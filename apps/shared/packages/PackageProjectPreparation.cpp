@@ -5,6 +5,7 @@
 #include "Horo/Packages/PackageRestoreErrors.h"
 #include "PackageBehaviorReferences.h"
 #include "PackageProjectSession.h"
+#include "PackageUpdateReferences.h"
 
 #include <algorithm>
 #include <charconv>
@@ -579,23 +580,56 @@ namespace Horo::Application::Internal {
                    (!sources.live && sources.offline->ProjectRoot() == root && sources.offline->LockDigest() == expected.lockDigest);
         }
 
-        /** @brief Proves the staged rollback only withdraws entries and reviews their current saved references. */
+        /** @brief Reviews changed retained assets against both exact, staged archive generations. */
+        Result<void> ReviewRetainedRollbackAssets(const Packages::PackageRestoreGraph &installed, const Packages::PackageRestoreGraph &candidate,
+                                                  const Packages::ValidatedPackageLockfileV1 &lock,
+                                                  const Platform::ProjectReadContext &context) {
+            std::vector<Diagnostic> diagnostics;
+            for (const auto &retained : candidate.packages) {
+                if (auto current = Platform::CheckProjectReadContext(context); current.HasError())
+                    return current;
+                const auto current = std::ranges::find(lock.Packages(), retained.lock.package, &Packages::LockedPackage::package);
+                if (current == lock.Packages().end())
+                    return Result<void>::Failure(MetadataConflict());
+                if (*current == retained.lock)
+                    continue;
+                if (!CanRestoreRetainedAsset(*current, retained.lock))
+                    return Result<void>::Failure(UpdateNeedsMigration());
+                const auto archived = std::ranges::find(installed.packages, *current, &Packages::PackageRestorePackage::lock);
+                if (archived == installed.packages.end() || !archived->archive || !retained.archive)
+                    return Result<void>::Failure(MetadataConflict());
+                auto reviewed = ReviewAssetFiles(*current, *archived->archive, retained.lock, *retained.archive, diagnostics);
+                if (reviewed.HasError()) {
+                    auto error = std::move(reviewed).ErrorValue();
+                    std::ranges::move(diagnostics, std::back_inserter(error.diagnostics));
+                    return Result<void>::Failure(std::move(error));
+                }
+            }
+            return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
+        }
+
+        /** @brief Reviews compatible retained assets and saved references to every exact departing package. */
         Result<void> CheckRollbackWithdrawals(const MetadataDocuments &current, const Packages::PackageLockfileLimits &limits,
                                               const Packages::PackageRestoreGraph &candidate, const PackageRemovalSources &sources) {
             const auto lock = Packages::ValidatedPackageLockfileV1::Parse(current.lock, limits);
             if (lock.HasError())
                 return Result<void>::Failure(lock.ErrorValue());
-            const auto installed = lock.Value().Packages();
-            for (const auto &retained : candidate.packages) {
-                if (std::ranges::find(installed, retained.lock) == installed.end())
-                    return Result<void>::Failure(MetadataConflict());
-            }
+            const auto installed = sources.offline->Graph();
+            if (!installed || installed->requestHash != lock.Value().RequestHash())
+                return Result<void>::Failure(MetadataConflict());
+            auto retained = ReviewRetainedRollbackAssets(*installed, candidate, lock.Value(), sources.context);
             Packages::PackageRemovalGraphPreview impact;
-            for (const auto &entry : installed) {
-                if (std::ranges::find(candidate.packages, entry, &Packages::PackageRestorePackage::lock) == candidate.packages.end())
+            for (const auto &entry : lock.Value().Packages()) {
+                if (std::ranges::none_of(candidate.packages, [&](const auto &retained) { return retained.lock.package == entry.package; }))
                     impact.removed.push_back({entry.package, entry.version});
             }
-            return CheckRemovalReferences(sources, lock.Value(), impact);
+            auto references = CheckRemovalReferences(sources, lock.Value(), impact);
+            if (retained.HasValue())
+                return references;
+            std::optional<Error> blocked{std::move(retained).ErrorValue()};
+            if (references.HasError())
+                RecordRemovalFailure(blocked, std::move(references).ErrorValue());
+            return Result<void>::Failure(std::move(*blocked));
         }
     }  // namespace
 

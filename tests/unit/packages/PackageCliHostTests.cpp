@@ -320,10 +320,24 @@ namespace {
 
     TEST_CASE("Cached updates and withdrawal rollbacks require unchanged archive evidence", "[packages][application][cli][update]") {
         using namespace Packages;
+        enum class RollbackCase { Unchanged, HistoricalMetadata, NewlyMountedAsset };
+        using enum RollbackCase;
+        const auto scenario = GENERATE(Unchanged, HistoricalMetadata, NewlyMountedAsset);
         NativeProject fixture;
         const auto added = HoroPackageId::Parse("com.horo.added-assets").Value();
         const auto &base = fixture.graph;
         const auto archive = Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("new package bytes"));
+        const auto retainedArchive = [&] {
+            if (scenario == HistoricalMetadata)
+                return HistoricalAssetAddition(fixture, false);
+            if (scenario == NewlyMountedAsset) {
+                const std::vector<std::pair<std::string, std::string>> files{{"horo-package.toml", "schemaVersion = 1\n"},
+                                                                           {"assets/data.bin", "verified bytes"},
+                                                                           {"assets/new.bin", "new mounted asset"}};
+                return Tests::PackageApplicationService::Verify(Tests::Packages::PackageArchiveBytes(files));
+            }
+            return base.archive;
+        }();
         const nlohmann::json intent{
             {"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
             {"dependencies", {{base.package.Value(), {{"source", "fixture.source"}, {"version", "1.0.0"}}},
@@ -331,14 +345,14 @@ namespace {
         const auto request = ValidatedPackageRequest::Parse(intent.dump());
         REQUIRE(request.HasValue());
         const std::array roots{base.package, added};
-        const PackageResolutionPlan plan{.packages = {{base.package, base.version, base.source, base.archive.Digest(), {}},
+        const PackageResolutionPlan plan{.packages = {{base.package, base.version, base.source, retainedArchive.Digest(), {}},
                                                       {added, base.version, base.source, archive.Digest(), {}}}};
         const auto artifact = [&](const HoroPackageId &id, const ValidatedPackageArchive &content) {
             return PackageLockArtifact{.package = id, .version = base.version, .source = base.source, .artifactDigest = content.Digest(),
                                        .manifestDigest = content.PackageManifestDigest(), .fileManifestDigest = content.Manifest().Digest(),
                                        .packageFormatVersion = 1, .contributions = {"assets"}};
         };
-        const std::array artifacts{artifact(base.package, base.archive), artifact(added, archive)};
+        const std::array artifacts{artifact(base.package, retainedArchive), artifact(added, archive)};
         const auto lock = ValidatedPackageLockfileV1::Generate(plan, roots, request.Value().Digest(), artifacts);
         REQUIRE(lock.HasValue());
         fixture.Write("candidate.json", intent.dump());
@@ -346,12 +360,15 @@ namespace {
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path());
         NativeDurableFileSystem files;
+        const auto previous = files.ReadFileBounded(root / ".horo/packages.lock", 1U << 20U, {});
+        REQUIRE(previous.HasValue());
         auto cache = PackageCacheStore::Create(files, cacheRoot / "complete").Value();
         auto partial = PackageCacheStore::Create(files, cacheRoot / "added-only").Value();
         REQUIRE(PackageCacheStore::Create(files, cacheRoot / "empty").HasValue());
         REQUIRE(partial.Publish(archive).HasValue());
         REQUIRE(cache.Publish(archive).HasValue());
         REQUIRE(cache.Publish(base.archive).HasValue());
+        REQUIRE(cache.Publish(retainedArchive).HasValue());
         const auto preview = MakePackageUpdatePreviewCommandAdapter();
         const auto apply = MakePackageApplyUpdateCommandAdapter();
         const auto rollback = MakePackageRollbackPreviewCommandAdapter();
@@ -390,7 +407,50 @@ namespace {
                                    NativeProject::PathOption("package-cache-root", cacheRoot / "added-only")}};
             deniesMissing(rollback.adapter->Execute(command, context));
             command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "complete");
-            CHECK(rollback.adapter->Execute(command, context).HasValue());
+            const auto reviewedRollback = rollback.adapter->Execute(command, context);
+            const auto hasRemovedAsset = [](const Error &error) {
+                return std::ranges::any_of(error.diagnostics, [](const auto &entry) {
+                    return entry.code.Value() == "packages.host.update_asset_removed" && entry.path == "assets/new.bin";
+                });
+            };
+            if (scenario == NewlyMountedAsset) {
+                REQUIRE(reviewedRollback.HasError());
+                CHECK(hasRemovedAsset(reviewedRollback.ErrorValue()));
+            } else {
+                REQUIRE(reviewedRollback.HasValue());
+                if (scenario == Unchanged)
+                    return;
+            }
+
+            auto lockOnly = command;
+            lockOnly.options.pop_back();
+            // Applying a token based on metadata alone must still validate both staged archive generations.
+            const auto lockReview = rollback.adapter->Execute(lockOnly, context);
+            REQUIRE(lockReview.HasValue());
+            const auto rollbackApply = MakePackageRollbackUpdateCommandAdapter();
+            command.command = rollbackApply.adapter->GetDescriptor().path;
+            const auto rollbackApproval = std::get<std::string>(lockReview.Value().fields.back().value);
+            command.options.push_back({"approve", {{rollbackApproval, CliValueSource::Invocation, {}}}});
+            const auto source = root / "Assets/Example.horoasset";
+            const auto metadata = root / "Assets/Example.horoasset.horo";
+            std::ofstream{source} << "{}";
+            std::ofstream{metadata} << nlohmann::json{{"schemaVersion", 1}, {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
+                                                     {"assetType", "core.scene"}, {"importerPackageId", added.Value()}};
+            const auto blocked = rollbackApply.adapter->Execute(command, context);
+            REQUIRE(blocked.HasError());
+            CHECK(files.ReadFileBounded(root / ".horo/packages.lock", 1U << 20U, {}).Value() != previous.Value());
+            if (scenario == NewlyMountedAsset) {
+                CHECK(hasRemovedAsset(blocked.ErrorValue()));
+                CHECK(std::ranges::any_of(blocked.ErrorValue().diagnostics, [](const auto &entry) {
+                    return entry.code.Value() == "packages.host.importer_in_use" && entry.path == "Assets/Example.horoasset";
+                }));
+                return;
+            }
+            CHECK(blocked.ErrorValue().code.Value() == "packages.host.importer_in_use");
+            REQUIRE(std::filesystem::remove(source));
+            REQUIRE(std::filesystem::remove(metadata));
+            REQUIRE(rollbackApply.adapter->Execute(command, context).HasValue());
+            CHECK(files.ReadFileBounded(root / ".horo/packages.lock", 1U << 20U, {}).Value() == previous.Value());
         });
     }
 

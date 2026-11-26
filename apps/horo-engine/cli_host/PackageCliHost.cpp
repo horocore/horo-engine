@@ -65,10 +65,10 @@ namespace Horo::Application::Internal {
             PackageOperation operation;
             std::optional<Packages::HoroPackageId> removalPackage;
 
-            /** @brief Identifies a rollback whose retained packages have exactly the same lock entries. */
+            /** @brief Selects the rollback path that rechecks saved references to departing packages. */
             bool IsWithdrawalRollback() const {
-                return operation == PackageOperation::Rollback && !preview.changes.empty() &&
-                       std::ranges::all_of(preview.changes, [](const auto &change) { return change.current && !change.candidate; });
+                return operation == PackageOperation::Rollback &&
+                       std::ranges::any_of(preview.changes, [](const auto &change) { return change.current && !change.candidate; });
             }
 
             /** @brief Identifies the reviewed project and exact old and proposed documents. */
@@ -452,15 +452,27 @@ namespace Horo::Application::Internal {
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
-                if (!change.current || change.candidate)
+                if (!change.current)
                     continue;
                 const auto archive = ReadUpdateArchive(cache.Value(), *change.current);
                 if (archive.HasError()) {
-                    diagnostics.emplace_back(DiagnosticCode{"packages.host.removal_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
+                    const auto *code = change.candidate ? "packages.host.update_archive_evidence_unavailable"
+                                                       : "packages.host.removal_archive_evidence_unavailable";
+                    diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error,
                                              archive.ErrorValue().code.Value(), SourceLocation{"packages.host"}, change.current->package.Value());
-                } else if (auto reviewed = AppendOfflineRemovalArchiveBlockers(diagnostics, *change.current, archive.Value());
-                           reviewed.HasError()) {
-                    return reviewed;
+                } else if (change.candidate) {
+                    const auto candidate = ReadUpdateArchive(cache.Value(), *change.candidate);
+                    if (candidate.HasError()) {
+                        diagnostics.emplace_back(DiagnosticCode{"packages.host.update_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
+                                                 candidate.ErrorValue().code.Value(), SourceLocation{"packages.lock"},
+                                                 change.candidate->package.Value());
+                    } else if (auto reviewed = ReviewAssetFiles(*change.current, archive.Value(), *change.candidate, candidate.Value(), diagnostics);
+                               reviewed.HasError()) {
+                        return reviewed;
+                    }
+                } else {
+                    if (auto reviewed = AppendOfflineRemovalArchiveBlockers(diagnostics, *change.current, archive.Value()); reviewed.HasError())
+                        return reviewed;
                 }
                 if (diagnostics.size() > MaximumRemovalCoverageDiagnostics)
                     return Result<void>::Failure(
@@ -474,7 +486,9 @@ namespace Horo::Application::Internal {
             Packages::PackageRemovalGraphPreview impact;
             std::vector<Diagnostic> diagnostics;
             for (const auto &change : update.preview.changes) {
-                if (!change.current || change.candidate)
+                if (!change.current || (change.candidate && !CanRestoreRetainedAsset(*change.current, *change.candidate)))
+                    return Result<void>::Failure(UpdateNeedsMigration());
+                if (change.candidate)
                     continue;
                 impact.removed.push_back({change.current->package, change.current->version});
                 if (auto blocker = OfflineRemovalContributionBlocker(*change.current))

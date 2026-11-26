@@ -28,6 +28,11 @@ namespace Horo::Application::Internal {
         return compatible == next && IsAssetOnly(next);
     }
 
+    /** @copydoc CanRestoreRetainedAsset */
+    bool CanRestoreRetainedAsset(const Packages::LockedPackage &current, const Packages::LockedPackage &candidate) {
+        return current.version == candidate.version && CanPreserveAssetReferences(current, candidate);
+    }
+
     /** @copydoc UpdateNeedsMigration */
     Error UpdateNeedsMigration(std::vector<Diagnostic> diagnostics) {
         std::string message{"Package update requires migration review."};

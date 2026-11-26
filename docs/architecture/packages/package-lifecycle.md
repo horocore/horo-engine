@@ -622,6 +622,13 @@ rollback point and before writing the metadata journal. The second review uses
 the same mutation lease, cancellation and deadline. A late reference blocks the
 operation and preserves the previous package metadata.
 
+A withdrawal rollback may also restore a retained asset package at the same
+version and with the same locked source, dependencies and contribution policy.
+Preview and publication review the exact older and current archives. The
+restored archive must preserve every currently mounted asset path, owner and
+payload. Rollback still checks the saved project references to departing
+packages before publishing the older request and lock together.
+
 Migrations that modify project-owned scenes or assets are previewed first and
 then committed through editor document transactions or explicit file migration
 transactions. After a migration commits, rollback requires restoring from the

@@ -19,6 +19,9 @@ namespace Horo::Application::Internal {
                                                 const Packages::LockedPackage &candidate, const Packages::ValidatedPackageArchive &candidateArchive,
                                                 std::vector<Diagnostic> &diagnostics);
 
+    /** @brief Checks whether a retained package can be restored alongside an offline withdrawal. */
+    [[nodiscard]] bool CanRestoreRetainedAsset(const Packages::LockedPackage &current, const Packages::LockedPackage &candidate);
+
     /** @brief Binds a read-only cache archive to the exact current or candidate lock entry. */
     [[nodiscard]] Result<Packages::ValidatedPackageArchive> ReadUpdateArchive(const Packages::PackageCacheStore &cache,
                                                                              const Packages::LockedPackage &locked);
