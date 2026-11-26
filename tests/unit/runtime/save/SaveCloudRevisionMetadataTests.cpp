@@ -1,7 +1,9 @@
+#include "Horo/Application/CloudSaveTransport.h"
 #include "Horo/PlatformServices/PlatformOfflineQueue.h"
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "PlatformCloudTestSupport.h"
+#include "PlatformServicesFrontendTestSupport.h"
 #include "SaveTestUtils.h"
 
 #include <algorithm>
@@ -9,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <type_traits>
 #include <vector>
 
@@ -41,6 +44,160 @@ namespace Horo::Runtime {
 
         [[nodiscard]] SaveCloudObjectRef Object() {
             return {.key = {std::byte{0x00}, std::byte{0xff}}, .revision = std::vector<std::byte>{std::byte{0x7f}}};
+        }
+
+        /** @brief Composes the real frontend with finite in-memory cloud mutation capabilities. */
+        [[nodiscard]] Cloud::PlatformServicesFrontend CloudFrontend(const std::shared_ptr<Cloud::RoutingBackend> &backend,
+                                                                     const Cloud::PlatformSessionSnapshot &session) {
+            backend->snapshot = Cloud::Capabilities(session.ProviderGeneration());
+            backend->snapshot.services[static_cast<std::size_t>(Cloud::PlatformServiceKind::Cloud)].cloudMutation = Cloud::MutationFacts();
+            auto frontend = Cloud::PlatformServicesFrontend::Create(backend, backend->snapshot, session);
+            REQUIRE(frontend.HasValue());
+            return std::move(frontend).Value();
+        }
+
+        TEST_CASE("Save transport dispatches only typed opaque intents from the bound profile",
+                  "[unit][save][cloud-transport][frontend]") {
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session);
+            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
+            REQUIRE(transport.HasValue());
+
+            const auto slot = Id<SaveGameSlotId>(1);
+            const auto mutation = Id<SaveCloudMutationId>(9);
+            const auto intent = Cloud::TestSupport::CloudWrite();
+            const auto commit = Cloud::TestSupport::CloudCommit(intent);
+            REQUIRE(commit.committedObject);
+            const auto revision = commit.committedObject->revision;
+            const auto listed = transport.Value().List(20, 2);
+            const auto read = transport.Value().Read(21, slot, 3);
+            const auto write = transport.Value().Write(22, slot, intent.bytes, intent.expectedDigest, mutation, revision);
+            const auto deleted = transport.Value().Delete(23, slot, revision, Id<SaveCloudMutationId>(10));
+            REQUIRE(listed.HasValue());
+            REQUIRE(read.HasValue());
+            REQUIRE(write.HasValue());
+            REQUIRE(deleted.HasValue());
+            CHECK(listed.Value().operation == 20);
+            CHECK(read.Value().operation == 21);
+            CHECK(write.Value().operation == 22);
+            CHECK(deleted.Value().operation == 23);
+            REQUIRE(backend->lastCloudList);
+            REQUIRE(backend->lastCloudList->prefix);
+            REQUIRE(backend->lastCloudRead);
+            REQUIRE(backend->lastCloudWrite);
+            REQUIRE(backend->lastCloudDelete);
+
+            const auto prefix = backend->lastCloudList->prefix->Bytes();
+            const auto key = backend->lastCloudRead->key.Bytes();
+            REQUIRE(prefix.size() == 32);
+            REQUIRE(key.size() == 64);
+            CHECK(std::ranges::equal(key.first(prefix.size()), prefix));
+            const auto prefixDigest = ParseSha256("sha256:77eb9bb00a07521bae4c1d7c3efadc80e6682870b6e6ea13e337f780726e8d01");
+            const auto slotDigest = ParseSha256("sha256:c4c6e4fcf45224cd48dd885c71bc6a79d852adf2fd367cc585437ddf1e25ee08");
+            REQUIRE(prefixDigest.HasValue());
+            REQUIRE(slotDigest.HasValue());
+            CHECK(std::ranges::equal(prefix, std::as_bytes(std::span{prefixDigest.Value().bytes})));
+            CHECK(std::ranges::equal(key.last(prefix.size()), std::as_bytes(std::span{slotDigest.Value().bytes})));
+            CHECK(backend->lastCloudRead->maximumBytes == 3);
+            CHECK(backend->lastCloudWrite->key == backend->lastCloudRead->key);
+            CHECK(backend->lastCloudDelete->key == backend->lastCloudRead->key);
+            CHECK(backend->lastCloudWrite->expectedDigest == intent.expectedDigest);
+            CHECK(std::ranges::equal(backend->lastCloudWrite->bytes.Bytes(), intent.bytes.Bytes()));
+            CHECK(std::get<Cloud::CloudMatchProviderRevision>(backend->lastCloudWrite->precondition).revision == revision);
+            CHECK(backend->lastCloudDelete->expectedRevision == revision);
+            CHECK(std::ranges::equal(backend->lastCloudWrite->mutation.bytes, std::as_bytes(std::span{mutation.Bytes()})));
+            CHECK(backend->lastCloudDelete->mutation.bytes.back() == std::byte{10});
+            CHECK(frontend.RequestCancel(write.Value().handle).HasValue());
+            CHECK(backend->requests.Query(write.Value().handle).Value().cancellationRequested);
+
+            OperationId reported{};
+            auto subscription = backend->requests.OnComplete<Cloud::CloudBlobReadResult>(
+                read.Value().handle, [&](const Cloud::PlatformRequestSnapshot<Cloud::CloudBlobReadResult> &snapshot) {
+                    if (snapshot.terminal && snapshot.terminal->HasValue())
+                        reported = read.Value().operation;
+                });
+            REQUIRE(subscription.HasValue());
+            auto head = *commit.committedObject;
+            head.key = backend->lastCloudRead->key;
+            const auto subject = *session.Subject();
+            REQUIRE(backend->requests.MarkRunning(read.Value().handle).HasValue());
+            REQUIRE(backend->requests
+                        .CompleteSuccess(read.Value().handle.Id(), read.Value().handle.Generation(),
+                                         Cloud::CloudBlobReadResult{subject, subject.SessionGeneration(), std::move(head), intent.bytes})
+                        .HasValue());
+            CHECK(reported == 0);
+            CHECK(backend->requests.DispatchCompletions() == 1);
+            CHECK(reported == 21);
+
+            const auto create = transport.Value().Write(24, slot, intent.bytes, intent.expectedDigest, Id<SaveCloudMutationId>(11),
+                                                        std::nullopt);
+            REQUIRE(create.HasValue());
+            CHECK(std::holds_alternative<Cloud::CloudCreateIfAbsent>(backend->lastCloudWrite->precondition));
+        }
+
+        TEST_CASE("Save transport key is portable across devices and fenced by typed partition authority",
+                  "[unit][save][cloud-transport][frontend]") {
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = Cloud::Frontend(backend, session);
+            const auto slot = Id<SaveGameSlotId>(1);
+            const auto readKey = [&](const SaveCloudMetadataScope &scope, const SaveGameSlotId requestedSlot) {
+                const auto transport = Application::CloudSaveTransport::Create(frontend, scope, *session.Subject());
+                REQUIRE(transport.HasValue());
+                REQUIRE(transport.Value().Read(1, requestedSlot, 1).HasValue());
+                REQUIRE(backend->lastCloudRead);
+                return backend->lastCloudRead->key;
+            };
+            const auto original = readKey(Scope(), slot);
+            auto otherDevice = Scope();
+            std::get<UserProfileOwner>(otherDevice.localNamespace.owner).user = Id<LocalUserStorageId>(9);
+            CHECK(readKey(otherDevice, slot) == original);
+            auto otherEnvironment = Scope();
+            otherEnvironment.localNamespace.environment = Id<EnvironmentStorageId>(8);
+            auto otherProduct = Scope();
+            otherProduct.localNamespace.product = Id<ProductStorageId>(8);
+            for (const auto &other : {Scope(8), Scope(4, 8), Scope(4, 5, 8), otherEnvironment, otherProduct})
+                CHECK(readKey(other, slot) != original);
+            CHECK(readKey(Scope(), Id<SaveGameSlotId>(2)) != original);
+        }
+
+        TEST_CASE("Save transport rejects unowned, stale, or oversized requests before handing them to the backend",
+                  "[unit][save][cloud-transport][frontend]") {
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session);
+            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
+            REQUIRE(transport.HasValue());
+            const auto intent = Cloud::TestSupport::CloudWrite();
+            const auto slot = Id<SaveGameSlotId>(1);
+            const auto oldSession = Cloud::Session({7}, {4});
+            const auto stale = Application::CloudSaveTransport::Create(frontend, Scope(), *oldSession.Subject());
+            REQUIRE(stale.HasValue());
+            CHECK(stale.Value().Read(1, slot, 1).HasError());
+            CHECK(transport.Value().List(0, 1).HasError());
+            CHECK(transport.Value().List(1, 5).HasError());
+            CHECK(transport.Value().Read(1, {}, 1).HasError());
+            CHECK(transport.Value().Read(1, slot, 5).HasError());
+            CHECK(transport.Value().Write(1, slot, intent.bytes, intent.expectedDigest, {}, {}).HasError());
+            CHECK(Application::CloudSaveTransport::Create(frontend, {}, *session.Subject()).HasError());
+            CHECK(Application::CloudSaveTransport::Create(frontend, Scope(), {}).HasError());
+            CHECK(backend->TotalCalls() == 0);
+        }
+
+        TEST_CASE("Save transport reports a null cloud capability without touching local state",
+                  "[unit][save][cloud-transport][frontend]") {
+            auto backend = std::make_shared<Cloud::NullPlatformServicesBackend>(Cloud::PlatformProviderGeneration{7});
+            auto capabilities = Cloud::ActivatePlatformServicesBackend(*backend, {});
+            REQUIRE(capabilities.HasValue());
+            const auto session = Cloud::Session();
+            auto created = Cloud::PlatformServicesFrontend::Create(backend, std::move(capabilities).Value(), session);
+            REQUIRE(created.HasValue());
+            auto frontend = std::move(created).Value();
+            const auto transport = Application::CloudSaveTransport::Create(frontend, Scope(), *session.Subject());
+            REQUIRE(transport.HasValue());
+            Cloud::RequireError(transport.Value().List(1, 1), Cloud::FrontendErrors::NullProvider);
+            Cloud::RequireError(transport.Value().Read(1, Id<SaveGameSlotId>(1), 1), Cloud::FrontendErrors::NullProvider);
         }
 
         /** @brief Copies only a trusted caller-owned record's opaque transport fields and original mutation identity. */

@@ -484,6 +484,12 @@ target_link_libraries(HoroApplication
 )
 add_dependencies(HoroApplication HoroProjectCompatibilityCatalog)
 
+add_library(HoroSaveCloudTransport STATIC application/cloud_save/CloudSaveTransport.cpp)
+target_compile_features(HoroSaveCloudTransport PUBLIC cxx_std_20)
+target_include_directories(HoroSaveCloudTransport PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/application/cloud_save/include>")
+target_link_libraries(HoroSaveCloudTransport PUBLIC HoroEngine::Runtime HoroEngine::PlatformServices)
+
 add_library(HoroReleaseProcess STATIC
         application/release/ReleaseProcess.cpp
         application/release/ReleaseCandidatePublisher.cpp)

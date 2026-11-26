@@ -18,17 +18,6 @@ namespace Horo::PlatformServices {
                     .precondition = CloudCreateIfAbsent{},
                     .mutation = mutation};
         }
-
-        CloudMutationCapability MutationFacts() {
-            return {.atomicity = CloudMutationAtomicity::ConditionalAtomicObject,
-                    .createIfAbsent = true,
-                    .replaceIfRevision = true,
-                    .deleteIfRevision = true,
-                    .durableMutationDedupe = true,
-                    .maxNamespaceBytes = 32,
-                    .maxObjectCount = 4,
-                    .maxConcurrentMutations = 2};
-        }
     }  // namespace
 
     TEST_CASE("Platform Services frontend routes every accepted typed operation exactly once", "[platform-services][frontend]") {

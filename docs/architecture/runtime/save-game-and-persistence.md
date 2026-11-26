@@ -1665,6 +1665,16 @@ Platform Services treats that key and finalized archive bytes as opaque and cann
 edit local storage. The application/profile-owned `CloudSaveCoordinator` is the one
 sync state authority; Platform Services and UI are transport/presentation adapters.
 
+The application's internal `CloudSaveTransport` projects the coordinator's
+authenticated client-profile scope into a stable binary list prefix. The
+versioned prefix hashes the product, environment, portable game profile,
+provider and opaque account identities. The object key appends a separately
+tagged hash of that prefix and the logical slot. Installation-local user IDs
+stay out of both tokens so the same account and profile address the same slots
+on another device. Reads carry a finite byte budget. Writes and deletes carry
+the journal's mutation ID and exact conditional revision, and each admitted
+platform request retains its owning Save operation correlation.
+
 The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
 complete local `SaveNamespaceId` plus distinct provider and account identities. Each
 record names one current slot generation and exact `ArchiveContentHash`, with bounded
