@@ -1863,6 +1863,15 @@ class AndroidPackageLaunch:
         device.require_identity()
         require_deploy_boot(device, self.device_boot_time)
 
+    def confirm_capture_target(self, build_digest: str | None) -> None:
+        """Confirm that captured diagnostics still refer to the selected installation and device."""
+        deploy_verified_install(self.device, self.application, self.user, self.digest)
+        if build_digest is not None and deploy_device_build_digest(self.device) != build_digest:
+            raise AndroidDeployError("device_build_changed")
+        self.device.require_identity()
+        require_deploy_user(self.device, self.user)
+        require_deploy_boot(self.device, self.device_boot_time)
+
     def rollback(self) -> dict:
         """Use a separate deadline to stop only a provably attributed package process."""
         if self.retired_crash:
@@ -2073,6 +2082,7 @@ def android_deploy_main(argv=None) -> int:
             user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
             report["device"] = {"androidApi": api, "abi": abi}
             device_boot_time = None
+            device_build = None
             if openxr:
                 device_boot_time = deploy_device_boot_time(device)
                 device_build = deploy_device_build_digest(device)
@@ -2101,24 +2111,22 @@ def android_deploy_main(argv=None) -> int:
             report["stage"] = "diagnostics"
             observe_seconds = arguments.observe_seconds or 0
             observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, observe_seconds)
+            runtime_candidate = runtime.copy()
             try:
                 check_deploy_capture(observed, applicable, observe_seconds)
                 if openxr:
-                    check_openxr_discovery(runtime, observed["openxr"], abi)
+                    check_openxr_discovery(runtime_candidate, observed["openxr"], abi)
             except AndroidDeployError:
-                # Preserve the typed facts that explain a failure of the capture itself.
+                if openxr:
+                    launch.confirm_capture_target(device_build)
+                    runtime.update(runtime_candidate)
                 report["observed"] = observed
                 raise
             if openxr:
                 report["cleanup"] = launch.rollback()
                 if report["cleanup"]["status"] not in ("stopped", "already_exited"):
                     raise AndroidDeployError("application_stop_unconfirmed")
-            deploy_verified_install(device, application, user, artifact.apk_sha256)
-            if openxr and deploy_device_build_digest(device) != device_build:
-                raise AndroidDeployError("device_build_changed")
-            device.require_identity()
-            require_deploy_user(device, user)
-            require_deploy_boot(device, device_boot_time)
+            launch.confirm_capture_target(device_build)
         report["observed"] = observed
         if openxr:
             runtime["status"] = "cold_system_discovered"

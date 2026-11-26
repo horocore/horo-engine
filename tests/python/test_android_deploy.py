@@ -499,6 +499,18 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["openxr"], {"abi": "arm64-v8a", "stage": "extension-admission", "result": -51})
         self.assertEqual(report["cleanup"], {"status": "stopped"})
 
+    def test_openxr_does_not_publish_a_runtime_mismatch_after_reboot(self):
+        options = (*OPENXR_OPTIONS, "--expect-runtime-version", "1.1.64")
+        status, report, commands = self.execute({
+            LOGCAT: log_line(OPENXR),
+            DEVICE_BOOT_QUERY: [DEVICE_BOOT] * 3 + ["btime 1795000001"] * 2,
+        }, options, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["error"]), (1, "device_boot_changed"))
+        self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_boot_changed"})
+        self.assertFalse(any("force-stop" in command for command in commands))
+
     def test_openxr_retirement_failure_remains_a_failed_deployment(self):
         first = ("host-openxr abi=arm64-v8a stage=instance-retirement result=-2 "
                  "runtimeMajor=0 runtimeMinor=0 runtimePatch=0")
