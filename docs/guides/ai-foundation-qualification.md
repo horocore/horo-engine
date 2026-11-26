@@ -177,9 +177,23 @@ inputs produce a nonzero exit and no status record.
 python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --audit-retention
 ```
 
-The storage owner can use the status to enforce deletion and continues to
-control write access to both records. The audit reads only the manifest and
-approval and reports no replay data or file paths.
+The storage owner can explicitly purge an expired pair from a directory it
+controls exclusively. Stop concurrent writers before invoking the purge. Pass
+the manifest and source replay as distinct files in the same directory.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --purge-expired --source-replay evidence.json
+```
+
+The purge checks the UTC expiry, matches the approval, and reproduces the
+manifest from the source before removal. The source goes first so that an
+interruption leaves the verified manifest available for retry. If the source
+is already absent, retry verifies the expired manifest against the approval
+and removes it. The approval remains available for audit. The purge affects
+the specified directory entries and does not erase copies or backups.
+A successful purge emits a schema-versioned status record without replay data
+or paths. Check `sourceRemoved` to distinguish a removed replay from one that
+was already absent at the supplied path.
 
 The exporter emits schema 1 with decision outcome counts and exact source, scene,
 canonical AI and plan digests. It omits IDs, paths, observation records and

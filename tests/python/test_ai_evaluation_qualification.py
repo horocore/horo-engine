@@ -3,6 +3,8 @@
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
+import os
+from pathlib import Path
 import sys
 
 import pytest
@@ -62,6 +64,114 @@ def test_publishes_the_same_redacted_manifest_to_a_new_file(tmp_path, export):
     assert not written.out and not written.err
     assert destination.read_bytes() == streamed.out.encode("utf-8")
     assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
+
+
+@pytest.fixture
+def retained_pair(tmp_path, export, monkeypatch, capsys):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    manifest = tmp_path / "retained ç report.json"
+    status, result = export(data, approval, "--output", str(manifest))
+    assert status == 0, result.err
+    replay = tmp_path / "evidence.json"
+    grant = tmp_path / "approval.json"
+    record = json.loads(manifest.read_bytes())
+    today = datetime.now(UTC).date()
+
+    def expire():
+        approval["expiresOnUtc"] = record["expiresOnUtc"] = today.isoformat()
+        manifest.write_text(json.dumps(record), encoding="utf-8")
+        grant.write_text(json.dumps(approval), encoding="utf-8")
+
+    def purge(source=replay):
+        monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--approval", str(grant),
+                                          "--purge-expired", "--source-replay", str(source)])
+        status = evaluation.main()
+        return status, capsys.readouterr()
+
+    return manifest, replay, grant, expire, purge
+
+
+def test_purge_removes_expired_pair_and_preserves_audit_approval(retained_pair):
+    manifest, replay, grant, expire, purge = retained_pair
+    expire()
+    approved = grant.read_bytes()
+    status, result = purge()
+    assert status == 0, result.err
+    assert json.loads(result.out) == {"schemaVersion": 1, "status": "purged",
+                                      "expiresOnUtc": json.loads(approved)["expiresOnUtc"], "sourceRemoved": True}
+    assert PRIVATE not in result.out and str(replay) not in result.out
+    assert not manifest.exists() and not replay.exists()
+    assert grant.read_bytes() == approved
+
+
+@pytest.mark.parametrize("scenario", ["current", "source-mismatch", "approval-mismatch", "hardlink", "symlink", "other-directory"])
+def test_purge_refuses_unapproved_sources_and_leaves_both_files(tmp_path, retained_pair, scenario):
+    manifest, replay, grant, expire, purge = retained_pair
+    source = replay
+    if scenario != "current":
+        expire()
+    if scenario == "source-mismatch":
+        replay.write_bytes(json.dumps(frame(3, 4)).encode())
+    if scenario == "approval-mismatch":
+        grant.write_text(json.dumps(approval_for(b"other source")), encoding="utf-8")
+    if scenario == "hardlink":
+        os.link(replay, tmp_path / "alias.json")
+    if scenario == "symlink":
+        source = tmp_path / "alias.json"
+        try:
+            source.symlink_to(replay)
+        except OSError:
+            pytest.skip("File symlinks are unavailable")
+    if scenario == "other-directory":
+        alternate = tmp_path / "alternate"
+        alternate.mkdir()
+        source = alternate / replay.name
+        source.write_bytes(replay.read_bytes())
+    old_manifest, old_replay = manifest.read_bytes(), replay.read_bytes()
+    status, result = purge(source)
+    assert status == 1 and not result.out
+    assert PRIVATE not in result.err and str(tmp_path) not in result.err
+    assert manifest.read_bytes() == old_manifest and replay.read_bytes() == old_replay
+
+
+def test_purge_retries_after_replay_was_removed(retained_pair, monkeypatch):
+    manifest, replay, grant, expire, purge = retained_pair
+    expire()
+    existing_unlink = Path.unlink
+
+    def fail_manifest(path):
+        if path == manifest:
+            raise PermissionError("simulated access loss")
+        existing_unlink(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", fail_manifest)
+        status, result = purge()
+        assert status == 1 and not result.out and "retry" in result.err
+    assert not replay.exists() and manifest.exists()
+
+    status, result = purge()
+    assert status == 0, result.err
+    assert json.loads(result.out)["sourceRemoved"] is False
+    assert not manifest.exists() and grant.exists()
+
+
+def test_purge_preserves_replay_when_the_manifest_changes_after_validation(retained_pair, monkeypatch):
+    manifest, replay, _grant, expire, purge = retained_pair
+    expire()
+    verify = evaluation.verify_replay_bytes
+
+    def replace_manifest(*args):
+        verify(*args)
+        manifest.write_bytes(b"separate retention operation")
+
+    monkeypatch.setattr(evaluation, "verify_replay_bytes", replace_manifest)
+    previous_replay = replay.read_bytes()
+    status, result = purge()
+    assert status == 1 and not result.out and "changed after validation" in result.err
+    assert replay.read_bytes() == previous_replay
+    assert manifest.read_bytes() == b"separate retention operation"
 
 
 @pytest.mark.parametrize("scenario", ["match", "no-model", "wrong-model", "missing-workload", "over-budget"])

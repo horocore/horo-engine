@@ -1,4 +1,4 @@
-"""Export, verify or read a redacted evaluation manifest under an explicit offline approval."""
+"""Export, verify or retire evaluation evidence under an explicit offline approval."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 
@@ -233,8 +234,67 @@ def summarize_source(data: bytes) -> dict:
 
 def verify_source_evidence(record: dict, path: Path) -> None:
     data, source_digest = read_replay(path)
+    verify_replay_bytes(record, data, source_digest)
+
+
+def verify_replay_bytes(record: dict, data: bytes, source_digest: str) -> None:
     require(source_digest == record["sourceReplaySha256"], "Source replay does not match the approved digest")
     require(summarize_source(data) == record["evidence"], "Manifest evidence does not match the approved source replay")
+
+
+def retention_identity(info: os.stat_result) -> tuple[int, ...]:
+    reparse = getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    require(stat.S_ISREG(info.st_mode) and not reparse and info.st_nlink == 1,
+            "Retention requires independent regular files")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def read_retention_file(path: Path, limit: int) -> tuple[bytes, tuple[int, ...]]:
+    identity = retention_identity(path.lstat())
+    with path.open("rb") as stream:
+        require(retention_identity(os.fstat(stream.fileno())) == identity, "Retention file changed before reading")
+        data = stream.read(limit + 1)
+        require(retention_identity(os.fstat(stream.fileno())) == identity, "Retention file changed while reading")
+    require(0 < len(data) <= limit, "Retention input exceeds the size limit or is empty")
+    return data, identity
+
+
+def require_retention_identity(path: Path, expected: tuple[int, ...]) -> None:
+    require(retention_identity(path.lstat()) == expected, "Retention file changed after validation")
+
+
+def remove_retention_file(path: Path, expected: tuple[int, ...]) -> None:
+    require_retention_identity(path, expected)
+    try:
+        path.unlink()
+    except OSError:
+        raise _EvidenceError("A verified evaluation file could not be removed; retry the purge") from None
+
+
+def purge_expired_manifest(path: Path, replay: Path, approval: object, today: date) -> dict:
+    """Remove an expired pair from the storage owner's exclusive directory."""
+    directory = path.parent.resolve(strict=True)
+    require(replay.parent.resolve(strict=True) == directory, "Retention inputs must share one storage directory")
+    path, replay = directory / path.name, directory / replay.name
+    require(path != replay, "Retention requires distinct manifest and replay paths")
+    raw, manifest_identity = read_retention_file(path, MAX_MANIFEST_BYTES)
+    record = validate_retained_manifest(decode(raw), approval, None)
+    expiry = record["expiresOnUtc"]
+    require(date.fromisoformat(expiry) <= today, "Evaluation retention is still current")
+    source_removed = False
+    try:
+        replay.lstat()
+    except FileNotFoundError:
+        # The source may already have been removed by an earlier, interrupted purge.
+        pass
+    else:
+        data, replay_identity = read_retention_file(replay, MAX_FRAME_BYTES * MAX_FRAMES)
+        verify_replay_bytes(record, data, hashlib.sha256(data).hexdigest())
+        require_retention_identity(path, manifest_identity)
+        remove_retention_file(replay, replay_identity)
+        source_removed = True
+    remove_retention_file(path, manifest_identity)
+    return {"schemaVersion": 1, "status": "purged", "expiresOnUtc": expiry, "sourceRemoved": source_removed}
 
 
 def verify_qualification_artifacts(qualification: dict, root: Path) -> None:
@@ -295,24 +355,30 @@ def main() -> int:
     retained.add_argument("--verify-retained", action="store_true", help="Check a stored manifest against its original approval and UTC expiry")
     retained.add_argument("--read-retained", action="store_true", help="Emit a current stored manifest after reproducing its approved evidence")
     retained.add_argument("--audit-retention", action="store_true", help="Report the UTC retention status of a stored manifest and its approval")
+    retained.add_argument("--purge-expired", action="store_true", help="Remove an expired manifest and source from owner-exclusive storage")
     parser.add_argument("--source-replay", type=Path, help="Reproduce the evidence from the original approved replay")
     parser.add_argument("--qualification-artifacts", type=Path, help="Check approved provider, model and workload files named by SHA-256")
     parser.add_argument("--output", type=Path, help="Publish the export to a new manifest file")
     args = parser.parse_args()
     if args.read_retained and args.source_replay is None:
         parser.error("--read-retained requires --source-replay")
-    if args.source_replay is not None and not (args.verify_retained or args.read_retained):
-        parser.error("--source-replay requires --verify-retained or --read-retained")
-    if args.output is not None and (args.verify_retained or args.read_retained or args.audit_retention):
+    if args.purge_expired and args.source_replay is None:
+        parser.error("--purge-expired requires --source-replay")
+    if args.source_replay is not None and not (args.verify_retained or args.read_retained or args.purge_expired):
+        parser.error("--source-replay requires --verify-retained, --read-retained or --purge-expired")
+    if args.output is not None and (args.verify_retained or args.read_retained or args.audit_retention or args.purge_expired):
         parser.error("--output is only available when exporting a replay")
     if args.qualification_artifacts is not None:
-        if args.audit_retention:
-            parser.error("--qualification-artifacts cannot be used for a retention audit")
+        if args.audit_retention or args.purge_expired:
+            parser.error("--qualification-artifacts cannot be used for retention operations")
         if args.verify_retained and args.source_replay is None:
             parser.error("--qualification-artifacts requires --source-replay when verifying a retained manifest")
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
+        if args.purge_expired:
+            emit_json(purge_expired_manifest(args.input, args.source_replay, approval, today))
+            return 0
         if args.audit_retention:
             record = decode(read_bounded(args.input, MAX_MANIFEST_BYTES))
             emit_json(audit_retention(record, approval, today))
