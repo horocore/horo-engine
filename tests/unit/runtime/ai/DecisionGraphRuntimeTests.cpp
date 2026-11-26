@@ -1,6 +1,7 @@
 #include "DecisionGraphCompilerTestSupport.h"
 
 #include <algorithm>
+#include <catch2/generators/catch_generators.hpp>
 #include <thread>
 
 namespace Horo::AI {
@@ -390,6 +391,47 @@ namespace Horo::AI {
             CHECK(instance->Step({1, fixture.binding, snapshot.Value(), {}}).HasError());
             CHECK(fixture.probe.starts == 0);
             CHECK(fixture.Step(*instance, 1) == AiTaskState::Running);
+        }
+
+        TEST_CASE("Decision binding stops after its graph owner cancels from a factory", "[ai][decision-graph-runtime]") {
+            Fixture fixture;
+            struct Factory final {
+                Probe &probe;
+                CancellationSource cancellation;
+                std::size_t destroyed{};
+            } factory{fixture.probe};
+            auto registration = Registration(fixture.probe);
+            registration.factory.userData = &factory;
+            registration.factory.create = [](void *value, std::span<const BehaviorTreeProperty>) -> IBehaviorTreeExecutor * {
+                auto &owner = *static_cast<Factory *>(value);
+                owner.cancellation.RequestCancellation();
+                ++owner.probe.factories;
+                return new Provider(owner.probe);
+            };
+            registration.factory.destroy = [](void *value, IBehaviorTreeExecutor *instance) noexcept {
+                ++static_cast<Factory *>(value)->destroyed;
+                delete instance;
+            };
+            auto generation = DecisionNodeGeneration::Capture({&registration, 1}, fixture.admission);
+            REQUIRE(generation.HasValue());
+            fixture.providers = std::move(generation).Value();
+            const auto tree = Tree(1, {TreeNode(1, DecisionControlKind::Root), TreeNode(2, DecisionControlKind::Parallel),
+                                       TreeNode(3, DecisionControlKind::Task), TreeNode(4, DecisionControlKind::Task)},
+                                   {Edge(1, 1, 2), Edge(2, 2, 3), Edge(3, 2, 4, 1)});
+            const auto plan = fixture.Compile(std::span{&tree, 1}, 1);
+            auto binding = fixture.RuntimeBinding();
+            const auto scope = GENERATE(&AiTaskOperationContext::cancellation, &AiTaskOperationContext::capabilityCancellation,
+                                        &AiTaskOperationContext::ownerCancellation);
+            binding.operation.*scope = factory.cancellation.Token();
+
+            const auto created = DecisionGraphInstance::Create(plan, fixture.providers, binding);
+
+            REQUIRE(created.HasError());
+            CHECK(created.ErrorValue().code.Value() == AIErrors::RuntimeUnavailable.code.Value());
+            CHECK(fixture.providers->CanAdmit());
+            CHECK(fixture.probe.factories == 1);
+            CHECK(factory.destroyed == 1);
+            CHECK(fixture.probe.starts == 0);
         }
 
         TEST_CASE("HSM one-shot provider actions terminate or reject Running with exactly once cleanup", "[ai][decision-graph-runtime]") {

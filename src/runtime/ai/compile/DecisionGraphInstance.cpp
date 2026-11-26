@@ -160,7 +160,8 @@ namespace Horo::AI {
         const auto &graph = plan_->Graphs()[plan_->Occurrences()[index].plan];
         state.generation = binding_.firstTaskGeneration;
         if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&graph.execution)) {
-            auto callbacks = providers_->CreateExecutor(providers_, **tree, plan_->Capabilities(), graph.providerProperties, queryTasks);
+            auto callbacks = providers_->CreateExecutor(providers_, **tree, plan_->Capabilities(), graph.providerProperties, queryTasks,
+                                                        &binding_.operation);
             if (callbacks.HasError())
                 return Result<void>::Failure(callbacks.ErrorValue());
             BehaviorTreeInstanceBinding binding{binding_.operation.agent, binding_.operation.cancellation,
@@ -179,7 +180,8 @@ namespace Horo::AI {
             if (auto built = BuildUtility(index); built.HasError())
                 return built;
         } else {
-            auto callbacks = providers_->CreateExecutor(providers_, *graph.bindings, plan_->Capabilities(), graph.providerProperties);
+            auto callbacks = providers_->CreateExecutor(providers_, *graph.bindings, plan_->Capabilities(), graph.providerProperties,
+                                                        &binding_.operation);
             if (callbacks.HasError())
                 return Result<void>::Failure(callbacks.ErrorValue());
             state.actions = std::make_unique<ActionAdapter>(*this, index, std::move(callbacks).Value());

@@ -31,6 +31,8 @@ metadata until the host explicitly activates the provider.
 If a provider withdraws admission during node binding, binding stops before
 invoking another factory and disposes of already created nodes under their
 original provider lease.
+Cancellation of the graph's operation has the same effect during binding. The
+runtime disposes of the partial graph without revoking other users of that provider.
 
 Each contribution declares its execution domain, required immutable inputs,
 maximum request and result sizes, work and concurrency limits, output schema,

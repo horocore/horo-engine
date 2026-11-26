@@ -12,7 +12,8 @@ namespace Horo::AI {
         state.utility->actions.reserve(utility.Actions().size());
         std::uint32_t offset{};
         for (const auto &action : utility.Actions()) {
-            auto callbacks = providers_->CreateExecutor(providers_, *action, plan_->Capabilities(), graph.providerProperties);
+            auto callbacks = providers_->CreateExecutor(providers_, *action, plan_->Capabilities(), graph.providerProperties, nullptr,
+                                                        &binding_.operation);
             if (callbacks.HasError())
                 return Result<void>::Failure(callbacks.ErrorValue());
             BehaviorTreeInstanceBinding binding{binding_.operation.agent, binding_.operation.cancellation,

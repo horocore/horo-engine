@@ -138,8 +138,18 @@ namespace Horo::AI {
 
     private:
         friend class RegisteredDecisionNodeExecutor;
+        friend class DecisionGraphInstance;
         friend class ::Horo::Gameplay::LoadedGameModule;
         friend class ::Horo::Gameplay::LuaDecisionNodeProgram;
+        /** @brief Binds callbacks for a graph whose operation can be cancelled during construction. */
+        [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
+            std::shared_ptr<const DecisionNodeGeneration> self, const DecisionAssetPlan &plan, AiCapabilitySet capabilities,
+            std::span<const DecisionNodeConfiguration> configuration, const AiTaskOperationContext *operation) const;
+        /** @brief Binds executable callbacks while the graph and optional query route are admitted. */
+        [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
+            std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
+            std::span<const DecisionNodeConfiguration> configuration, IDecisionQueryTaskBinder *queryTasks,
+            const AiTaskOperationContext *operation) const;
         /** @brief Retains one exact native owner while deferring callable admission until module activation succeeds. */
         [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureNative(
             std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
