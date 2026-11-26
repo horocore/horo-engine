@@ -101,6 +101,7 @@ namespace Horo::Editor {
         std::span<const AgentSceneReferencePoint> locations;
         std::uint64_t structuralRevision{}; /**< Exact Play topology at the press; selection-only requests omit it. */
         bool mounted{};                     /**< Draw source was a committed mounted cell. */
+        CancellationToken lifetime;         /**< Exact token from the selection snapshot used during capture. */
     };
 
     /** @brief Bounded reference review. Multiple requests stay ambiguous regardless of their eligibility. */
@@ -119,6 +120,7 @@ namespace Horo::Editor {
         std::uint64_t worldGeneration{};     /**< Exact live Scene occurrence. */
         std::uint64_t structuralRevision{}; /**< Published topology used to classify the candidates. */
         std::uint64_t selectionRevision{};  /**< Selection used by the workspace for this review. */
+        CancellationToken lifetime;         /**< Workspace lifetime shared with the original request. */
 
         /** @brief Indicates that the captured evidence admits multiple distinct referents. */
         [[nodiscard]] bool RequiresClarification() const noexcept {
@@ -156,5 +158,6 @@ namespace Horo::Editor {
         std::array<Contact, MaximumContacts> contacts{};
         std::size_t count{};
         std::uint64_t selectionRevision{};
+        CancellationToken lifetime; /**< Workspace lifetime that admitted this Physics read. */
     };
 }  // namespace Horo::Editor

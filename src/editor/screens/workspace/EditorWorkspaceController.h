@@ -1411,6 +1411,10 @@ namespace Horo::Editor {
         void RefreshSceneProjections();
         /** @brief Revokes agent evidence before publishing a changed scene or selection projection. */
         void InvalidateAgentSceneSelection() noexcept;
+        /** @brief Issues or reuses the current workspace evidence lifetime on the owner lane. */
+        [[nodiscard]] const CancellationSource &AgentSceneSelectionLifetime();
+        /** @brief Checks exact ownership and rejects expired evidence even after returning to an earlier source. */
+        [[nodiscard]] bool AgentSceneSelectionLifetimeCurrent(const CancellationToken &token) const noexcept;
         /** @brief Revokes only viewport-specific reviews after camera or tool changes. */
         void InvalidateAgentViewport() noexcept;
         /** @brief Withdraws renderer-owned capture before retiring the command binding and its telemetry. */

@@ -312,6 +312,10 @@ rejected before planning.
 The retained Play reference review remains visible only while its document
 opening, selection, live Scene topology, and mounted or authored source still
 match. The panel checks those revisions without rescanning the candidates.
+Reference requests must carry the cancellation token from their
+`AgentSceneSelectionSnapshot`. Both reference and contact reviews retain that
+workspace lifetime. Switching the mounted or authored Play source revokes the
+old lifetime permanently, even if the user returns to the original source.
 
 Immersive requests follow an explicit presentation state machine:
 

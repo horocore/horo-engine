@@ -596,9 +596,7 @@ namespace Horo::Editor {
                 return std::nullopt;
         } else if (m_viewModel.worldDocument || !selection.revision.value || selection.objects.empty())
             return std::nullopt;
-        if (!m_agentSceneSelectionLifetime)
-            m_agentSceneSelectionLifetime.emplace();
-        auto captured = CaptureAgentSelectionValues(*m_agentSceneSelectionLifetime);
+        auto captured = CaptureAgentSelectionValues(AgentSceneSelectionLifetime());
         if (purpose == AgentSceneSelectionPurpose::ImmersivePlay && m_mountedWorldPlaySelected) {
             captured.objectCount = 0;
             captured.truncated = false;
@@ -725,7 +723,7 @@ namespace Horo::Editor {
     std::optional<AgentSceneReferenceReview> EditorWorkspaceController::ReviewAgentSceneReferences(
         const AgentSceneReferenceRequest &request) const {
         const auto play = ReadAgentReferenceScene();
-        if (!play || play->RuntimeId().value != request.worldGeneration)
+        if (!play || play->RuntimeId().value != request.worldGeneration || !AgentSceneSelectionLifetimeCurrent(request.lifetime))
             return std::nullopt;
         if (request.documentEpoch != m_document.ReplacementEpoch() || request.documentRevision != m_document.Revision().value)
             return std::nullopt;
@@ -743,6 +741,7 @@ namespace Horo::Editor {
             review->structuralRevision = play->StructuralRevision();
             review->selectionRevision = selection.revision.value;
             review->mounted = m_mountedWorldPlaySelected;
+            review->lifetime = request.lifetime;
         }
         return review;
     }
@@ -750,7 +749,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::AgentSceneReferencesCurrent */
     bool EditorWorkspaceController::AgentSceneReferencesCurrent(const AgentSceneReferenceReview &review) const {
         const auto play = ReadAgentReferenceScene();
-        return play && review.worldGeneration == play->RuntimeId().value && review.structuralRevision == play->StructuralRevision() &&
+        return play && AgentSceneSelectionLifetimeCurrent(review.lifetime) && review.worldGeneration == play->RuntimeId().value &&
+               review.structuralRevision == play->StructuralRevision() &&
                review.documentEpoch == m_document.ReplacementEpoch() && review.documentRevision == m_document.Revision().value &&
                review.selectionRevision == m_selection.Current().revision.value && review.mounted == m_mountedWorldPlaySelected;
     }
@@ -758,7 +758,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::AgentSceneContactsCurrent */
     bool EditorWorkspaceController::AgentSceneContactsCurrent(const AgentSceneContactReview &review) const {
         const auto play = ReadAgentReferenceScene();
-        if (!play || !CanReviewAgentSceneContacts())
+        if (!play || !CanReviewAgentSceneContacts() || !AgentSceneSelectionLifetimeCurrent(review.lifetime))
             return false;
         const auto &selection = m_selection.Current();
         return review.object == selection.primary->value && review.worldGeneration == play->RuntimeId().value &&
@@ -790,7 +790,8 @@ namespace Horo::Editor {
                                              .structuralRevision = play->StructuralRevision(),
                                              .documentEpoch = m_document.ReplacementEpoch(),
                                              .documentRevision = m_document.Revision().value,
-                                             .selectionRevision = selection.revision.value};
+                                             .selectionRevision = selection.revision.value,
+                                             .lifetime = AgentSceneSelectionLifetime().Token()};
         const auto contacts = m_playSession.ReadAgentSceneContacts(*entity);
         if (!contacts || contacts->anchor != *entity || !AgentSceneContactsCurrent(review))
             return std::nullopt;
@@ -1100,6 +1101,18 @@ namespace Horo::Editor {
         for (std::size_t index = 0; index < snapshot.objectCount; ++index)
             snapshot.objects[index] = selection.objects[index].value;
         return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceController::AgentSceneSelectionLifetime */
+    const CancellationSource &EditorWorkspaceController::AgentSceneSelectionLifetime() {
+        if (!m_agentSceneSelectionLifetime)
+            m_agentSceneSelectionLifetime.emplace();
+        return *m_agentSceneSelectionLifetime;
+    }
+
+    /** @copydoc EditorWorkspaceController::AgentSceneSelectionLifetimeCurrent */
+    bool EditorWorkspaceController::AgentSceneSelectionLifetimeCurrent(const CancellationToken &token) const noexcept {
+        return m_agentSceneSelectionLifetime && m_agentSceneSelectionLifetime->Token() == token && !token.IsCancellationRequested();
     }
 
     /** @copydoc EditorWorkspaceController::InvalidateAgentSceneSelection */

@@ -960,7 +960,14 @@ namespace {
             CHECK_FALSE(workspace.ReadAgentSceneContacts());
         }
         host.contactPeer = Runtime::SceneObjectId{1};
-        return *review;
+        workspace.SelectMountedWorldPlay(true);
+        CHECK_FALSE(workspace.AgentSceneContactsCurrent(*review));
+        workspace.SelectMountedWorldPlay(false);
+        const auto refreshed = workspace.ReadAgentSceneContacts();
+        REQUIRE(refreshed);
+        CHECK(workspace.AgentSceneContactsCurrent(*refreshed));
+        CHECK_FALSE(workspace.AgentSceneContactsCurrent(*review));
+        return *refreshed;
     }
 
     /** @brief Checks the read-only candidate review against a running editor scene. */
@@ -971,6 +978,8 @@ namespace {
         const std::array candidates{selected.value, SceneObjectId{1}.value, std::uint64_t{999999}, std::uint64_t{3}, std::uint64_t{4}};
         AgentSceneReferenceRequest request{capturedSelection->documentEpoch, capturedSelection->documentRevision, play.RuntimeId().value,
                                            candidates};
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.lifetime = capturedSelection->lifetime;
         const auto references = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(references);
         REQUIRE(references->Candidates().size() == candidates.size());
@@ -1011,7 +1020,8 @@ namespace {
                                            .source = AgentSceneReferenceSource::Location,
                                            .locations = points,
                                            .structuralRevision = play.StructuralRevision(),
-                                           .mounted = true};
+                                           .mounted = true,
+                                           .lifetime = captured->lifetime};
         CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
         workspace.SelectMountedWorldPlay(false);
         CHECK_FALSE(captured->lifetime.IsCancellationRequested());
@@ -1022,6 +1032,8 @@ namespace {
         CHECK_FALSE(mountedCapture->lifetime.IsCancellationRequested());
         workspace.SelectMountedWorldPlay(true);
         CHECK_FALSE(mountedCapture->lifetime.IsCancellationRequested());
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        request.lifetime = mountedCapture->lifetime;
         const auto mounted = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(mounted);
         CHECK(mounted->mounted);
@@ -1039,6 +1051,15 @@ namespace {
         workspace.SelectMountedWorldPlay(false);
         CHECK(mountedCapture->lifetime.IsCancellationRequested());
         CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*mounted));
+        workspace.SelectMountedWorldPlay(true);
+        const auto newCapture = workspace.CaptureAgentSceneSelection(AgentSceneSelectionPurpose::ImmersivePlay);
+        REQUIRE(newCapture);
+        --request.structuralRevision;
+        CHECK_FALSE(workspace.ReviewAgentSceneReferences(request));
+        CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*mounted));
+        request.lifetime = newCapture->lifetime;
+        CHECK(workspace.ReviewAgentSceneReferences(request));
+        workspace.SelectMountedWorldPlay(false);
     }
 
     /** @brief Location evidence belongs to its original scene and is withheld for deleted objects. */
@@ -1053,7 +1074,8 @@ namespace {
                                                  .worldGeneration = play.RuntimeId().value,
                                                  .source = AgentSceneReferenceSource::Location,
                                                  .locations = locations,
-                                                 .structuralRevision = play.StructuralRevision()};
+                                                 .structuralRevision = play.StructuralRevision(),
+                                                 .lifetime = captured->lifetime};
         const auto review = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(review);
         REQUIRE(review->Candidates().size() == 3);
@@ -1072,7 +1094,10 @@ namespace {
         REQUIRE(capture);
         CHECK(capture->objectCount == 0);
         CHECK_FALSE(capture->lifetime.IsCancellationRequested());
-        const auto review = workspace.ReviewAgentSceneReferences({capture->documentEpoch, capture->documentRevision, scene.value, {}});
+        const auto review = workspace.ReviewAgentSceneReferences({.documentEpoch = capture->documentEpoch,
+                                                                  .documentRevision = capture->documentRevision,
+                                                                  .worldGeneration = scene.value,
+                                                                  .lifetime = capture->lifetime});
         REQUIRE(review);
         CHECK(review->Candidates().empty());
         CHECK_FALSE(review->RequiresClarification());
@@ -1093,7 +1118,8 @@ namespace {
                                            .worldGeneration = play->RuntimeId().value,
                                            .objects = objects,
                                            .source = AgentSceneReferenceSource::Pointing,
-                                           .structuralRevision = play->StructuralRevision()};
+                                           .structuralRevision = play->StructuralRevision(),
+                                           .lifetime = captured->lifetime};
         const auto displayed = workspace.ReviewAgentSceneReferences(request);
         REQUIRE(displayed);
         CHECK(workspace.AgentSceneReferencesCurrent(*displayed));

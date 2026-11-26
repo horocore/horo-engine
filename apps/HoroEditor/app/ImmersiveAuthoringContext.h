@@ -79,6 +79,10 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::span<const SceneSource::SceneObjectId> Selection() const && = delete;
+        /** @brief Returns the upstream workspace lifetime captured with the selection. */
+        [[nodiscard]] CancellationToken SourceLifetime() const noexcept {
+            return sourceLifetime_;
+        }
         [[nodiscard]] bool IsCurrent() const noexcept;
 
         /** @brief Checks whether two snapshots were issued for the exact same owner and generation. */

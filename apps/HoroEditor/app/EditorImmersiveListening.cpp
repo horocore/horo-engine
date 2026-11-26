@@ -9,11 +9,12 @@ namespace Horo::Editor {
     namespace {
         /** @brief Requests complete point or object evidence from the workspace owning the captured revision. */
         std::optional<AgentSceneReferenceReview> ReviewPointedReferences(
-            const ImmersiveCommandEnvelope &preview, const ImmersiveContextIdentity &identity,
+            const ImmersiveCommandEnvelope &preview, const ImmersivePlanningContext &context,
             const std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> &review,
             const AgentSceneReferenceSource source) {
             const auto kind = source == AgentSceneReferenceSource::Location ? ImmersivePointingReviewKind::Locations
                                                                             : ImmersivePointingReviewKind::Objects;
+            const auto &identity = context.Identity();
             const auto pointing = CollectImmersivePointingHits(preview.Spatial(), identity.worldGeneration, kind);
             if (!pointing)
                 return std::nullopt;
@@ -22,7 +23,8 @@ namespace Horo::Editor {
                                                .worldGeneration = identity.worldGeneration,
                                                .source = source,
                                                .structuralRevision = pointing->structuralRevision,
-                                               .mounted = pointing->mounted};
+                                               .mounted = pointing->mounted,
+                                               .lifetime = context.SourceLifetime()};
             if (kind == ImmersivePointingReviewKind::Locations) {
                 std::array<AgentSceneReferencePoint, ImmersivePointingHits::MaximumObjects> locations;
                 auto captured = std::span{locations}.first(pointing->count);
@@ -84,7 +86,7 @@ namespace Horo::Editor {
         const auto &context = preview_->Speech().Context();
         const auto &identity = context.Identity();
         if (source != AgentSceneReferenceSource::Selection)
-            return ReviewPointedReferences(*preview_, identity, review, source);
+            return ReviewPointedReferences(*preview_, context, review, source);
         std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
         const auto selection = context.Selection();
         if (selection.size() > AgentSceneSelectionSnapshot::MaximumObjects)
@@ -92,8 +94,11 @@ namespace Horo::Editor {
 
         for (std::size_t index = 0; index < selection.size(); ++index)
             objects[index] = selection[index].value;
-        return review(
-            {identity.documentOpening, identity.documentRevision, identity.worldGeneration, std::span{objects}.first(selection.size())});
+        return review({.documentEpoch = identity.documentOpening,
+                       .documentRevision = identity.documentRevision,
+                       .worldGeneration = identity.worldGeneration,
+                       .objects = std::span{objects}.first(selection.size()),
+                       .lifetime = context.SourceLifetime()});
     }
 
     /** @copydoc EditorImmersiveListening::ReviewSurfaces */
