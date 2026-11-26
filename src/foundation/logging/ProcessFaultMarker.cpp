@@ -168,7 +168,8 @@ namespace Horo::Log::Internal {
                 const int file = markerFile.exchange(-1);
                 if (file >= 0) {
                     const Footer footer{static_cast<std::uint32_t>(signal), 0, completionTag};
-                    static_cast<void>(write(file, &footer, sizeof(footer)));
+                    // Startup validates the full record. A partial write must never delay signal delivery.
+                    [[maybe_unused]] const auto written = write(file, &footer, sizeof(footer));
                     static_cast<void>(close(file));
                 }
             }
