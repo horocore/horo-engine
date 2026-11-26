@@ -31,6 +31,21 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    TEST_CASE("Native CLI admits portable removal blockers without disclosing other error details", "[packages][cli][errors]") {
+        const auto translator = Translator();
+        Error blocked{ErrorCode{"packages.request.removal_blocked"}, ErrorDomainId{"horo.packages.request"}, ErrorSeverity::Error,
+                      "A locked dependency cannot be removed directly."};
+        blocked.diagnostics.emplace_back(DiagnosticCode{"packages.request.removal_required_by"}, DiagnosticSeverity::Error,
+                                         "com.game.root 1.2.0 requires com.shared.data", SourceLocation{"packages.lock"}, "com.game.root");
+        const auto review = translator.Translate(blocked, Hosts::ErrorDetail::HostPolicy);
+        REQUIRE(review.has_value());
+        REQUIRE(review->Failure().diagnostics.size() == 1);
+        CHECK(review->Failure().diagnostics.front().path == "com.game.root");
+        const auto publicReview = translator.Translate(blocked);
+        REQUIRE(publicReview.has_value());
+        CHECK(publicReview->Failure().diagnostics.front().path.empty());
+    }
+
     TEST_CASE("Native navigation host preserves validation cancellation and infrastructure exit categories", "[navigation][cli][errors]") {
         using enum Hosts::ExitCategory;
         namespace N = Navigation::NavigationErrors;

@@ -7493,7 +7493,7 @@ add_executable(HoroNavigationHostErrorTests unit/application/navigation/Navigati
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/PrefabCliHost.cpp"
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/NavigationCliHost.cpp")
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::AnimationCookedAssets)
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::AnimationCookedAssets HoroEngine::Packages)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors

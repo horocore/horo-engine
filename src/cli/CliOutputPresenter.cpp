@@ -129,7 +129,7 @@ namespace Horo::Cli {
         /** @brief Fails closed on missing mappings while retaining the complete original typed error. */
         void ProjectFailure(Json &envelope, const Error &failure, const Hosts::ErrorTranslator &translator, const bool hostFailure,
                             CliPresentationOutcome &outcome) {
-            auto translated = translator.Translate(failure);
+            auto translated = translator.Translate(failure, Hosts::ErrorDetail::HostPolicy);
             if (!translated) {
                 outcome.rejectedError = failure;
                 translated = translator.Translate(MakeError(CliErrors::HostFailure));
@@ -168,6 +168,9 @@ namespace Horo::Cli {
             if (envelope["status"] == "failed") {
                 diagnostics << HumanText(envelope["error"].is_null() ? "CLI host failure" : envelope["error"]["message"].get<std::string>())
                             << '\n';
+                for (const auto &entry : envelope["diagnostics"])
+                    if (!entry["path"].get_ref<const std::string &>().empty())
+                        diagnostics << HumanText(entry["message"].get_ref<const std::string &>()) << '\n';
                 return;
             }
             output << envelope["command"].get<std::string>() << ": " << envelope["status"].get<std::string>() << '\n';

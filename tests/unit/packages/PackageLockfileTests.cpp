@@ -153,12 +153,31 @@ TEST_CASE("Package removal reports each locked dependent of a transitive package
     REQUIRE(request.HasValue());
     Fixture fixture;
     fixture.requestHash = request.Value().Digest();
+    const auto selected = Id("com.shared.data");
+    SECTION("large dependency fan-in stays within the host diagnostic envelope") {
+        for (int index = 10; index < 74; ++index) {
+            const auto name = "com.game.feature" + std::to_string(index);
+            fixture.plan.packages.front().dependencies.push_back(Id(name));
+            fixture.plan.packages.push_back(Resolved(name, "1.0.0", "vendor.index", name, {selected}));
+            fixture.artifacts.push_back(Artifact(fixture.plan.packages.back()));
+        }
+        const auto lock = fixture.Generate();
+        REQUIRE(lock.HasValue());
+        const auto refused = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), selected);
+        CheckFailure(refused, "packages.request.removal_blocked");
+        const auto &diagnostics = refused.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 9);
+        for (int index = 10; index < 74; ++index) {
+            const auto identity = "com.game.feature" + std::to_string(index) + " 1.0.0";
+            CHECK(std::ranges::any_of(diagnostics, [&identity](const auto &entry) { return entry.message.find(identity) != std::string::npos; }));
+        }
+        return;
+    }
     const auto lock = fixture.Generate();
     REQUIRE(lock.HasValue());
 
-    const auto selected = Id("com.shared.data");
     const auto refused = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), selected);
-    CheckFailure(refused, "packages.request.invalid");
+    CheckFailure(refused, "packages.request.removal_blocked");
     const auto &diagnostics = refused.ErrorValue().diagnostics;
     REQUIRE(diagnostics.size() == 2);
     CHECK(diagnostics[0].code.Value() == "packages.request.removal_required_by");

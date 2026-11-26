@@ -14,7 +14,7 @@ namespace Horo::Cli {
         using Json = nlohmann::json;
 
         /** @brief Uses the same application fixture as GUI/MCP, extended with exact CLI-owned errors. */
-        Hosts::ErrorTranslator Translator() {
+        Hosts::ErrorTranslator Translator(const bool discloseFirstError = false) {
             const ModuleDescriptor module{.id = {"horo.cli"}, .version = {1, 0, 0}, .errorDomains = {CliErrors::ErrorDomain()}};
             auto registry = ExtendErrorCodeRegistry(HostErrorFixture::Registry(), std::span{&module, 1});
             REQUIRE(registry.HasValue());
@@ -22,6 +22,7 @@ namespace Horo::Cli {
                     nullptr);
             const auto application = HostErrorFixture::Mappings();
             std::vector<Hosts::ErrorMapping> mappings(application.begin(), application.end());
+            mappings.front().discloseRootDetail = discloseFirstError;
             mappings.push_back({CliErrors::HostFailure.domain, CliErrors::HostFailure.code, Hosts::ExitCategory::Invariant});
             mappings.push_back(
                 {CliErrors::ExecutionContextInvalid.domain, CliErrors::ExecutionContextInvalid.code, Hosts::ExitCategory::Invariant});
@@ -72,6 +73,33 @@ namespace Horo::Cli {
                                                           {"text", std::string{"line\n\x1b[31m"}}}});
         }
     }  // namespace
+
+    TEST_CASE("CLI discloses diagnostics only for a host-approved root error", "[cli][output]") {
+        const auto &descriptor = HostErrorFixture::Descriptors.front();
+        auto failure = MakeError(descriptor, "Approved root message");
+        failure.diagnostics.emplace_back(DiagnosticCode{descriptor.code.Value()}, DiagnosticSeverity::Error, "Approved detail",
+                                         SourceLocation{"fixture"}, "approved-reference");
+        failure = WithCause(std::move(failure), MakeError(descriptor, "Private cause message"));
+        const auto terminal = CliTerminalResult::Failure({.invocation = {31}}, failure);
+
+        std::ostringstream output, diagnostics;
+        CliOutputPresenter json(Descriptor(), {31}, Translator(true), output, diagnostics, CliProgressOutputMode::Json, false);
+        REQUIRE_FALSE(json.Complete(terminal).rejectedError.has_value());
+        const auto envelope = Json::parse(output.str());
+        INFO(envelope.dump());
+        REQUIRE(envelope["diagnostics"].size() == 1);
+        CHECK(envelope["diagnostics"].front()["path"] == "approved-reference");
+        CHECK(output.str().find("Private cause message") == std::string::npos);
+
+        CliOutputPresenter human(Descriptor(), {31}, Translator(true), output, diagnostics, CliProgressOutputMode::Human, false);
+        CHECK_FALSE(human.Complete(terminal).rejectedError.has_value());
+        CHECK(diagnostics.str() == "Approved root message\nApproved detail\n");
+
+        std::ostringstream publicOutput, publicDiagnostics;
+        CliOutputPresenter other(Descriptor(), {31}, Translator(), publicOutput, publicDiagnostics, CliProgressOutputMode::Json, false);
+        CHECK_FALSE(other.Complete(terminal).rejectedError.has_value());
+        CHECK(publicOutput.str().find("Approved detail") == std::string::npos);
+    }
 
     TEST_CASE("JSON CLI presentation is one document and preserves typed values and correlation") {
         std::ostringstream output, diagnostics;

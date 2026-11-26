@@ -17,6 +17,7 @@
 #include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Navigation/NavigationErrors.h"
+#include "Horo/Packages/PackageRequest.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/NativeFileSystemErrors.h"
 #include "Horo/Platform/ProjectReadFiles.h"
@@ -491,6 +492,11 @@ namespace Horo::Application::Internal {
         mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.read_failed"}, Operation);
         mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.write_failed"}, Operation);
         mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.size_exceeded"}, Validation);
+        const auto packageMappings = mappings.size();
+        if (!AddDomain(modules, mappings, "horo.packages", Packages::PackageRemovalErrorDomain(), Validation))
+            return std::nullopt;
+        for (auto &mapping : std::span{mappings}.subspan(packageMappings))
+            mapping.discloseRootDetail = mapping.code.Value() == "packages.request.removal_blocked";
         if (!AddEntries(modules, mappings, "horo.navigation", NavigationEntries) || !AddHostDependencies(modules, mappings) ||
             !AddSourceDomains(modules, mappings) || !AddPrefabDomains(modules, mappings))
             return std::nullopt;

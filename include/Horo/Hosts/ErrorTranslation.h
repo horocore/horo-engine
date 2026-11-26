@@ -30,12 +30,14 @@ namespace Horo::Hosts {
         ErrorDomainId domain;
         ErrorCode code;
         ExitCategory category{ExitCategory::Operation};
+        bool discloseRootDetail{}; /**< Host approval for operation detail on this exact root identity. */
     };
 
-    /** @brief Public output omits operation text and locations; trusted local details retain them. */
+    /** @brief Controls disclosure of operation text and diagnostic locations. */
     enum class ErrorDetail : std::uint8_t {
         Public,
-        TrustedLocal
+        TrustedLocal,
+        HostPolicy /**< Discloses root details only when enabled by the host's exact mapping. */
     };
 
     /** @brief Immutable owned presentation preserving the original identity and cause chain. */

@@ -86,13 +86,14 @@ namespace Horo::Hosts {
                 SeverityName(error.severity).empty() || error.diagnostics.size() > 64 || !ValidText(descriptor->summary) ||
                 !ValidText(descriptor->remediationHint))
                 return std::nullopt;
-            const bool trusted = detail == ErrorDetail::TrustedLocal;
+            const bool trusted = detail == ErrorDetail::TrustedLocal || (detail == ErrorDetail::HostPolicy && depth == 0);
             if (trusted && !ValidText(error.message))
                 return std::nullopt;
             Error projected = MakeError(*descriptor, trusted && !error.message.empty() ? error.message : std::string{descriptor->summary});
             projected.severity = error.severity;
             for (const Diagnostic &diagnostic : error.diagnostics) {
-                auto projectedDiagnostic = ProjectDiagnostic(diagnostic, error.domain, registry, detail);
+                auto projectedDiagnostic = ProjectDiagnostic(diagnostic, error.domain, registry,
+                                                             trusted ? ErrorDetail::TrustedLocal : ErrorDetail::Public);
                 if (!projectedDiagnostic)
                     return std::nullopt;
                 projected.diagnostics.push_back(std::move(*projectedDiagnostic));
@@ -145,14 +146,15 @@ namespace Horo::Hosts {
 
     /** @copydoc ErrorTranslator::Translate */
     std::optional<TranslatedError> ErrorTranslator::Translate(const Error &error, const ErrorDetail detail) const {
-        if (detail != ErrorDetail::Public && detail != ErrorDetail::TrustedLocal)
+        if (detail != ErrorDetail::Public && detail != ErrorDetail::TrustedLocal && detail != ErrorDetail::HostPolicy)
             return std::nullopt;
         const auto mapping = std::ranges::find_if(mappings_, [&error](const ErrorMapping &candidate) {
             return candidate.domain.Value() == error.domain.Value() && candidate.code.Value() == error.code.Value();
         });
         if (mapping == mappings_.end())
             return std::nullopt;
-        auto projected = ProjectError(error, registry_, detail, 0);
+        const auto disclosure = detail == ErrorDetail::HostPolicy && !mapping->discloseRootDetail ? ErrorDetail::Public : detail;
+        auto projected = ProjectError(error, registry_, disclosure, 0);
         if (!projected)
             return std::nullopt;
         const auto &descriptor = *registry_.Resolve(error);

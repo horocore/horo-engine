@@ -5,7 +5,14 @@
 
 #include <optional>
 
+namespace Horo {
+    struct ModuleErrorDomainDescriptor;
+}
+
 namespace Horo::Packages {
+    /** @brief Declares portable removal review error identities for host presentation. */
+    [[nodiscard]] ModuleErrorDomainDescriptor PackageRemovalErrorDomain();
+
     /** @brief Portable authority categories; local overrides and transport/trust credentials are not project intent. */
     enum class PortablePackageSourceKind : std::uint8_t {
         PublicRegistry,
