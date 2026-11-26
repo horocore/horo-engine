@@ -885,6 +885,11 @@ namespace {
     /** @brief Checks that the preview screens peers and retires after its Scene changes. */
     AgentSceneContactReview VerifyPlayContactReview(EditorWorkspaceController &workspace, DecisionNavigationTestHost &host,
                                                     const SceneObjectId selected) {
+        REQUIRE(workspace.CanReviewAgentSceneContacts());
+        workspace.SelectMountedWorldPlay(true);
+        CHECK_FALSE(workspace.CanReviewAgentSceneContacts());
+        CHECK_FALSE(workspace.ReadAgentSceneContacts());
+        workspace.SelectMountedWorldPlay(false);
         const auto review = workspace.ReadAgentSceneContacts();
         REQUIRE(review);
         CHECK(review->object == selected.value);

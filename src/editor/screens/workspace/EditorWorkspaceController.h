@@ -346,6 +346,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool AgentSceneReferencesCurrent(const AgentSceneReferenceReview &review) const;
         /** @brief Reads the selected ordinary Scene object's latest complete Physics tick. */
         [[nodiscard]] std::optional<AgentSceneContactReview> ReadAgentSceneContacts();
+        /** @brief Reports whether read-only contact review is available for the active Play selection. */
+        [[nodiscard]] bool CanReviewAgentSceneContacts() const;
         /** @brief Checks the exact document, Scene topology and selected owner of a retained preview. */
         [[nodiscard]] bool AgentSceneContactsCurrent(const AgentSceneContactReview &review) const;
 

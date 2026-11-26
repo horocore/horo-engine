@@ -758,21 +758,27 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::AgentSceneContactsCurrent */
     bool EditorWorkspaceController::AgentSceneContactsCurrent(const AgentSceneContactReview &review) const {
         const auto play = ReadAgentReferenceScene();
+        if (!play || !CanReviewAgentSceneContacts())
+            return false;
         const auto &selection = m_selection.Current();
-        const auto primary = selection.primary;
-        return play && primary && review.object == primary->value && review.worldGeneration == play->RuntimeId().value &&
+        return review.object == selection.primary->value && review.worldGeneration == play->RuntimeId().value &&
                review.structuralRevision == play->StructuralRevision() && review.documentEpoch == m_document.ReplacementEpoch() &&
-               review.documentRevision == m_document.Revision().value && review.selectionRevision == selection.revision.value &&
-               !m_viewModel.worldDocument && !m_mountedWorldPlaySelected;
+               review.documentRevision == m_document.Revision().value && review.selectionRevision == selection.revision.value;
+    }
+
+    /** @copydoc EditorWorkspaceController::CanReviewAgentSceneContacts */
+    bool EditorWorkspaceController::CanReviewAgentSceneContacts() const {
+        return m_playSession.State() == EditorPlaySessionState::Playing && !m_viewModel.worldDocument &&
+               !m_mountedWorldPlaySelected && m_selection.Current().primary.has_value();
     }
 
     /** @copydoc EditorWorkspaceController::ReadAgentSceneContacts */
     std::optional<AgentSceneContactReview> EditorWorkspaceController::ReadAgentSceneContacts() {
         const auto play = ReadAgentReferenceScene();
+        if (!play || !CanReviewAgentSceneContacts())
+            return std::nullopt;
         const auto &selection = m_selection.Current();
         const auto primary = selection.primary;
-        if (!play || !primary || m_viewModel.worldDocument || m_mountedWorldPlaySelected)
-            return std::nullopt;
         const auto objects = m_document.Objects();
         if (ClassifyAgentReference(objects, true, *play, *primary) != AgentSceneReferenceState::Available)
             return std::nullopt;

@@ -428,6 +428,48 @@ namespace {
         }
     }
 
+    TEST_CASE("Play contact review works without a speech provider and clears when its scene retires", "[editor][agent][gui][play]") {
+        unsigned reads = 0;
+        bool current = true;
+        bool playing = false;
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.canReviewAgentSceneContacts = [&] { return playing; };
+            context.readAgentSceneContacts = [&] {
+                ++reads;
+                AgentSceneContactReview review{.object = 301, .completedTick = 405};
+                review.contacts[0] = {507, AgentSceneContactKind::TriggerEnter};
+                review.count = 1;
+                return std::optional{review};
+            };
+            context.agentSceneContactsCurrent = [&](const AgentSceneContactReview &review) {
+                return current && review.object == 301;
+            };
+        }};
+        constexpr std::string_view button = "Review selected object's physics events";
+        constexpr std::string_view contact = "Trigger entry #507";
+        CHECK(fixture.DrawnText().find(button) == std::string::npos);
+        playing = true;
+        CHECK(fixture.DrawnText().find(button) != std::string::npos);
+        CHECK(reads == 0);
+
+        fixture.Activate("###xr_contacts_review");
+        const auto reviewed = fixture.DrawnText();
+        CHECK(reviewed.find("Completed physics tick 405") != std::string::npos);
+        CHECK(reviewed.find(contact) != std::string::npos);
+        CHECK(reads == 1);
+
+        current = false;
+        const auto withdrawn = fixture.DrawnText();
+        CHECK(withdrawn.find(contact) == std::string::npos);
+        CHECK(withdrawn.find("A complete physics event review is unavailable") != std::string::npos);
+        current = true;
+        playing = false;
+        CHECK(fixture.DrawnText().find(button) == std::string::npos);
+        playing = true;
+        CHECK(fixture.DrawnText().find(contact) == std::string::npos);
+        CHECK(reads == 1);
+    }
+
     TEST_CASE("Viewport numbers are captured only after a user opens their review", "[editor][agent][gui][viewport]") {
         CancellationSource owner;
         int captured{};

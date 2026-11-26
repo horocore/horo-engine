@@ -275,8 +275,9 @@ Ownership rules:
   The on-demand Physics preview reads contact starts and trigger entries for the
   selected object in one completed Play tick. It filters by the object's
   resident body handles when they fit the Physics filter budget and uses the
-  complete tick otherwise. It displays the tick alongside
-  the events and leaves speech timing separate. Incomplete event batches and
+  complete tick otherwise. The local panel makes this review available during
+  Play without starting speech capture. It displays the tick alongside the
+  events and clears the preview when Play stops or pauses. Incomplete event batches and
   hidden, locked, or deleted peers suppress the preview. A new selection,
   document revision, or Scene structural revision withdraws the captured review.
 - MCP validates admitted tools. The editor document/command owner validates and

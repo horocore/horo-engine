@@ -156,6 +156,8 @@ namespace Horo::Editor {
         std::function<bool(const AgentSceneContactReview &)> agentSceneContactsCurrent{};
         /** @brief Checks the lifetime of a displayed review without classifying its candidates again. */
         std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent{};
+        /** @brief Checks whether the workspace can review contact events for its selected Play object. */
+        std::function<bool()> canReviewAgentSceneContacts{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
