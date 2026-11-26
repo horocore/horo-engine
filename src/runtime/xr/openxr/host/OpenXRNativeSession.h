@@ -589,6 +589,10 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Passes an otherwise unhandled OpenXR event to the linked passthrough provider.
          * @param buffer Exact native event borrowed during the owner-lane poll. */
         void ObservePassthroughEvent(const XrEventDataBuffer &buffer) noexcept;
+        /** @brief Redacts a pending or active grant on a native event and defers pause while a native call owns the child. */
+        void WithdrawPassthroughForEvent() noexcept {
+            RevokePassthrough(preparingPassthrough_ ? *preparingPassthrough_ : passthrough_.scope);
+        }
         /** @brief Cleans up the current passthrough child before native session retirement. */
         [[nodiscard]] Result<void> RetirePassthrough();
         /** @brief Redacts the layer and attempts native pause on consent/focus/origin/runtime loss. */

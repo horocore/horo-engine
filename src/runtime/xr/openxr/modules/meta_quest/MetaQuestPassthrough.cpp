@@ -124,7 +124,7 @@ namespace Horo::XR::OpenXRInternal {
         std::memcpy(&event, &buffer, sizeof(event));
         // Recovery requires a new grant. Unknown or adverse flags cannot preserve an existing one.
         if (event.next || event.flags != XR_PASSTHROUGH_STATE_CHANGED_RESTORED_ERROR_BIT_FB)
-            RevokePassthrough();
+            WithdrawPassthroughForEvent();
     }
 
     /** @brief Binds native dispatch and builds only the permitted prefix of one reconstruction grant. */

@@ -326,6 +326,6 @@ namespace Horo::XR::OpenXRInternal {
         RevokeLightEstimation();
         anchorStore_.admitted = false;
         anchors_.Withdraw(XRAnchorWithdrawal::AccessRevoked);
-        RevokePassthrough();
+        WithdrawPassthroughForEvent();
     }
 }  // namespace Horo::XR::OpenXRInternal

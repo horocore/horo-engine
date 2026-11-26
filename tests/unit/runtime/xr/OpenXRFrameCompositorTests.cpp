@@ -7,6 +7,17 @@ namespace Horo::Tests::OpenXR {
             return true;
         }};
 
+        /** @brief Binds scripted event dispatch for the current test scope. */
+        struct ActiveEvents final {
+            explicit ActiveEvents(EventScript &script) {
+                EventScript::active = &script;
+            }
+
+            ~ActiveEvents() {
+                EventScript::active = nullptr;
+            }
+        };
+
         TEST_CASE("Native reconstruction underlay requires elected runtime support and explicit consent",
                   "[unit][xr][compositor][passthrough]") {
             const bool selected = GENERATE(false, true);
@@ -116,6 +127,30 @@ namespace Horo::Tests::OpenXR {
                 REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
                 RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
             }
+            SECTION("runtime failure during submission withdraws consent before pausing the provider") {
+                EventScript events;
+                ActiveEvents active{events};
+                events.session = f.native.script.lastSession;
+                OpenXRSessionEvents owner{f.native.owner, f.sessions, f.frames};
+                REQUIRE(owner.Bind({&EventScript::GetProc}, {}).HasValue());
+                f.script.onEnd = [&] {
+                    events.passthroughState = XR_PASSTHROUGH_STATE_CHANGED_RECOVERABLE_ERROR_BIT_FB;
+                    REQUIRE(owner.Poll(true).HasValue());
+                    CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Retiring);
+                    CHECK(f.passthrough.running);
+                    CHECK(f.passthrough.pauses == 0);
+                };
+                REQUIRE(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt).HasValue());
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+                CHECK_FALSE(f.passthrough.running);
+                CHECK(f.passthrough.pauses == 1);
+
+                events.passthroughState = XR_PASSTHROUGH_STATE_CHANGED_RESTORED_ERROR_BIT_FB;
+                REQUIRE(owner.Poll(true).HasValue());
+                CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Retiring);
+                REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
+            }
             SECTION("foreign frame and World origin leave the transaction available for abort") {
                 auto wrong = receipt;
                 wrong.frame = {};
@@ -129,17 +164,7 @@ namespace Horo::Tests::OpenXR {
             }
             SECTION("focus or provider loss withdraws the layer before another frame end") {
                 EventScript events;
-
-                struct ActiveEvents final {
-                    explicit ActiveEvents(EventScript &script) {
-                        EventScript::active = &script;
-                    }
-
-                    ~ActiveEvents() {
-                        EventScript::active = nullptr;
-                    }
-                } active{events};
-
+                ActiveEvents active{events};
                 events.session = f.native.script.lastSession;
                 OpenXRSessionEvents owner{f.native.owner, f.sessions, f.frames};
                 REQUIRE(owner.Bind({&EventScript::GetProc}, {}).HasValue());

@@ -1055,7 +1055,10 @@ and retries outside an admitted frame. Neither the retained handle nor a
 permission restoration republishes old lighting.
 
 Baseline passthrough is a runtime compositor-layer intent and exposes no raw camera
-frames. `XRSpatialAnchors` owns live anchor identity on the canonical XR session control
+frames. A provider failure observed during native frame submission withdraws the
+grant immediately. The native call finishes before the provider is paused. A
+runtime recovery notification cannot restore the withdrawn grant.
+`XRSpatialAnchors` owns live anchor identity on the canonical XR session control
 lane. Its fixed-capacity registry binds one explicitly admitted provider and purpose
 grant to an exact session, target reference space, and World-origin revision. Only
 fresh localized observations carry a pose. Locating, limited, lost, or expired
