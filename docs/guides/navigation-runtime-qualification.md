@@ -78,12 +78,13 @@ and checks that the old work is rejected and its provider pin released. It
 reports cumulative owner-thread C++ allocation requests across construction,
 overlapping captures and retirement.
 
-The live-memory run measures simultaneous requested heap bytes across the
-owner and worker threads. In the test process, Detour's allocation callback
-uses the same probe, so its native allocations are included. The run reports
-the peak across each layout in both modes and the overlapping-capture case
-separately from timing. The tracker uses caller-owned storage and reports an
-incomplete sample if it cannot track every block.
+The live-memory run measures simultaneously live requested bytes and
+allocator-reported usable block capacity across owner and worker threads.
+Detour's allocation callback uses the same probe, so its native allocations
+are included. The run reports both peaks for each layout in both modes and for
+the overlapping-capture case, separately from timing. The tracker uses
+caller-owned storage and reports an incomplete sample if it cannot track or
+measure every block.
 The scene's dynamic registry sizes slot and staging tables from the validated
 configuration and snapshots only active records.
 
@@ -96,10 +97,11 @@ pending queue and closing the world prevents subsequent movement callbacks.
 The Gameplay formation retirement case separately admits 64 moves with
 Character feedback pending. It retires the group, rejects late access, and
 checks that the Character, Navigation job, and topology owners drain. The test
-checks the 4 MiB ADR-109 limit against peak tracked payload, including Detour
-storage and worker-side C++ allocations. Each measured workload must also release
-all tracked storage after its owners and worker jobs retire. Allocator metadata
-and other direct C allocations still require accounting.
+checks the 4 MiB ADR-109 limit against peak usable block capacity, including
+Detour storage and worker-side C++ allocations. Each measured workload must also
+release all tracked storage after its owners and worker jobs retire. The usable
+capacity includes any rounding exposed by the allocator. Allocator metadata
+outside the usable block and other direct C allocations still require accounting.
 
 ## Reference corpus and exact outcomes
 

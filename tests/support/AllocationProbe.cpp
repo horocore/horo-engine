@@ -6,8 +6,10 @@
 #include <limits>
 #include <mutex>
 #include <new>
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 #include <malloc.h>
+#elif defined(__APPLE__)
+#include <malloc/malloc.h>
 #endif
 
 namespace {
@@ -19,6 +21,20 @@ namespace {
     // The lock protects the active scope pointer and its caller-owned records across allocator threads.
     constinit std::atomic<LiveProbe *> activeLiveProbe{};
     std::mutex liveProbeMutex;
+
+    /** @brief Reads usable capacity for an allocation made by the matching CRT allocator. */
+    std::size_t UsableAllocationBytes(void *const storage, [[maybe_unused]] const std::size_t alignment) noexcept {
+#ifdef _WIN32
+        return alignment == 0 ? _msize(storage) : _aligned_msize(storage, alignment, 0);
+#elif defined(__linux__)
+        return malloc_usable_size(storage);
+#elif defined(__APPLE__)
+        return malloc_size(storage);
+#else
+        static_cast<void>(storage);
+        return 0;
+#endif
+    }
 
     class AllocationMeter final {
     public:
@@ -50,7 +66,7 @@ namespace {
 #endif
             if (storage == nullptr)
                 throw std::bad_alloc{};
-            LiveProbe::Acquired(storage, byteCount);
+            LiveProbe::Acquired(storage, byteCount, alignment);
             return storage;
         }
 
@@ -209,7 +225,7 @@ namespace Horo::Tests::AllocationProbe {
         return measurement_;
     }
 
-    void ScopedLiveMeasurement::Acquired(const void *address, const std::size_t requestedBytes) noexcept {
+    void ScopedLiveMeasurement::Acquired(void *const address, const std::size_t requestedBytes, const std::size_t alignment) noexcept {
         if (activeLiveProbe.load(std::memory_order_acquire) == nullptr)
             return;
         const std::lock_guard lock(liveProbeMutex);
@@ -217,13 +233,18 @@ namespace Horo::Tests::AllocationProbe {
         if (probe == nullptr)
             return;
         auto &sample = probe->measurement_;
-        if (probe->count_ == probe->storage_.size() || requestedBytes > std::numeric_limits<std::size_t>::max() - sample.liveBytes) {
+        const auto usableBytes = UsableAllocationBytes(address, alignment);
+        constexpr auto maxSize = std::numeric_limits<std::size_t>::max();
+        if (probe->count_ == probe->storage_.size() || usableBytes == 0 || usableBytes == maxSize || usableBytes < requestedBytes ||
+            usableBytes > maxSize - sample.liveUsableBytes) {
             sample.incomplete = true;
             return;
         }
-        probe->storage_[probe->count_++] = {address, requestedBytes};
+        probe->storage_[probe->count_++] = {address, requestedBytes, usableBytes};
         sample.liveBytes += requestedBytes;
         sample.peakBytes = std::max(sample.peakBytes, sample.liveBytes);
+        sample.liveUsableBytes += usableBytes;
+        sample.peakUsableBytes = std::max(sample.peakUsableBytes, sample.liveUsableBytes);
     }
 
     void ScopedLiveMeasurement::Released(const void *address) noexcept {
@@ -238,6 +259,7 @@ namespace Horo::Tests::AllocationProbe {
         if (found == live.end())
             return;
         probe->measurement_.liveBytes -= found->requestedBytes;
+        probe->measurement_.liveUsableBytes -= found->usableBytes;
         *found = probe->storage_[--probe->count_];
     }
 

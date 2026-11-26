@@ -47,18 +47,21 @@ namespace Horo::Tests::AllocationProbe {
     struct LiveAllocation final {
         const void *address{};
         std::size_t requestedBytes{};
+        std::size_t usableBytes{};
     };
 
-    /** @brief Process-wide C++ payload measurements for one exclusive test scope. */
+    /** @brief Requested and allocator-reported usable C++ bytes in one exclusive test scope. */
     struct LiveMeasurement final {
         std::size_t liveBytes{};
         std::size_t peakBytes{};
+        std::size_t liveUsableBytes{};
+        std::size_t peakUsableBytes{};
         bool incomplete{};
     };
 
-    /** @brief Measures simultaneously live requested C++ bytes across allocating and freeing threads.
-     * @details Caller storage must outlive the scope. Direct C allocations and allocator overhead
-     * are outside this probe. Finish workers before taking the final snapshot.
+    /** @brief Measures live request sizes and backing block capacity across allocating and freeing threads.
+     * @details Caller storage must outlive the scope. Direct C allocations and allocator metadata
+     * outside the usable blocks are outside this probe. Finish workers before the final snapshot.
      */
     class ScopedLiveMeasurement final {
     public:
@@ -68,8 +71,9 @@ namespace Horo::Tests::AllocationProbe {
         ScopedLiveMeasurement &operator=(const ScopedLiveMeasurement &) = delete;
         [[nodiscard]] LiveMeasurement Snapshot() const noexcept;
 
-        /** @brief Allocation interposer hooks, called only after allocation succeeds or before storage is freed. */
-        static void Acquired(const void *address, std::size_t requestedBytes) noexcept;
+        /** @brief Records a successful allocation. Alignment is zero for ordinary C++ allocations. */
+        static void Acquired(void *address, std::size_t requestedBytes, std::size_t alignment = 0) noexcept;
+        /** @brief Removes an allocation from the scope before storage is freed. */
         static void Released(const void *address) noexcept;
 
     private:

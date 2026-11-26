@@ -231,16 +231,19 @@ namespace Horo::Navigation {
             scene.Close();
         }
 
-        /** @brief Reports aggregate live C++ and Detour request bytes with the reference configuration. */
+        /** @brief Checks requested and usable C++ and Detour allocation bytes against the reference envelope. */
         void ReportLiveMemory(const std::string_view workload, const std::string_view mode, const LiveMeasurement &result,
                               const std::size_t nativeAllocations) {
             REQUIRE_FALSE(result.incomplete);
             CHECK(result.peakBytes > 0);
-            CHECK(result.peakBytes <= CrowdSmallBudgetBytes);
+            CHECK(result.peakUsableBytes >= result.peakBytes);
+            CHECK(result.peakUsableBytes <= CrowdSmallBudgetBytes);
             CHECK(result.liveBytes == 0);
+            CHECK(result.liveUsableBytes == 0);
             std::cout << "NAV-006.12 profile=CrowdSmall layout=" << workload << " mode=" << mode << " agents=" << CrowdAgents
                       << " build=" << HORO_QUALIFICATION_BUILD_TYPE << " platform=" << HORO_QUALIFICATION_PLATFORM
                       << " compiler=" << HORO_QUALIFICATION_COMPILER << " tracked_live_payload_peak_bytes=" << result.peakBytes
+                      << " tracked_live_usable_peak_bytes=" << result.peakUsableBytes
                       << " detour_native_allocations=" << nativeAllocations << '\n';
         }
 
@@ -297,19 +300,23 @@ namespace Horo::Navigation {
         LiveMeasurement retired;
         {
             ScopedLiveMeasurement live(storage);
-            void *first = ::operator new(32);
-            void *second = ::operator new(64, std::align_val_t{64});
+            void *first = ::operator new(33);
+            void *second = ::operator new(65, std::align_val_t{64});
             overlap = live.Snapshot();
             ::operator delete(first);
             ::operator delete(second, std::align_val_t{64});
             retired = live.Snapshot();
         }
         CHECK_FALSE(overlap.incomplete);
-        CHECK(overlap.liveBytes == 96);
-        CHECK(overlap.peakBytes == 96);
+        CHECK(overlap.liveBytes == 98);
+        CHECK(overlap.peakBytes == 98);
+        CHECK(overlap.liveUsableBytes >= overlap.liveBytes);
+        CHECK(overlap.peakUsableBytes == overlap.liveUsableBytes);
         CHECK_FALSE(retired.incomplete);
         CHECK(retired.liveBytes == 0);
-        CHECK(retired.peakBytes == 96);
+        CHECK(retired.peakBytes == overlap.peakBytes);
+        CHECK(retired.liveUsableBytes == 0);
+        CHECK(retired.peakUsableBytes == overlap.peakUsableBytes);
     }
 
     TEST_CASE("CrowdSmall measures live allocation across owner and Detour worker", "[integration][navigation][crowd][scale]") {
