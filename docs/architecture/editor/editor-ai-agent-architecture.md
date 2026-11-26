@@ -1653,6 +1653,7 @@ frame cost and native renderer parity to backend qualification.
 | Configuration | Evidence |
 |---|---|
 | Windows editor panel | The `[viewport]` cases in `HoroEditorLocalAgentPanelRenderTests` exercise the numeric preview and the transform disclosure controls. A selection replaced during the component read withdraws the review. A new selection needs its own review. |
+| Windows workspace lifecycle | The `[debug-capture]` cases in `HoroEditorWorkspaceControllerTests` verify that a Play attempt cancels the renderer's authored capture. In the scene without an authored camera, returning to Edit rejects the old capture approval and admits a fresh one. |
 | Windows native OpenGL | The `[image-capture]` case in `HoroEditorViewportOpenGLSmoke` checks the requested crop pixels and withdrawal after authorization ends. |
 | Linux Vulkan with Xvfb and software rendering | The `[image-capture]` case in `HoroEditorVulkanPresentationSmoke` uses the locked viewport shader package. It checks crop pixels, revocation after copy submission, and presentation of the next frame. |
 

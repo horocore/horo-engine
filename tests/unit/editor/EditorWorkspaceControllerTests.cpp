@@ -815,6 +815,41 @@ namespace {
         CHECK(viewport.requests == 1);
     }
 
+    TEST_CASE("An attempted Play transition requires fresh viewport image approval", "[unit][editor][debug-capture]") {
+        Tests::OwnedTestDirectory project{"workspace-viewport-play-approval"};
+        PrepareEmptyDefaultScene(project.Path(), project.Path() / "assets/scenes/main.horo");
+        CaptureViewport viewport;
+        TestWorkspaceController controller{project.Path()};
+        auto &workspace = controller.Controller();
+        const auto endpoint = workspace.BindDebugCapture("test-project", 1, &viewport).lock();
+        REQUIRE(endpoint);
+        const auto beforePlay = endpoint->readImageSource();
+        REQUIRE(beforePlay);
+        constexpr EditorViewportImageRegion region{2, 3, 24, 16};
+        const auto allowed = [] {
+            return true;
+        };
+        const auto oldCapture = endpoint->startImage(*beforePlay, region, allowed);
+        REQUIRE(oldCapture.HasValue());
+        const auto oldAuthority = viewport.current;
+        REQUIRE(oldAuthority());
+
+        controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StartPlay));
+        CHECK(viewport.cancelledId == oldCapture.Value());
+
+        controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
+        REQUIRE(workspace.ViewModel().playState == EditorPlayState::Idle);
+        const auto afterPlay = endpoint->readImageSource();
+        REQUIRE(afterPlay);
+        CHECK(afterPlay != beforePlay);
+        CHECK_FALSE(oldAuthority());
+        CHECK(endpoint->startImage(*beforePlay, region, allowed).HasError());
+        CHECK(viewport.requests == 1);
+        REQUIRE(endpoint->startImage(*afterPlay, region, allowed).HasValue());
+        CHECK(viewport.requests == 2);
+        CHECK(viewport.current());
+    }
+
     TEST_CASE("Replacing capture trust withdraws the old renderer request before any new frame", "[unit][editor][debug-capture]") {
         CaptureViewport viewport;
         TestWorkspaceController controller;
