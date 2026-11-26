@@ -476,8 +476,8 @@ def validate_android_capture(options: argparse.Namespace, record: dict) -> None:
     from qualify_xr_android import check_android_preflight_file, validate_android_preflight
 
     expected = validate_android_preflight(load_record(options.android_preflight_declaration))
-    check_android_preflight_file(options.android_preflight, expected, record)
     verify_artifact(options.android_apk, expected["apkSha256"])
+    check_android_preflight_file(options.android_preflight, options.android_apk, expected, record)
 
 
 def main() -> int:

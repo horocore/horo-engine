@@ -49,7 +49,7 @@ class Evidence:
 
     def android_preflight(self, expected: dict, record: dict) -> None:
         self.verify(expected["apkSha256"])
-        check_android_preflight_file(self.path(expected["receiptSha256"]), expected, record)
+        check_android_preflight_file(self.path(expected["receiptSha256"]), self.path(expected["apkSha256"]), expected, record)
 
     def smoke_record(self, digest: str) -> dict:
         with self.path(digest).open("rb") as source:

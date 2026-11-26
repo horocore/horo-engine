@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import zipfile
+import zlib
 
-from project import OPENXR_DEVELOPMENT_PROFILES, android_profile
+from project import OPENXR_DEVELOPMENT_PROFILES, OPENXR_LOADER_NAME, PROVENANCE_ASSET, android_profile, archive_limits
 from qualify_xr_device import decode_record, fields, in_set, is_digest, is_standalone_android, require
 
 
@@ -125,7 +127,27 @@ def check_recommended_stereo_extents(value: object) -> None:
                 "Invalid Android stereo view extent")
 
 
-def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_version: str) -> None:
+def check_android_apk_members(apk: Path, profile: dict, artifact: dict, abi: str) -> None:
+    """Match receipt digests to the named members of the independently pinned APK."""
+    images = artifact["openxrImages"]
+    members = (
+        ("provenance", PROVENANCE_ASSET, artifact["provenanceSha256"]),
+        ("diagnostic host", f"lib/{abi}/lib{profile['nativeLibrary']}.so", images["diagnosticHostSha256"]),
+        ("loader", f"lib/{abi}/{OPENXR_LOADER_NAME}", images["loaderSha256"]),
+    )
+    try:
+        with zipfile.ZipFile(apk) as archive:
+            archive_limits(archive)
+            for label, name, digest in members:
+                with archive.open(name) as member:
+                    actual = hashlib.file_digest(member, "sha256").hexdigest()
+                require(actual == digest, f"Android preflight {label} digest does not match the APK")
+    except (EOFError, KeyError, RuntimeError, zipfile.BadZipFile, zlib.error):
+        raise ValueError("Android diagnostic APK members could not be read") from None
+
+
+def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_version: str,
+                            *, apk: Path | None = None) -> None:
     """Bind a retired Android probe to the independently declared package, device build and runtime."""
     require(0 < len(data) <= MAX_ANDROID_RECEIPT_BYTES, "Android preflight exceeds the size limit")
     require(hashlib.sha256(data).hexdigest() == expected["receiptSha256"], "Android preflight receipt digest does not match")
@@ -140,11 +162,14 @@ def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_
     require(in_set(cleanup["status"], {"stopped", "already_exited"}), "Android preflight process retirement is unconfirmed")
     _, profile = android_profile(expected["profile"])
     abi = check_android_target(receipt, expected, profile, runtime_version)
-    check_android_artifact(receipt.get("artifact"), expected, profile, revision, abi)
+    artifact = receipt["artifact"]
+    check_android_artifact(artifact, expected, profile, revision, abi)
     check_android_discovery(receipt.get("observed"), runtime_version, abi)
+    if apk is not None:
+        check_android_apk_members(apk, profile, artifact, abi)
 
 
-def check_android_preflight_file(path: Path, expected: dict, record: dict) -> None:
+def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: dict) -> None:
     """Match a deployment receipt to the standalone Android build recorded in the physical smoke run."""
     identity = record["tuple"]
     require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
@@ -156,4 +181,4 @@ def check_android_preflight_file(path: Path, expected: dict, record: dict) -> No
     revision = provenance.get("sourceRevision")
     require(revision is not None, "Device evidence does not record a source revision")
     with path.open("rb") as source:
-        check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, identity["runtimeVersion"])
+        check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, identity["runtimeVersion"], apk=apk)

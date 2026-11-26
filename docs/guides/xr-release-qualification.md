@@ -179,6 +179,9 @@ package and device build, connection, runtime version and process retirement.
 It uses the deployer's Android package profile to check the observed ABI and
 any API level reported by the receipt. The package's application, renderer and
 ABI inventory also have to match that profile when reported.
+The checker compares the receipt's provenance, diagnostic host and OpenXR
+loader digests with the corresponding entries in the pinned APK. The deployer
+verifies the APK signature before installation.
 When deployment uses `--expect-runtime-version`, the checker verifies both the
 selected version and the observed version against the physical run's tuple.
 When the cold OpenXR instance can enumerate the primary stereo recommendations,

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -555,23 +557,28 @@ def test_display_capture_cannot_be_reused_for_a_different_connection(release):
     assert "Standalone (xr-platform): Display capture is from a different product tuple" in result.stderr
 
 
-def android_receipt(row, evidence):
-    profile = "qualification-openxr-quest-development"
-    expected = {"apkSha256": store(evidence, b"separate Android diagnostic APK"),
+def android_receipt(row, evidence, *, profile="qualification-openxr-quest-development", abi="arm64-v8a"):
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("assets/horo-package-provenance.json", b"synthetic provenance")
+        archive.writestr(f"lib/{abi}/libhoro-package-qualification.so", b"synthetic diagnostic host")
+        archive.writestr(f"lib/{abi}/libopenxr_loader.so", b"synthetic loader")
+    expected = {"apkSha256": store(evidence, package.getvalue()),
                 "deviceBuildSha256": ANDROID_BUILD, "profile": profile, "adbConnection": "usb"}
     row["androidPreflight"] = expected
     return {
         "schema": 1, "status": "diagnostic_complete", "stage": "diagnostics",
         "artifact": {"apkSha256": expected["apkSha256"], "sourceRevision": REVISION, "profile": profile,
-                     "provenanceSha256": "d" * 64,
+                     "provenanceSha256": hashlib.sha256(b"synthetic provenance").hexdigest(),
                      "openxr": {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "cold-discovery"},
-                     "openxrImages": {"abi": "arm64-v8a", "diagnosticHostSha256": "e" * 64, "loaderSha256": "f" * 64}},
+                     "openxrImages": {"abi": abi, "diagnosticHostSha256": hashlib.sha256(b"synthetic diagnostic host").hexdigest(),
+                                      "loaderSha256": hashlib.sha256(b"synthetic loader").hexdigest()}},
         "qualification": {"host": {"requested": "linux-x64", "observed": "linux-x64"},
                           "connection": {"requested": "usb", "observed": "usb"}, "profile": profile,
                           "runtime": {"requested": "openxr", "selection": "system-default", "status": "cold_system_discovered"},
                           "physicalXrQualification": "not_run"},
-        "device": {"abi": "arm64-v8a", "buildSha256": expected["deviceBuildSha256"]},
-        "observed": {"crashObserved": False, "openxr": {"abi": "arm64-v8a", "stage": "discovered", "result": 0,
+        "device": {"abi": abi, "buildSha256": expected["deviceBuildSha256"]},
+        "observed": {"crashObserved": False, "openxr": {"abi": abi, "stage": "discovered", "result": 0,
                                                        "runtimeVersion": {"major": 1, "minor": 2, "patch": 3}}},
         "cleanup": {"status": "stopped"},
     }
@@ -599,6 +606,7 @@ def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(rele
 @pytest.mark.parametrize(("change", "reason"), [
     (None, None),
     ("apk", "Artifact content does not match"),
+    ("loader", "Android preflight loader digest does not match the APK"),
     ("build", "Android preflight and physical smoke use different system builds"),
     ("revision", "Android preflight is from another source revision"),
     ("runtime", "Android preflight uses a different runtime version"),
@@ -611,6 +619,8 @@ def test_single_device_checker_verifies_android_deployment(release, change, reas
     receipt = android_receipt(row, evidence)
     if change == "revision":
         receipt["artifact"]["sourceRevision"] = "8" * 40
+    if change == "loader":
+        receipt["artifact"]["openxrImages"]["loaderSha256"] = "8" * 64
     if change == "runtime":
         receipt["observed"]["openxr"]["runtimeVersion"]["patch"] = 4
     if change == "transport":
@@ -732,14 +742,8 @@ def test_android_preflight_requires_a_profile_that_supports_the_observed_abi(rel
     matrix, evidence = release
     row = matrix["tuples"][0]
     capture_android_smoke(row, evidence)
-    receipt = android_receipt(row, evidence)
-    row["androidPreflight"]["profile"] = profile
-    receipt["artifact"]["profile"] = profile
-    receipt["artifact"]["openxrImages"]["abi"] = "x86_64"
-    receipt["qualification"]["profile"] = profile
-    receipt["device"]["abi"] = "x86_64"
+    receipt = android_receipt(row, evidence, profile=profile, abi="x86_64")
     receipt["device"]["androidApi"] = 29
-    receipt["observed"]["openxr"]["abi"] = "x86_64"
     row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
 
     result = run_matrix(release)
@@ -747,6 +751,27 @@ def test_android_preflight_requires_a_profile_that_supports_the_observed_abi(rel
     assert result.returncode == (0 if accepted else 1), result.stderr
     if not accepted:
         assert "ABI is not supported by the diagnostic profile" in result.stderr
+
+
+@pytest.mark.parametrize(("field", "label"), [
+    ("provenanceSha256", "provenance"),
+    ("diagnosticHostSha256", "diagnostic host"),
+    ("loaderSha256", "loader"),
+])
+def test_android_matrix_checks_receipt_digests_against_actual_apk_members(release, field, label):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence)
+    receipt = android_receipt(row, evidence)
+    artifact = receipt["artifact"]
+    digests = artifact if field == "provenanceSha256" else artifact["openxrImages"]
+    digests[field] = "8" * 64
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+
+    result = run_matrix(release)
+
+    assert result.returncode == 1
+    assert f"Android preflight {label} digest does not match the APK" in result.stderr
 
 
 def test_android_discovery_is_checked_against_the_runtime_version_in_the_smoke_tuple(release):
