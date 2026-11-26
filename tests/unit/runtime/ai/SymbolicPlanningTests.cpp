@@ -40,6 +40,31 @@ namespace Horo::AI {
             }
         };
 
+        /** @brief Compiles the exact typed root and leaf metadata used by the symbolic projection. */
+        std::shared_ptr<const DecisionAssetPlan> SequenceBindings(const BehaviorTreeTestSupport::Fixture &scene,
+                                                                  DecisionControlKind root = DecisionControlKind::Sequence,
+                                                                  DecisionControlKind second = DecisionControlKind::Unspecified) {
+            const auto source = BehaviorTreeTestSupport::Source();
+            const auto providerType = Id<DecisionNodeTypeId>(101);
+            DecisionAssetDescriptor asset{.asset = Id<DecisionGraphAssetId>(100),
+                                          .kind = DecisionPlanKind::BehaviorTree,
+                                          .blackboardSchema = scene.schema->Identity(),
+                                          .nodes = {{.id = Id<DecisionNodeId>(1), .source = source, .intrinsic = root},
+                                                    {.id = Id<DecisionNodeId>(2), .type = providerType, .source = source},
+                                                    {.id = Id<DecisionNodeId>(3),
+                                                     .type = second == DecisionControlKind::Unspecified ? providerType : DecisionNodeTypeId{},
+                                                     .source = source,
+                                                     .intrinsic = second}},
+                                          .source = source};
+            const std::array descriptors{DecisionNodeDescriptor{.type = providerType,
+                                                                .origin = {DecisionDescriptorSourceKind::Native, Id<DecisionProviderId>(501), 1},
+                                                                .source = source}};
+            auto compiled = DecisionAssetCompiler::Compile(asset, {}, descriptors, std::array{scene.schema});
+            REQUIRE(compiled.HasValue());
+            REQUIRE(compiled.Value().IsValid());
+            return compiled.Value().plan;
+        }
+
         TEST_CASE("Symbolic planning returns the lowest-cost sequence of registered tasks", "[ai][planning]") {
             DomainFixture input;
             const auto domain = input.Capture();
@@ -354,7 +379,7 @@ namespace Horo::AI {
                 SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
             };
             const auto compiled =
-                CompileSymbolicTaskSequence(plan, {scene.Bindings(), Id<DecisionNodeId>(1), occurrences}, input.Registry());
+                CompileSymbolicTaskSequence(plan, {SequenceBindings(scene), Id<DecisionNodeId>(1), occurrences}, input.Registry());
             REQUIRE(compiled.HasValue());
             REQUIRE(compiled.Value());
             REQUIRE(compiled.Value()->Nodes().size() == 3);
@@ -403,7 +428,15 @@ namespace Horo::AI {
                 SymbolicTaskOccurrence{Id<SymbolicActionId>(10), input.pickTask, Id<DecisionNodeId>(2)},
                 SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
             };
-            const SymbolicExecutionBindings bindings{scene.Bindings(), Id<DecisionNodeId>(1), occurrences};
+            SymbolicExecutionBindings bindings{SequenceBindings(scene), Id<DecisionNodeId>(1), occurrences};
+            SECTION("the admitted root is another intrinsic control") {
+                bindings.asset = SequenceBindings(scene, DecisionControlKind::Selector);
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("an intrinsic control cannot stand in for a provider-bound task") {
+                bindings.asset = SequenceBindings(scene, DecisionControlKind::Sequence, DecisionControlKind::Inverter);
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
             SECTION("task declaration was withdrawn") {
                 AiCapabilityDescriptorRegistry current;
                 REQUIRE(current.Register({input.pickTask}).HasValue());

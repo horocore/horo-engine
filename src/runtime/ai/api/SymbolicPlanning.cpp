@@ -23,6 +23,13 @@ namespace Horo::AI {
         bool PlanningCancelled(const CancellationToken &cancellation, const AiTaskOperationContext *operation) noexcept {
             return cancellation.IsCancellationRequested() || (operation && operation->IsCancellationRequested());
         }
+
+        /** @brief Resolves an occurrence in the admitted, identity-sorted metadata. */
+        const DecisionPlanNode *FindAssetNode(const DecisionAssetPlan &asset, const DecisionNodeId id) noexcept {
+            const auto nodes = asset.Nodes();
+            const auto found = std::ranges::lower_bound(nodes, id, {}, &DecisionPlanNode::id);
+            return found != nodes.end() && found->id == id ? &*found : nullptr;
+        }
     }  // namespace
 
     /** @brief Fixed label store for a positive-cost, stable lowest-cost frontier. */
@@ -385,7 +392,8 @@ namespace Horo::AI {
         if (!bindings.asset || !bindings.sequence.IsValid())
             return Compiled::Failure(MakeError(AIErrors::DecisionAssetBindingMissing));
         const auto schema = bindings.asset->BlackboardSchema();
-        if (!schema)
+        const auto *sequence = FindAssetNode(*bindings.asset, bindings.sequence);
+        if (!schema || !sequence || sequence->intrinsic != DecisionControlKind::Sequence)
             return Compiled::Failure(MakeError(AIErrors::DecisionAssetBindingMissing));
 
         try {
@@ -397,8 +405,9 @@ namespace Horo::AI {
                 const auto &step = steps[index];
                 const auto &occurrence = bindings.occurrences[index];
                 const auto task = tasks.Find(step.task);
+                const auto *node = FindAssetNode(*bindings.asset, occurrence.node);
                 if (!task || (task->blackboard && task->blackboard != schema->Identity()) || !occurrence.node.IsValid() ||
-                    occurrence.action != step.action || occurrence.task != step.task)
+                    occurrence.action != step.action || occurrence.task != step.task || !node || !node->type.IsValid())
                     return Compiled::Failure(MakeError(AIErrors::TaskContextInvalid));
                 root.children.push_back(occurrence.node);
                 nodes.push_back({.id = occurrence.node, .operation = BehaviorTreeOperation::Task, .task = step.task});

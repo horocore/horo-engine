@@ -187,7 +187,7 @@ namespace Horo::AI {
     /**
      * @brief Converts a solved plan into an ordinary admitted Behavior Tree task sequence without invoking providers.
      * @param plan Detached result the caller has accepted for the current world revision.
-     * @param bindings Exact decision asset and provider-bound occurrences supplied by the decision owner.
+     * @param bindings Exact decision asset with an intrinsic Sequence root and provider-bound task occurrences.
      * @param tasks Current frozen task declarations for that owner.
      * @return Immutable execution plan, null for a solved empty plan, or a typed admission failure.
      */

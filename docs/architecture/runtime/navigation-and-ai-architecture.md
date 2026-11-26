@@ -2905,7 +2905,10 @@ alternative fails and any branch was truncated, the outcome is budget exhaustion
 At its normal safe point, the decision owner rechecks the world revision and
 supplies the exact compiled asset and primitive node occurrences. The symbolic
 sequence adapter re-admits the task identities against the current declarations
-and uses the standard Behavior Tree compiler. Its result uses the existing task
+and uses the standard Behavior Tree compiler. Its asset must bind an intrinsic
+Sequence root and provider-backed task occurrences. Callers using generic
+provider metadata for the root must compile it as an intrinsic Sequence first.
+Its result uses the existing task
 start, resume, cancellation and cleanup lifecycle.
 The HTN adapter composes the same registered primitives into guarded compound
 methods. It tries methods in stable ID order, preserves authored child order,
