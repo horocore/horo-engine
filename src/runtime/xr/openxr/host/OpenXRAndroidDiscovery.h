@@ -7,6 +7,7 @@
 #if defined(__ANDROID__)
 
 #include "Horo/Platform/DynamicLibrary.h"
+#include "OpenXRViewRecommendations.h"
 
 #include <jni.h>
 #include <openxr/openxr.h>
@@ -59,7 +60,8 @@ namespace Horo::XR::OpenXRInternal {
     struct AndroidOpenXRProbeResult final {
         AndroidOpenXRProbeStage stage;
         XrResult result;
-        XrVersion runtimeVersion{}; /**< Set only after successful discovery and retirement. */
+        XrVersion runtimeVersion{};                                 /**< Set only after successful discovery and retirement. */
+        std::optional<OpenXRPrimaryStereoExtents> recommendedViews; /**< Instance-scoped recommendations, when available. */
     };
 
     /** @brief One owner for a cold system diagnostic on the GameActivity control lane.

@@ -334,16 +334,26 @@ class AndroidDeployTests(unittest.TestCase):
         serial = "TESTHEADSET"
         status, report, _ = self.execute({
             ("devices", "-l"): f"List of devices attached\n{serial} device usb:1-2 transport_id:{TRANSPORT}",
-            LOGCAT: log_line(OPENXR),
+            LOGCAT: log_line(OPENXR + " primaryView0=1024x768 primaryView1=1280x800"),
         }, ("--host", "linux-x64", "--connection", "usb", "--runtime", "openxr", "--expect-runtime-version", "1.1.63"), name,
             serial=serial)
         self.assertEqual(status, 0)
+        self.assertEqual(report["observed"]["openxr"]["primaryStereoRecommendedViewExtents"],
+                         [{"width": 1024, "height": 768}, {"width": 1280, "height": 800}])
         receipt = project.canonical_json(report)
         declaration = validate_android_preflight({
             "receiptSha256": hashlib.sha256(receipt).hexdigest(), "apkSha256": DIGEST,
             "deviceBuildSha256": DEVICE_BUILD_DIGEST, "profile": name, "adbConnection": "usb",
         })
         check_android_preflight(receipt, declaration, SOURCE_REVISION, "1.1.63")
+
+    def test_openxr_cold_extents_reject_partial_or_invalid_publication(self):
+        invalid = (" primaryView0=1024x768", " primaryView0=0x768 primaryView1=1280x800",
+                   " primaryView0=4294967296x768 primaryView1=1280x800", " primaryView0=1024x768 primaryView1=1280x800 private=room")
+        for suffix in invalid:
+            with self.subTest(suffix=suffix):
+                with self.assertRaises(project.AndroidDeployError):
+                    project.openxr_log_evidence(OPENXR + suffix)
 
     def test_quest_profile_requires_openxr_intent_and_launches_its_own_application(self):
         name = project.OPENXR_QUEST_DEVELOPMENT_PROFILE

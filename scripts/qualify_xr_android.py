@@ -105,12 +105,24 @@ def check_android_target(receipt: dict, expected: dict, runtime_version: str) ->
 def check_android_discovery(value: object, expected_version: str, abi: str) -> None:
     observed = fields(value, {"crashObserved", "openxr"}, "Android preflight observations")
     require(observed["crashObserved"] is False, "Android preflight recorded a crash")
-    openxr = fields(observed["openxr"], {"abi", "stage", "result", "runtimeVersion"}, "Android OpenXR discovery")
+    openxr = receipt_fields(observed["openxr"], {"abi", "stage", "result", "runtimeVersion"},
+                            {"primaryStereoRecommendedViewExtents"}, "Android OpenXR discovery")
     require(openxr["stage"] == "discovered" and is_json_integer(openxr["result"]) and openxr["result"] == 0,
             "Expected successful Android OpenXR discovery")
     require(openxr["abi"] == abi, "Android preflight uses a different runtime ABI")
     require(android_runtime_version(openxr["runtimeVersion"]) == expected_version,
             "Android preflight uses a different runtime version")
+    if "primaryStereoRecommendedViewExtents" in openxr:
+        check_recommended_stereo_extents(openxr["primaryStereoRecommendedViewExtents"])
+
+
+def check_recommended_stereo_extents(value: object) -> None:
+    """Check cold view recommendations without using them as physical display evidence."""
+    require(isinstance(value, list) and len(value) == 2, "Invalid Android stereo view count")
+    for entry in value:
+        extent = fields(entry, {"width", "height"}, "Android stereo view extent")
+        require(all(is_json_integer(dimension) and 0 < dimension < 2**32 for dimension in extent.values()),
+                "Invalid Android stereo view extent")
 
 
 def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_version: str) -> None:

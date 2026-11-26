@@ -69,7 +69,7 @@ namespace Horo::XR::OpenXRInternal {
             return matches == 1 ? XR_SUCCESS : XR_ERROR_EXTENSION_NOT_PRESENT;
         }
 
-        /** @brief Reads only an actual HMD and a numeric runtime version from the retained cold instance. */
+        /** @brief Reads an HMD, numeric runtime version and optional recommended views from the retained cold instance. */
         AndroidOpenXRProbeResult DiscoverSystem(PFN_xrGetInstanceProcAddr dispatch, XrInstance instance) noexcept {
             using enum AndroidOpenXRProbeStage;
             PFN_xrGetSystem getSystem{};
@@ -92,7 +92,10 @@ namespace Horo::XR::OpenXRInternal {
                 return {RuntimeProperties, result};
             if (properties.type != XR_TYPE_INSTANCE_PROPERTIES || properties.next || !XR_VERSION_MAJOR(properties.runtimeVersion))
                 return {RuntimeProperties, XR_ERROR_RUNTIME_FAILURE};
-            return {Discovered, XR_SUCCESS, properties.runtimeVersion};
+            PFN_xrEnumerateViewConfigurationViews enumerate{};
+            const auto resolved = Resolve(dispatch, instance, "xrEnumerateViewConfigurationViews", enumerate);
+            return {Discovered, XR_SUCCESS, properties.runtimeVersion,
+                    resolved == XR_SUCCESS ? ReadPrimaryStereoExtents(enumerate, instance, system) : std::nullopt};
         }
     }  // namespace
 

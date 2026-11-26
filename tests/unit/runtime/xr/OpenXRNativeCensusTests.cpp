@@ -2,6 +2,7 @@
 #include "OpenXRPlaneCapture.h"
 #include "OpenXRPlaneSnapshot.h"
 #include "OpenXRSessionEvents.h"
+#include "OpenXRViewRecommendations.h"
 #include "support/OpenXREventScriptTestSupport.h"
 #include "support/OpenXRLightTestSupport.h"
 #include "support/OpenXRPlaneCaptureTestSupport.h"
@@ -13,6 +14,23 @@
 
 namespace Horo::Tests::OpenXR {
     namespace {
+
+        /** @brief Emulates ordered stereo recommendations and rejects an uninitialized output contract. */
+        XrResult XRAPI_CALL StereoRecommendations(XrInstance, XrSystemId system, XrViewConfigurationType configuration,
+                                                  std::uint32_t capacity, std::uint32_t *count, XrViewConfigurationView *views) {
+            if (configuration != XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO)
+                return XR_ERROR_VIEW_CONFIGURATION_TYPE_UNSUPPORTED;
+            if (capacity == 0) {
+                *count = system == 2 ? 4 : 2;
+                return XR_SUCCESS;
+            }
+            if (capacity != 2 || views[0].type != XR_TYPE_VIEW_CONFIGURATION_VIEW || views[1].type != XR_TYPE_VIEW_CONFIGURATION_VIEW)
+                return XR_ERROR_VALIDATION_FAILURE;
+            *count = system == 3 ? 1 : 2;
+            views[0] = {XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 1024, 2048, 768, 1536, 1, 4};
+            views[1] = {XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 1280, 2048, system == 4 ? 0U : 800U, 1536, 1, 4};
+            return system == 5 ? XR_ERROR_INSTANCE_LOST : XR_SUCCESS;
+        }
 
         struct CensusFixture {
             Script native;
@@ -145,6 +163,18 @@ namespace Horo::Tests::OpenXR {
         };
 
     }  // namespace
+
+    TEST_CASE("Cold OpenXR stereo recommendations require both ordered valid views", "[unit][xr][native][stereo-recommendations]") {
+        const auto instance = reinterpret_cast<XrInstance>(std::uintptr_t{1});
+        const auto extents = XR::OpenXRInternal::ReadPrimaryStereoExtents(StereoRecommendations, instance, 1);
+        REQUIRE(extents);
+        CHECK((*extents)[0].width == 1024);
+        CHECK((*extents)[0].height == 768);
+        CHECK((*extents)[1].width == 1280);
+        CHECK((*extents)[1].height == 800);
+        const auto invalid = GENERATE(2, 3, 4, 5);
+        CHECK_FALSE(XR::OpenXRInternal::ReadPrimaryStereoExtents(StereoRecommendations, instance, invalid));
+    }
 
     TEST_CASE("OpenXR light estimator requires an enabled route, scope and system support", "[unit][xr][native][lighting]") {
         LightFixture fixture;

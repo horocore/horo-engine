@@ -383,6 +383,22 @@ def test_android_discovery_rejects_an_invalid_runtime_pin(release, expected, mes
     assert message in result.stderr
 
 
+@pytest.mark.parametrize(("extents", "message"), [
+    ([{"width": 1024, "height": 768}], "Invalid Android stereo view count"),
+    ([{"width": 1024, "height": 768}, {"width": True, "height": 800}], "Invalid Android stereo view extent"),
+])
+def test_android_discovery_rejects_invalid_cold_recommendations(release, extents, message):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence)
+    receipt = android_receipt(row, evidence)
+    receipt["observed"]["openxr"]["primaryStereoRecommendedViewExtents"] = extents
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
 def test_android_preflight_does_not_apply_to_pcvr(release):
     matrix, evidence = release
     row = matrix["tuples"][1]

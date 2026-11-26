@@ -5,6 +5,8 @@
 #include "OpenXRLoaderPin.h"
 
 #include <android/log.h>
+#include <array>
+#include <cstdio>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <utility>
 
@@ -12,6 +14,7 @@ namespace Horo::AndroidQualification {
     namespace {
         using XR::OpenXRInternal::AndroidOpenXRProbeResult;
         using XR::OpenXRInternal::AndroidOpenXRProbeStage;
+        using XR::OpenXRInternal::OpenXRPrimaryStereoExtents;
 
         /** @brief Defines the closed process-scoped diagnostic vocabulary. */
         const char *StageName(AndroidOpenXRProbeStage stage) noexcept {
@@ -38,11 +41,20 @@ namespace Horo::AndroidQualification {
         }
 
         /** @brief Emits numeric and closed-enum facts only, keeping paths, handles and runtime names private. */
-        void Report(const char *stage, XrResult result, XrVersion version = 0) noexcept {
+        void Report(const char *stage, XrResult result, XrVersion version = 0,
+                    const std::optional<OpenXRPrimaryStereoExtents> &views = {}) noexcept {
+            std::array<char, 80> recommendations{};
+            if (views) {
+                const auto &[left, right] = *views;
+                std::snprintf(recommendations.data(), recommendations.size(), " primaryView0=%ux%u primaryView1=%ux%u",
+                              static_cast<unsigned>(left.width), static_cast<unsigned>(left.height), static_cast<unsigned>(right.width),
+                              static_cast<unsigned>(right.height));
+            }
             __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification",
-                                "host-openxr abi=%s stage=%s result=%d runtimeMajor=%u runtimeMinor=%u runtimePatch=%u", OpenXRLoaderAbi,
+                                "host-openxr abi=%s stage=%s result=%d runtimeMajor=%u runtimeMinor=%u runtimePatch=%u%s", OpenXRLoaderAbi,
                                 stage, static_cast<int>(result), static_cast<unsigned>(XR_VERSION_MAJOR(version)),
-                                static_cast<unsigned>(XR_VERSION_MINOR(version)), static_cast<unsigned>(XR_VERSION_PATCH(version)));
+                                static_cast<unsigned>(XR_VERSION_MINOR(version)), static_cast<unsigned>(XR_VERSION_PATCH(version)),
+                                recommendations.data());
         }
     }  // namespace
 
@@ -79,7 +91,7 @@ namespace Horo::AndroidQualification {
         const auto result = discovery_->Probe(XR_MAKE_VERSION(1, 0, 0));
         if (result.stage != AndroidOpenXRProbeStage::InstanceRetirement)
             discovery_.reset();
-        Report(StageName(result.stage), result.result, result.runtimeVersion);
+        Report(StageName(result.stage), result.result, result.runtimeVersion, result.recommendedViews);
     }
 
     /** @copydoc OpenXRDiagnosticHost::Command */

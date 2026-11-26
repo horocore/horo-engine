@@ -1,5 +1,6 @@
 #include "host/OpenXRNativeSession.h"
 #include "host/OpenXRSwapchain.h"
+#include "host/OpenXRViewRecommendations.h"
 
 #include <algorithm>
 #include <bit>
@@ -172,11 +173,8 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Validates observed per-view native bounds; renderer/profile compatibility remains separate. */
         bool ValidView(const XrViewConfigurationView &view, const XrSystemGraphicsProperties &limits) {
-            return view.type == XR_TYPE_VIEW_CONFIGURATION_VIEW && !view.next && view.recommendedImageRectWidth > 0 &&
-                   view.recommendedImageRectHeight > 0 && view.recommendedSwapchainSampleCount > 0 &&
-                   view.recommendedImageRectWidth <= view.maxImageRectWidth && view.recommendedImageRectHeight <= view.maxImageRectHeight &&
-                   view.recommendedSwapchainSampleCount <= view.maxSwapchainSampleCount &&
-                   view.maxImageRectWidth <= limits.maxSwapchainImageWidth && view.maxImageRectHeight <= limits.maxSwapchainImageHeight;
+            return ValidNativeViewRecommendation(view) && view.maxImageRectWidth <= limits.maxSwapchainImageWidth &&
+                   view.maxImageRectHeight <= limits.maxSwapchainImageHeight;
         }
 
         /** @brief Reads the complete primary stereo view and blend-mode publication from the actual selected system. */

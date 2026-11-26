@@ -117,6 +117,10 @@ directory as the physical record. The checker verifies the source revision,
 package and device build, connection, runtime version and process retirement.
 When deployment uses `--expect-runtime-version`, the checker verifies both the
 selected version and the observed version against the physical run's tuple.
+When the cold OpenXR instance can enumerate the primary stereo recommendations,
+the receipt includes both recommended widths and heights in runtime order.
+Those recommendations provide setup context. The physical run must still
+capture session display modes, refresh rates and view extents for its own tuple.
 Android deployment also checks that the foreground user is consistent before
 installation, launch, and evidence publication. A user switch invalidates the
 run. The receipt omits the Android user number.

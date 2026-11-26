@@ -1366,7 +1366,8 @@ PLATFORM_STATE_LINES = {
 OPENXR_LINE = re.compile(
     r"host-openxr abi=(arm64-v8a|x86_64) stage=(host-application|bundled-loader|loader-dispatch|loader-initialization|extension-admission|"
     r"instance-creation|system-discovery|runtime-properties|instance-retirement|discovered) "
-    r"result=(0|-?[1-9][0-9]{0,9}) runtimeMajor=([0-9]{1,5}) runtimeMinor=([0-9]{1,5}) runtimePatch=([0-9]{1,10})")
+    r"result=(0|-?[1-9][0-9]{0,9}) runtimeMajor=([0-9]{1,5}) runtimeMinor=([0-9]{1,5}) runtimePatch=([0-9]{1,10})"
+    r"(?: primaryView0=([1-9][0-9]{0,9})x([1-9][0-9]{0,9}) primaryView1=([1-9][0-9]{0,9})x([1-9][0-9]{0,9}))?")
 
 
 LOG_ENTRY_TIME = re.compile(
@@ -1422,15 +1423,22 @@ def openxr_log_evidence(message: str) -> dict:
     match = OPENXR_LINE.fullmatch(message)
     if match is None:
         raise AndroidDeployError("openxr_diagnostic_invalid")
-    abi, stage, result, major, minor, patch = match.groups()
+    abi, stage, result, major, minor, patch, *views = match.groups()
     result, major, minor, patch = map(int, (result, major, minor, patch))
     if not -2**31 <= result < 2**31 or major >= 2**16 or minor >= 2**16 or patch >= 2**32:
         raise AndroidDeployError("openxr_diagnostic_invalid")
     evidence = {"abi": abi, "stage": stage, "result": result}
     if stage == "discovered":
         if result == 0 and major:
-            return evidence | {"runtimeVersion": {"major": major, "minor": minor, "patch": patch}}
-    elif result != 0 and not (major or minor or patch):
+            evidence["runtimeVersion"] = {"major": major, "minor": minor, "patch": patch}
+            if views[0] is not None:
+                dimensions = tuple(map(int, views))
+                if any(value >= 2**32 for value in dimensions):
+                    raise AndroidDeployError("openxr_diagnostic_invalid")
+                evidence["primaryStereoRecommendedViewExtents"] = [
+                    {"width": width, "height": height} for width, height in zip(dimensions[::2], dimensions[1::2])]
+            return evidence
+    elif result != 0 and not (major or minor or patch) and views[0] is None:
         return evidence
     raise AndroidDeployError("openxr_diagnostic_invalid")
 
