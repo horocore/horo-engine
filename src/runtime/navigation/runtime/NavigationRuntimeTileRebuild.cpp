@@ -80,8 +80,6 @@ namespace Horo::Navigation {
             const auto &links = previous.Topology().offMeshLinks;
             if (links.empty())
                 return Result<void>::Success();
-            if (!CanReproject(request.linkProjector, links))
-                return Failure<void>(NavigationErrors::OperationUnsupported);
             if (links.size() > request.tileLimits.maximumOffMeshLinks || links.size() >= scratch / sizeof(NavMeshOffMeshLink))
                 return Failure<void>(NavigationErrors::CapacityExceeded);
             std::vector<NavMeshOffMeshLink> projected;
@@ -159,13 +157,15 @@ namespace Horo::Navigation {
                                                const std::size_t index, const CancellationToken &cancel) {
                 if (remaining == 0)
                     return Failure<void>(NavigationErrors::CapacityExceeded);
+                const auto &old = request.activeTiles[index];
+                const auto &links = old->Topology().offMeshLinks;
+                if (!links.empty() && !CanReproject(request.linkProjector, links))
+                    return Failure<void>(NavigationErrors::OperationUnsupported);
                 auto prepared = PrepareNavigationBakeTile(request.input, request.layout[index], request.compatibility, cancel,
                                                           std::min<std::size_t>(remaining, NavigationBakeInputLimits::MaximumOwnedBytes));
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
-                const auto &old = request.activeTiles[index];
-                if (const bool revalidateLinks = request.linkProjector && !old->Topology().offMeshLinks.empty();
-                    prepared.Value().dependencyKey == old->DependencyKey() && !revalidateLinks) {
+                if (prepared.Value().dependencyKey == old->DependencyKey() && links.empty()) {
                     if (!FitsTopologyLimits(old->Topology(), request.tileLimits))
                         return Failure<void>(NavigationErrors::CapacityExceeded);
                     return Add(old);

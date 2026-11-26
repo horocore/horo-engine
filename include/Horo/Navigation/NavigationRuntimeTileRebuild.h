@@ -77,7 +77,7 @@ namespace Horo::Navigation {
         NavigationTileBuildLimits tileLimits{};
         std::size_t maximumRebuiltTiles{32};
         std::size_t maximumOwnedBytes{64U * 1024U * 1024U};
-        const INavigationRuntimeLinkProjector *linkProjector{}; /**< Revalidates existing linked tiles even if grounded inputs match. */
+        const INavigationRuntimeLinkProjector *linkProjector{}; /**< Required when the predecessor contains authored off-mesh links. */
     };
 
     /** @brief Detached provider and its retained storage reservation, separate from the portable tiles. */

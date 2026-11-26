@@ -254,6 +254,40 @@ namespace Horo::Navigation {
         };
     }  // namespace
 
+    TEST_CASE("Native rebuild cannot reuse an unchanged linked tile without fresh clearance",
+              "[unit][navigation][provider][path][traversal][tile_rebuild]") {
+        const CookedLinkFixture fixture;
+        const TestSupport::IncrementalBakeFixture source;
+        const auto input = source.Input();
+        const std::array layout{fixture.input.tile};
+        const auto prepared = PrepareNavigationBakeTile(*input, layout.front(), source.compatibility);
+        REQUIRE(prepared.HasValue());
+        REQUIRE(prepared.Value().dependencyKey == fixture.tiles.front()->DependencyKey());
+
+        auto path = fixture.Request();
+        const NavigationWorldActivationDescriptor original{Id<NavigationSceneRuntimeId>(1), Id<NavigationSceneGeneration>(1), path.world,
+                                                           path.topology};
+        auto world = NavigationWorldLifecycle::Create(1).Value();
+        REQUIRE(world.Stage(original, fixture.Open()).HasValue());
+        REQUIRE(world.CommitAtSafePoint(original.scene, original.sceneGeneration).HasValue());
+        const auto previous = world.Acquire(original.world).Value();
+        const auto link = RouteLink(previous, path);
+
+        const NavigationRuntimeRebuildFence fence{original, input->Revisions(), 1, 1, 2};
+        const NavigationRuntimeTileRebuildRequest rebuild{.expected = fence,
+                                                          .nextTopology = Id<NavigationGeneration>(original.topology.Value() + 1),
+                                                          .input = *input,
+                                                          .layout = layout,
+                                                          .activeTiles = fixture.tiles,
+                                                          .compatibility = source.compatibility};
+        const NativeFactory factory{fixture.definition, 1024U * 1024U, true};
+        const auto builder = CreateRecastDetourNavigationMeshBuilder().Value();
+        RequireError(PrepareRuntimeNavigationTileRebuild(rebuild, *builder, factory), NavigationErrors::OperationUnsupported);
+        CHECK(world.ActiveDescriptor().Value() == original);
+        CHECK_FALSE(previous.IsRevoked());
+        CHECK(RouteLink(previous, path) == link);
+    }
+
     TEST_CASE("Native linked rebuild publishes a complete route and preserves the predecessor after rejected clearance",
               "[unit][navigation][provider][path][traversal][tile_rebuild]") {
         const CookedLinkFixture fixture;

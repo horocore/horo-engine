@@ -1235,9 +1235,12 @@ halo-aware tile dependencies, shares unchanged tiles and builds changed tiles
 under caller budgets. Publication consumes the candidate at the owner safe
 point and checks the Scene, topology, sources, overlay, origin and world change
 authority before swapping the complete provider. Readers pin the predecessor
-until their leases drain. A changed tile with retained off-mesh links requires
-link reprojection before it can be rebuilt. Product hosts still own capture,
-scheduling, capability admission and blocker retirement.
+until their leases drain. Every retained off-mesh link requires reprojection
+and fresh clearance evidence. Matching grounded tile dependencies do not encode
+clearance along the traversal. Hosts rebuilding a linked closure must supply a
+projector or keep the predecessor active when preparation returns
+`OperationUnsupported`. Product hosts still own capture, scheduling, capability
+admission and blocker retirement.
 
 `NavigationRuntimeRebuildJobs` adds one owner-lane job slot per composed
 rebuild owner. Its background CPU job owns the source, tile and provider pins
