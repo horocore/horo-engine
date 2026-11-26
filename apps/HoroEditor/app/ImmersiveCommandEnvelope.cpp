@@ -94,13 +94,15 @@ namespace Horo::Editor {
             return Aligned;
         }
 
-        /** @brief A press-qualified ray requires both the pose and transition intervals within the phrase. */
+        /** @brief A press that may belong to the phrase requires a usable pose in the same phrase. */
         ImmersiveCommandStatus ObservationOverlap(const ImmersiveSpatialObservation &sample, const SpeechHypothesisView &phrase) noexcept {
             const auto pose = Overlap(sample.earliest, sample.latest, phrase);
-            if (!sample.controllerPress || pose == SpeechOnly)
+            if (!sample.controllerPress)
                 return pose;
             const auto press = Overlap(sample.controllerPress->earliest, sample.controllerPress->latest, phrase);
-            return press == Aligned ? pose : press;
+            if (press != Aligned)
+                return press;
+            return pose == SpeechOnly ? AmbiguousTiming : pose;
         }
 
         /** @brief Orders captured press intervals per device while permitting one cutoff to share a press. */

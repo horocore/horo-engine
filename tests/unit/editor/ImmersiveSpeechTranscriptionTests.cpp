@@ -819,7 +819,7 @@ namespace Horo::Editor {
             SECTION("the press alone cannot align an earlier pose outside the phrase") {
                 sample.earliest.nanoseconds = 990'000;
                 sample.latest.nanoseconds = 995'000;
-                expected = SpeechOnly;
+                expected = AmbiguousTiming;
             }
             SECTION("a pose inside the phrase cannot disambiguate the earlier press") {
                 sample.controllerPress->earliest.nanoseconds = 995'000;
@@ -965,6 +965,32 @@ namespace Horo::Editor {
             CHECK_FALSE(assembled.envelope);
             const auto preview = capture.AssemblePreview(speech, unmeasured.cutoff);
             REQUIRE(preview.status == CommandStatus::SpeechOnlySpatialRejected);
+            REQUIRE(preview.envelope);
+            CHECK(preview.envelope->Spatial().empty());
+            CHECK(preview.envelope->Speech().Hypothesis().text == Transcript().text);
+        }
+
+        TEST_CASE("A press during speech with an out-of-window pose withdraws earlier spatial evidence", "[agent][immersive][speech]") {
+            using enum ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto first = SpatialObservation(context, 1, 1'005'000, 1'010'000);
+            first.controllerPress = ImmersiveControllerPress{first.earliest, first.latest};
+            const auto phraseEnd = Transcript().end;
+            auto later = SpatialObservation(context, 2, phraseEnd.nanoseconds, phraseEnd.nanoseconds);
+            later.controllerPress = ImmersiveControllerPress{{5, 1'025'000}, {5, 1'030'000}};
+            SECTION("the second press is inside speech") {}
+            SECTION("the second press straddles the end of speech") {
+                later.controllerPress->latest = phraseEnd;
+            }
+            ImmersiveSpatialCapture capture;
+            capture.Begin(context);
+            REQUIRE(capture.RecordPointing(first) == ImmersiveSpatialCaptureStatus::Recorded);
+            REQUIRE(capture.RecordPointing(later) == ImmersiveSpatialCaptureStatus::Recorded);
+            capture.Seal();
+            const auto preview = capture.AssemblePreview(speech, later.cutoff);
+            REQUIRE(preview.status == SpeechOnlySpatialRejected);
             REQUIRE(preview.envelope);
             CHECK(preview.envelope->Spatial().empty());
             CHECK(preview.envelope->Speech().Hypothesis().text == Transcript().text);
