@@ -253,6 +253,34 @@ TEST_CASE("Package removal inventory retains native package identity until the o
     CHECK(fixture.Activate().HasValue());
 }
 
+TEST_CASE("Package removal reserves only distinct members of the verified installation", "[packages][activation][removal]") {
+    Fixture fixture;
+    fixture.Install();
+    const auto installed = fixture.install.InstalledRecord();
+    REQUIRE(installed);
+    const auto &locked = installed->Graph()->packages.front().lock;
+    const LockedPackageReference current{locked.package, locked.version};
+    std::vector departing{current};
+    auto expected = PackageLifecycleErrors::StaleInstall.code.Value();
+    SECTION("a package is absent from the installed graph") {
+        departing.front().package = Parse<HoroPackageId>("com.example.missing");
+    }
+    SECTION("the departing version has been replaced") {
+        departing.front().version = Parse<PackageVersion>("2.0.0");
+    }
+    SECTION("a package appears twice in the same request") {
+        departing.push_back(current);
+        expected = PackageLifecycleErrors::InvalidCandidate.code.Value();
+    }
+
+    const auto rejected = fixture.service->ReserveRemoval(departing);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == expected);
+    const auto reserved = fixture.service->ReserveRemoval(std::span{&current, 1});
+    REQUIRE(reserved.HasValue());
+    CHECK(reserved.Value()->InstalledRecord() == installed);
+}
+
 TEST_CASE("Package lifecycle shutdown during native preparation cannot publish or resurrect a graph", "[packages][activation]") {
     Fixture fixture;
     fixture.Install();

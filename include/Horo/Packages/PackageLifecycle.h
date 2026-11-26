@@ -217,7 +217,7 @@ namespace Horo::Packages {
          * still be draining. This inspection has no side effects. */
         [[nodiscard]] Result<std::vector<HoroPackageId>> RetainedRemovalPackages(std::span<const LockedPackageReference> departing) const;
         /** @brief Reserves a live removal after checking that no departing package still owns executable modules.
-         * @param departing Exact nonempty departing set from the validated removal plan.
+         * @param departing Exact nonempty set of distinct package IDs and versions from the verified installation.
          * @return Worker-safe lease or a typed owner, installed-record, or retained-module failure.
          * @details Only the composition lane can reserve. This blocks new lifecycle activation while the lease lives and after
          * publication. It does not publish metadata, mutate project documents, or unload modules.

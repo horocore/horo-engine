@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <limits>
+#include <map>
 #include <set>
 #include <thread>
 #include <utility>
@@ -78,6 +79,24 @@ namespace Horo::Packages {
             return first.Identity() == second.Identity() || std::ranges::any_of(roles, [&first, &second](const auto role) {
                 return first.Supports(role) && second.Supports(role);
             });
+        }
+
+        /** @brief Checks each withdrawal against one sealed install and consumes each identity once. */
+        Result<void> VerifyRemovalMembership(const PackageRestoreGraph &graph, std::span<const LockedPackageReference> departing) {
+            std::map<std::string_view, const PackageVersion *, std::less<>> installed;
+            for (const auto &package : graph.packages)
+                installed.emplace(package.lock.package.Value(), &package.lock.version);
+            for (const auto &reference : departing) {
+                const auto member = installed.find(reference.package.Value());
+                if (member == installed.end())
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::StaleInstall, reference.package.Value()));
+                if (!member->second)
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate, reference.package.Value()));
+                if (*member->second != reference.version)
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::StaleInstall, reference.package.Value()));
+                member->second = nullptr;
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -414,6 +433,11 @@ namespace Horo::Packages {
             return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         if (impl_->RemovalReserved())
             return Output::Failure(MakeError(PackageLifecycleErrors::RemovalReserved));
+        const auto installed = impl_->install.InstalledRecord();
+        if (!installed)
+            return Output::Failure(MakeError(PackageLifecycleErrors::StaleInstall));
+        if (const auto membership = VerifyRemovalMembership(*installed->Graph(), departing); membership.HasError())
+            return Output::Failure(membership.ErrorValue());
         const auto retained = RetainedRemovalPackages(departing);
         if (retained.HasError())
             return Output::Failure(retained.ErrorValue());
@@ -424,9 +448,6 @@ namespace Horo::Packages {
                                                SourceLocation{"packages.activation"}, package.Value());
             return Output::Failure(std::move(error));
         }
-        const auto installed = impl_->install.InstalledRecord();
-        if (!installed)
-            return Output::Failure(MakeError(PackageLifecycleErrors::StaleInstall));
         auto state = std::make_shared<PackageRemovalLease::State>();
         state->projectRoot = impl_->install.ProjectRoot();
         state->departing.assign(departing.begin(), departing.end());

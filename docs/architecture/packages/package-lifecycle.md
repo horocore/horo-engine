@@ -477,8 +477,9 @@ graph effects alone.
 
 Before a live removal can publish, the lifecycle owner issues a reservation
 for the same project and exact departing set. Packages with active or retiring
-module owners cannot be reserved. The reservation retains the verified install
-record and prevents activation while the transaction inspects references and
+module owners cannot be reserved. Each departing ID must appear once and match
+its verified installed version. The reservation retains the install record
+and prevents activation while the transaction inspects references and
 publishes metadata. Dropping an uncommitted reservation reopens admission.
 Once the lock commits, admission on the old session remains revoked until
 the host composes from the new lock.
