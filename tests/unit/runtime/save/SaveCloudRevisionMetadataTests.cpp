@@ -429,6 +429,153 @@ namespace Horo::Runtime {
                                 SaveErrors::CloudMetadataStale);
         }
 
+        TEST_CASE("Uncertain uploads recover from the exact bounded provider read",
+                  "[unit][save][cloud-transport][recovery]") {
+            using Application::CloudSaveUploadRecovery;
+            SaveSlotLifecycleTest::Fixture fixture;
+            fixture.Import(10);
+            fixture.Import(11);
+            const auto target = fixture.Target(10);
+            const auto payload = fixture.ExportBytes(10);
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session, payload.size());
+            auto transport = BoundTransport(frontend, session, scope);
+            const Tests::OwnedTestDirectory directory{"save-cloud-recovery"};
+            const auto journal = NativeJournal(directory, transport);
+            const auto staged = Application::StageCloudSaveUpload(
+                *fixture.owner, journal, target, Id<SaveCloudMutationId>(44), {}, payload.size());
+            REQUIRE(staged.HasValue());
+            REQUIRE(transport.DispatchMutation(2, staged.Value().mutation, staged.Value().bytes).HasValue());
+            REQUIRE(backend->lastCloudWrite);
+            const auto write = *backend->lastCloudWrite;
+            const auto probe = transport.ProbeUpload(3, staged.Value().mutation);
+            REQUIRE(probe.HasValue());
+            const auto &handle = probe.Value().Request().handle;
+            REQUIRE(backend->lastCloudRead);
+            CHECK(backend->lastCloudRead->key == write.key);
+            CHECK(backend->lastCloudRead->maximumBytes == payload.size());
+            const auto before = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(before.HasValue());
+            REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+
+            const auto recover = [&] {
+                const auto snapshot = backend->requests.Query(handle);
+                REQUIRE(snapshot.HasValue());
+                return transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value());
+            };
+
+            SECTION("A commit survives loss of the write response and restart of local storage") {
+                auto head = *Cloud::TestSupport::CloudCommit(write).committedObject;
+                head.transportDigest.reset();
+                REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
+                            Cloud::CloudBlobReadResult{write.subject, write.subject.SessionGeneration(), head, write.bytes}).HasValue());
+                REQUIRE(recover().Value() == CloudSaveUploadRecovery::Confirmed);
+                fixture.Reopen();
+                const auto stored = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+                REQUIRE(stored.HasValue());
+                CHECK(stored.Value().Metadata().records.front().lastConfirmed == staged.Value().mutation.Intent().mutation);
+                CHECK(stored.Value().Metadata().records.front().state == SaveCloudGenerationState::Clean);
+                CHECK(stored.Value().Index().entries == before.Value().Index().entries);
+                REQUIRE(recover().Value() == CloudSaveUploadRecovery::Confirmed);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == stored.Value().Metadata());
+            }
+            SECTION("Only exact absence permits retry of the original conditional create") {
+                REQUIRE(backend->requests.CompleteFailure(handle, MakeError(Cloud::CloudObjectErrors::NotFound)).HasValue());
+                REQUIRE(recover().Value() == CloudSaveUploadRecovery::RetryOriginal);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == before.Value().Metadata());
+                REQUIRE(transport.DispatchMutation(4, staged.Value().mutation, staged.Value().bytes).HasValue());
+                CHECK(backend->lastCloudWrite->mutation == write.mutation);
+                CHECK(std::holds_alternative<Cloud::CloudCreateIfAbsent>(backend->lastCloudWrite->precondition));
+                REQUIRE(fixture.owner->Execute(fixture.Copy(11, 10)).HasValue());
+                Cloud::RequireError(recover(), SaveErrors::CloudMetadataStale);
+            }
+            SECTION("An unrelated request's missing result cannot permit a retry") {
+                const auto unrelated = transport.Read(4, staged.Value().mutation.Intent().slot, payload.size());
+                REQUIRE(unrelated.HasValue());
+                const auto &other = unrelated.Value().handle;
+                REQUIRE(backend->requests.MarkRunning(other).HasValue());
+                REQUIRE(backend->requests.CompleteFailure(other, MakeError(Cloud::CloudObjectErrors::NotFound)).HasValue());
+                const auto snapshot = backend->requests.Query(other);
+                REQUIRE(snapshot.HasValue());
+                Cloud::RequireError(transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value()),
+                                    Cloud::RequestErrors::Stale);
+            }
+            SECTION("A different complete object is a normal remote conflict") {
+                auto otherBytes = payload;
+                otherBytes.front() ^= std::byte{1};
+                auto bytes = Cloud::CloudBlobOwnedBytes::Copy(otherBytes);
+                REQUIRE(bytes.HasValue());
+                auto head = *Cloud::TestSupport::CloudCommit(write).committedObject;
+                head.transportDigest = ComputeSha256(otherBytes);
+                REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
+                            Cloud::CloudBlobReadResult{write.subject, write.subject.SessionGeneration(), head, bytes.Value()}).HasValue());
+                Cloud::RequireError(recover(), Cloud::CloudObjectErrors::PreconditionFailed);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == before.Value().Metadata());
+            }
+            SECTION("An incomplete or failed read leaves the outcome unknown") {
+                Cloud::RequireError(recover(), Cloud::CloudObjectErrors::InvalidRequest);
+                REQUIRE(backend->requests.CompleteFailure(handle, MakeError(Cloud::CloudObjectErrors::PartialTransfer)).HasValue());
+                Cloud::RequireError(recover(), Cloud::CloudObjectErrors::PartialTransfer);
+                CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == before.Value().Metadata());
+            }
+        }
+
+        TEST_CASE("An uncertain replacement does not confirm the original remote revision",
+                  "[unit][save][cloud-transport][recovery]") {
+            SaveSlotLifecycleTest::Fixture fixture;
+            fixture.Import(10);
+            const auto target = fixture.Target(10);
+            const auto payload = fixture.ExportBytes(10);
+            auto scope = Scope();
+            scope.localNamespace = fixture.Access().expected;
+            auto backend = std::make_shared<Cloud::RoutingBackend>();
+            const auto session = Cloud::Session();
+            auto frontend = CloudFrontend(backend, session, payload.size());
+            auto transport = BoundTransport(frontend, session, scope);
+            const Tests::OwnedTestDirectory directory{"save-cloud-replace-recovery"};
+            const auto journal = NativeJournal(directory, transport);
+            const auto initial = Application::StageCloudSaveUpload(
+                *fixture.owner, journal, target, Id<SaveCloudMutationId>(44), {}, payload.size());
+            REQUIRE(initial.HasValue());
+            REQUIRE(transport.DispatchMutation(2, initial.Value().mutation, initial.Value().bytes).HasValue());
+            REQUIRE(backend->lastCloudWrite);
+            const auto committed = Cloud::TestSupport::CloudCommit(*backend->lastCloudWrite);
+            REQUIRE(transport.PublishUploadConfirmation(*fixture.owner, fixture.Access(), initial.Value().mutation, committed).HasValue());
+            auto replacementIntent = initial.Value().mutation.Intent();
+            replacementIntent.mutation = Id<SaveCloudMutationId>(45);
+            replacementIntent.revision = committed.committedObject->revision;
+            const auto replacement = journal.Store(replacementIntent);
+            REQUIRE(replacement.HasValue());
+            const auto probe = transport.ProbeUpload(3, replacement.Value());
+            REQUIRE(probe.HasValue());
+            const auto &handle = probe.Value().Request().handle;
+            REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+
+            SECTION("The old revision with identical bytes permits only the original replace") {
+                REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
+                            Cloud::CloudBlobReadResult{committed.subject, committed.sessionGeneration,
+                                                       *committed.committedObject, initial.Value().bytes}).HasValue());
+                const auto snapshot = backend->requests.Query(handle);
+                REQUIRE(snapshot.HasValue());
+                const auto recovery = transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value());
+                REQUIRE(recovery.HasValue());
+                CHECK(recovery.Value() == Application::CloudSaveUploadRecovery::RetryOriginal);
+            }
+            SECTION("Missing is a conflict for a replacement") {
+                REQUIRE(backend->requests.CompleteFailure(handle, MakeError(Cloud::CloudObjectErrors::NotFound)).HasValue());
+                const auto snapshot = backend->requests.Query(handle);
+                REQUIRE(snapshot.HasValue());
+                Cloud::RequireError(transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value()),
+                                    Cloud::CloudObjectErrors::PreconditionFailed);
+            }
+            const auto stored = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
+            REQUIRE(stored.HasValue());
+            CHECK(stored.Value().Metadata().records.front().lastConfirmed == initial.Value().mutation.Intent().mutation);
+        }
+
         TEST_CASE("Cloud catalog publication preserves exact pairing across reload and local slot changes",
                   "[unit][save][cloud-transport][catalog]") {
             SaveSlotLifecycleTest::Fixture fixture;

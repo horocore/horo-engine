@@ -5,6 +5,7 @@
  * @brief Host-only bridge between Save coordinator intents and opaque cloud transport.
  */
 
+#include "Horo/Application/CloudSaveMutationJournal.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
@@ -17,13 +18,37 @@ namespace Horo::Runtime {
 }
 
 namespace Horo::Application {
-    class CloudSaveDurableMutation;
-    class CloudSaveMutationJournal;
-
     /** @brief The exact platform request admitted for one owning Save operation. */
     template <typename T> struct CloudSaveRequest final {
         OperationId operation;                              /**< Save owner's correlation identity. */
         PlatformServices::PlatformRequestHandle<T> handle; /**< Frontend-issued cancellation and completion identity. */
+    };
+
+    /** @brief A bounded read admitted for one immutable, uncertain upload intent. */
+    class CloudSaveUploadProbe final {
+    public:
+        /** @brief Returns correlation and observation identity for the application owner. */
+        [[nodiscard]] const CloudSaveRequest<PlatformServices::CloudBlobReadResult> &Request() const noexcept {
+            return request_;
+        }
+
+    private:
+        friend class CloudSaveTransport;
+        CloudSaveUploadProbe(CloudSaveDurableMutation mutation,
+                             PlatformServices::PlatformSubjectHandle subject,
+                             std::uint64_t maximumBytes,
+                             CloudSaveRequest<PlatformServices::CloudBlobReadResult> request);
+
+        CloudSaveDurableMutation mutation_;
+        PlatformServices::PlatformSubjectHandle subject_;
+        std::uint64_t maximumBytes_;
+        CloudSaveRequest<PlatformServices::CloudBlobReadResult> request_;
+    };
+
+    /** @brief The safe action established by one complete, correlated upload observation. */
+    enum class CloudSaveUploadRecovery : std::uint8_t {
+        Confirmed,
+        RetryOriginal
     };
 
     /**
@@ -89,10 +114,38 @@ namespace Horo::Application {
                                                              const CloudSaveDurableMutation &mutation,
                                                              const PlatformServices::CloudMutationResult &completion) const;
 
+        /** @brief Reads the exact key of an upload whose provider commit may have begun.
+         * @param operation Owning Save operation. @param mutation Original durable upload.
+         * @return A probe retaining the immutable intent and this read's correlation, or a typed admission failure.
+         */
+        [[nodiscard]] Result<CloudSaveUploadProbe> ProbeUpload(OperationId operation,
+                                                              const CloudSaveDurableMutation &mutation) const;
+
+        /** @brief Recovers an uncertain upload from the probe's correlated terminal observation.
+         * @param lifecycle Local catalog authority. @param access Exact bound namespace revision.
+         * @param probe Admitted read and original durable intent. @param completion Observation from that exact request.
+         * @return Durable confirmation, permission to consider the original conditional retry, or typed failure.
+         * @details The coordinator must revalidate the local selection and exact bytes before dispatching the original intent.
+         * Runs on the serialized storage lane while the authenticated frontend binding remains valid.
+         */
+        [[nodiscard]] Result<CloudSaveUploadRecovery> ReconcileUpload(
+            Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
+            const CloudSaveUploadProbe &probe,
+            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion) const;
+
     private:
         friend class CloudSaveMutationJournal;
         /** @brief Derives the versioned opaque key for one typed slot inside this authenticated partition. */
         [[nodiscard]] Result<PlatformServices::CloudSaveObjectKey> Key(Runtime::SaveGameSlotId slot) const;
+
+        /** @brief Validates the exact selected local generation in the current binding. */
+        [[nodiscard]] const Runtime::SaveCloudGenerationRecord *FindUploadSelection(
+            const CloudSaveDurableMutation &mutation, const Runtime::SaveCloudRevisionSnapshot &current) const;
+
+        /** @brief Classifies a correlated read as a proven commit, a possible retry, or a failure. */
+        [[nodiscard]] Result<std::optional<PlatformServices::CloudMutationResult>> ObserveUpload(
+            const CloudSaveUploadProbe &probe,
+            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion) const;
 
         CloudSaveTransport(const PlatformServices::PlatformServicesFrontend &frontend, PlatformServices::PlatformSubjectHandle subject,
                            PlatformServices::CloudSaveObjectPrefix prefix, Sha256Digest journalPartition,

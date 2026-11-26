@@ -1,5 +1,5 @@
 #include "Horo/Application/CloudSaveTransport.h"
-#include "Horo/Application/CloudSaveMutationJournal.h"
+#include "Horo/Runtime/Save/SaveSlotLifecycle.h"
 
 #include <algorithm>
 #include <array>
@@ -75,7 +75,19 @@ namespace Horo::Application {
                 return false;
             return !expected || std::ranges::equal(*previous->revision, expected->Bytes());
         }
+
+        /** @brief Checks whether the selected local record can still apply the original remote precondition. */
+        bool CanApplyUpload(const Runtime::SaveCloudGenerationRecord &selected, const CloudSaveObjectKey &key,
+                            const std::optional<ProviderObjectRevision> &expected) {
+            using enum Runtime::SaveCloudGenerationState;
+            return selected.state != Deleted && selected.state != Conflicted && selected.state != Downloading &&
+                   MatchesPrecondition(selected.object, key, expected);
+        }
     }
+
+    CloudSaveUploadProbe::CloudSaveUploadProbe(CloudSaveDurableMutation mutation, const PlatformSubjectHandle subject,
+                                               const std::uint64_t maximumBytes, CloudSaveRequest<CloudBlobReadResult> request)
+        : mutation_(std::move(mutation)), subject_(subject), maximumBytes_(maximumBytes), request_(std::move(request)) {}
 
     CloudSaveTransport::CloudSaveTransport(const PlatformServicesFrontend &frontend, const PlatformSubjectHandle subject,
                                            CloudSaveObjectPrefix prefix, const Sha256Digest journalPartition,
@@ -172,32 +184,26 @@ namespace Horo::Application {
                                                                                  const CloudMutationResult &completion,
                                                                                  const Runtime::SaveCloudRevisionSnapshot &current) const {
         using Response = Result<Runtime::SaveCloudRevisionSnapshot>;
-        if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_ || current.Metadata().scope != scope_ ||
-            !mutation.intent_.upload)
+        const auto *selected = FindUploadSelection(mutation, current);
+        if (!selected)
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         const auto &intent = mutation.intent_;
         if (auto checked = CheckUploadCompletion(completion, intent, subject_, mutation.key_); checked.HasError())
             return Response::Failure(checked.ErrorValue());
 
         const auto &currentMetadata = current.Metadata();
-        const auto selected = std::ranges::lower_bound(currentMetadata.records, intent.slot, {}, &Runtime::SaveCloudGenerationRecord::slot);
-        if (selected == currentMetadata.records.end() || selected->slot != intent.slot || selected->generation != intent.generation ||
-            selected->archive != intent.archive)
-            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
         const auto &head = *completion.committedObject;
         if (selected->lastConfirmed == intent.mutation && selected->state == Runtime::SaveCloudGenerationState::Clean &&
             MatchesPrecondition(selected->object, mutation.key_, head.revision))
             return Response::Success(current);
-        if (selected->state == Runtime::SaveCloudGenerationState::Deleted || selected->state == Runtime::SaveCloudGenerationState::Conflicted ||
-            selected->state == Runtime::SaveCloudGenerationState::Downloading ||
-            !MatchesPrecondition(selected->object, mutation.key_, intent.revision) ||
+        if (!CanApplyUpload(*selected, mutation.key_, intent.revision) ||
             currentMetadata.revision == std::numeric_limits<std::uint64_t>::max())
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
 
         try {
             auto candidate = currentMetadata;
             ++candidate.revision;
-            auto &record = candidate.records[static_cast<std::size_t>(selected - currentMetadata.records.begin())];
+            auto &record = candidate.records[static_cast<std::size_t>(selected - currentMetadata.records.data())];
             const auto key = mutation.key_.Bytes();
             const auto revision = head.revision.Bytes();
             record.object = {.key = {key.begin(), key.end()}, .revision = std::vector<std::byte>{revision.begin(), revision.end()}};
@@ -207,5 +213,106 @@ namespace Horo::Application {
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }
+    }
+
+    /** @copydoc CloudSaveTransport::FindUploadSelection */
+    const Runtime::SaveCloudGenerationRecord *CloudSaveTransport::FindUploadSelection(
+        const CloudSaveDurableMutation &mutation, const Runtime::SaveCloudRevisionSnapshot &current) const {
+        const auto &metadata = current.Metadata();
+        const auto &intent = mutation.intent_;
+        if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_ || metadata.scope != scope_ || !intent.upload)
+            return nullptr;
+        const auto selected = std::ranges::lower_bound(metadata.records, intent.slot, {}, &Runtime::SaveCloudGenerationRecord::slot);
+        if (selected == metadata.records.end() || selected->slot != intent.slot || selected->generation != intent.generation ||
+            selected->archive != intent.archive)
+            return nullptr;
+        return &*selected;
+    }
+
+    /** @copydoc CloudSaveTransport::ProbeUpload */
+    Result<CloudSaveUploadProbe> CloudSaveTransport::ProbeUpload(const OperationId operation,
+                                                                const CloudSaveDurableMutation &mutation) const {
+        using Response = Result<CloudSaveUploadProbe>;
+        if (mutation.partition_ != journalPartition_ || !mutation.intent_.upload)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        const auto limits = frontend_->ServiceLimits(PlatformServiceKind::Cloud);
+        if (limits.HasError())
+            return Response::Failure(limits.ErrorValue());
+        const auto maximumBytes = limits.Value().maxPayloadBytes;
+        auto request = Read(operation, mutation.intent_.slot, maximumBytes);
+        if (request.HasError())
+            return Response::Failure(request.ErrorValue());
+        return Response::Success(CloudSaveUploadProbe{mutation, subject_, maximumBytes, std::move(request).Value()});
+    }
+
+    /** @copydoc CloudSaveTransport::ObserveUpload */
+    Result<std::optional<CloudMutationResult>> CloudSaveTransport::ObserveUpload(
+        const CloudSaveUploadProbe &probe, const PlatformRequestSnapshot<CloudBlobReadResult> &completion) const {
+        using Response = Result<std::optional<CloudMutationResult>>;
+        const auto &handle = probe.Request().handle;
+        if (probe.subject_ != subject_ || completion.id != handle.Id() || completion.generation != handle.Generation())
+            return Response::Failure(MakeError(RequestErrors::Stale));
+        if (!completion.terminal || !IsTerminal(completion.state))
+            return Response::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+
+        const auto &mutation = probe.mutation_;
+        const auto &intent = mutation.intent_;
+        if (const auto *error = completion.terminal->ErrorValue()) {
+            const auto &missing = CloudObjectErrors::NotFound;
+            if (completion.state != PlatformRequestState::Failed || error->code.Value() != missing.code.Value() ||
+                error->domain.Value() != missing.domain.Value())
+                return Response::Failure(*error);
+            if (intent.revision)
+                return Response::Failure(MakeError(CloudObjectErrors::PreconditionFailed));
+            return Response::Success(std::nullopt);
+        }
+
+        const auto *read = completion.terminal->Value();
+        if (!read || completion.state != PlatformRequestState::Succeeded)
+            return Response::Failure(MakeError(CloudObjectErrors::InvalidProviderResponse));
+        const CloudBlobReadRequest request{subject_, mutation.key_, probe.maximumBytes_};
+        if (const auto valid = ValidateCloudBlobReadCompletion(*read, request, subject_); valid.HasError())
+            return Response::Failure(valid.ErrorValue());
+        auto head = read->head;
+        if (head.revision == intent.revision)
+            return Response::Success(std::nullopt);
+        if (head.sizeBytes != intent.upload->size)
+            return Response::Failure(MakeError(CloudObjectErrors::PreconditionFailed));
+        if (!head.transportDigest)
+            head.transportDigest = ComputeSha256(read->bytes.Bytes());
+        if (head.transportDigest != intent.upload->digest)
+            return Response::Failure(MakeError(CloudObjectErrors::PreconditionFailed));
+        return Response::Success(CloudMutationResult{.subject = read->subject,
+                                                     .sessionGeneration = read->sessionGeneration,
+                                                     .key = mutation.key_,
+                                                     .mutation = MutationId(intent.mutation),
+                                                     .committedObject = std::move(head)});
+    }
+
+    /** @copydoc CloudSaveTransport::ReconcileUpload */
+    Result<CloudSaveUploadRecovery> CloudSaveTransport::ReconcileUpload(
+        Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
+        const CloudSaveUploadProbe &probe, const PlatformRequestSnapshot<CloudBlobReadResult> &completion) const {
+        using Response = Result<CloudSaveUploadRecovery>;
+        const auto &mutation = probe.mutation_;
+        if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_)
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        const auto observed = ObserveUpload(probe, completion);
+        if (observed.HasError())
+            return Response::Failure(observed.ErrorValue());
+        if (observed.Value()) {
+            const auto published = PublishUploadConfirmation(lifecycle, access, mutation, *observed.Value());
+            if (published.HasError())
+                return Response::Failure(published.ErrorValue());
+            return Response::Success(CloudSaveUploadRecovery::Confirmed);
+        }
+
+        const auto current = lifecycle.ReadCloudRevision(access, scope_);
+        if (current.HasError())
+            return Response::Failure(current.ErrorValue());
+        const auto *selected = FindUploadSelection(mutation, current.Value());
+        if (!selected || !CanApplyUpload(*selected, mutation.key_, mutation.intent_.revision))
+            return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+        return Response::Success(CloudSaveUploadRecovery::RetryOriginal);
     }
 }
