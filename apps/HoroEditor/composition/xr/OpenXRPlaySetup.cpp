@@ -204,8 +204,12 @@ namespace Horo::Application::Internal {
             report.issue = Editor::EditorXrSetupIssue::Stale;
             return report;
         }
-        if (setupPreflight_)
+        if (setupRefreshRequested_) {
+            if (report.test == Editor::EditorXrSetupTestState::Passed)
+                report.test = Editor::EditorXrSetupTestState::Queued;
+        } else if (setupPreflight_) {
             report.display = setupPreflight_->Compatibility().display;
+        }
         report.mayRequestTest = SetupIdle() && queuedSetupTest_.value == 0;
         if (!report.mayRequestTest && report.test == Editor::EditorXrSetupTestState::NotRun &&
             report.issue == Editor::EditorXrSetupIssue::None)

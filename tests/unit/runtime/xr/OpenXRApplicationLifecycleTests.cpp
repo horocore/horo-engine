@@ -895,6 +895,8 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(stale.HasError());
             CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::CapabilityStale.code.Value());
             fixture.play->RequestSetupRefresh();
+            CHECK(fixture.play->ReadSetup().test == Queued);
+            CHECK_FALSE(fixture.play->ReadSetup().display);
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().test == Failed);
             CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Stale);
@@ -912,6 +914,7 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(fixture.play->ReadSetup().test == Cancelled);
             if (!refreshBeforeRetest)
                 fixture.play->RequestSetupRefresh();
+            CHECK_FALSE(fixture.play->ReadSetup().display);
 
             fixture.play->PumpSetupTest();
 
@@ -947,7 +950,8 @@ namespace Horo::Tests::OpenXRApplication {
             };
             fixture.play->RequestSetupRefresh();
             fixture.play->RequestSetupRefresh();
-            CHECK(fixture.play->ReadSetup().test == Passed);
+            CHECK(fixture.play->ReadSetup().test == Queued);
+            CHECK_FALSE(fixture.play->ReadSetup().display);
             CHECK(admissionChecks == 0);
             fixture.play->PumpSetupTest();
             CHECK(fixture.play->ReadSetup().test == Failed);
@@ -955,6 +959,19 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.play->PumpSetupTest();
             CHECK(admissionChecks == 1);
             fixture.onCheckAdmission = {};
+        }
+        SECTION("current evidence returns after refresh without starting a session") {
+            const auto created = std::ranges::count(fixture.script.native.calls, "session");
+            fixture.play->RequestSetupRefresh();
+            CHECK(fixture.play->ReadSetup().test == Queued);
+            CHECK_FALSE(fixture.play->ReadSetup().display);
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Passed);
+            const auto refreshed = fixture.play->ReadSetup().display;
+            REQUIRE(refreshed);
+            CHECK(refreshed->refreshMilliHertz == display->refreshMilliHertz);
+            CHECK(refreshed->viewExtents == display->viewExtents);
+            CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
         }
 
         REQUIRE(RequireValue(fixture.ClosePlay()));
