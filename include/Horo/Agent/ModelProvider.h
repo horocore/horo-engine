@@ -89,7 +89,7 @@ namespace Horo::Agent {
     /** @brief One ordered event, valid only for the duration of its callback. */
     struct ModelEvent final {
         ModelEventKind kind{ModelEventKind::TextDelta};
-        std::string text;
+        std::string text; /**< TextDelta payload. Each delta contains complete UTF-8 scalar values without embedded NUL. */
         ModelToolIntent tool;
         ModelUsage usage;
     };

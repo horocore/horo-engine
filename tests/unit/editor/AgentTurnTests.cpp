@@ -150,6 +150,40 @@ namespace Horo::Agent {
         CHECK(model.requests.size() == 1);
     }
 
+    TEST_CASE("Editor Agent withholds malformed model text before preview and recovers on the next turn", "[agent][turn]") {
+        std::string rejected;
+        SECTION("invalid UTF-8") {
+            rejected.assign(1, '\xff');
+        }
+        SECTION("embedded NUL") {
+            rejected = std::string{"visible\0hidden", 14};
+        }
+        Model model;
+        const std::string validText{"T\xc3\xbcrk\xc3\xa7" "e"};
+        model.action = [&](std::size_t call, const ModelEventSink &sink, std::stop_token) {
+            if (call == 1)
+                return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = "Approved prefix\n"},
+                                   {.kind = ModelEventKind::TextDelta, .text = rejected},
+                                   {.kind = ModelEventKind::Completed}});
+            return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = validText},
+                               {.kind = ModelEventKind::Completed}});
+        };
+        AgentTurnRuntime runtime;
+        std::vector<std::string> deltas;
+        const AgentTurnTextObserver observe = [&](std::string_view delta) { deltas.emplace_back(delta); };
+        const auto failed = runtime.Run(model, nullptr, 1, Request(), {}, {}, nullptr, observe);
+        CHECK(failed.status == AgentTurnStatus::InvalidModelResponse);
+        CHECK(failed.messages.empty());
+        CHECK(deltas == std::vector<std::string>{"Approved prefix\n"});
+
+        const auto recovered = runtime.Run(model, nullptr, 2, Request(), {}, {}, nullptr, observe);
+        REQUIRE(recovered.status == AgentTurnStatus::Completed);
+        REQUIRE_FALSE(recovered.messages.empty());
+        CHECK(recovered.messages.back().text == validText);
+        REQUIRE(deltas.size() == 2);
+        CHECK(deltas.back() == recovered.messages.back().text);
+    }
+
     TEST_CASE("Editor Agent checks turn revocation after announcing and before dispatching a tool", "[agent][turn]") {
         Tools tools;
         const AgentTurnMcp bridge{tools.adapter};

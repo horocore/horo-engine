@@ -1,10 +1,12 @@
 #pragma once
 
 #include "Horo/Agent/ModelProvider.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Agent::Detail {
@@ -38,10 +40,7 @@ namespace Horo::Agent::Detail {
             --remaining_.events;
             switch (event.kind) {
                 case ModelEventKind::TextDelta:
-                    if (!ConsumeBytes(event.text.size()))
-                        return false;
-                    message_.text.append(event.text);
-                    return true;
+                    return AcceptText(event.text);
                 case ModelEventKind::ToolIntent:
                     return AcceptIntent(event.tool);
                 case ModelEventKind::Usage:
@@ -96,6 +95,16 @@ namespace Horo::Agent::Detail {
             if (count > remaining_.bytes)
                 return Reject(TurnStreamFailure::Capacity);
             remaining_.bytes -= count;
+            return true;
+        }
+
+        /** @brief Checks the byte allowance and validates the delta before retaining it. */
+        bool AcceptText(const std::string_view text) {
+            if (!ConsumeBytes(text.size()))
+                return false;
+            if (text.find('\0') != std::string_view::npos || !IsValidUtf8ScalarSequence(text))
+                return Reject(TurnStreamFailure::Malformed);
+            message_.text.append(text);
             return true;
         }
 

@@ -1426,6 +1426,9 @@ its authoritative owner.
 The local chat panel displays completed, redacted lines while an inference
 without tools is running, including turns with explicitly approved attachments.
 The display polls the bounded worker draft without waiting for the producer.
+The turn checks each text delta against its byte allowance and requires complete
+UTF-8 scalar values without embedded NUL. An invalid delta is withheld from the
+preview and stops the turn before final delivery.
 Final delivery uses the terminal response. A live display does not approve
 conversation storage or create a history checkpoint.
 Regenerate resubmits the last plain prompt to the same selected model and
