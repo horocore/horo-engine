@@ -250,6 +250,11 @@ namespace Horo::Editor {
         CloseWith(Cancelled);
     }
 
+    /** @copydoc ImmersiveSpeechTranscription::AudioDuration */
+    std::chrono::nanoseconds ImmersiveSpeechTranscription::AudioDuration() const noexcept {
+        return std::chrono::nanoseconds{nextFrame_ * NanosecondsPerSecond / source_.format.sampleRate};
+    }
+
     SpeechTranscriptionStatus ImmersiveSpeechTranscription::CheckLive() noexcept {
         if (status_ != Accepted && status_ != Pending)
             return status_;
@@ -300,7 +305,7 @@ namespace Horo::Editor {
         owned.kind_ = hypothesis.kind;
         owned.start_ = hypothesis.start;
         owned.end_ = hypothesis.end;
-        owned.admittedAudioDuration_ = std::chrono::nanoseconds{nextFrame_ * NanosecondsPerSecond / source_.format.sampleRate};
+        owned.admittedAudioDuration_ = AudioDuration();
         owned.confidence_ = hypothesis.confidence;
         owned.textSize_ = hypothesis.text.size();
         std::ranges::copy(hypothesis.text, owned.text_.begin());

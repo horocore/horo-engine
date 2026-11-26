@@ -42,6 +42,8 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionStatus Seal(bool foreground);
         /** @brief Relays a bounded batch of PCM and polls at most one recognition result. */
         [[nodiscard]] SpeechTranscriptionUpdate Advance(bool foreground);
+        /** @brief Reads the scalar progress of the current recognition operation. */
+        [[nodiscard]] std::optional<ImmersiveSpeechProgress> ReadProgress() const noexcept;
         /** @brief Reconciles native consent and assembles final speech with sealed spatial evidence. */
         [[nodiscard]] ImmersiveCommandAssembly AssembleCommand(bool foreground, const ImmersiveSpeechEvidence &speech,
                                                                const XR::XRInteractionCutoff &cutoff);

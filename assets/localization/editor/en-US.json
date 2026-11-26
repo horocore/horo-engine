@@ -193,6 +193,7 @@
     "workspace.local_agent.xr_listening_privacy": {"text": "Audio, the transcript, and its XR context stay on this device during this preview."},
     "workspace.local_agent.xr_listening_max_audio_seconds": {"text": "Recording limit in seconds"},
     "workspace.local_agent.xr_listening_admitted_audio_ms": {"text": "Audio sent to recognition in milliseconds"},
+    "workspace.local_agent.xr_listening_after_capture_ms": {"text": "Time after recording ended (ms)"},
     "workspace.local_agent.xr_listening_microphone_permission": {"text": "Allow microphone access"},
     "workspace.local_agent.xr_listening_speech_permission": {"text": "Allow speech recognition"},
     "workspace.local_agent.xr_listening_refresh": {"text": "Find microphone inputs"},

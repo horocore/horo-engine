@@ -237,6 +237,9 @@ Ownership rules:
   and reports the reason. A new recording requires a new user action.
   One elapsed-time budget covers provider open, input, and result polling.
   Expiration signals cooperative provider cancellation even during a provider call.
+  The panel reports PCM accepted by the recognizer even before a draft arrives.
+  After microphone detachment it separately reports elapsed time until receipt
+  of final text. These transient measurements disappear when the scope retires.
   The local panel displays only the latest admitted partial as a draft. Final
   recognition replaces it and enables reference review. Cancellation or context
   withdrawal clears the draft.

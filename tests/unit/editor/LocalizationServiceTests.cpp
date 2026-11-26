@@ -209,6 +209,7 @@ namespace {
             "workspace.local_agent.xr_listening_privacy",
             "workspace.local_agent.xr_listening_max_audio_seconds",
             "workspace.local_agent.xr_listening_admitted_audio_ms",
+            "workspace.local_agent.xr_listening_after_capture_ms",
             "workspace.local_agent.xr_listening_active",
             "workspace.local_agent.xr_listening_finishing",
             "workspace.local_agent.xr_listening_draft",

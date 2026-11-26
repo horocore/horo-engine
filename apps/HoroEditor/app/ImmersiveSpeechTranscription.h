@@ -220,7 +220,10 @@ namespace Horo::Editor {
         void Cancel() noexcept;
 
     private:
+        friend class ImmersiveSpeechWorker;
         struct ProviderWindow;
+        /** @brief Counts PCM accepted by the provider independently of the current hypothesis. Worker lane only. */
+        [[nodiscard]] std::chrono::nanoseconds AudioDuration() const noexcept;
         [[nodiscard]] SpeechTranscriptionStatus CheckLive() noexcept;
         [[nodiscard]] SpeechTranscriptionStatus CheckProvider(bool accepted) noexcept;
         SpeechTranscriptionStatus CloseWith(SpeechTranscriptionStatus status) noexcept;

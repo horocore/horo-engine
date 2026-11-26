@@ -70,11 +70,9 @@ namespace Horo::Editor {
         return partial_->PreviewText(SpeechHypothesisKind::Partial);
     }
 
-    /** @copydoc EditorImmersiveListening::AdmittedAudioDuration */
-    std::optional<std::chrono::nanoseconds> EditorImmersiveListening::AdmittedAudioDuration() const noexcept {
-        if (preview_)
-            return preview_->Speech().AdmittedAudioDuration();
-        return partial_ ? partial_->AdmittedAudioDuration() : std::nullopt;
+    /** @copydoc EditorImmersiveListening::ReadProgress */
+    std::optional<ImmersiveSpeechProgress> EditorImmersiveListening::ReadProgress() const {
+        return Current() ? speech_.ReadProgress() : std::nullopt;
     }
 
     /** @copydoc EditorImmersiveListening::ReviewReferences */

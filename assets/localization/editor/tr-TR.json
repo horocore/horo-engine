@@ -193,6 +193,7 @@
     "workspace.local_agent.xr_listening_privacy": {"text": "Ses, konuşma metni ve XR bağlamı bu önizleme sırasında cihazda kalır."},
     "workspace.local_agent.xr_listening_max_audio_seconds": {"text": "Saniye cinsinden kayıt sınırı"},
     "workspace.local_agent.xr_listening_admitted_audio_ms": {"text": "Tanımaya gönderilen sesin milisaniye cinsinden süresi"},
+    "workspace.local_agent.xr_listening_after_capture_ms": {"text": "Kayıt bittikten sonra geçen süre (ms)"},
     "workspace.local_agent.xr_listening_microphone_permission": {"text": "Mikrofon erişimine izin ver"},
     "workspace.local_agent.xr_listening_speech_permission": {"text": "Konuşma tanımaya izin ver"},
     "workspace.local_agent.xr_listening_refresh": {"text": "Mikrofon girişlerini bul"},

@@ -622,15 +622,19 @@ namespace Horo::Editor {
                 }
             }
 
-            /** @brief Shows the configured capture cap and the duration already admitted to recognition. */
+            /** @brief Shows the capture cap, admitted PCM and the time spent finishing recognition. */
             void DrawListeningUsage(const ILocalizationService &locale) const {
                 ImGui::TextWrapped("%s %lld", LocalizedText(locale, "xr_listening_max_audio_seconds").c_str(),
                                    static_cast<long long>(ImmersiveSpeechTranscription::MaximumInputDuration.count()));
-                if (const auto duration = listening_->AdmittedAudioDuration()) {
-                    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(*duration).count();
-                    ImGui::TextWrapped("%s %lld", LocalizedText(locale, "xr_listening_admitted_audio_ms").c_str(),
-                                       static_cast<long long>(milliseconds));
-                }
+                const auto progress = listening_->ReadProgress();
+                if (!progress)
+                    return;
+                const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(progress->admittedAudio).count();
+                ImGui::TextWrapped("%s %lld", LocalizedText(locale, "xr_listening_admitted_audio_ms").c_str(),
+                                   static_cast<long long>(milliseconds));
+                if (progress->afterCapture)
+                    ImGui::TextWrapped("%s %lld", LocalizedText(locale, "xr_listening_after_capture_ms").c_str(),
+                                       static_cast<long long>(progress->afterCapture->count()));
             }
 
             /** @brief Projects owner-issued reference states without selecting a candidate. */

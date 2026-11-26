@@ -32,8 +32,8 @@ namespace Horo::Editor {
         /** @brief Borrows the latest live draft for display while final recognition is pending. */
         [[nodiscard]] std::string_view PartialTranscript() const & noexcept;
 
-        /** @brief Returns the admitted PCM duration of the current final or partial transcript, when available. */
-        [[nodiscard]] std::optional<std::chrono::nanoseconds> AdmittedAudioDuration() const noexcept;
+        /** @brief Reads progress only for the current XR listening scope, including before the first draft. */
+        [[nodiscard]] std::optional<ImmersiveSpeechProgress> ReadProgress() const;
 
         /** @brief Returns the terminal capture reason while Status is Interrupted. */
         [[nodiscard]] SpeechTranscriptionStatus FailureReason() const noexcept {

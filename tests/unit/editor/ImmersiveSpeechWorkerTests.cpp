@@ -139,6 +139,7 @@ namespace Horo::Editor {
 
         TEST_CASE("Speech worker drains live PCM before its sealed tail and preserves lease revocation", "[agent][immersive][speech]") {
             SpeechWorkerFixture fixture;
+            CHECK_FALSE(fixture.worker.ReadProgress());
             auto expected = Finished;
             SECTION("accepted final stays revocable") {
                 expected = Finished;
@@ -150,6 +151,10 @@ namespace Horo::Editor {
                 expected = Cancelled;
             }
             fixture.Start(expected == LowConfidence ? 0.2F : 0.9F, false, expected == Cancelled);
+            const auto started = fixture.worker.ReadProgress();
+            REQUIRE(started);
+            CHECK(started->admittedAudio == std::chrono::nanoseconds::zero());
+            CHECK_FALSE(started->afterCapture);
             auto native = Capture::AudioCaptureBuffer::Create(fixture.source);
             REQUIRE(native.HasValue());
             auto tail = std::move(native).Value();
@@ -161,26 +166,52 @@ namespace Horo::Editor {
             REQUIRE(tail.TryRead(block, first) == Capture::AudioCaptureRead::Copied);
             REQUIRE(fixture.worker.Submit(block, first) == Accepted);
             first.front() = 0;
+            const auto progressDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            auto live = fixture.worker.ReadProgress();
+            while (live && live->admittedAudio == std::chrono::nanoseconds::zero() &&
+                   std::chrono::steady_clock::now() < progressDeadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                live = fixture.worker.ReadProgress();
+            }
+            REQUIRE(live);
+            CHECK(live->admittedAudio == std::chrono::nanoseconds{20'833});
+            CHECK_FALSE(live->afterCapture);
             const auto partial = WaitForUpdate(fixture.worker);
             REQUIRE(partial.evidence);
             CHECK(partial.evidence->PreviewText(SpeechHypothesisKind::Partial) == "First block");
             CHECK(partial.evidence->PreviewText(SpeechHypothesisKind::Final).empty());
             REQUIRE(fixture.worker.Seal(std::move(tail)) == Accepted);
+            const auto finishing = fixture.worker.ReadProgress();
+            if (finishing) {
+                CHECK(finishing->afterCapture.has_value());
+                CHECK(finishing->admittedAudio >= live->admittedAudio);
+            }
             const auto completed = WaitForUpdate(fixture.worker);
             CHECK_FALSE(fixture.worker.Busy());
             REQUIRE(completed.status == expected);
             if (expected != Finished) {
                 CHECK_FALSE(completed.evidence);
+                CHECK_FALSE(fixture.worker.ReadProgress());
                 CheckRevokedDraft(partial);
                 return;
             }
             REQUIRE(completed.evidence);
             CHECK(completed.evidence->PreviewText(SpeechHypothesisKind::Final) == "Both blocks");
             CHECK(completed.evidence->PreviewText(SpeechHypothesisKind::Partial).empty());
+            const auto finalProgress = fixture.worker.ReadProgress();
+            REQUIRE(finalProgress);
+            REQUIRE(finishing);
+            REQUIRE(finalProgress->afterCapture);
+            CHECK(finalProgress->afterCapture >= finishing->afterCapture);
+            CHECK(finalProgress->admittedAudio == std::chrono::nanoseconds{41'666});
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            REQUIRE(fixture.worker.ReadProgress());
+            CHECK(fixture.worker.ReadProgress()->afterCapture == finalProgress->afterCapture);
             CHECK(fixture.worker.OwnsEvidence(*completed.evidence));
             const ImmersiveSpeechWorker foreign;
             CHECK_FALSE(foreign.OwnsEvidence(*completed.evidence));
             fixture.capture.request_stop();
+            CHECK_FALSE(fixture.worker.ReadProgress());
             CHECK_FALSE(fixture.worker.OwnsEvidence(*completed.evidence));
             CHECK_FALSE(completed.evidence->IsCurrent());
             CheckRevokedDraft(partial);

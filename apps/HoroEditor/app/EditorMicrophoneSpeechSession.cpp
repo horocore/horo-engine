@@ -132,6 +132,11 @@ namespace Horo::Editor {
         return update;
     }
 
+    /** @copydoc EditorMicrophoneSpeechSession::ReadProgress */
+    std::optional<ImmersiveSpeechProgress> EditorMicrophoneSpeechSession::ReadProgress() const noexcept {
+        return worker_.ReadProgress();
+    }
+
     SpeechTranscriptionStatus EditorMicrophoneSpeechSession::TransferBlock(const bool foreground) {
         Audio::Backend::AudioCapturedBlock block{};
         const auto read = microphone_.ReadSpeechCapture(generation_, foreground, block, scratch_);

@@ -11,6 +11,7 @@ namespace Horo::Editor {
     namespace {
         using enum SpeechTranscriptionStatus;
         namespace Capture = Audio::Backend;
+        using Clock = std::chrono::steady_clock;
         constexpr auto IdlePollInterval = std::chrono::milliseconds(10);
         constexpr unsigned MaximumBlocksPerPoll = 4;
 
@@ -48,6 +49,7 @@ namespace Horo::Editor {
      * @details Control owns the live writer and initializes the tail before publishing sealed. The worker
      * reads the tail only after acquiring sealed and draining the live queue. A separate mutex covers only
      * the single latest partial. Control polls that mutex with try_lock and never waits on the worker.
+     * The worker publishes only the scalar PCM duration. Control owns the two receipt timestamps.
      */
     struct ImmersiveSpeechWorker::State final {
         Capture::AudioCaptureBuffer live;
@@ -58,13 +60,17 @@ namespace Horo::Editor {
         std::uint64_t liveSequence{};
         std::mutex partialMutex;
         std::optional<SpeechTranscriptionUpdate> partial;
+        const ImmersivePlanningContext context;
+        std::atomic<std::chrono::nanoseconds::rep> admittedAudio{};
+        std::optional<Clock::time_point> detachedAt;
+        std::optional<Clock::time_point> receivedAt;
 
-        State(Capture::AudioCaptureBuffer queue, const std::stop_token captureRevoked)
-            : live(std::move(queue)), revoke(captureRevoked, RevokeWorker{cancel}) {}
+        State(Capture::AudioCaptureBuffer queue, const std::stop_token captureRevoked, const ImmersivePlanningContext &scope)
+            : live(std::move(queue)), revoke(captureRevoked, RevokeWorker{cancel}), context(scope) {}
 
         /** @brief Scrubs the block after each synchronous provider operation. */
-        static SpeechTranscriptionStatus Drain(Capture::AudioCaptureBuffer &source, ImmersiveSpeechTranscription &stream,
-                                               PcmScratch &scratch, const std::stop_token stop) {
+        SpeechTranscriptionStatus Drain(Capture::AudioCaptureBuffer &source, ImmersiveSpeechTranscription &stream,
+                                        PcmScratch &scratch, const std::stop_token stop) {
             for (unsigned index = 0; index < MaximumBlocksPerPoll && !stop.stop_requested(); ++index) {
                 Capture::AudioCapturedBlock block{};
                 const auto read = source.TryRead(block, scratch.values);
@@ -78,6 +84,7 @@ namespace Horo::Editor {
                 scratch.Clear();
                 if (result != Accepted)
                     return result;
+                admittedAudio.store(stream.AudioDuration().count(), std::memory_order_relaxed);
             }
             return stop.stop_requested() ? Cancelled : Accepted;
         }
@@ -104,6 +111,8 @@ namespace Horo::Editor {
                 return {ProviderUnavailable, {}};
             if (reply->evidence && !reply->evidence->IsCurrent())
                 return {StaleContext, {}};
+            if (reply->status == Finished && reply->evidence)
+                receivedAt = Clock::now();
             return std::move(*reply);
         }
 
@@ -167,7 +176,7 @@ namespace Horo::Editor {
             auto queue = Capture::AudioCaptureBuffer::Create(source);
             if (queue.HasError())
                 return InvalidRequest;
-            auto shared = std::make_shared<State>(std::move(queue).Value(), captureRevoked);
+            auto shared = std::make_shared<State>(std::move(queue).Value(), captureRevoked, context);
             auto prepared =
                 ImmersiveSpeechTranscription::Prepare(owner, context, source, locale, minimumConfidence, shared->cancel.get_token());
             if (!prepared.stream)
@@ -214,6 +223,7 @@ namespace Horo::Editor {
             return CaptureInterrupted;
         }
         state_->tail.emplace(std::move(tail));
+        state_->detachedAt = Clock::now();
         state_->sealed.store(true);
         return Accepted;
     }
@@ -233,6 +243,18 @@ namespace Horo::Editor {
             return {draftWithdrawn ? DraftWithdrawn : StaleContext, {}};
         }
         return std::move(*update);
+    }
+
+    /** @copydoc ImmersiveSpeechWorker::ReadProgress */
+    std::optional<ImmersiveSpeechProgress> ImmersiveSpeechWorker::ReadProgress() const noexcept {
+        if (!state_ || state_->cancel.stop_requested() || !state_->context.IsCurrent() || (!Busy() && !state_->receivedAt))
+            return std::nullopt;
+        ImmersiveSpeechProgress progress{std::chrono::nanoseconds{state_->admittedAudio.load(std::memory_order_relaxed)}};
+        if (state_->detachedAt) {
+            const auto end = state_->receivedAt ? *state_->receivedAt : Clock::now();
+            progress.afterCapture = std::chrono::duration_cast<std::chrono::milliseconds>(end - *state_->detachedAt);
+        }
+        return progress;
     }
 
     /** @copydoc ImmersiveSpeechWorker::OwnsEvidence */

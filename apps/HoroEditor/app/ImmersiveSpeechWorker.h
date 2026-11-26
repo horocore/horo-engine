@@ -6,6 +6,12 @@
 #include "ImmersiveSpeechTranscription.h"
 
 namespace Horo::Editor {
+    /** @brief Transient progress for one current utterance. */
+    struct ImmersiveSpeechProgress final {
+        std::chrono::nanoseconds admittedAudio; /**< PCM duration after the provider has accepted the samples. */
+        std::optional<std::chrono::milliseconds> afterCapture; /**< From microphone detachment to editor receipt of final text. */
+    };
+
     /** @brief One editor-owned listening operation with fixed PCM and recognition-result storage.
      * @details Call control methods serially outside XR and Audio callbacks. Destruction joins the
      * worker during host teardown. The worker owns the provider and never borrows editor or microphone state.
@@ -36,6 +42,9 @@ namespace Horo::Editor {
         [[nodiscard]] SpeechTranscriptionStatus Seal(Audio::Backend::AudioCaptureBuffer tail) noexcept;
         /** @brief Reads a partial or terminal update without blocking while the worker is busy. */
         [[nodiscard]] SpeechTranscriptionUpdate Poll();
+        /** @brief Observes recognition progress without waiting for a hypothesis or retaining transcript data.
+         * @return Progress until failure, cancellation, or context withdrawal. Final timing freezes at adoption by Poll. */
+        [[nodiscard]] std::optional<ImmersiveSpeechProgress> ReadProgress() const noexcept;
         /** @brief Checks whether the current listening operation issued this still-admissible evidence. */
         [[nodiscard]] bool OwnsEvidence(const ImmersiveSpeechEvidence &evidence) const noexcept;
         /** @brief Invalidates queued and already-delivered evidence and requests worker cancellation. */
