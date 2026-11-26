@@ -143,7 +143,19 @@ When using a manifest as reproducible evidence, also pass `--source-replay evide
 This verifies the original replay bytes against the approved digest and
 reproduces the redacted counts and frame provenance for comparison. The
 verification emits neither raw replay values nor regenerated evidence.
-The storage owner enforces deletion and controls write access to both records.
+For retention automation, use `--audit-retention` with the same manifest and
+original approval. It returns a schema-versioned JSON record with `status`
+(`current` or `expired`) and `expiresOnUtc`. A matched record switches to
+`expired` at the start of its expiry date in UTC. Missing, malformed or mismatched
+inputs produce a nonzero exit and no status record.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --audit-retention
+```
+
+The storage owner can use the status to enforce deletion and continues to
+control write access to both records. The audit reads only the manifest and
+approval and reports no replay data or file paths.
 
 The exporter emits schema 1 with decision outcome counts and exact source, scene,
 canonical AI and plan digests. It omits IDs, paths, observation records and

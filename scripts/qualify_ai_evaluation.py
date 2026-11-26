@@ -104,14 +104,15 @@ def qualification_tuple(value: object) -> dict:
     }
 
 
-def validate_approval(value: object, replay_digest: str, today: date) -> dict:
+def validate_approval(value: object, replay_digest: str, today: date | None) -> dict:
     record = exact_fields(value, {"schemaVersion", "purpose", "replaySha256", "expiresOnUtc", "qualification"}, "export approval")
     require(schema(record["schemaVersion"]) == 1 and record["purpose"] == APPROVAL_PURPOSE, "Unsupported export approval")
     require(digest(record["replaySha256"]) == replay_digest, "Approval does not match this replay")
     expiry = record["expiresOnUtc"]
     require(isinstance(expiry, str) and len(expiry) == 10, "Invalid approval expiry")
     expires_on = date.fromisoformat(expiry)
-    require(expires_on.isoformat() == expiry and today < expires_on, "Export approval has expired or is invalid")
+    require(expires_on.isoformat() == expiry, "Invalid approval expiry")
+    require(today is None or today < expires_on, "Export approval has expired")
     return {"expiresOnUtc": expiry, "qualification": qualification_tuple(record["qualification"])}
 
 
@@ -194,7 +195,7 @@ def validate_retained_evidence(value: object) -> None:
         validate_retained_frame(frame)
 
 
-def validate_retained_manifest(value: object, approval: object, today: date) -> dict:
+def validate_retained_manifest(value: object, approval: object, today: date | None) -> dict:
     record = exact_fields(value, {"format", "schemaVersion", "purpose", "qualificationSource", "sourceReplaySha256",
                                   "expiresOnUtc", "qualification", "evidence"}, "evaluation manifest")
     require(record["format"] == MANIFEST_FORMAT and schema(record["schemaVersion"]) == 1, "Unsupported evaluation manifest")
@@ -205,6 +206,13 @@ def validate_retained_manifest(value: object, approval: object, today: date) -> 
             "Manifest does not match its approval")
     validate_retained_evidence(record["evidence"])
     return record
+
+
+def audit_retention(value: object, approval: object, today: date) -> dict:
+    manifest = validate_retained_manifest(value, approval, None)
+    expiry = manifest["expiresOnUtc"]
+    status = "expired" if date.fromisoformat(expiry) <= today else "current"
+    return {"schemaVersion": 1, "status": status, "expiresOnUtc": expiry}
 
 
 def read_replay(path: Path) -> tuple[bytes, str]:
@@ -226,7 +234,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Existing headless evidence.json or retained evaluation manifest")
     parser.add_argument("--approval", required=True, type=Path, help="Explicit, digest-bound offline export approval")
-    parser.add_argument("--verify-retained", action="store_true", help="Check a stored manifest against its original approval and UTC expiry")
+    retained = parser.add_mutually_exclusive_group()
+    retained.add_argument("--verify-retained", action="store_true", help="Check a stored manifest against its original approval and UTC expiry")
+    retained.add_argument("--audit-retention", action="store_true", help="Report the UTC retention status of a stored manifest and its approval")
     parser.add_argument("--source-replay", type=Path, help="With --verify-retained, reproduce the evidence from the original approved replay")
     args = parser.parse_args()
     if args.source_replay is not None and not args.verify_retained:
@@ -234,6 +244,10 @@ def main() -> int:
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
+        if args.audit_retention:
+            record = decode(read_bounded(args.input, MAX_MANIFEST_BYTES))
+            print(json.dumps(audit_retention(record, approval, today), sort_keys=True, separators=(",", ":")))
+            return 0
         if args.verify_retained:
             record = validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)
             if args.source_replay is not None:

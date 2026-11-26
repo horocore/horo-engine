@@ -129,8 +129,9 @@ def test_source_replay_is_only_available_in_verification_mode(monkeypatch, capsy
     assert not result.out and "--source-replay requires --verify-retained" in result.err
 
 
+@pytest.mark.parametrize("mode", ["--verify-retained", "--audit-retention"])
 @pytest.mark.parametrize("scenario", ["valid", "expired", "extended", "different-replay", "different-provider", "raw-record", "bad-count"])
-def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatch, capsys, scenario):
+def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatch, capsys, mode, scenario):
     data = json.dumps(frame(3, 2)).encode()
     approval = approval_for(data)
     status, result = export(data, approval)
@@ -153,11 +154,23 @@ def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatc
     grant = tmp_path / "approval.json"
     retained.write_text(json.dumps(manifest), encoding="utf-8")
     grant.write_text(json.dumps(approval), encoding="utf-8")
-    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(retained), "--approval", str(grant), "--verify-retained"])
-    assert evaluation.main() == (0 if scenario == "valid" else 1)
+    inputs = (retained.read_bytes(), grant.read_bytes())
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(retained), "--approval", str(grant), mode])
+    audit = mode == "--audit-retention"
+    success = scenario == "valid" or (audit and scenario == "expired")
+    assert evaluation.main() == (0 if success else 1)
     result = capsys.readouterr()
-    assert not result.out and PRIVATE not in result.err
-    assert bool(result.err) == (scenario != "valid")
+    if audit and success:
+        assert json.loads(result.out) == {
+            "schemaVersion": 1,
+            "status": "expired" if scenario == "expired" else "current",
+            "expiresOnUtc": approval["expiresOnUtc"],
+        }
+    else:
+        assert not result.out
+    assert PRIVATE not in result.err
+    assert bool(result.err) == (not success)
+    assert (retained.read_bytes(), grant.read_bytes()) == inputs
 
 
 @pytest.mark.parametrize("scenario", ["valid", "changed-count", "changed-provenance", "wrong-source", "expired"])
