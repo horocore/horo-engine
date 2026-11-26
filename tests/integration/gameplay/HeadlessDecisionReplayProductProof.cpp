@@ -404,6 +404,22 @@ namespace Horo::Application::PrefabAtomicTest {
                 changed << window;
                 REQUIRE(changed.good());
             };
+            std::array distinctScenes{frames.front(), frames.back()};
+            ++distinctScenes.back().definition.value;
+            const auto mixedPath = (output.Directory() / "mixed-scenes").u8string();
+            const auto mixed = Internal::HeadlessReplayOutput::Parse(
+                std::string_view{reinterpret_cast<const char *>(mixedPath.data()), mixedPath.size()});
+            REQUIRE(mixed.HasValue());
+            CHECK(Internal::PublishHeadlessReplayWindow(mixed.Value(), distinctScenes).HasError());
+            CHECK_FALSE(std::filesystem::exists(mixed.Value().Directory()));
+
+            auto &sceneIdentity = encoded.at(1).at("sceneDefinitionId");
+            const auto originalScene = sceneIdentity;
+            sceneIdentity = std::to_string(distinctScenes.back().definition.value);
+            writeCandidate();
+            CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
+            sceneIdentity = originalScene;
+
             auto &decisions = encoded.at(0).at("decision").at("records");
             REQUIRE_FALSE(decisions.empty());
             auto &record = decisions.back();

@@ -164,10 +164,10 @@ def summarize_replay(frames: list[dict]) -> dict:
         require(isinstance(frame, dict) and frame.get("format") == REPLAY_FORMAT, "Invalid replay frame")
         require(schema(frame.get("version")) == 1, "Unsupported replay frame version")
         tick = identity(frame.get("tick"))
-        agent = identity(frame.get("agentId"))
+        frame_subject = (identity(frame.get("sceneDefinitionId")), identity(frame.get("agentId")))
         if last_tick is not None:
-            require(tick == last_tick + 1 and agent == subject, "Replay window is discontinuous or changed subject")
-        last_tick, subject = tick, agent
+            require(tick == last_tick + 1 and frame_subject == subject, "Replay window is discontinuous or changed subject")
+        last_tick, subject = tick, frame_subject
         outcome = object_field(frame, "decision").get("outcome")
         require(isinstance(outcome, int) and not isinstance(outcome, bool) and 0 <= outcome < len(OUTCOMES), "Invalid decision outcome")
         outcomes[OUTCOMES[outcome]] += 1

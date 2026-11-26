@@ -243,6 +243,18 @@ def test_approved_replay_window_enforces_the_native_per_frame_byte_limit(export,
         assert json.loads(result.out)["evidence"]["frameCount"] == 2
 
 
+def test_approved_replay_window_rejects_agent_identity_reused_in_another_scene(export):
+    other_scene = dict(frame(4, 3), sceneDefinitionId="448448449")
+    data = json.dumps({"format": evaluation.REPLAY_FORMAT, "version": 2,
+                       "frames": [frame(3, 2), other_scene]}).encode()
+
+    status, result = export(data, approval_for(data))
+
+    assert status == 1
+    assert not result.out
+    assert result.err == "Replay window is discontinuous or changed subject\n"
+
+
 def test_requires_explicit_approval_argument(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", "evidence.json"])
     with pytest.raises(SystemExit) as exit_status:

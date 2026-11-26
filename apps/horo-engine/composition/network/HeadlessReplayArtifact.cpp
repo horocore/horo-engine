@@ -503,16 +503,17 @@ namespace Horo::Application::Internal {
         }
         try {
             std::string document = R"({"format":"horo-ai-replay-evidence","version":2,"frames":[)";
-            auto previous = frames.front().evidence.tick;
+            const auto &first = frames.front();
+            auto previous = first.evidence.tick;
             for (const auto &frame : frames) {
                 const auto tick = frame.evidence.tick;
-                if (frame.evidence.subject != frames.front().evidence.subject ||
-                    (&frame != &frames.front() && (tick <= previous || tick - previous != 1)))
+                if (frame.definition != first.definition || frame.evidence.subject != first.evidence.subject ||
+                    (&frame != &first && (tick <= previous || tick - previous != 1)))
                     return Result<void>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
                 auto encoded = EncodeEvidence(frame, ComputeSha256(std::as_bytes(std::span{frame.canonicalRecord})));
                 if (encoded.HasError())
                     return Result<void>::Failure(std::move(encoded).ErrorValue());
-                if (&frame != &frames.front())
+                if (&frame != &first)
                     document.push_back(',');
                 document.append(encoded.Value());
                 previous = tick;

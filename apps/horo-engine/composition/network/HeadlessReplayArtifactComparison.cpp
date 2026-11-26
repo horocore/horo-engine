@@ -298,7 +298,9 @@ namespace Horo::Application::Internal {
             for (const auto &encoded : frames) {
                 auto frame = ReadReplayFrame(encoded);
                 if (!result.empty() &&
-                    (frame.agent != result.front().agent || frame.tick <= result.back().tick || frame.tick - result.back().tick != 1))
+                    (frame.agent != result.front().agent ||
+                     frame.At(SceneInput).observation.stamp.generation != result.front().At(SceneInput).observation.stamp.generation ||
+                     frame.tick <= result.back().tick || frame.tick - result.back().tick != 1))
                     throw InvalidEvidence{};
                 result.push_back(std::move(frame));
             }

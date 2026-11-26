@@ -52,7 +52,7 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<void> PublishHeadlessReplayArtifact(const HeadlessReplayOutput &output, const HeadlessDecisionReplayData &data,
                                                              const Sha256Digest &canonicalDigest);
 
-    /** @brief Atomically publishes one contiguous window, retaining the single-tick format for a one-tick capture. */
+    /** @brief Atomically publishes consecutive captures of one Scene and subject, retaining the single-tick format when applicable. */
     [[nodiscard]] Result<void> PublishHeadlessReplayWindow(const HeadlessReplayOutput &output,
                                                            std::span<const HeadlessDecisionReplayData> frames);
 
