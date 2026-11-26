@@ -803,6 +803,42 @@ namespace Horo::Editor {
             CHECK_FALSE(update.evidence);
         }
 
+        TEST_CASE("New speech hypotheses revoke all copies of the previous draft", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            fixture.StartWithAudio();
+            fixture.provider.next = Transcript();
+            const auto old = fixture.stream->Poll();
+            REQUIRE(old.evidence);
+            const auto retained = *old.evidence;
+            REQUIRE_FALSE(retained.PreviewText(Kind::Partial).empty());
+
+            auto next = Transcript();
+            next.text = "Updated text";
+            auto status = Status::Accepted;
+            SECTION("a corrected draft") {}
+            SECTION("a withdrawal under the confidence threshold") {
+                next.confidence = 0.2F;
+                status = Status::DraftWithdrawn;
+            }
+            SECTION("the accepted final") {
+                REQUIRE(fixture.stream->FinishInput() == Status::Accepted);
+                next.kind = Kind::Final;
+                status = Status::Finished;
+            }
+            fixture.provider.next = next;
+            const auto current = fixture.stream->Poll();
+            REQUIRE(current.status == status);
+            CHECK_FALSE(retained.IsCurrent());
+            CHECK(retained.PreviewText(Kind::Partial).empty());
+            CHECK(retained.Hypothesis().text.empty());
+            if (status == Status::DraftWithdrawn) {
+                CHECK_FALSE(current.evidence);
+            } else {
+                REQUIRE(current.evidence);
+                CHECK(current.evidence->PreviewText(next.kind) == next.text);
+            }
+        }
+
         TEST_CASE("Immersive speech distinguishes adapter-reported malformed output from unavailability", "[agent][immersive][speech]") {
             SpeechFixture fixture;
             fixture.StartWithAudio();

@@ -208,6 +208,8 @@ namespace Horo::Editor {
             const auto withdrawn = WaitForUpdate(fixture.worker);
             CHECK(withdrawn.status == DraftWithdrawn);
             CHECK_FALSE(withdrawn.evidence);
+            CHECK_FALSE(fixture.worker.OwnsEvidence(*draft.evidence));
+            CHECK(draft.evidence->PreviewText(SpeechHypothesisKind::Partial).empty());
             CHECK(fixture.worker.Busy());
 
             auto emptyTail = Capture::AudioCaptureBuffer::Create(fixture.source);

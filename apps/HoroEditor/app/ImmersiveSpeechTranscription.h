@@ -114,6 +114,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string_view Locale() const && = delete;
+        /** @brief Borrows the complete hypothesis only while its evidence is current. */
         [[nodiscard]] SpeechHypothesisView Hypothesis() const & noexcept;
         [[nodiscard]] SpeechHypothesisView Hypothesis() const && = delete;
         /** @brief Borrows local display text only while the evidence is live and of the requested kind. */
@@ -228,7 +229,7 @@ namespace Horo::Editor {
 
         ImmersiveSpeechEvidence evidence_;
         Audio::Backend::AudioCaptureBufferDescriptor source_;
-        std::stop_source release_;
+        std::stop_source release_{std::nostopstate}; /**< Revocation source for the last published hypothesis. */
         std::unique_ptr<ISpeechProviderStream> stream_;
         std::unique_ptr<ProviderWindow> providerWindow_;
         std::chrono::steady_clock::time_point deadline_{};

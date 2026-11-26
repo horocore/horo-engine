@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <thread>
 
 namespace Horo::Editor {
@@ -107,7 +108,10 @@ namespace Horo::Editor {
         return context_.IsCurrent() && !release_.stop_requested() && !stop_.stop_requested();
     }
 
+    /** @copydoc ImmersiveSpeechEvidence::Hypothesis */
     SpeechHypothesisView ImmersiveSpeechEvidence::Hypothesis() const & noexcept {
+        if (!IsCurrent())
+            return {};
         return {kind_, start_, end_, confidence_, {text_.data(), textSize_}};
     }
 
@@ -122,7 +126,6 @@ namespace Horo::Editor {
                                                                const std::stop_token stop, const std::chrono::milliseconds providerBudget)
         : source_(source), providerBudget_(providerBudget), minimumConfidence_(minimumConfidence) {
         evidence_.context_ = context;
-        evidence_.release_ = release_.get_token();
         evidence_.stop_ = stop;
         evidence_.localeSize_ = locale.size();
         std::ranges::copy(locale, evidence_.locale_.begin());
@@ -261,10 +264,17 @@ namespace Horo::Editor {
             return {CloseWith(HypothesisLimitExceeded), {}};
         if (!ValidHypothesis(hypothesis))
             return {CloseWith(InvalidTranscript), {}};
+        release_.request_stop();
         if (hypothesis.confidence < minimumConfidence_)
             return {isFinal ? CloseWith(LowConfidence) : DraftWithdrawn, {}};
 
+        try {
+            release_ = std::stop_source{};
+        } catch (const std::bad_alloc &) {
+            return {CloseWith(ResourceUnavailable), {}};
+        }
         auto owned = evidence_;
+        owned.release_ = release_.get_token();
         owned.kind_ = hypothesis.kind;
         owned.start_ = hypothesis.start;
         owned.end_ = hypothesis.end;

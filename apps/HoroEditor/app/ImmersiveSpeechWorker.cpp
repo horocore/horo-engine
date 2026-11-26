@@ -228,8 +228,10 @@ namespace Horo::Editor {
         if (!lock || !state_->partial)
             return {Pending, {}};
         auto update = std::exchange(state_->partial, std::nullopt);
-        if (update->evidence && !update->evidence->IsCurrent())
-            return {StaleContext, {}};
+        if (const auto &evidence = update->evidence; evidence && !evidence->IsCurrent()) {
+            const bool draftWithdrawn = evidence->Context().IsCurrent() && !evidence->stop_.stop_requested();
+            return {draftWithdrawn ? DraftWithdrawn : StaleContext, {}};
+        }
         return std::move(*update);
     }
 

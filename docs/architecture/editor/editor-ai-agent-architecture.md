@@ -231,6 +231,9 @@ Ownership rules:
   The local panel displays only the latest admitted partial as a draft. Final
   recognition replaces it and enables reference review. Cancellation or context
   withdrawal clears the draft.
+  Each new hypothesis revokes access to the prior draft, including copies
+  already delivered to the editor. A low-confidence update withdraws the draft
+  while recognition continues. The final remains bound to the listening scope.
   The editor clears its owned transcript byte storage on release. The macOS
   adapter clears its own UTF-8 scratch before polling another result and on
   cancellation.
