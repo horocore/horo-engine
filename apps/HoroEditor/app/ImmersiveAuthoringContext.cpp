@@ -104,13 +104,15 @@ namespace Horo::Editor {
     }
 
     ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop,
-                                             CancellationToken projectLifetime, std::shared_ptr<const Agent::McpPlanCatalog> catalog)
+                                             CancellationToken projectLifetime, CancellationToken trustLifetime,
+                                             std::shared_ptr<const Agent::McpPlanCatalog> catalog)
         : context_(std::move(context)), plan_(std::move(plan)), stop_(stop), projectLifetime_(std::move(projectLifetime)),
-          catalog_(std::move(catalog)) {}
+          trustLifetime_(std::move(trustLifetime)), catalog_(std::move(catalog)) {}
 
     /** @copydoc ImmersivePlanReview::HasCurrentAuthority */
     bool ImmersivePlanReview::HasCurrentAuthority() const noexcept {
-        return context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() && (!catalog_ || catalog_->IsCurrent());
+        return context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() && !trustLifetime_.IsCancellationRequested() &&
+               (!catalog_ || catalog_->IsCurrent());
     }
 
     /** @copydoc ImmersivePlanReview::Status */
@@ -156,7 +158,8 @@ namespace Horo::Editor {
             return {context_, {.status = Agent::AgentTurnStatus::InvalidRequest}, stop};
         if (!approvedContext && !projectIdentity_.empty())
             return {context_, {.status = Agent::AgentTurnStatus::ContextDenied}, stop};
-        if (approvedContext && (projectIdentity_.empty() || approvedContext->project.projectIdentity != projectIdentity_ ||
+        const auto trustLifetime = approvedContext ? approvedContext->policy.ObserveProjectRevision() : std::optional{CancellationToken{}};
+        if (approvedContext && (!trustLifetime || projectIdentity_.empty() || approvedContext->project.projectIdentity != projectIdentity_ ||
                                 approvedContext->project.projectGeneration != context_.Identity().projectOpening))
             return {context_,
                     {.status = Agent::AgentTurnStatus::ContextDenied, .contextError = Security::AgentPolicyReason::StaleAuthority},
@@ -171,11 +174,13 @@ namespace Horo::Editor {
             return inspected;
         };
         const auto projectLifetime = approvedContext ? approvedContext->project.cancellation : CancellationToken{};
-        const Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime]() noexcept {
-            return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && (!catalog || catalog->IsCurrent());
+        const Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime,
+                                                              trust = *trustLifetime]() noexcept {
+            return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && !trust.IsCancellationRequested() &&
+                   (!catalog || catalog->IsCurrent());
         };
         auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext, providerAuthority);
-        return {context_, std::move(plan), stop, projectLifetime, catalog_};
+        return {context_, std::move(plan), stop, projectLifetime, *trustLifetime, catalog_};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}

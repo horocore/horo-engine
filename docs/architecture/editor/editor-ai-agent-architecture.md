@@ -317,6 +317,9 @@ Ownership rules:
   new inference and withdraws any draft from the old catalog. During planning,
   a deadline thread observes the captured document, context and catalog lifetime
   so authority withdrawal stops a cooperative model even before its next event.
+  Plans with consented context also observe the exact project trust revision
+  that admitted it. Replacing trust or retiring the policy stops inference and
+  withdraws the draft even when the project remains open.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

@@ -127,7 +127,8 @@ namespace Horo::Editor {
     private:
         friend class ImmersiveAgentRequest;
         ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
-                            CancellationToken projectLifetime = {}, std::shared_ptr<const Agent::McpPlanCatalog> catalog = {});
+                            CancellationToken projectLifetime = {}, CancellationToken trustLifetime = {},
+                            std::shared_ptr<const Agent::McpPlanCatalog> catalog = {});
 
         /** @brief Checks workspace, project and catalog authority for this review. */
         [[nodiscard]] bool HasCurrentAuthority() const noexcept;
@@ -136,6 +137,7 @@ namespace Horo::Editor {
         Agent::AgentTurnPlan plan_;
         std::stop_token stop_;
         CancellationToken projectLifetime_;
+        CancellationToken trustLifetime_;
         std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
     };
 

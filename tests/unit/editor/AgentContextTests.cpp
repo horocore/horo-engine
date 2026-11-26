@@ -8,7 +8,9 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <condition_variable>
 #include <future>
+#include <mutex>
 
 namespace Horo::Agent {
     namespace {
@@ -35,13 +37,16 @@ namespace Horo::Agent {
 
         struct RecordingModel final : IModelProvider {
             std::vector<ModelMessage> sent;
+            std::function<void(std::stop_token)> beforeResponse;
 
             ProviderDiscovery Discover(std::stop_token) override {
                 return {};
             }
 
-            ModelOutcome Stream(const ModelRequest &request, const ModelEventSink &sink, std::stop_token) override {
+            ModelOutcome Stream(const ModelRequest &request, const ModelEventSink &sink, std::stop_token stop) override {
                 sent = request.messages;
+                if (beforeResponse)
+                    beforeResponse(stop);
                 if (!sink({.kind = ModelEventKind::TextDelta, .text = "Result"}) || !sink({.kind = ModelEventKind::Completed}))
                     return {ModelError{ModelErrorCode::Cancelled, "Stopped by host", {}}};
                 return {};
@@ -358,13 +363,45 @@ namespace Horo::Agent {
 
         auto correct = capture(project.projectIdentity);
         REQUIRE(correct);
+        SECTION("changing trust stops a quiet provider within the same project opening") {
+            bool observedStop{};
+            model.beforeResponse = [&](std::stop_token stop) {
+                REQUIRE(policy.SetProjectTrust(false, 5));
+                std::mutex mutex;
+                std::condition_variable_any wake;
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, std::chrono::seconds{2}, [] { return false; });
+                observedStop = stop.stop_requested();
+            };
+            const auto review = correct->Plan(model, 25, AgentTurnLimits{.timeout = std::chrono::seconds{5}}, inspect, {}, &approved);
+            CHECK(observedStop);
+            CHECK_FALSE(projectLifetime.Token().IsCancellationRequested());
+            CHECK(context->IsCurrent());
+            CHECK(review.Status() == ContextDenied);
+            CHECK_FALSE(review.Read(*context));
+            return;
+        }
         const auto review = correct->Plan(model, 25, {}, inspect, {}, &approved);
         REQUIRE(review.Status() == Completed);
         REQUIRE(model.sent.size() == 2);
         CHECK(model.sent.front().text == preview.Value().Items().front().candidate.text);
         REQUIRE(review.Read(*context));
         CHECK(review.Read(*context)->draft->text == "Result");
-        projectLifetime.RequestCancellation();
-        CHECK_FALSE(review.Read(*context));
+
+        SECTION("closing the project retires the review") {
+            projectLifetime.RequestCancellation();
+            CHECK_FALSE(review.Read(*context));
+        }
+        SECTION("replacing trust retires the review within the same project opening") {
+            CHECK_FALSE(policy.SetProjectTrust(false, 4));
+            REQUIRE(review.Read(*context));
+            REQUIRE(policy.SetProjectTrust(false, 5));
+            CHECK_FALSE(projectLifetime.Token().IsCancellationRequested());
+            CHECK(context->IsCurrent());
+            CHECK(review.Status() == ContextDenied);
+            CHECK_FALSE(review.Read(*context));
+            REQUIRE(policy.SetProjectTrust(true, 6));
+            CHECK_FALSE(review.Read(*context));
+        }
     }
 }  // namespace Horo::Agent
