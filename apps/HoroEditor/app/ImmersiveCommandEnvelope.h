@@ -133,8 +133,11 @@ namespace Horo::Editor {
                                                                const ImmersiveSpeechEvidence &speech,
                                                                std::optional<ImmersiveSpatialHistoryView> history = {}) noexcept;
 
+        /** @brief Checks a speech-only command when no XR cutoff is being consumed. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+
         /** @brief Rechecks speech cancellation and the current XR cutoff before adopting the command. */
-        [[nodiscard]] bool IsCurrent(const XR::XRInteractionCutoff &cutoff = {}) const noexcept;
+        [[nodiscard]] bool IsCurrent(const XR::XRInteractionCutoff &cutoff) const noexcept;
 
         [[nodiscard]] const ImmersiveSpeechEvidence &Speech() const & noexcept {
             return speech_;
@@ -142,8 +145,9 @@ namespace Horo::Editor {
 
         [[nodiscard]] const ImmersiveSpeechEvidence &Speech() const && = delete;
 
+        /** @brief Borrows aligned observations while their speech lease remains current. */
         [[nodiscard]] std::span<const ImmersiveSpatialObservation> Spatial() const & noexcept {
-            return std::span{observations_}.first(count_);
+            return std::span{observations_}.first(speech_.IsCurrent() ? count_ : 0);
         }
 
         [[nodiscard]] std::span<const ImmersiveSpatialObservation> Spatial() const && = delete;

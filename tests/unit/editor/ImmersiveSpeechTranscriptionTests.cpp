@@ -257,8 +257,13 @@ namespace Horo::Editor {
             REQUIRE(speechOnly.envelope);
             CHECK(speechOnly.envelope->Spatial().empty());
             CHECK(speechOnly.envelope->IsCurrent());
+            CHECK(speechOnly.envelope->IsCurrent(cutoff));
+            auto foreign = cutoff;
+            ++foreign.session.slot.generation;
+            CHECK_FALSE(speechOnly.envelope->IsCurrent(foreign));
             fixture.stop.request_stop();
             CHECK_FALSE(assembled.envelope->IsCurrent(cutoff));
+            CHECK(assembled.envelope->Spatial().empty());
             CHECK_FALSE(speechOnly.envelope->IsCurrent());
         }
 
@@ -482,6 +487,12 @@ namespace Horo::Editor {
             }
             SECTION("ordered poses cannot admit reversed press updates") {
                 std::swap(samples[0].controllerPress, samples[2].controllerPress);
+                expected = AmbiguousTiming;
+            }
+            SECTION("a press outside the phrase still constrains its device's next press") {
+                samples[0].earliest.nanoseconds = 970'000;
+                samples[0].latest.nanoseconds = 990'000;
+                samples[2].controllerPress->earliest = samples[0].controllerPress->latest;
                 expected = AmbiguousTiming;
             }
             SECTION("different devices can contribute independent overlapping presses") {

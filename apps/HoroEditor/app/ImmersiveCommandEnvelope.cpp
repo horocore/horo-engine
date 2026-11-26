@@ -101,15 +101,15 @@ namespace Horo::Editor {
             return press == Aligned ? pose : press;
         }
 
-        /** @brief Orders aligned press intervals per device while permitting one cutoff to share a press. */
+        /** @brief Orders captured press intervals per device while permitting one cutoff to share a press. */
         bool FollowsPreviousPress(const ImmersiveSpatialObservation &sample,
-                                  const std::span<const ImmersiveSpatialObservation> aligned) noexcept {
+                                  const std::span<const ImmersiveSpatialObservation> earlier) noexcept {
             if (!sample.controllerPress)
                 return true;
-            const auto previous = std::find_if(aligned.rbegin(), aligned.rend(), [&sample](const auto &observation) {
+            const auto previous = std::find_if(earlier.rbegin(), earlier.rend(), [&sample](const auto &observation) {
                 return observation.controllerPress && observation.candidate.device == sample.candidate.device;
             });
-            if (previous == aligned.rend())
+            if (previous == earlier.rend())
                 return true;
             const auto &prior = *previous->controllerPress;
             const auto &press = *sample.controllerPress;
@@ -221,8 +221,14 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ImmersiveCommandEnvelope::IsCurrent */
+    bool ImmersiveCommandEnvelope::IsCurrent() const noexcept {
+        return count_ == 0 && speech_.IsCurrent();
+    }
+
+    /** @copydoc ImmersiveCommandEnvelope::IsCurrent */
     bool ImmersiveCommandEnvelope::IsCurrent(const XR::XRInteractionCutoff &cutoff) const noexcept {
-        return speech_.IsCurrent() && (count_ == 0 || BelongsToHistory(cutoff_, cutoff));
+        return speech_.IsCurrent() && cutoff.session == speech_.Context().Identity().xrSession &&
+               (count_ == 0 || BelongsToHistory(cutoff_, cutoff));
     }
 
     /** @copydoc ImmersiveCommandEnvelope::Assemble */
@@ -252,17 +258,18 @@ namespace Horo::Editor {
             return StaleEvidence;
 
         const ImmersiveSpatialObservation *previous = nullptr;
-        for (const auto &sample : history.observations) {
+        for (std::size_t index = 0; index < history.observations.size(); ++index) {
+            const auto &sample = history.observations[index];
             if (const auto status = CheckObservation(sample, previous, history.cutoff, phrase.start.clockDomain); status != Aligned)
                 return status;
+            if (!FollowsPreviousPress(sample, history.observations.first(index)))
+                return AmbiguousTiming;
             previous = &sample;
             const auto overlap = ObservationOverlap(sample, phrase);
             if (overlap == AmbiguousTiming)
                 return AmbiguousTiming;
             if (overlap != Aligned)
                 continue;
-            if (!FollowsPreviousPress(sample, Spatial()))
-                return AmbiguousTiming;
             observations_[count_++] = sample;
         }
         cutoff_ = history.cutoff;

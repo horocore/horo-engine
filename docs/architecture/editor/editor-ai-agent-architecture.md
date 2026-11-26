@@ -217,6 +217,8 @@ Ownership rules:
   action intervals, the press carries the range between the observed released
   and pressed states. The ray and transition must independently fit inside the
   same phrase window. An uncertain press cannot be inferred from the ray's time.
+  Press order is validated across the complete bounded capture before phrase
+  selection. A speech-only preview still belongs to its original XR session.
 - On macOS, the local Agent panel offers explicit listening controls for the
   current authored scene in focused XR Play. The scene selection is optional.
   Speech and microphone permission are
