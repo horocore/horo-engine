@@ -1223,7 +1223,9 @@ the grant. Withdrawal stops startup and rolls back the native objects already
 created for that grant.
 Permission is rechecked even when a startup query fails. If permission was
 withdrawn, the grant is retired and the native error remains a cause of the
-permission denial.
+permission denial. A denial reported by the runtime also retires the grant
+before native handles are created, even when the platform callback still
+reports permission.
 If the grant is withdrawn during the final native session validation, the
 owner rejects the layer and attempts to pause the provider before returning
 control to the application. When cleanup fails during activation rollback,

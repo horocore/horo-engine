@@ -310,6 +310,32 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
         }
 
+        TEST_CASE("Native passthrough preflight denial retires the grant before allocating handles",
+                  "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
+            XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            f.census.fail = "passthrough-properties";
+            const auto result = GENERATE(XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB, XR_ERROR_PERMISSION_INSUFFICIENT,
+                                         XR_ERROR_RUNTIME_FAILURE);
+            f.census.failureResult = result;
+            const bool denied = result != XR_ERROR_RUNTIME_FAILURE;
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough),
+                                   denied ? XRErrors::PermissionDenied : XRErrors::OperationUnavailable);
+            CHECK(f.native.owner.ReadPassthrough(scope) == NativePassthroughState::Absent);
+            CHECK(f.passthrough.featuresCreated == 0);
+
+            f.census.fail = {};
+            if (denied) {
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope, ApprovedPassthrough), XRErrors::IdentityStale);
+                CHECK(f.passthrough.featuresCreated == 0);
+                scope.grant = IdentityValue<XRPassthroughGrant>(2);
+            }
+            REQUIRE(f.native.owner.StartPassthrough(scope, ApprovedPassthrough).HasValue());
+            REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+        }
+
         TEST_CASE("Passthrough rollback redacts immediately and retains exact teardown debt", "[unit][xr][compositor][passthrough]") {
             if (!NativePassthroughExtensionRequest())
                 SKIP("This test requires the Meta Quest provider.");

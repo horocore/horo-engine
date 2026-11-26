@@ -141,10 +141,15 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Retires revoked consent even when the native step also failed. */
         Result<void> CheckPermission(Result<void> step) const {
-            if (preparation.Allows(authorization))
+            const auto &permissionDenied = XRErrors::PermissionDenied;
+            const bool nativeDenial =
+                step.HasError() && ErrorChainContains(step.ErrorValue(), permissionDenied.domain, permissionDenied.code);
+            if (preparation.Allows(authorization) && !nativeDenial)
                 return step;
             owner.RevokePassthrough();
-            auto denied = MakeError(XRErrors::PermissionDenied, "Passthrough consent was withdrawn during startup");
+            if (nativeDenial)
+                return step;
+            auto denied = MakeError(permissionDenied, "Passthrough consent was withdrawn during startup");
             if (step.HasError())
                 denied = WithCause(std::move(denied), std::move(step).ErrorValue());
             return Result<void>::Failure(std::move(denied));
@@ -239,8 +244,11 @@ namespace Horo::XR::OpenXRInternal {
         const auto admission = ReadExtensionAdmission(candidate.scope.session, Extension);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
-        if (auto enabled = CheckPassthroughExtension(admission.Value()); enabled.HasError())
+        if (auto enabled = CheckPassthroughExtension(admission.Value()); enabled.HasError()) {
+            if (admission.Value().state == NativeExtensionState::Denied)
+                RevokePassthrough();
             return enabled;
+        }
         const auto native = Borrow(candidate.scope.session);
         if (native.HasError())
             return Result<void>::Failure(native.ErrorValue());

@@ -37,6 +37,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t synthesisEyeWidthStep{160};
         std::uint32_t synthesisEyeQueries{};
         std::string_view fail;
+        XrResult failureResult{XR_ERROR_RUNTIME_FAILURE};
         PFN_xrGetInstanceProcAddr extraProc{};
         std::vector<std::string_view> calls;
 
@@ -51,7 +52,7 @@ namespace Horo::Tests::OpenXR {
 
         static XrResult Record(const std::string_view phase) {
             active->calls.push_back(phase);
-            return active->fail == phase ? XR_ERROR_RUNTIME_FAILURE : XR_SUCCESS;
+            return active->fail == phase ? active->failureResult : XR_SUCCESS;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Instance(XrInstance, XrInstanceProperties *value) {
