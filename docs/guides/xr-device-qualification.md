@@ -161,6 +161,10 @@ receipt bytes directly. When the probe receipt and product package receipt
 are separate files, keep the product receipt's digest as
 `packageReceiptSha256`. Pass the independently recorded probe digest and
 installed OpenXR component digest for the separate receipt.
+The launcher rejects a preflight if any child stdout line or the stdout byte
+budget was truncated. A complete receipt requires the full captured stream
+so the launcher can rule out conflicting records. It does not retain or
+publish the child's stderr.
 
 ```sh
 python scripts/qualify_xr_device.py smoke.json --expect release-tuple.json \

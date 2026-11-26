@@ -225,13 +225,18 @@ namespace Horo::Application::Internal {
 
         /** @brief Retains at most one well-formed receipt from the supervised child's standard output. */
         struct ProbeReceipt final {
-            /** @brief Ignores ordinary output and records malformed or repeated receipts as a permanent failure. */
+            /** @brief Requires complete stdout so truncation cannot conceal a second or conflicting receipt. */
             void Observe(const ProcessOutputLine &line, std::string_view digest, std::string_view host, std::string_view target) noexcept {
-                if (line.stream != ProcessOutputStream::StandardOutput ||
-                    (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::DisplayRecord) &&
-                     !line.text.starts_with(OpenXRProbeWire::FailureRecord)))
+                if (line.stream != ProcessOutputStream::StandardOutput || rejected)
                     return;
-                if (size || line.truncated || line.text.size() > bytes.size()) {
+                if (line.truncated) {
+                    rejected = true;
+                    return;
+                }
+                if (!line.text.starts_with(OpenXRProbeWire::Record) && !line.text.starts_with(OpenXRProbeWire::DisplayRecord) &&
+                    !line.text.starts_with(OpenXRProbeWire::FailureRecord))
+                    return;
+                if (size || line.text.size() > bytes.size()) {
                     rejected = true;
                     return;
                 }

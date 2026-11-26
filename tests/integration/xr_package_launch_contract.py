@@ -43,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix="horo installed probe ") as directory:
     }
     qualified_variants = ("accepted", "tethered", "wireless-streaming", "required-routes-only", "failure-receipt", "foreign", "duplicate", "stale-executable",
                           "stale-after-failure", "surviving-child", "interrupted", "timed-out", *incompatible_facts,
-                          "invalid-connection", "invalid-timeout", "display", "local-display", "malformed-display")
+                          "invalid-connection", "invalid-timeout", "display", "local-display", "malformed-display",
+                          "truncated-stdout-line", "exhausted-stdout", "truncated-stderr")
     cases = [(variant, False) for variant in (*success_variants, *failure_variants)]
     cases.extend((variant, True) for variant in qualified_variants)
     for variant, qualified in cases:
@@ -89,6 +90,14 @@ if variant in {failure_variants!r}:
 print(record, flush=True)
 if variant == "duplicate":
     print(record, flush=True)
+if variant == "truncated-stdout-line":
+    print("private " * 200)
+if variant == "exhausted-stdout":
+    for _ in range(150):
+        print("private " * 125)
+    print(record)
+if variant == "truncated-stderr":
+    print("private " * 200, file=sys.stderr)
 if variant in ("surviving-child", "interrupted", "timed-out"):
     child = subprocess.Popen(['/usr/bin/sleep', '20'])
     Path('pid').write_text(str(child.pid))
@@ -127,7 +136,8 @@ sys.exit(7 if variant == "failed" else 0)
         else:
             run = subprocess.run(args, env=env, timeout=8, capture_output=True, text=True, check=False)
         invalid_options = variant in ("invalid-connection", "invalid-timeout")
-        accepted = variant in ("accepted", "tethered", "wireless-streaming", "required-routes-only", "display", "local-display")
+        accepted = variant in ("accepted", "tethered", "wireless-streaming", "required-routes-only", "display", "local-display",
+                               "truncated-stderr")
         assert run.returncode == (0 if accepted else 2 if invalid_options else 1), (variant, run)
         assert "private" not in run.stderr and "/root/" not in run.stderr, (variant, run)
         assert (root / "ran").exists() == (not invalid_options and variant != "stale-executable"), (variant, run)
@@ -144,6 +154,7 @@ sys.exit(7 if variant == "failed" else 0)
                             "malformed-display": "unattributed-receipt",
                             "stale-executable": "stale-or-busy-package", "stale-after-failure": "stale-package", "timed-out": "timed-out",
                             "surviving-child": "interrupted-or-retired", "interrupted": "interrupted-or-retired",
+                            "truncated-stdout-line": "unattributed-receipt", "exhausted-stdout": "unattributed-receipt",
                             **dict.fromkeys(incompatible_facts, "unattributed-receipt")}
                 assert run.stderr == f"{identity} {outcomes[variant]}\n" and not run.stdout, (variant, run)
             assert runtime not in run.stderr + run.stdout and headset not in run.stderr + run.stdout
