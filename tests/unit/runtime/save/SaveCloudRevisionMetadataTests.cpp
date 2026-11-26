@@ -638,15 +638,19 @@ namespace Horo::Runtime {
             const auto &handle = download.Value().Request().handle;
             REQUIRE(backend->requests.MarkRunning(handle).HasValue());
             const auto subject = *session.Subject();
-            const auto complete = [&](const std::vector<std::byte> &archive, const Cloud::ProviderObjectRevision &observed) {
+            const auto completeRead = [&](const auto &readHandle, const std::vector<std::byte> &archive,
+                                          const Cloud::ProviderObjectRevision &observed) {
                 const auto bytes = Cloud::CloudBlobOwnedBytes::Copy(archive);
                 REQUIRE(bytes.HasValue());
                 const Cloud::CloudObjectHead head{backend->lastCloudRead->key, observed, archive.size(), ComputeSha256(archive)};
-                REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
+                REQUIRE(backend->requests.CompleteSuccess(readHandle.Id(), readHandle.Generation(),
                             Cloud::CloudBlobReadResult{subject, subject.SessionGeneration(), head, bytes.Value()}).HasValue());
-                auto snapshot = backend->requests.Query(handle);
+                auto snapshot = backend->requests.Query(readHandle);
                 REQUIRE(snapshot.HasValue());
                 return std::move(snapshot).Value();
+            };
+            const auto complete = [&](const std::vector<std::byte> &archive, const Cloud::ProviderObjectRevision &observed) {
+                return completeRead(handle, archive, observed);
             };
 
             SECTION("The approved revision creates a new generation in an absent slot") {
@@ -726,6 +730,45 @@ namespace Horo::Runtime {
                 const auto snapshot = complete(damaged, revision.Value());
                 CHECK(transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target).HasError());
                 CHECK(std::ranges::equal(snapshot.terminal->Value()->bytes.Bytes(), damaged));
+                CHECK(fixture.Index().entries == before.entries);
+            }
+            SECTION("Quarantine retains one private complete observation and never replaces it at capacity") {
+                const Tests::OwnedTestDirectory directory{"save-cloud-quarantine"};
+                auto storage = Platform::CreateNativeImmutableFileStorage(directory.Path(), "rejected");
+                REQUIRE(storage.HasValue());
+                const Application::CloudSaveQuarantinePolicy policy{*storage.Value(), payload.size(), 1};
+                auto damaged = payload;
+                damaged.front() ^= std::byte{1};
+                const auto snapshot = complete(damaged, revision.Value());
+                const auto failure = transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target, {}, &policy);
+                REQUIRE(failure.HasError());
+                CHECK_FALSE(failure.ErrorValue().cause);
+                const auto replay = transport.ImportDownload(*fixture.owner, download.Value(), snapshot, target, {}, &policy);
+                REQUIRE(replay.HasError());
+                CHECK_FALSE(replay.ErrorValue().cause);
+                std::vector<std::filesystem::path> retained;
+                for (const auto &entry : std::filesystem::recursive_directory_iterator(directory.Path() / "rejected")) {
+                    if (entry.is_regular_file())
+                        retained.push_back(entry.path());
+                }
+                REQUIRE(retained.size() == 1);
+                const auto evidence = SaveSlotLifecycleTest::DiskBytes(retained.front());
+                REQUIRE(evidence.size() > damaged.size());
+                CHECK(std::ranges::equal(std::span{evidence}.last(damaged.size()), damaged));
+
+                const auto nextRevision = Cloud::ProviderObjectRevision::Copy(std::array{std::byte{4}});
+                REQUIRE(nextRevision.HasValue());
+                const auto second = transport.DownloadRevision(32, remoteSlot, nextRevision.Value(), payload.size());
+                REQUIRE(second.HasValue());
+                const auto &secondHandle = second.Value().Request().handle;
+                REQUIRE(backend->requests.MarkRunning(secondHandle).HasValue());
+                const auto different = completeRead(secondHandle, damaged, nextRevision.Value());
+                const auto full = transport.ImportDownload(*fixture.owner, second.Value(), different, target, {}, &policy);
+                REQUIRE(full.HasError());
+                CHECK(full.ErrorValue().code.Value() == failure.ErrorValue().code.Value());
+                CHECK(ErrorChainContains(full.ErrorValue(), FileStorageErrors::Capacity.domain, FileStorageErrors::Capacity.code));
+                CHECK(SaveSlotLifecycleTest::DiskBytes(retained.front()) == evidence);
+                fixture.Reopen();
                 CHECK(fixture.Index().entries == before.entries);
             }
         }

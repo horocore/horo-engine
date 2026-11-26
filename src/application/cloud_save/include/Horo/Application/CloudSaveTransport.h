@@ -48,6 +48,16 @@ namespace Horo::Application {
         Runtime::SaveSlotDisplayMetadata display;
     };
 
+    /** @brief Bounded, private retention grant for rejected complete downloads in one account partition.
+     * @details Host policy fixes these bounds for the lifetime of the dedicated storage root.
+     * When full, existing evidence is retained until its host storage owner retires it.
+     */
+    struct CloudSaveQuarantinePolicy final {
+        const ImmutableFileStorage &storage;
+        std::size_t maximumArchiveBytes{};
+        std::size_t maximumEntries{};
+    };
+
     /** @brief A bounded read admitted for one immutable, uncertain upload intent. */
     class CloudSaveUploadProbe final {
     public:
@@ -119,13 +129,15 @@ namespace Horo::Application {
          * @param lifecycle Local catalog authority. @param download Admitted remote selection.
          * @param completion Terminal observation of that exact read. @param target Approved destination and source scope.
          * @param cancellation Observed until local manifest publication.
+         * @param quarantine Optional host grant for retaining rejected archive evidence.
          * @return Normal local import result or a typed rejection. The caller retains immutable received evidence.
          * @details Runs on the serialized storage lane under the live frontend binding.
          */
         [[nodiscard]] Result<Runtime::SaveSlotLifecycleResult> ImportDownload(
             Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
             const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
-            const CloudSaveImportTarget &target, const CancellationToken &cancellation = {}) const;
+            const CloudSaveImportTarget &target, const CancellationToken &cancellation = {},
+            const CloudSaveQuarantinePolicy *quarantine = nullptr) const;
 
         /** @brief Applies a direct descendant to the same logical slot without rewriting its verified archive.
          * @param lifecycle Local publication authority. @param download Admitted remote selection.

@@ -1,11 +1,14 @@
 #include "Horo/Application/CloudSaveTransport.h"
+#include "Horo/Runtime/Save/SaveSlotRecovery.h"
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <new>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -140,6 +143,53 @@ namespace Horo::Application {
             const auto bytes = read.bytes.Bytes();
             return {std::make_shared<const std::vector<std::byte>>(bytes.begin(), bytes.end())};
         }
+
+        /** @brief Returns a stable evidence category for archive validation failures only. */
+        std::optional<std::uint8_t> QuarantineCategory(const Error &error) {
+            using namespace Runtime::SaveErrors;
+            const auto matches = [&error](const ErrorCodeDescriptor *descriptor) {
+                return error.domain.Value() == descriptor->domain.Value() && error.code.Value() == descriptor->code.Value();
+            };
+            const std::array invalid{&ArchiveHeaderInvalid, &ArchiveManifestInvalid, &ArchiveEnvelopeInvalid, &ArchiveContainerInvalid,
+                                     &ArchiveEntryInvalid, &ArchiveDirectoryInvalid, &ArchivePayloadTruncated, &ArchiveChunkDecodeFailed,
+                                     &ArchiveChunkHashMismatch, &ArchiveContentHashMismatch, &ArchiveIntegrityCoverageInvalid,
+                                     &CanonicalStateHashMismatch, &ArchiveUnsafeReference, &ArchiveExtensionInvalid};
+            if (std::ranges::any_of(invalid, matches))
+                return 1;
+            const std::array incompatible{&VersionUnsupportedNewer, &ArchiveCodecUnsupported, &ArchiveIntegrityAlgorithmUnsupported,
+                                          &SignatureRequired, &SignatureDisallowed};
+            if (std::ranges::any_of(incompatible, matches))
+                return 2;
+            return std::nullopt;
+        }
+
+        /** @brief Retains one complete rejected observation in a finite immutable account bucket. */
+        Result<void> RetainRejectedDownload(const CloudBlobReadResult &read, const Sha256Digest &partition,
+                                            const std::uint8_t category, const CloudSaveQuarantinePolicy &policy,
+                                            const CancellationToken &cancellation) {
+            const auto payload = read.bytes.Bytes();
+            if (policy.maximumEntries == 0 || policy.maximumEntries > Runtime::MaximumSaveSlotRecoveryQuarantined ||
+                policy.maximumArchiveBytes == 0 || policy.maximumArchiveBytes > MaximumCloudObjectPayloadBytes ||
+                payload.size() > policy.maximumArchiveBytes)
+                return Result<void>::Failure(MakeError(FileStorageErrors::Capacity));
+            const auto key = ComputeSha256(read.head.key.Bytes());
+            const auto revision = ComputeSha256(read.head.revision.Bytes());
+            const auto digest = ComputeSha256(payload);
+            std::vector<std::uint8_t> evidence{1, category};
+            evidence.reserve(evidence.size() + key.bytes.size() + revision.bytes.size() + digest.bytes.size() + payload.size());
+            evidence.insert(evidence.end(), key.bytes.begin(), key.bytes.end());
+            evidence.insert(evidence.end(), revision.bytes.begin(), revision.bytes.end());
+            evidence.insert(evidence.end(), digest.bytes.begin(), digest.bytes.end());
+            std::ranges::transform(payload, std::back_inserter(evidence), [](std::byte byte) { return std::to_integer<std::uint8_t>(byte); });
+            const std::string prefix = "quarantine/" + FormatSha256(partition).substr(std::string_view{"sha256:"}.size()) + "/";
+            for (std::size_t slot = 0; slot < policy.maximumEntries; ++slot) {
+                auto stored = policy.storage.Store(prefix + std::to_string(slot) + ".archive", evidence, cancellation);
+                if (stored.HasValue() ||
+                    !ErrorChainContains(stored.ErrorValue(), FileStorageErrors::Conflict.domain, FileStorageErrors::Conflict.code))
+                    return stored;
+            }
+            return Result<void>::Failure(MakeError(FileStorageErrors::Capacity));
+        }
     }
 
     CloudSaveDownload::CloudSaveDownload(const Sha256Digest partition, const Runtime::SaveGameSlotId slot,
@@ -239,7 +289,7 @@ namespace Horo::Application {
     Result<Runtime::SaveSlotLifecycleResult> CloudSaveTransport::ImportDownload(
         Runtime::SaveSlotLifecycle &lifecycle, const CloudSaveDownload &download,
         const PlatformRequestSnapshot<CloudBlobReadResult> &completion, const CloudSaveImportTarget &target,
-        const CancellationToken &cancellation) const {
+        const CancellationToken &cancellation, const CloudSaveQuarantinePolicy *quarantine) const {
         using Response = Result<Runtime::SaveSlotLifecycleResult>;
         const auto &destination = target.destination;
         const auto &access = destination.address.namespaceAccess;
@@ -259,12 +309,26 @@ namespace Horo::Application {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
 
         try {
-            return lifecycle.ImportVerified({.kind = Runtime::SaveSlotLifecycleKind::Import,
-                                             .source = destination,
-                                             .imported = StageDownload(*read.Value()),
-                                             .importSource = target.sourceScope,
-                                             .display = target.display},
-                                            download.slot_, cancellation);
+            auto imported = lifecycle.ImportVerified({.kind = Runtime::SaveSlotLifecycleKind::Import,
+                                                       .source = destination,
+                                                       .imported = StageDownload(*read.Value()),
+                                                       .importSource = target.sourceScope,
+                                                       .display = target.display},
+                                                      download.slot_, cancellation);
+            if (!quarantine || imported.HasValue())
+                return imported;
+            const auto category = QuarantineCategory(imported.ErrorValue());
+            if (!category)
+                return imported;
+            const auto retained = RetainRejectedDownload(*read.Value(), journalPartition_, *category, *quarantine, cancellation);
+            if (retained.HasError()) {
+                auto error = std::move(imported).ErrorValue();
+                auto storageError = retained.ErrorValue();
+                if (error.cause)
+                    storageError = WithCause(std::move(storageError), *error.cause.Get());
+                return Response::Failure(WithCause(std::move(error), std::move(storageError)));
+            }
+            return imported;
         } catch (const std::bad_alloc &) {
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataAllocationFailed));
         }
