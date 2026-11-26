@@ -15,6 +15,7 @@ namespace Horo::Packages {
 }
 
 namespace Horo::Application::Internal {
+    inline constexpr std::size_t MaximumRemovalCoverageDiagnostics = 16'384;
     /** @brief Bounded saved-source failures retained alongside confirmed reference findings. */
     class PackageSourceReviewFailures final {
     public:
@@ -67,6 +68,12 @@ namespace Horo::Application::Internal {
      * @details The caller must still verify the actual archive before an offline mutation.
      */
     [[nodiscard]] std::optional<Diagnostic> OfflineRemovalContributionBlocker(const Packages::LockedPackage &package);
+
+    /** @brief Lists sealed archive members that cannot depart without a live lifecycle owner.
+     * @param archive Exact cache or staging archive validated against the lock entry.
+     * @return Diagnostics in archive inventory order, empty for an asset-only archive.
+     */
+    [[nodiscard]] std::vector<Diagnostic> InspectOfflineRemovalArchive(const Packages::ValidatedPackageArchive &archive);
 
     /** @brief Requires exact observations for departing runtime roles and for retained roles that could consume a departing service. */
     [[nodiscard]] Result<void> CheckRemovalRegistrationCoverage(const PackageRemovalSources &sources,

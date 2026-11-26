@@ -227,7 +227,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reports saved importer references and lock-level blockers before issuing an offline approval. */
-        Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context);
+        Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
+                                          const Cli::CliExecutionContext &context);
         /** @brief Checks the verified archives if the caller requested a reference-aware preview. */
         Result<void> AppendBehaviorMigrationDiagnostics(const PackageProjectPolicy &policy, const Cli::CliExecutionContext &context,
                                                          std::span<const PackageBehaviorMigration> claims, std::vector<Diagnostic> &diagnostics);
@@ -252,7 +253,7 @@ namespace Horo::Application::Internal {
                 const auto preview = InspectUpdate(request, operation_, context.Cancellation());
                 if (preview.HasError())
                     return Output::Failure(preview.ErrorValue());
-                const auto review = operation_ == PackageOperation::Removal ? ReviewOfflineRemoval(preview.Value(), context)
+                const auto review = operation_ == PackageOperation::Removal ? ReviewOfflineRemoval(preview.Value(), request, context)
                                                                            : ReviewCachedUpdate(preview.Value(), request, context);
                 if (review.HasError())
                     return Output::Failure(review.ErrorValue());
@@ -396,7 +397,40 @@ namespace Horo::Application::Internal {
             return InspectPackageRemovalImporters(*inventory.Value().assets, impact);
         }
 
-        Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliExecutionContext &context) {
+        /** @brief Checks optional sealed cache evidence without restoring packages or activating executable code. */
+        Result<void> ReviewCachedRemoval(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
+                                         const Cli::CliExecutionContext &context, std::vector<Diagnostic> &diagnostics) {
+            if (std::ranges::find(request.options, "package-cache-root", &Cli::CliParsedOption::name) == request.options.end())
+                return Result<void>::Success();
+            const auto root = PathOption(request, "package-cache-root");
+            if (root.HasError())
+                return Result<void>::Failure(root.ErrorValue());
+            NativeDurableFileSystem files;
+            const auto cache = Packages::PackageCacheStore::Create(files, root.Value(), update.policy.limits.validation);
+            if (cache.HasError())
+                return Result<void>::Failure(cache.ErrorValue());
+            for (const auto &change : update.preview.changes) {
+                if (context.IsStopRequested())
+                    return Result<void>::Failure(UpdateStopped(context));
+                if (!change.current || change.candidate || OfflineRemovalContributionBlocker(*change.current))
+                    continue;
+                const auto archive = ReadUpdateArchive(cache.Value(), *change.current);
+                if (archive.HasError()) {
+                    diagnostics.emplace_back(DiagnosticCode{"packages.host.removal_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
+                                             archive.ErrorValue().code.Value(), SourceLocation{"packages.host"}, change.current->package.Value());
+                    continue;
+                }
+                auto blockers = InspectOfflineRemovalArchive(archive.Value());
+                std::ranges::move(blockers, std::back_inserter(diagnostics));
+                if (diagnostics.size() > MaximumRemovalCoverageDiagnostics)
+                    return Result<void>::Failure(
+                        Error{ErrorCode{"packages.host.removal_reference_coverage_limit"}, ErrorDomainId{"packages.host"}});
+            }
+            return Result<void>::Success();
+        }
+
+        Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
+                                          const Cli::CliExecutionContext &context) {
             Packages::PackageRemovalGraphPreview impact;
             std::vector<Diagnostic> diagnostics;
             for (const auto &change : update.preview.changes) {
@@ -408,6 +442,8 @@ namespace Horo::Application::Internal {
             }
             if (impact.removed.empty())
                 return Result<void>::Success();
+            if (auto review = ReviewCachedRemoval(update, request, context, diagnostics); review.HasError())
+                return review;
             auto references = ReadRemovalImporters(update.policy, impact, context);
             if (references.HasError()) {
                 auto failure = std::move(references).ErrorValue();
@@ -652,7 +688,8 @@ namespace Horo::Application::Internal {
         auto descriptor = DescribePackageRollbackPreviewCommand();
         descriptor.path = {{"package", "preview-remove"}};
         descriptor.summary = "Review the exact package withdrawal and its approval fingerprint.";
-        std::erase_if(descriptor.options, [](const auto &option) { return option.name == "package-cache-root"; });
+        std::ranges::find(descriptor.options, "package-cache-root", &Cli::CliOptionDescriptor::name)->summary =
+            "Optional absolute cache root for verifying the exact departing archives.";
         descriptor.options.insert(descriptor.options.begin(), {.name = "package-id",
                                                                .summary = "Portable ID of a directly requested package.",
                                                                .valueKind = Cli::CliOptionValueKind::String,

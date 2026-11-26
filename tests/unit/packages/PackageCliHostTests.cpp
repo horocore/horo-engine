@@ -75,7 +75,9 @@ namespace {
         Tests::Packages::TemporaryDirectory project{"cli package project ü"}, storage{"cli package storage ü"};
         Tests::PackageApplicationService::AssetGraph graph;
 
-        explicit NativeProject(bool native = false) : graph(native, native) {
+        explicit NativeProject(bool native = false, std::string_view declaredContribution = {}) : graph(native, native) {
+            if (declaredContribution.empty())
+                declaredContribution = native ? "native" : "assets";
             const nlohmann::json intent{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
                                         {"dependencies",
                                          {{"com.horo.application-fixture", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}};
@@ -90,7 +92,7 @@ namespace {
                                                    .fileManifestDigest = graph.archive.Manifest().Digest(),
                                                    .packageFormatVersion = 1,
                                                    .platforms = {},
-                                                   .contributions = {native ? "native" : "assets"}};
+                                                   .contributions = {std::string{declaredContribution}}};
             auto lock = Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&graph.package, 1U}, request.Value().Digest(),
                                                                        std::span{&artifact, 1U});
             REQUIRE(lock.HasValue());
@@ -765,6 +767,55 @@ namespace {
         });
     }
 
+    TEST_CASE("Cached removal preview and apply explain files that contradict an asset-only lock",
+              "[packages][application][cli][remove]") {
+        NativeProject fixture{true, "assets"};
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        std::filesystem::create_directories(root / "Assets");
+        const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
+        auto preview = MakePackageRemovalPreviewCommandAdapter();
+        auto apply = MakePackageApplyRemovalCommandAdapter();
+        const auto &id = fixture.graph.package.Value();
+        CliCommandRequest command{.command = preview.adapter->GetDescriptor().path,
+                                  .options = {NativeProject::PathOption("project", root),
+                                              {"package-id", {{id, CliValueSource::Invocation, {}}}}}};
+        InInvocation([&](CliExecutionContext &context) {
+            const auto lockOnly = preview.adapter->Execute(command, context);
+            REQUIRE(lockOnly.HasValue());
+            const auto fingerprint = std::get<std::string>(lockOnly.Value().fields.back().value);
+            command.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            const auto missing = preview.adapter->Execute(command, context);
+            REQUIRE(missing.HasError());
+            CHECK(missing.ErrorValue().code.Value() == "packages.host.removal_archive_evidence_unavailable");
+            CHECK_FALSE(std::filesystem::exists(cacheRoot));
+
+            NativeDurableFileSystem files;
+            auto cache = Packages::PackageCacheStore::Create(files, cacheRoot);
+            REQUIRE(cache.HasValue());
+            auto verifiedCache = std::move(cache).Value();
+            REQUIRE(verifiedCache.Publish(fixture.graph.archive).HasValue());
+            fixture.WriteImporterReference("sample.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+            const auto checkBlockers = [](const Result<CliCommandResult> &result) {
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+                const auto &diagnostics = result.ErrorValue().diagnostics;
+                REQUIRE(diagnostics.size() == 3);
+                CHECK(std::ranges::any_of(diagnostics, [](const auto &finding) {
+                    return finding.path == "extensions/native/extension.json";
+                }));
+                CHECK(std::ranges::any_of(diagnostics, [](const auto &finding) {
+                    return finding.path.starts_with("extensions/native/module.");
+                }));
+                CHECK(diagnostics.back().path == "Assets/sample.horoasset");
+            };
+            checkBlockers(preview.adapter->Execute(command, context));
+            command.command = apply.adapter->GetDescriptor().path;
+            command.options.push_back({"approve", {{fingerprint, CliValueSource::Invocation, {}}}});
+            checkBlockers(apply.adapter->Execute(command, context));
+            CHECK_FALSE(std::filesystem::exists(root / ".horo/local/package-metadata.pending"));
+        });
+    }
+
     TEST_CASE("Headless package removal requires exact approval and checks saved references", "[packages][application][cli][remove]") {
         NativeProject fixture;
         const auto root = std::filesystem::canonical(fixture.project.Path());
@@ -793,6 +844,11 @@ namespace {
             CHECK(std::get<std::int64_t>(reviewed.Value().fields[1].value) == 1);
             CHECK(std::get<std::string>(reviewed.Value().fields[3].value).ends_with("] -> [absent]"));
             const auto approval = std::get<std::string>(reviewed.Value().fields.back().value);
+            auto archiveReview = command;
+            archiveReview.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
+            const auto verifiedReview = preview.adapter->Execute(archiveReview, context);
+            REQUIRE(verifiedReview.HasValue());
+            CHECK(std::get<std::string>(verifiedReview.Value().fields.back().value) == approval);
             command.command = apply.adapter->GetDescriptor().path;
             command.options.push_back(NativeProject::PathOption("package-cache-root", cacheRoot));
             command.options.push_back({"approve", {{std::string{"unreviewed"}, CliValueSource::Invocation, {}}}});

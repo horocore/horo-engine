@@ -30,7 +30,6 @@ namespace Horo::Application::Internal {
         using ComponentOwners = std::map<Gameplay::ComponentTypeId, std::set<Packages::HoroPackageId>>;
         constexpr std::size_t MaximumBehaviorReferences = 16'384;
         constexpr std::size_t MaximumServiceReferences = 16'384;
-        constexpr std::size_t MaximumCoverageDiagnostics = 16'384;
         constexpr auto ServiceInUse = "packages.host.service_in_use";
         using Registration = Packages::GameplayPackageModuleHost::RegistrationInventory;
         using ServiceOwners = std::map<Gameplay::GameplayServiceId, std::set<Packages::HoroPackageId>>;
@@ -493,13 +492,16 @@ namespace Horo::Application::Internal {
             return actual != graph.packages.end() && actual->archive && actual->lock == locked ? &*actual : nullptr;
         }
 
-        /** @brief Allows only data files in the asset namespace along with the package manifest. */
+        /** @brief Identifies file types whose removal requires no executable owner. */
+        bool IsOfflineRemovalFile(const Packages::PackageFileEntry &file) {
+            const auto &path = file.id.path.Value();
+            return !file.executable &&
+                   (path == "horo-package.toml" || Packages::IsPackageAssetRenameMetadata(file) || path.starts_with("assets/"));
+        }
+
+        /** @brief Allows only data files in the asset namespace along with inert package metadata. */
         bool IsOfflineAssetArchive(const Packages::PackageRestorePackage &package) {
-            return std::ranges::all_of(package.archive->Manifest().Entries(), [](const auto &file) {
-                const auto &path = file.id.path.Value();
-                return !file.executable &&
-                       (path == "horo-package.toml" || path == Packages::PackageAssetRenameDeclarationPath || path.starts_with("assets/"));
-            });
+            return std::ranges::all_of(package.archive->Manifest().Entries(), IsOfflineRemovalFile);
         }
 
         /** @brief Separates data archives from executable ones and verifies the editor's supported executable owner. */
@@ -583,9 +585,14 @@ namespace Horo::Application::Internal {
                 if (!package)
                     return Result<void>::Failure(
                         ReferenceError("packages.host.removal_archive_evidence_unavailable", expected.package.Value()));
-                if (OfflineRemovalContributionBlocker(expected) || !IsOfflineAssetArchive(*package))
-                    return Result<void>::Failure(
-                        ReferenceError("packages.host.removal_requires_lifecycle_owner", expected.package.Value()));
+                auto blockers = InspectOfflineRemovalArchive(*package->archive);
+                if (auto contribution = OfflineRemovalContributionBlocker(expected))
+                    blockers.push_back(std::move(*contribution));
+                if (!blockers.empty()) {
+                    auto error = ReferenceError("packages.host.removal_requires_lifecycle_owner", expected.package.Value());
+                    error.diagnostics = std::move(blockers);
+                    return Result<void>::Failure(std::move(error));
+                }
             }
             return Result<void>::Success();
         }
@@ -609,7 +616,7 @@ namespace Horo::Application::Internal {
                     return authority;
                 if (auto checked = InspectRuntimeCoverage(sources, *graph, *install, entry, departing, blockers); checked.HasError())
                     RecordRuntimeCoverageFailure(entry, std::move(checked).ErrorValue(), firstFailure, blockers);
-                if (blockers.size() > MaximumCoverageDiagnostics)
+                if (blockers.size() > MaximumRemovalCoverageDiagnostics)
                     return Result<void>::Failure(ReferenceError("packages.host.removal_reference_coverage_limit"));
             }
             if (!blockers.empty()) {
@@ -655,6 +662,18 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         return Diagnostic{DiagnosticCode{"packages.host.removal_requires_lifecycle_owner"}, DiagnosticSeverity::Error,
                           package.package.Value(), SourceLocation{"packages.host"}, package.package.Value()};
+    }
+
+    /** @copydoc InspectOfflineRemovalArchive */
+    std::vector<Diagnostic> InspectOfflineRemovalArchive(const Packages::ValidatedPackageArchive &archive) {
+        std::vector<Diagnostic> blockers;
+        for (const auto &file : archive.Manifest().Entries()) {
+            if (!IsOfflineRemovalFile(file))
+                blockers.emplace_back(DiagnosticCode{"packages.host.removal_requires_lifecycle_owner"}, DiagnosticSeverity::Error,
+                                      "Archive member requires a live lifecycle owner.", SourceLocation{"packages.archive"},
+                                      file.id.path.Value());
+        }
+        return blockers;
     }
 
     /** @copydoc CheckRemovalRegistrationCoverage */
