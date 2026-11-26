@@ -4136,7 +4136,10 @@ stable identity manifest and a bounded transfer budget. It stores stationary
 positions in signed world millimetres and proposes promotion when a reduced
 agent enters the inclusive axis-aligned radius around the supplied anchor.
 Proposals are produced in stable identity order into caller-owned storage. The
-provider neither constructs canonical agents nor runs their graphs or tasks.
+provider reuses the bounded slot selection while the exact world anchor and
+population revision remain unchanged. A moved anchor or committed transfer
+refreshes that selection. The provider neither constructs canonical agents nor
+runs their graphs or tasks.
 Hosts install `MakeReducedPopulationStructuralParticipant` to transfer a
 manifest identity through the existing AI and Scene publication fence. Promoted
 agents require an active canonical controller and Blackboard, and demotion

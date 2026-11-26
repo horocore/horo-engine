@@ -30,6 +30,9 @@ namespace Horo::AI {
             const auto overflow = population.EvaluatePromotions({std::numeric_limits<std::int64_t>::min(), 0, 0}, output);
             REQUIRE(overflow.HasValue());
             CHECK(overflow.Value() == 0);
+            CHECK(population.EvaluatePromotions({std::numeric_limits<std::int64_t>::min(), 0, 0}, output).Value() == 0);
+            CHECK(population.EvaluatePromotions({0, 0, 0}, output).Value() == output.size());
+            CHECK(output.front().agent == rows[1].agent);
         }
 
         TEST_CASE("Reduced population transfers identity only when its transaction publishes", "[ai][reduced-population]") {
@@ -52,6 +55,10 @@ namespace Horo::AI {
                 REQUIRE(candidate.Value().ValidatePublication().HasValue());
             }
             CHECK(population.EvaluatePromotions({0, 0, 0}, output).Value() == 2);
+            output = {};
+            CHECK(population.EvaluatePromotions({0, 0, 0}, output).Value() == 2);
+            CHECK(output.front().agent == first);
+            CHECK(output.back().agent == second);
 
             auto promote = population.PrepareTransition(std::span{&first, 1}, {});
             REQUIRE(promote.HasValue());

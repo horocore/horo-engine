@@ -33,6 +33,22 @@ namespace Horo::AI {
         std::vector<std::array<std::int64_t, 3>> positions;
         std::vector<std::uint8_t> canonical;
         std::uint64_t revision{1};
+        std::array<std::int64_t, 3> evaluatedAnchor{};
+        std::vector<std::size_t> evaluatedSlots;
+        std::uint64_t evaluatedRevision{};
+
+        /** @brief Refreshes the bounded selection only after the anchor or population publication changes. */
+        void Evaluate(const std::array<std::int64_t, 3> &anchor) {
+            if (evaluatedRevision == revision && evaluatedAnchor == anchor)
+                return;
+            evaluatedSlots.clear();
+            for (std::size_t slot = 0; slot < identities.size() && evaluatedSlots.size() < limits.maximumTransitions; ++slot) {
+                if (!canonical[slot] && InRadius(positions[slot], anchor, limits.promotionRadiusMillimeters))
+                    evaluatedSlots.push_back(slot);
+            }
+            evaluatedAnchor = anchor;
+            evaluatedRevision = revision;
+        }
 
         /** @brief Resolves a stable identity without copying any of its state. */
         [[nodiscard]] std::optional<std::size_t> Find(const AgentId agent) const noexcept {
@@ -100,6 +116,7 @@ namespace Horo::AI {
             state->identities.reserve(initial.size());
             state->positions.reserve(initial.size());
             state->canonical.resize(initial.size());
+            state->evaluatedSlots.reserve(std::min(initial.size(), limits.maximumTransitions));
             for (const auto &row : initial) {
                 state->identities.push_back(row.agent);
                 state->positions.push_back(row.positionMillimeters);
@@ -119,12 +136,11 @@ namespace Horo::AI {
         const auto maximum = state_->limits.maximumTransitions;
         if (output.size() < maximum)
             return Output::Failure(MakeError(AIErrors::TaskCapacityExceeded));
-        std::size_t written{};
-        for (std::size_t slot = 0; slot < state_->identities.size() && written < maximum; ++slot) {
-            if (!state_->canonical[slot] && InRadius(state_->positions[slot], anchor, state_->limits.promotionRadiusMillimeters))
-                output[written++] = {state_->identities[slot], state_->positions[slot]};
-        }
-        return Output::Success(written);
+        state_->Evaluate(anchor);
+        std::ranges::transform(state_->evaluatedSlots, output.begin(), [this](const std::size_t slot) {
+            return AiReducedAgent{state_->identities[slot], state_->positions[slot]};
+        });
+        return Output::Success(state_->evaluatedSlots.size());
     }
 
     /** @copydoc AiReducedPopulation::Tracks */
