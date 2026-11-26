@@ -20,17 +20,34 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                    selection.workerBudget.ToNanoseconds() > 0 && selection.tickBudget != 0;
         }
 
-        /** @brief Resolves authored text identities through the same validator used by the runtime caption renderer. */
-        Result<void> AppendDialogueCaption(EditorPlayNpcDialogueSelection &selection, const ProjectNpcDialogueCaption &caption) {
-            auto key = Runtime::Ui::UiMessageKey::Create(caption.messageNamespace, caption.messageKey);
+        /** @brief Admits a project localization reference into the private Play catalog. */
+        Result<std::uint32_t> AppendDialogueMessage(EditorPlayNpcDialogueSelection &selection, std::string_view messageNamespace,
+                                                    std::string_view messageKey, std::string_view fallback) {
+            auto key = Runtime::Ui::UiMessageKey::Create(messageNamespace, messageKey);
             if (key.HasError())
-                return Result<void>::Failure(key.ErrorValue());
-            auto text = Runtime::Ui::LocalizedMessageRef::Create(std::move(key).Value(), {}, caption.fallbackText);
+                return Result<std::uint32_t>::Failure(key.ErrorValue());
+            auto message = Runtime::Ui::LocalizedMessageRef::Create(std::move(key).Value(), std::string(fallback));
+            if (message.HasError())
+                return Result<std::uint32_t>::Failure(message.ErrorValue());
+            const auto index = static_cast<std::uint32_t>(selection.messages.size());
+            selection.messages.push_back(std::move(message).Value());
+            return Result<std::uint32_t>::Success(index);
+        }
+
+        /** @brief Binds the caption's text and optional speaker to the same localization catalog. */
+        Result<void> AppendDialogueCaption(EditorPlayNpcDialogueSelection &selection, const ProjectNpcDialogueCaption &caption) {
+            const auto text = AppendDialogueMessage(selection, caption.messageNamespace, caption.messageKey, caption.fallbackText);
             if (text.HasError())
                 return Result<void>::Failure(text.ErrorValue());
-            const auto messageIndex = static_cast<std::uint32_t>(selection.messages.size());
-            selection.messages.push_back(std::move(text).Value());
-            selection.captions.push_back({caption.cue, messageIndex, 0, caption.durationTicks});
+            std::uint32_t speakerIndex{};
+            if (caption.speaker) {
+                const auto &label = *caption.speaker;
+                const auto speaker = AppendDialogueMessage(selection, label.messageNamespace, label.messageKey, label.fallbackText);
+                if (speaker.HasError())
+                    return Result<void>::Failure(speaker.ErrorValue());
+                speakerIndex = speaker.Value() + 1;
+            }
+            selection.captions.push_back({caption.cue, text.Value(), speakerIndex, caption.durationTicks});
             return Result<void>::Success();
         }
     }  // namespace
@@ -73,7 +90,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                   .tickBudget = authored.deadlineTicks};
         if (!ValidDialogueSelection(selection))
             return Result<void>::Failure(MakeError(InvalidProjectScene, "The authored Play dialogue has no available input or HUD."));
-        selection.messages.reserve(authored.captions.size());
+        const auto speakers = std::ranges::count_if(authored.captions, [](const auto &caption) { return caption.speaker.has_value(); });
+        selection.messages.reserve(authored.captions.size() + static_cast<std::size_t>(speakers));
         selection.captions.reserve(authored.captions.size());
         for (const auto &caption : authored.captions) {
             if (auto admitted = AppendDialogueCaption(selection, caption); admitted.HasError())

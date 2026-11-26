@@ -193,6 +193,8 @@ namespace {
             "captions":[{"id":9,"namespace":"game.dialogue","key":"welcome","text":"Welcome","durationTicks":5},
                         {"id":4,"namespace":"game.dialogue","key":"offline","text":"Come back later.","durationTicks":10}]}}})");
         auto &presentation = dialogue["npcDialogue"]["presentation"];
+        auto &speaker = presentation["captions"][0]["speaker"];
+        speaker = {{"namespace", "game.characters"}, {"key", "guide"}, {"text", "Guide"}};
         const auto resolve = [&] {
             const auto source = DecodeProjectSourceDocument(document.dump());
             REQUIRE(source.HasValue());
@@ -209,6 +211,11 @@ namespace {
             CHECK(plan.captions.front().cue == plan.fallback);
             CHECK(plan.captions.front().fallbackText == "Come back later.");
             CHECK(plan.captions.front().durationTicks == 10);
+            CHECK_FALSE(plan.captions.front().speaker.has_value());
+            REQUIRE(plan.captions.back().speaker);
+            CHECK(plan.captions.back().speaker->messageNamespace == "game.characters");
+            CHECK(plan.captions.back().speaker->messageKey == "guide");
+            CHECK(plan.captions.back().speaker->fallbackText == "Guide");
             return;
         }
         SECTION("missing trigger is rejected") { presentation["trigger"] = 6; }
@@ -216,6 +223,9 @@ namespace {
         SECTION("duplicate cues are rejected") { presentation["captions"][1]["id"] = 9; }
         SECTION("zero budget is rejected") { presentation["workerMilliseconds"] = 0; }
         SECTION("zero caption duration is rejected") { presentation["captions"][0]["durationTicks"] = 0; }
+        SECTION("speaker text is required") { speaker.erase("text"); }
+        SECTION("speaker text must be a string") { speaker["text"] = 7; }
+        SECTION("speaker owns only localization fields") { speaker["id"] = 7; }
         SECTION("caption destinations do not belong to the local catalog") { presentation["captions"][0]["destination"] = "https://example.invalid/"; }
         CHECK(resolve().HasError());
     }

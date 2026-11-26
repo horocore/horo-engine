@@ -49,6 +49,13 @@ namespace Horo::Application {
         std::vector<AI::NpcDialogueFact> facts; /**< Canonical increasing list of distinct fields. */
     };
 
+    /** @brief Authored local speaker label resolved by the caption presenter. */
+    struct ProjectNpcDialogueSpeaker final {
+        std::string messageNamespace;
+        std::string messageKey;
+        std::string fallbackText;
+    };
+
     /** @brief Authored local text identity and duration for one provider-selectable caption. */
     struct ProjectNpcDialogueCaption final {
         AI::NpcDialogueCueId cue;
@@ -56,6 +63,7 @@ namespace Horo::Application {
         std::string messageKey;
         std::string fallbackText;
         std::uint32_t durationTicks{};
+        std::optional<ProjectNpcDialogueSpeaker> speaker;
     };
 
     /** @brief Complete caption catalog and timing policy for one project-selected interaction. */

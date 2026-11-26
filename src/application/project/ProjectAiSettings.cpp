@@ -282,24 +282,35 @@ namespace Horo::Application {
             return std::ranges::adjacent_find(output, {}, &ProjectNpcDialogueTrigger::id) == output.end();
         }
 
-        /** @brief Decodes one local-only caption. The application UI owner admits localization keys before publication. */
-        bool ReadDialogueCaption(const Json &entry, ProjectNpcDialogueCaption &caption) {
-            constexpr std::array<std::string_view, 5> keys{"id", "namespace", "key", "text", "durationTicks"};
-            if (!HasOnly(entry, keys) || entry.size() != keys.size())
-                return false;
-            caption.cue = ReadIdentity<AI::NpcDialogueCueId>(entry["id"]);
-            if (!caption.cue.IsValid() || !ReadUnsigned(entry, "durationTicks", caption.durationTicks) || caption.durationTicks == 0)
-                return false;
-            constexpr std::array names{"namespace", "key", "text"};
-            constexpr std::array members{&ProjectNpcDialogueCaption::messageNamespace, &ProjectNpcDialogueCaption::messageKey,
-                                         &ProjectNpcDialogueCaption::fallbackText};
-            for (std::size_t index = 0; index < names.size(); ++index) {
-                const auto &field = entry[names[index]];
-                if (!field.is_string())
+        constexpr std::array<std::string_view, 3> DialogueTextKeys{"namespace", "key", "text"};
+
+        /** @brief Reads the three required localization fields for caption bodies and speaker labels. */
+        bool ReadDialogueText(const Json &entry, std::string &messageNamespace, std::string &key, std::string &fallback) {
+            const std::array fields{&messageNamespace, &key, &fallback};
+            for (std::size_t index = 0; index < DialogueTextKeys.size(); ++index) {
+                const auto field = entry.find(DialogueTextKeys[index]);
+                if (field == entry.end() || !field->is_string())
                     return false;
-                caption.*members[index] = field.get_ref<const std::string &>();
+                *fields[index] = field->get_ref<const std::string &>();
             }
             return true;
+        }
+
+        /** @brief Decodes one local-only caption and its optional localized speaker label. */
+        bool ReadDialogueCaption(const Json &entry, ProjectNpcDialogueCaption &caption) {
+            constexpr std::array<std::string_view, 6> keys{
+                "id", DialogueTextKeys[0], DialogueTextKeys[1], DialogueTextKeys[2], "durationTicks", "speaker"};
+            if (!HasOnly(entry, keys) || !entry.contains("id"))
+                return false;
+            caption.cue = ReadIdentity<AI::NpcDialogueCueId>(entry["id"]);
+            if (!caption.cue.IsValid() || !ReadUnsigned(entry, "durationTicks", caption.durationTicks) || caption.durationTicks == 0 ||
+                !ReadDialogueText(entry, caption.messageNamespace, caption.messageKey, caption.fallbackText))
+                return false;
+            const auto speaker = entry.find("speaker");
+            if (speaker == entry.end())
+                return true;
+            auto &label = caption.speaker.emplace();
+            return HasOnly(*speaker, DialogueTextKeys) && ReadDialogueText(*speaker, label.messageNamespace, label.messageKey, label.fallbackText);
         }
 
         /** @brief Bounds the catalog and proves the offline fallback resolves to exactly one authored caption. */

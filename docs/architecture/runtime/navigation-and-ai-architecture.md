@@ -2405,6 +2405,9 @@ provides `trigger`, `fallback`, `deadlineTicks`, `workerMilliseconds` and
 `captions`. The trigger must resolve to an authored interaction. The fallback
 must resolve to one caption. Each caption has an `id`, a localization
 `namespace` and `key`, local fallback `text`, and a positive `durationTicks`.
+The optional `speaker` object contains its own `namespace`, `key`, and fallback
+`text`. The UI resolves the label from the same localization snapshot as the
+caption body and displays it according to the speaker-name preference.
 The application validates the localized message references before binding its
 HUD timeline. The project can omit this presentation object, and caption text
 stays in the presentation owner.

@@ -1052,7 +1052,8 @@ namespace {
                     R"("settings":{"renderBackend":"null","ai":{"schemaVersion":1,"npcDialogue":{"provider":1,"destination":2,)"
                     R"("version":1,"fields":[],"triggers":[{"id":3,"agent":10,"facts":[]}],)"
                     R"("presentation":{"trigger":3,"fallback":4,"deadlineTicks":10,"workerMilliseconds":100,)"
-                    R"("captions":[{"id":4,"namespace":"game.dialogue","key":"offline","text":"Come back later.","durationTicks":20}]}}}}})";
+                    R"("captions":[{"id":4,"namespace":"game.dialogue","key":"offline","text":"Come back later.","durationTicks":20,)"
+                    R"("speaker":{"namespace":"game.characters","key":"guide","text":"Guide"}}]}}}}})";
         REQUIRE(metadata.good());
     }
 
@@ -1125,6 +1126,11 @@ TEST_CASE("Editor Play starts authored NPC dialogue only after the fixed commit"
     CHECK(timeline->Cues().front().cue.id.sequence == 1);
     const auto &caption = timeline->Cues().front();
     CHECK(caption.catalog->at(caption.cue.text).FallbackText() == "Come back later.");
+    REQUIRE(caption.cue.speaker > 0);
+    const auto &speaker = caption.catalog->at(caption.cue.speaker - 1);
+    CHECK(speaker.Key().namespaceId == "game.characters");
+    CHECK(speaker.Key().localKey == "guide");
+    CHECK(speaker.FallbackText() == "Guide");
     play.Stop();
     CHECK(timeline->Cues().empty());
     lifecycle.Shutdown();
