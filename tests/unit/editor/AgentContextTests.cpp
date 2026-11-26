@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <future>
 #include <mutex>
+#include <thread>
 
 namespace Horo::Agent {
     namespace {
@@ -363,6 +364,22 @@ namespace Horo::Agent {
 
         auto correct = capture(project.projectIdentity);
         REQUIRE(correct);
+        SECTION("the approved context deadline stops a quiet provider") {
+            bool observedStop{};
+            project.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{750};
+            model.beforeResponse = [&](std::stop_token stop) {
+                std::mutex mutex;
+                std::condition_variable_any wake;
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, std::chrono::seconds{2}, [] { return false; });
+                observedStop = stop.stop_requested();
+            };
+            const auto review = correct->Plan(model, 25, AgentTurnLimits{.timeout = std::chrono::seconds{5}}, inspect, {}, &approved);
+            CHECK(observedStop);
+            CHECK(review.Status() == ContextDenied);
+            CHECK_FALSE(review.Read(*context));
+            return;
+        }
         SECTION("changing trust stops a quiet provider within the same project opening") {
             bool observedStop{};
             model.beforeResponse = [&](std::stop_token stop) {
@@ -381,12 +398,26 @@ namespace Horo::Agent {
             CHECK_FALSE(review.Read(*context));
             return;
         }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{750};
+        bool verifyExpiry{};
+        SECTION("a completed draft expires with the context used to produce it") {
+            project.deadline = deadline;
+            verifyExpiry = true;
+        }
         const auto review = correct->Plan(model, 25, {}, inspect, {}, &approved);
         REQUIRE(review.Status() == Completed);
         REQUIRE(model.sent.size() == 2);
         CHECK(model.sent.front().text == preview.Value().Items().front().candidate.text);
         REQUIRE(review.Read(*context));
         CHECK(review.Read(*context)->draft->text == "Result");
+        if (verifyExpiry) {
+            project.deadline = std::chrono::steady_clock::time_point::max();
+            std::this_thread::sleep_until(deadline);
+            CHECK(context->IsCurrent());
+            CHECK(review.Status() == ContextDenied);
+            CHECK_FALSE(review.Read(*context));
+            return;
+        }
 
         SECTION("closing the project retires the review") {
             projectLifetime.RequestCancellation();

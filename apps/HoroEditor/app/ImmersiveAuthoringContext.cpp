@@ -105,14 +105,15 @@ namespace Horo::Editor {
 
     ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop,
                                              CancellationToken projectLifetime, CancellationToken trustLifetime,
-                                             std::shared_ptr<const Agent::McpPlanCatalog> catalog)
+                                             std::shared_ptr<const Agent::McpPlanCatalog> catalog,
+                                             const std::chrono::steady_clock::time_point projectDeadline)
         : context_(std::move(context)), plan_(std::move(plan)), stop_(stop), projectLifetime_(std::move(projectLifetime)),
-          trustLifetime_(std::move(trustLifetime)), catalog_(std::move(catalog)) {}
+          trustLifetime_(std::move(trustLifetime)), catalog_(std::move(catalog)), projectDeadline_(projectDeadline) {}
 
     /** @copydoc ImmersivePlanReview::HasCurrentAuthority */
     bool ImmersivePlanReview::HasCurrentAuthority() const noexcept {
         return context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() && !trustLifetime_.IsCancellationRequested() &&
-               (!catalog_ || catalog_->IsCurrent());
+               std::chrono::steady_clock::now() < projectDeadline_ && (!catalog_ || catalog_->IsCurrent());
     }
 
     /** @copydoc ImmersivePlanReview::Status */
@@ -174,13 +175,14 @@ namespace Horo::Editor {
             return inspected;
         };
         const auto projectLifetime = approvedContext ? approvedContext->project.cancellation : CancellationToken{};
+        const auto projectDeadline = approvedContext ? approvedContext->project.deadline : std::chrono::steady_clock::time_point::max();
         const Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime,
-                                                              trust = *trustLifetime]() noexcept {
+                                                              trust = *trustLifetime, projectDeadline]() noexcept {
             return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && !trust.IsCancellationRequested() &&
-                   (!catalog || catalog->IsCurrent());
+                   std::chrono::steady_clock::now() < projectDeadline && (!catalog || catalog->IsCurrent());
         };
         auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext, providerAuthority);
-        return {context_, std::move(plan), stop, projectLifetime, *trustLifetime, catalog_};
+        return {context_, std::move(plan), stop, projectLifetime, *trustLifetime, catalog_, projectDeadline};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}

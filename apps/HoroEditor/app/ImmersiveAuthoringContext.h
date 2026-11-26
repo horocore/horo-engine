@@ -8,6 +8,7 @@
 #include "Horo/XR/XRIdentity.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -128,9 +129,10 @@ namespace Horo::Editor {
         friend class ImmersiveAgentRequest;
         ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
                             CancellationToken projectLifetime = {}, CancellationToken trustLifetime = {},
-                            std::shared_ptr<const Agent::McpPlanCatalog> catalog = {});
+                            std::shared_ptr<const Agent::McpPlanCatalog> catalog = {},
+                            std::chrono::steady_clock::time_point projectDeadline = std::chrono::steady_clock::time_point::max());
 
-        /** @brief Checks workspace, project and catalog authority for this review. */
+        /** @brief Checks workspace, project, trust, deadline and catalog authority for this review. */
         [[nodiscard]] bool HasCurrentAuthority() const noexcept;
 
         ImmersivePlanningContext context_;
@@ -139,6 +141,7 @@ namespace Horo::Editor {
         CancellationToken projectLifetime_;
         CancellationToken trustLifetime_;
         std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
+        std::chrono::steady_clock::time_point projectDeadline_;
     };
 
     /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
