@@ -45,6 +45,7 @@ def declared(smoke):
     ("foreign-run", "input capture is from a different smoke run"),
     ("wrong-check", "input capture is for a different check"),
     ("changed-observation", "Artifact content does not match"),
+    ("nested-receipt", "input observation refers to a physical check receipt"),
     ("missing-haptics", "Missing regular artifact"),
 ])
 def test_device_cli_validates_required_physical_check_receipts(tmp_path, smoke, change, reason):
@@ -62,6 +63,8 @@ def test_device_cli_validates_required_physical_check_receipts(tmp_path, smoke, 
             capture["provenance"] = dict(smoke["provenance"], runId="replacement")
         if check == "input" and change == "wrong-check":
             capture["check"] = "comfort"
+        if check == "input" and change == "nested-receipt":
+            capture["artifactSha256"] = smoke["checks"]["haptics"]["evidenceSha256"]
         receipt = json.dumps(capture).encode()
         receipt_digest = hashlib.sha256(receipt).hexdigest()
         smoke["checks"][check]["evidenceSha256"] = receipt_digest

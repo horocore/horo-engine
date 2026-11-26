@@ -169,6 +169,24 @@ def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(re
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_receipt_bytes_cannot_be_rewrapped_as_observation_for_another_run(release, reverse):
+    matrix, evidence = release
+    source, target = matrix["tuples"]
+    first = json.loads((evidence / source["recordSha256"]).read_bytes())
+    second = json.loads((evidence / target["recordSha256"]).read_bytes())
+    replacement = json.loads((evidence / second["checks"]["input"]["evidenceSha256"]).read_bytes())
+    replacement["artifactSha256"] = first["checks"]["input"]["evidenceSha256"]
+    second["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(replacement).encode())
+    target["recordSha256"] = store(evidence, json.dumps(second).encode())
+    if reverse:
+        matrix["tuples"].reverse()
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Physical observation artifact was reused across smoke runs" in result.stderr
+
+
 @pytest.mark.parametrize("view_count", [1, 4])
 def test_xr_1_0_claim_requires_physical_stereo_capture(release, view_count):
     matrix, evidence = release

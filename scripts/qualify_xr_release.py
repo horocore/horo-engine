@@ -10,8 +10,8 @@ from qualify_xr_android import check_android_preflight_file, validate_android_pr
 from qualify_xr_device import (
     CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
     artifact_path, check_desktop_preflight, check_display_capture, check_physical_gate, check_render_timing_file, decode_record,
-    desktop_receipt_digest, fields, in_set, is_digest, is_source_revision, is_token, load_record, physical_check_capture, require,
-    required_physical_check_receipts, validate_declaration, validate_record,
+    desktop_receipt_digest, fields, in_set, is_digest, is_source_revision, is_token, load_record, physical_check_evidence, require,
+    validate_declaration, validate_record,
     validate_timing_limits, verify_artifact,
 )
 
@@ -147,15 +147,11 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set
     observations = {record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]}
     if mr_capture is not None:
         observations.add(record["checks"]["optionalMR"]["evidenceSha256"])
-    check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - {None}
-    for check, digest in required_physical_check_receipts(record, optional):
-        artifact = physical_check_capture(evidence.path(digest), record, check)
-        evidence.verify(artifact)
-        observations.add(artifact)
-        check_digests.discard(digest)
-    for digest in check_digests:
+    receipts, physical_observations = physical_check_evidence(evidence.root, record, optional)
+    check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - receipts - {None}
+    for digest in sorted(check_digests | physical_observations):
         evidence.verify(digest)
-    return record["status"], observations
+    return record["status"], observations | receipts | physical_observations
 
 
 def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:

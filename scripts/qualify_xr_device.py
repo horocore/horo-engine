@@ -393,14 +393,23 @@ def required_physical_check_receipts(record: dict, optional: set[str]) -> Iterat
         yield check, record["checks"][check]["evidenceSha256"]
 
 
+def physical_check_evidence(root: Path, record: dict, optional: set[str]) -> tuple[set[str], set[str]]:
+    """Verify receipt identities and return the distinct receipt and observation digests."""
+    receipts = tuple(required_physical_check_receipts(record, optional))
+    receipt_digests = {digest for _, digest in receipts}
+    observations = set()
+    for check, digest in receipts:
+        artifact = physical_check_capture(artifact_path(root, digest), record, check)
+        require(artifact not in receipt_digests, f"{check} observation refers to a physical check receipt")
+        observations.add(artifact)
+    return receipt_digests, observations
+
+
 def verify_physical_checks(root: Path, record: dict, optional: set[str]) -> None:
     """Validate each receipt and its referenced bytes in the selected evidence directory."""
-    verified = set()
-    for check, digest in required_physical_check_receipts(record, optional):
-        artifact = physical_check_capture(artifact_path(root, digest), record, check)
-        if artifact not in verified:
-            verify_artifact(artifact_path(root, artifact), artifact)
-            verified.add(artifact)
+    _, observations = physical_check_evidence(root, record, optional)
+    for artifact in sorted(observations):
+        verify_artifact(artifact_path(root, artifact), artifact)
 
 
 def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
