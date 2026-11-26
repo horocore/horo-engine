@@ -1,4 +1,5 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
+#include "../../../apps/HoroEditor/app/EditorLocalAgentPatchCheckpoint.h"
 #include "../../support/NativePublicationFiles.h"
 #include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Application/GameplayTestService.h"
@@ -980,6 +981,66 @@ namespace {
             CHECK(restored[0].Revision() == 3 + 2 * index);
             CHECK(restored[0].Revision() == restored[1].Revision());
         }
+    }
+
+    TEST_CASE("Recovered multi-file reviews apply only the approved text", "[editor][source][review][history]") {
+        ReviewWorkspace workspace;
+        const auto original = workspace.Snapshots();
+        constexpr std::string_view patch = R"({"version":1,"files":[
+            {"kind":"edit","path":"a.cpp","hunks":[{"offset":0,"before":"ba","after":"ca"},{"offset":2,"before":"se","after":"rt"}]},
+            {"kind":"edit","path":"b.cpp","hunks":[{"offset":0,"before":"base","after":"agent"}]}
+        ]})";
+        auto offered = PrepareEditorLocalPatchReview(patch, {{original[0], original[1]}, "test", 1}, workspace.policy.Project(), 1);
+        REQUIRE(offered.HasValue());
+        auto review = std::move(offered).Value();
+        REQUIRE(review.decisions.Decide(*review.plan, {0, 0}, ReviewChoice::Accept).HasValue());
+        REQUIRE(review.decisions.Decide(*review.plan, {0, 1}, ReviewChoice::Reject).HasValue());
+        REQUIRE(review.decisions.Decide(*review.plan, {1}, ReviewChoice::Reject).HasValue());
+        const auto lifetime = workspace.lifetime.Token();
+        const auto &root = workspace.project.directory;
+        REQUIRE(SaveEditorPatchCheckpoint(workspace.files, root, {review.proposal, review.decisions, review.offeredPaths}, lifetime)
+                    .HasValue());
+
+        const auto edited = workspace.documents.Edit(workspace.b.instance, {original[1].Revision(), 0, 4, "user"});
+        REQUIRE(edited.HasValue());
+        auto recovered = LoadEditorPatchCheckpoint(root, workspace.policy.Project(), workspace.Snapshots(), lifetime);
+        REQUIRE(recovered.HasValue());
+        REQUIRE(recovered.Value());
+        const auto &restored = *recovered.Value();
+        EditorWorkspaceViewCommandData apply;
+        REQUIRE(QueueSourceReviewApplication(workspace.policy.Project(), restored.decisions, workspace.policy, restored.plan, lifetime,
+                                             apply));
+        REQUIRE(workspace.Process(apply));
+        workspace.Drain();
+        REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Applied);
+        const auto applied = workspace.Snapshots();
+        CHECK(applied[0].Text() == "case");
+        CHECK(applied[0].Dirty());
+        CHECK(applied[1].SharesStateWith(edited.Value()));
+        CHECK_FALSE(workspace.reviews.IsAppliedSource(applied[1]));
+
+        const auto readDisk = [&](const char *name) {
+            std::ifstream source(root / name, std::ios::binary);
+            REQUIRE(source.is_open());
+            return std::string{std::istreambuf_iterator<char>{source}, {}};
+        };
+        CHECK(readDisk("a.cpp") == "base");
+        SECTION("Undo restores only the applied buffer") {
+            EditorWorkspaceViewCommandData undo;
+            REQUIRE(workspace.reviews.QueueUndo(lifetime, undo));
+            REQUIRE(workspace.Process(undo));
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Reverted);
+            CHECK(workspace.Snapshots()[0].Text() == "base");
+            CHECK(readDisk("a.cpp") == "base");
+        }
+        SECTION("An explicit save publishes only the approved hunk") {
+            REQUIRE(workspace.documents.Save({workspace.a.instance, applied[0].Revision(), {}}, workspace.files).HasValue());
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Saved);
+            CHECK(readDisk("a.cpp") == "case");
+        }
+        CHECK(edited.Value().IsCurrent());
+        CHECK(workspace.Snapshots()[1].Text() == "user");
+        CHECK(readDisk("b.cpp") == "base");
     }
 
     TEST_CASE("Source review disposition requires exact in-place saves for the entire applied group", "[editor][source][review][history]") {
