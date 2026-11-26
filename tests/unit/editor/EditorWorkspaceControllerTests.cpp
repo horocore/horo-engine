@@ -270,6 +270,70 @@ namespace {
         REQUIRE((notifications.size() == 1));
     }
 
+    TEST_CASE("Scene proposal bindings retire on replacement or workspace shutdown", "[unit][editor][scene-review]") {
+        Runtime::RuntimeSceneService scenes;
+        CancellationSource process;
+        EditorWorkspaceDependencies dependencies;
+        dependencies.world.documentSessionOwner = Assets::AssetId::FromBytes({1});
+        EditorWorkspaceController controller{"scene-binding-project", scenes, {}, dependencies};
+        REQUIRE(scenes.Startup(process.Token()).HasValue());
+        const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, process.Token()};
+        REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+        const auto original = controller.ViewModel().objects.front();
+        const auto fence = controller.ViewModel().assetDropFence;
+        const InspectionSceneRevision revision{fence.replacementEpoch, fence.revision.value};
+        const auto endpoint = controller.BindSceneInspection("test-project", 1).lock();
+        REQUIRE(endpoint);
+        const std::array targets{original.id.value};
+        const ObjectInspectionRequest query{.objects = {original.id.value}, .expected = revision};
+        const std::array renames{AgentSceneObjectRename{original.id.value, "Reviewed name"}};
+        const auto allowed = [] { return true; };
+        REQUIRE(endpoint->readTransforms(query).HasValue());
+        REQUIRE(endpoint->inspectEditTargets(revision, targets).HasValue());
+        std::shared_ptr<const EditorInspectionCommandEndpoint> replacement;
+
+        SECTION("a proposal already on screen loses its old binding") {
+            const auto review = endpoint->proposeEdits(revision, {}, renames, {}, allowed);
+            REQUIRE(review.HasValue());
+            replacement = controller.BindSceneInspection("test-project", 2).lock();
+            REQUIRE(replacement);
+            CHECK(controller.ApproveAgentSceneReview(review.Value()).HasError());
+            CHECK_FALSE(controller.ViewModel().agentSceneReview);
+        }
+        SECTION("replacement during admission cannot publish a proposal from the old binding") {
+            const auto review = endpoint->proposeEdits(revision, {}, renames, {}, [&] {
+                replacement = controller.BindSceneInspection("test-project", 2).lock();
+                return true;
+            });
+            REQUIRE(replacement);
+            CHECK(review.HasError());
+            CHECK_FALSE(controller.ViewModel().agentSceneReview);
+        }
+        SECTION("workspace shutdown retires the retained callbacks") {
+            controller.RevokeWorkspaceCommands();
+        }
+
+        CHECK(endpoint->readTransforms(query).HasError());
+        CHECK(endpoint->inspectEditTargets(revision, targets).HasError());
+        CHECK(endpoint->proposeEdits(revision, {}, renames, {}, allowed).HasError());
+        CHECK(controller.ViewModel().objects.front().name == original.name);
+        CHECK_FALSE(controller.ViewModel().isDirty);
+        CHECK_FALSE(controller.ViewModel().canUndo);
+        if (replacement) {
+            CHECK(replacement->readTransforms(query).HasValue());
+            CHECK(replacement->inspectEditTargets(revision, targets).HasValue());
+            const auto fresh = replacement->proposeEdits(revision, {}, renames, {}, allowed);
+            REQUIRE(fresh.HasValue());
+            REQUIRE(controller.ApproveAgentSceneReview(fresh.Value()).HasValue());
+            CHECK(controller.ViewModel().objects.front().name == renames.front().name);
+            CHECK(controller.ViewModel().isDirty);
+            controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::UndoScene));
+            CHECK(controller.ViewModel().objects.front().name == original.name);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+        }
+    }
+
     TEST_CASE("Catalog Creation Selects The Result And Honors The Requested Parent", "[unit][editor]") {
         TestWorkspaceController controller;
         EditorWorkspaceViewCommandData createRoot;

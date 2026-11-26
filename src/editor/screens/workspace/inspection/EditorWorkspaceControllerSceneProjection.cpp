@@ -830,44 +830,42 @@ namespace Horo::Editor {
         return snapshot;
     }
 
+    namespace {
+        /** @brief Checks the owner lane and captured lifetime before invoking a borrowed workspace callback. */
+        template <typename Call>
+        auto BindInspectionCall(const std::thread::id owner, const CancellationToken &lifetime, Call call) {
+            return [owner, lifetime, call = std::move(call)](auto &&...args) {
+                using Reply = decltype(call(std::forward<decltype(args)>(args)...));
+                if (owner != std::this_thread::get_id())
+                    return Reply::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::WrongThread)));
+                if (lifetime.IsCancellationRequested())
+                    return Reply::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Stale)));
+                return call(std::forward<decltype(args)>(args)...);
+            };
+        }
+    }  // namespace
+
+    /** @copydoc EditorWorkspaceController::RetireSceneInspectionBinding */
+    void EditorWorkspaceController::RetireSceneInspectionBinding() noexcept {
+        if (m_inspectionCommandEndpoint && m_inspectionCommandEndpoint->retire)
+            m_inspectionCommandEndpoint->retire();
+        m_inspectionCommandEndpoint.reset();
+    }
+
     /** @copydoc EditorWorkspaceController::BindSceneInspection */
     std::weak_ptr<const EditorInspectionCommandEndpoint> EditorWorkspaceController::BindSceneInspection(
         std::string project, const std::uint64_t authorizationRevision) {
-        m_inspectionCommandEndpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
-            EditorInspectionCommandEndpoint{std::move(project), authorizationRevision, std::this_thread::get_id(),
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectLocalTransforms(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectWorldBounds(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectComponents(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectGeometry(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectDistances(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectGridOffsets(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectSurfaces(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectCollisions(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectPenetrations(request);
-        },
-                                            [this](const ObjectInspectionRequest &request) {
-            return InspectVisualIssues(request);
-        },
-                                            [this](InspectionSceneRevision scene, std::span<const AgentViewportTransform> proposed,
-                                                   std::span<const AgentSceneObjectRename> renames,
-                                                   std::span<const AgentSceneLightUpdate> lights, std::function<bool()> authorized) {
+        const CancellationSource source;
+        const auto lifetime = source.Token();
+        const auto owner = std::this_thread::get_id();
+        const auto read = [this, owner, &lifetime](auto method) {
+            return BindInspectionCall(owner, lifetime, [this, method](const ObjectInspectionRequest &request) {
+                return (this->*method)(request);
+            });
+        };
+        const auto propose = [this, lifetime](InspectionSceneRevision scene, std::span<const AgentViewportTransform> proposed,
+                                               std::span<const AgentSceneObjectRename> renames,
+                                               std::span<const AgentSceneLightUpdate> lights, std::function<bool()> authorized) {
             std::vector<SceneObjectTransformUpdate> updates;
             updates.reserve(proposed.size());
             for (const auto &local : proposed) {
@@ -876,14 +874,31 @@ namespace Horo::Editor {
                                     {local.rotation[0], local.rotation[1], local.rotation[2], local.rotation[3]},
                                     {local.scale[0], local.scale[1], local.scale[2]}}});
             }
-            return PreviewAgentSceneEdits(scene, updates, renames, {}, std::move(authorized), lights);
-        },
-                                            [this, owner = std::this_thread::get_id()](InspectionSceneRevision scene,
-                                                                                       std::span<const std::uint64_t> objects) {
-            if (owner != std::this_thread::get_id())
-                return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::WrongThread)));
-            return InspectAgentSceneEditTargets(scene, objects);
-        }});
+            return PreviewAgentSceneEdits(scene, updates, renames, lifetime, std::move(authorized), lights);
+        };
+        auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(EditorInspectionCommandEndpoint{
+            .project = std::move(project),
+            .authorizationRevision = authorizationRevision,
+            .owner = owner,
+            .readTransforms = read(&EditorWorkspaceController::InspectLocalTransforms),
+            .readBounds = read(&EditorWorkspaceController::InspectWorldBounds),
+            .readComponents = read(&EditorWorkspaceController::InspectComponents),
+            .readGeometry = read(&EditorWorkspaceController::InspectGeometry),
+            .readDistances = read(&EditorWorkspaceController::InspectDistances),
+            .readGridOffsets = read(&EditorWorkspaceController::InspectGridOffsets),
+            .readSurfaces = read(&EditorWorkspaceController::InspectSurfaces),
+            .readCollisions = read(&EditorWorkspaceController::InspectCollisions),
+            .readPenetrations = read(&EditorWorkspaceController::InspectPenetrations),
+            .readVisualIssues = read(&EditorWorkspaceController::InspectVisualIssues),
+            .proposeEdits = BindInspectionCall(owner, lifetime, propose),
+            .inspectEditTargets = BindInspectionCall(owner, lifetime,
+                                                    [this](InspectionSceneRevision scene, std::span<const std::uint64_t> objects) {
+                return InspectAgentSceneEditTargets(scene, objects);
+            }),
+            .retire = [source]() noexcept { source.RequestCancellation(); },
+        });
+        RetireSceneInspectionBinding();
+        m_inspectionCommandEndpoint = std::move(endpoint);
         return m_inspectionCommandEndpoint;
     }
 

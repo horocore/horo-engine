@@ -1,6 +1,5 @@
 #include "../EditorWorkspaceController.h"
 #include "../commands/EditorBuildCommandEndpoint.h"
-#include "../commands/EditorInspectionCommandEndpoint.h"
 #include "../commands/EditorTestCommandEndpoint.h"
 #include "EditorSourcePresentation.h"
 
@@ -241,7 +240,7 @@ namespace Horo::Editor {
         if (m_agentSceneReview)
             m_agentSceneReview->lifetime.RequestCancellation();
         m_sourceCommandEndpoint.reset();
-        m_inspectionCommandEndpoint.reset();
+        RetireSceneInspectionBinding();
         RetireDebugCaptureBinding();
         RevokeGameplayTestCommands();
         m_buildCommandEndpoint.reset();

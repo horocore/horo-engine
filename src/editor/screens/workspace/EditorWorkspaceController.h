@@ -1419,6 +1419,8 @@ namespace Horo::Editor {
         void InvalidateAgentViewport() noexcept;
         /** @brief Withdraws renderer-owned capture before retiring the command binding and its telemetry. */
         void RetireDebugCaptureBinding() noexcept;
+        /** @brief Revokes any retained Scene inspection callbacks and the proposals they have staged. */
+        void RetireSceneInspectionBinding() noexcept;
         /** @brief Withdraws captures of the prior viewport projection before advancing its revision. */
         void AdvanceViewportSceneRevision() noexcept;
         /** @brief Copies a scene revision and bounded selection under the caller's owner lease. */

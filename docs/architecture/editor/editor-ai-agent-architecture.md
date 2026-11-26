@@ -806,7 +806,8 @@ The viewport displays the name and light changes alongside the visual transform
 preview. Light state takes effect only when the operator applies the review.
 The MCP proposal grant admits the preview. Apply and discard are local viewport
 controls. The preview is retired when the originating authority expires or the
-authored Scene is replaced.
+authored Scene is replaced. Rebinding or closing the workspace inspection
+port cancels the originating scope for its callbacks and pending previews.
 
 ### Communication Flow
 

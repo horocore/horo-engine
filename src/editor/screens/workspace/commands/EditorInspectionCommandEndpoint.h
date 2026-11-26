@@ -322,5 +322,6 @@ namespace Horo::Editor {
             proposeEdits;
         /** @brief Read-only target admission on this exact workspace owner lane. */
         std::function<Result<void>(InspectionSceneRevision, std::span<const std::uint64_t>)> inspectEditTargets;
+        std::function<void()> retire; /**< Workspace-owned revocation of all callbacks and pending proposals from this binding. */
     };
 }  // namespace Horo::Editor
