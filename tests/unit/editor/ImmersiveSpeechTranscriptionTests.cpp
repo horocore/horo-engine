@@ -953,6 +953,43 @@ namespace Horo::Editor {
             CHECK(capture.Assemble(speech, sample.cutoff).status == CommandStatus::StaleEvidence);
         }
 
+        TEST_CASE("Retiring an XR pointer withdraws its points while retaining the local transcript", "[agent][immersive][speech]") {
+            using RecordStatus = ImmersiveSpatialCaptureStatus;
+            using CommandStatus = ImmersiveCommandStatus;
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            sample.controllerPress = ImmersiveControllerPress{sample.earliest, sample.latest};
+            ImmersiveSpatialCapture capture;
+            capture.Begin(context);
+            capture.RetirePointingSource();
+            CHECK_FALSE(capture.PointingSourceRetired());
+            REQUIRE(capture.RecordPointing(sample) == RecordStatus::Recorded);
+
+            SECTION("tracking is lost during capture") {
+                capture.RetirePointingSource();
+                CHECK(capture.RecordPointing(sample) == RecordStatus::PointingSourceRetired);
+                capture.Seal();
+            }
+            SECTION("the pointer is replaced during final recognition or presentation") {
+                capture.Seal();
+                const auto aligned = capture.AssemblePreview(speech, sample.cutoff);
+                REQUIRE(aligned.status == CommandStatus::Aligned);
+                capture.RetirePointingSource();
+            }
+            CHECK(capture.PointingSourceRetired());
+            const auto preview = capture.AssemblePreview(speech, sample.cutoff);
+            REQUIRE(preview.status == CommandStatus::SpeechOnlySpatialRejected);
+            REQUIRE(preview.envelope);
+            CHECK(preview.envelope->Speech().Hypothesis().text == Transcript().text);
+            CHECK(preview.envelope->Spatial().empty());
+
+            capture.Begin(context);
+            CHECK_FALSE(capture.PointingSourceRetired());
+            CHECK(capture.RecordPointing(sample) == RecordStatus::Recorded);
+        }
+
         TEST_CASE("Immersive listening never assembles a truncated spatial history", "[agent][immersive][speech]") {
             using RecordStatus = ImmersiveSpatialCaptureStatus;
             using CommandStatus = ImmersiveCommandStatus;

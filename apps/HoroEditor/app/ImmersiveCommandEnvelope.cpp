@@ -343,6 +343,20 @@ namespace Horo::Editor {
         sealed_ = true;
     }
 
+    /** @copydoc ImmersiveSpatialCapture::RetirePointingSource */
+    void ImmersiveSpatialCapture::RetirePointingSource() noexcept {
+        if (count_ == 0)
+            return;
+        std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});
+        count_ = 0;
+        failure_ = ImmersiveSpatialCaptureStatus::PointingSourceRetired;
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::PointingSourceRetired */
+    bool ImmersiveSpatialCapture::PointingSourceRetired() const noexcept {
+        return failure_ == ImmersiveSpatialCaptureStatus::PointingSourceRetired;
+    }
+
     /** @copydoc ImmersiveSpatialCapture::Assemble */
     ImmersiveCommandAssembly ImmersiveSpatialCapture::Assemble(const ImmersiveSpeechEvidence &speech,
                                                                const XR::XRInteractionCutoff &cutoff) const noexcept {
@@ -354,6 +368,8 @@ namespace Horo::Editor {
             return {CapacityExceeded, {}};
         if (failure_ == ImmersiveSpatialCaptureStatus::UnmeasuredPress)
             return {AmbiguousTiming, {}};
+        if (PointingSourceRetired())
+            return {InvalidSpatialEvidence, {}};
         if (count_ == 0)
             return ImmersiveCommandEnvelope::Assemble(*context_, speech);
         return ImmersiveCommandEnvelope::Assemble(*context_, speech,

@@ -70,6 +70,16 @@ namespace Horo::Editor {
         return spatial_.RecordPointing(observation);
     }
 
+    /** @copydoc EditorMicrophoneSpeechSession::RetirePointingSource */
+    void EditorMicrophoneSpeechSession::RetirePointingSource() noexcept {
+        spatial_.RetirePointingSource();
+    }
+
+    /** @copydoc EditorMicrophoneSpeechSession::PointingSourceRetired */
+    bool EditorMicrophoneSpeechSession::PointingSourceRetired() const noexcept {
+        return spatial_.PointingSourceRetired();
+    }
+
     /** @copydoc EditorMicrophoneSpeechSession::ReadCaptureClock */
     std::optional<EditorSpeechClockSample> EditorMicrophoneSpeechSession::ReadCaptureClock() const noexcept {
         if (const auto timestamp = microphone_.ReadSpeechClock(generation_))

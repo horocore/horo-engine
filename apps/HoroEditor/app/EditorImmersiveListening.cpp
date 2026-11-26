@@ -54,6 +54,8 @@ namespace Horo::Editor {
     }
 
     EditorImmersiveListening::State EditorImmersiveListening::Status() const noexcept {
+        if (state_ == State::Spatial && speech_.PointingSourceRetired())
+            return State::SpeechOnlySpatialRejected;
         return state_;
     }
 
@@ -84,8 +86,11 @@ namespace Horo::Editor {
             return std::nullopt;
         const auto &context = preview_->Speech().Context();
         const auto &identity = context.Identity();
-        if (source != AgentSceneReferenceSource::Selection)
+        if (source != AgentSceneReferenceSource::Selection) {
+            if (speech_.PointingSourceRetired())
+                return std::nullopt;
             return ReviewPointedReferences(*preview_, context, review, source);
+        }
         std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
         const auto selection = context.Selection();
         if (selection.size() > AgentSceneSelectionSnapshot::MaximumObjects)
@@ -105,7 +110,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorImmersiveListening::ReviewSurfaces */
     std::optional<ImmersiveSurfaceHits> EditorImmersiveListening::ReviewSurfaces() const {
-        if (!preview_ || preview_->Spatial().empty())
+        if (!preview_ || preview_->Spatial().empty() || speech_.PointingSourceRetired())
             return std::nullopt;
         const auto current = CurrentPresentation();
         if (!current)

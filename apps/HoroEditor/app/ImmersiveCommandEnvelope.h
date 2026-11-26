@@ -178,7 +178,8 @@ namespace Horo::Editor {
         Closed,
         StaleContext,
         CapacityExceeded,
-        UnmeasuredPress
+        UnmeasuredPress,
+        PointingSourceRetired
     };
 
     /** @brief Fixed storage for admitted XR evidence during one listening operation.
@@ -195,6 +196,12 @@ namespace Horo::Editor {
                                                            std::span<const ImmersiveSpatialObservation> observations) noexcept;
         /** @brief Records one observed press in the bound listening context. An unmeasured press invalidates spatial review. */
         [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPointing(const ImmersiveSpatialObservation &observation) noexcept;
+
+        /** @brief Withdraws recorded points from a retired source, including during final recognition or review. */
+        void RetirePointingSource() noexcept;
+
+        /** @brief Reports whether this capture lost the source of its recorded points. */
+        [[nodiscard]] bool PointingSourceRetired() const noexcept;
 
         /** @brief Stops recording before the detached speech worker produces its final result. */
         void Seal() noexcept;

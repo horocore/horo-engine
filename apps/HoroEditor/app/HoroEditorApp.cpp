@@ -2111,16 +2111,21 @@ namespace Horo::Editor {
             /** @brief Observes one committed input frame. Pointing contributes evidence only. */
             void Update(EditorMicrophoneSpeechSession &speech, const Application::Internal::OpenXRPlayHost &xr,
                         const std::optional<PointerFrame> &frame, const bool uiOwned) {
-                if (!frame || !frame->captureTime.poses) {
+                if (!frame || source_ != frame->source) {
+                    if (source_)
+                        speech.RetirePointingSource();
                     Reset();
+                    if (!frame)
+                        return;
+                    source_ = frame->source;
+                }
+                if (!frame->captureTime.poses) {
+                    actionTime_.reset();
+                    pressEdge_.Reset();
                     return;
                 }
                 const auto &time = *frame->captureTime.poses;
                 const auto capture = time.earliest.captureGeneration;
-                if (source_ != frame->source) {
-                    Reset();
-                    source_ = frame->source;
-                }
                 const auto previousAction = std::exchange(actionTime_, frame->captureTime.actions);
                 if (!pressEdge_.Observe(capture, frame->sample.selectDown, uiOwned))
                     return;
@@ -2778,6 +2783,8 @@ namespace Horo::Editor {
                 else if (composition.xrPlay) {
                     if (auto built = composition.xrPlay->BuildInputSnapshot(context, raw); built.HasError()) {
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION)
+                        if (auto *speech = screenHost_->Services().TryGet<EditorMicrophoneSpeechSession>())
+                            speech->RetirePointingSource();
                         xrSpeechPointing_.Reset();
 #endif
                         if (const auto cancelled = xrWorldUiPointer_.Cancel(authorities_.ui); cancelled.HasError())

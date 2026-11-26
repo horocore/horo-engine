@@ -36,6 +36,10 @@ namespace Horo::Editor {
          */
         [[nodiscard]] ImmersiveSpatialCaptureStatus RecordPointing(const ImmersiveSpatialObservation &observation,
                                                                    std::uint64_t captureGeneration) noexcept;
+        /** @brief Retires the spatial evidence without ending the microphone or transcript lifetime. */
+        void RetirePointingSource() noexcept;
+        /** @brief Tests whether the capture still admits its recorded pointing source. */
+        [[nodiscard]] bool PointingSourceRetired() const noexcept;
         /** @brief Returns clock evidence only while the active speech lease is accepting input. */
         [[nodiscard]] std::optional<EditorSpeechClockSample> ReadCaptureClock() const noexcept;
         /** @brief Detaches the microphone before letting the worker finalize the utterance. */
