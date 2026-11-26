@@ -39,13 +39,20 @@ namespace Horo::Packages {
             return found == files.end() ? nullptr : &*found;
         }
 
+        /** @brief Tests whether a portable spelling aliases an occupied path in a sealed inventory. */
+        bool OccupiesPortablePath(const ValidatedPackageArchive &archive, const PackagePath &path) {
+            return std::ranges::any_of(archive.Manifest().Entries(), [&path](const auto &file) {
+                return file.id.path.CollisionKey() == path.CollisionKey();
+            });
+        }
+
         /** @brief Allows only existing non-executable source and target assets from the two sealed inventories. */
         std::optional<bool> VerifyAssetMove(const PackagePath &from, const PackagePath &to, const ValidatedPackageArchive &previous,
                                             const ValidatedPackageArchive &candidate) {
             const auto *oldFile = FindFile(previous, from.Value());
             const auto *newFile = FindFile(candidate, to.Value());
             if (!oldFile || !newFile || oldFile->executable || newFile->executable ||
-                FindFile(candidate, from.Value()) || FindFile(previous, to.Value()))
+                OccupiesPortablePath(candidate, from) || OccupiesPortablePath(previous, to))
                 return std::nullopt;
             return oldFile->size == newFile->size && oldFile->digest == newFile->digest;
         }

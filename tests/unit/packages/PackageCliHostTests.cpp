@@ -699,9 +699,9 @@ namespace {
         NativeProject fixture;
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
-        enum class Source { Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, Duplicate, InvalidBehavior };
+        enum class Source { Verified, ChangedBytes, Stale, OutsideAssets, MissingTarget, PortableSourceAlias, Duplicate, InvalidBehavior };
         const auto mode = GENERATE(Source::Verified, Source::ChangedBytes, Source::Stale, Source::OutsideAssets, Source::MissingTarget,
-                                   Source::Duplicate, Source::InvalidBehavior);
+                                   Source::PortableSourceAlias, Source::Duplicate, Source::InvalidBehavior);
         const auto id = fixture.graph.package.Value();
         const auto previousDigest = FormatSha256(fixture.graph.archive.Digest());
         const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
@@ -720,6 +720,8 @@ namespace {
             {std::string{Packages::PackageAssetRenameDeclarationPath}, declaration.dump()}};
         if (mode == Source::InvalidBehavior)
             entries.emplace_back(Packages::PackageBehaviorRenameDeclarationPath, "{}");
+        if (mode == Source::PortableSourceAlias)
+            entries.emplace_back("assets/DATA.bin", "verified bytes");
         const auto archive = Packages::ValidatedPackageArchive::Verify(Tests::Packages::PackageArchiveBytes(entries));
         REQUIRE(archive.HasValue());
         WriteAssetCandidate(fixture, version, archive.Value());
@@ -744,7 +746,7 @@ namespace {
             const auto &error = result.ErrorValue();
             if (mode == Source::OutsideAssets) {
                 CHECK(error.code.Value() == "packages.migration.invalid_path");
-            } else if (mode == Source::MissingTarget) {
+            } else if (mode == Source::MissingTarget || mode == Source::PortableSourceAlias) {
                 CHECK(error.code.Value() == "packages.migration.archive_paths_mismatch");
             } else if (mode == Source::Duplicate) {
                 CHECK(error.code.Value() == "packages.migration.duplicate_transition");

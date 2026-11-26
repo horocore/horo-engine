@@ -35,7 +35,7 @@ namespace Horo::Packages {
      * @param candidate Proposed lock entry. @param candidateArchive Independently verified new archive.
      * @return The declared rename set, empty when absent or inapplicable, or a typed validation error.
      * @details The plan is bound to the old artifact digest. Paths must move from existing old assets to new candidate assets
-     * without colliding with other declarations or referencing executable files. No project writes or approval occur here.
+     * without portable path collisions in the declaration or across the inventories. Executable files are excluded.
      */
     [[nodiscard]] Result<std::vector<PackageAssetRename>> InspectPackageAssetRenames(
         const LockedPackage &previous, const ValidatedPackageArchive &previousArchive, const LockedPackage &candidate,
