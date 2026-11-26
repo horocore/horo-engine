@@ -661,6 +661,25 @@ namespace {
         CHECK(text.find("View MCP audit record") == std::string::npos);
     }
 
+    TEST_CASE("Stopping a quiet local model stream withdraws its visible draft", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        LocalAgentFixture fixture{"en-US"};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-local-idle");
+        fixture.Enter("##Prompt", "Wait for the complete reply");
+        fixture.Activate("###ask");
+        constexpr std::string_view draft = "Pending local draft";
+        REQUIRE(Await([&] { return fixture.DrawnText().find(draft) != std::string::npos; }));
+
+        fixture.Activate("###stop");
+        CHECK(fixture.DrawnText().find(draft) == std::string::npos);
+        const auto &cancelled = fixture.gui.localization.Get("editor", "workspace.local_agent.cancelled");
+        REQUIRE(Await([&] { return fixture.DrawnText().find(cancelled) != std::string::npos; }));
+        CHECK(fixture.DrawnText().find(draft) == std::string::npos);
+    }
+
     TEST_CASE("A real local model reply survives dock hiding and completes while hidden", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         const auto *gateName = std::getenv("HORO_MODEL_TEST_CHAT_GATE");

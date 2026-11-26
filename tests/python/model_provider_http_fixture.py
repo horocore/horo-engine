@@ -194,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def hold_local_response(self, begin_stream):
-        first = b'{"message":{"content":"first"}}\n' if begin_stream else b""
+        first = b'{"message":{"content":"Pending local draft\\n"}}\n' if begin_stream else b""
         self.hold_response("application/x-ndjson", first)
 
     def hold_response(self, content_type, first):

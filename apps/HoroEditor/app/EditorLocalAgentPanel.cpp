@@ -403,8 +403,10 @@ namespace Horo::Editor {
                 ImGui::EndDisabled();
                 DrawSendActions(locale, fonts);
                 const auto *cancel = sceneQuery_ ? "scene_query_revoke" : "stop";
-                if (Busy() && Button(locale, cancel, background_->CanCancel()))
+                if (Busy() && Button(locale, cancel, background_->CanCancel())) {
                     background_->Cancel();
+                    WithdrawLiveResponse();
+                }
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 DrawSceneQueryActivity(locale, fonts, command);
@@ -2104,12 +2106,20 @@ namespace Horo::Editor {
                 }
             }
 
+            /** @brief Removes the transient prefix before a completion or cancellation becomes visible. */
+            void WithdrawLiveResponse() {
+                if (!liveDraft_)
+                    return;
+                liveDraft_.reset();
+                response_.clear();
+            }
+
             void PollReply() {
                 auto completion = background_->Poll();
                 if (!completion)
                     return;
                 cloudProfileBusy_ = false;
-                liveDraft_.reset();
+                WithdrawLiveResponse();
                 if (completion->state != BackgroundTurn::CompletionState::Abandoned) {
                     try {
                         AdoptCompletion(*completion);
