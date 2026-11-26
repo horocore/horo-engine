@@ -192,6 +192,56 @@ their owners. Passing the command verifies the matrix and referenced bytes.
 The release qualification owner reviews the captured observations, grants
 approval, and records known limitations before publishing a support claim.
 
+## Apple Vision Pro interoperability decision
+
+The Apple Vision Pro target stays in **Future investigation** under
+[XRA-007.26](https://github.com/horocore/horo-engine/issues/2285). The
+investigation reviewed vendor documentation, the OpenXR conformance registry,
+and Horo's platform targets on 2026-11-26. It found a conformant host runtime
+for streaming, a separate Apple-native development path, and no qualifying
+Horo device result for either path.
+
+| Path | Evidence and Horo decision |
+| --- | --- |
+| Native Horo app on visionOS | Apple documents a custom Metal renderer driven through Compositor Services, with ARKit providing tracking. Horo's [Metal baseline](../adr/030-metal-platform-and-feature-baseline.md) covers a different platform scope. A visionOS port needs its own signed host, package, lifecycle, tracking and renderer integration. Status: unsupported in the current Horo product. [Apple's custom renderer guide](https://developer.apple.com/documentation/CompositorServices/drawing-fully-immersive-content-using-metal). |
+| Native OpenXR runtime on visionOS | The Khronos registry reviewed for this decision lists the Vision Pro streaming entry on a Linux x86-64 host with Vulkan. It lists no on-device Vision Pro OpenXR tuple. The ratified Metal graphics binding specifies how a runtime exchanges Metal resources. An OpenXR loader and that extension alone cannot establish runtime availability. Status: unsupported in the current Horo product. [Khronos conformance registry](https://www.khronos.org/conformance/adopters/conformant-products/openxr), [Metal binding specification](https://registry.khronos.org/OpenXR/specs/1.1/html/xrspec.html#XR_KHR_metal_enable). |
+| Host OpenXR over CloudXR | Khronos lists the NVIDIA CloudXR Runtime streaming-to-Vision-Pro tuple for OpenXR 1.0 and 1.1 on Linux x86-64/Vulkan. NVIDIA documents a visionOS client and Apple documents a foveated client path. The Horo application would run on the host. The headset would receive frames and supply admitted input over the stream. Status: first interoperability candidate, pending Horo qualification. [NVIDIA's CloudXR runtime guide](https://docs.nvidia.com/cloudxr-sdk/latest/usr_guide/cloudxr_runtime/getting_started.html), [Apple's foveated streaming guide](https://developer.apple.com/documentation/foveatedstreaming/streaming-a-cloudxr-application-to-apple-vision-pro-with-foveation). |
+| Compatibility apps and community streaming | A compatible iPad or iPhone app runs in a window. ALVR describes a separate PC/SteamVR streaming path for Vision Pro. Neither supplies a Horo qualification record. Any ALVR test requires its own host runtime, driver and client tuple and cannot inherit the CloudXR result. Status: outside the current Horo release scope. [Apple's compatibility guide](https://developer.apple.com/documentation/visionos/determining-whether-to-bring-your-app-to-visionos), [ALVR project](https://github.com/alvr-org/ALVR). |
+
+Keep planning rows free of unobserved runtime and device values. This row
+registers the streaming investigation without creating a release claim.
+
+```json
+{
+  "id": "vision-pro-cloudxr",
+  "category": "Future",
+  "owner": "xr-platform",
+  "releaseClaim": false,
+  "declaration": null,
+  "requiredOptionalChecks": [],
+  "recordSha256": null
+}
+```
+
+For a CloudXR follow-up, start with the documented Linux x86-64/Vulkan
+conformance entry. Record the exact headset model and visionOS build, client
+and host runtime versions, host OS, loader, renderer and driver, network
+connection mode, interaction profile, admitted extensions, signed Horo
+package, and test-plan revision. Use the [device smoke procedure](xr-device-qualification.md)
+to record runtime-enumerated views and refresh rates, tracking and input
+neutralization, measured stream and render timing, comfort, and disconnect
+and recovery. Exercise optional capabilities only when advertised and
+admitted. Qualify each alternate host or client path independently.
+
+Reopen the native OpenXR decision when a reproducible on-device conformant
+runtime and graphics binding are available. Evaluate a native Apple-framework
+port as a separately scoped backend against Horo's
+[XR contracts](../architecture/runtime/vr-ar-architecture.md), including
+session lifecycle, per-view rendering, tracking and input, permission
+withdrawal, and signed packaging. Reject a release claim when the proposed
+path lacks its required runtime, cannot meet those contracts, or lacks the
+physical evidence for its exact tuple.
+
 ## Open qualification work
 
 | Evidence | Status | Owner |
