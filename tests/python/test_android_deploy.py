@@ -31,6 +31,8 @@ LOADER_IMAGE_DIGEST = "8" * 64
 DEVICE_BUILD = "example/headset/model:14/build/incremental:user/release-keys"
 DEVICE_BUILD_DIGEST = hashlib.sha256(DEVICE_BUILD.encode("ascii")).hexdigest()
 DEVICE_BUILD_QUERY = ("shell", "getprop", "ro.build.fingerprint")
+DEVICE_BOOT_QUERY = ("shell", "toybox", "grep", "^btime", "/proc/stat")
+DEVICE_BOOT = "btime 1794900000"
 PACKAGE = "/data/app/~~hash/example==/base.apk"
 LIFECYCLE = ("host-state lifecycleRevision=3 activity=1 state=2 process=1 window=5 presentation=8 "
              "factsRevision=5 extent=1280x720 nativeAvailable=1 ready=1 hasWindow=1 hasPresentation=1 "
@@ -89,6 +91,7 @@ class AndroidDeployTests(unittest.TestCase):
             ("shell", "getprop", "ro.build.version.sdk"): "36",
             ("shell", "getprop", "ro.product.cpu.abi"): "arm64-v8a",
             DEVICE_BUILD_QUERY: DEVICE_BUILD,
+            DEVICE_BOOT_QUERY: DEVICE_BOOT,
             ("shell", "pm", "path", "--user", "10", application): f"package:{PACKAGE}",
             ("shell", "toybox", "sha256sum", PACKAGE): f"{DIGEST}  {PACKAGE}",
             launch: f"Status: ok\nLaunchState: COLD\nActivity: {application}/.PackageActivity",
@@ -688,6 +691,44 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertNotIn("private-foreign-device", json.dumps(report))
+
+    def test_openxr_cannot_reuse_evidence_or_stop_a_replacement_after_reboot(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        launch = launch_command(profile["applicationId"], openxr=True)
+        stop = ("shell", "am", "force-stop", "--user", "10", profile["applicationId"])
+        replacement = "btime 1795000001"
+        for stable, stage, error, installed, launched, stopped in (
+            (1, "install", "device_boot_changed", False, False, False),
+            (2, "launch", "device_boot_changed", True, False, False),
+            (3, "diagnostics", "application_stop_unconfirmed", True, True, False),
+            (4, "diagnostics", "application_stop_unconfirmed", True, True, False),
+            (5, "diagnostics", "device_boot_changed", True, True, True),
+        ):
+            with self.subTest(stable=stable):
+                status, report, commands = self.execute({
+                    LOGCAT: log_line(OPENXR),
+                    DEVICE_BOOT_QUERY: [DEVICE_BOOT] * stable + [replacement],
+                }, OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["status"], report["stage"], report["error"]), (1, "partial", stage, error))
+                self.assertEqual(any(command[0] == "install" for command in commands), installed)
+                self.assertEqual(launch in commands, launched)
+                self.assertEqual(stop in commands, stopped)
+                if launched and not stopped:
+                    self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "device_boot_changed"})
+                self.assertNotIn("observed", report)
+                self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+                self.assertNotIn("1794900000", json.dumps(report))
+                self.assertNotIn("1795000001", json.dumps(report))
+
+    def test_openxr_rejects_unverifiable_private_boot_evidence(self):
+        for boot in ("btime 0", "btime 18446744073709551616", "private-boot-data", (1, "permission denied")):
+            with self.subTest(boot=boot):
+                status, report, commands = self.execute({DEVICE_BOOT_QUERY: boot}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+                self.assertEqual((status, report["status"], report["stage"], report["error"]),
+                                 (1, "partial", "device", "device_boot_unverifiable"))
+                self.assertFalse(any(command[0] == "install" for command in commands))
+                self.assertNotIn("private-boot-data", json.dumps(report))
 
     def test_openxr_does_not_continue_after_android_foreground_user_changes(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE

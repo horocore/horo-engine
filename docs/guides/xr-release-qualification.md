@@ -140,6 +140,10 @@ capture session display modes, refresh rates and view extents for its own tuple.
 Android deployment also checks that the foreground user is consistent before
 installation, launch, and evidence publication. A user switch invalidates the
 run. The receipt omits the Android user number.
+The OpenXR deployer checks the Android kernel boot timestamp before installation,
+launch, cleanup and receipt publication. A changed timestamp invalidates the
+run even when the adb target and system build are unchanged. Cleanup stops
+only a process attributed to the original boot. The receipt omits the timestamp.
 Cleanup rechecks the selected ADB transport immediately before stopping the
 attributed process. A transport mismatch prevents the stop request and the
 deployment receipt stays partial.

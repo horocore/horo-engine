@@ -1316,6 +1316,25 @@ def deploy_device_build_digest(device: AdmittedAdbDevice) -> str:
     return hashlib.sha256(fingerprint.encode("ascii")).hexdigest()
 
 
+def deploy_device_boot_time(device: AdmittedAdbDevice) -> int:
+    """Read bounded kernel boot evidence for this ADB operation without exporting it."""
+    try:
+        reported = device.run("shell", "toybox", "grep", "^btime", "/proc/stat")
+    except AndroidDeployError as error:
+        if error.code == "device_command_failed":
+            raise AndroidDeployError("device_boot_unverifiable") from None
+        raise
+    match = re.fullmatch(r"btime ([1-9][0-9]{0,19})", reported)
+    if match is None:
+        raise AndroidDeployError("device_boot_unverifiable")
+    return deploy_number(match[1], 2**64 - 1, "device_boot_unverifiable")
+
+
+def require_deploy_boot(device: AdmittedAdbDevice, expected: int | None) -> None:
+    if expected is not None and deploy_device_boot_time(device) != expected:
+        raise AndroidDeployError("device_boot_changed")
+
+
 def deploy_verified_install(device: AdmittedAdbDevice, application: str, user: str, digest_value: str) -> None:
     """Require the same installed package digest before launch and evidence admission."""
     reported = device.run("shell", "pm", "path", "--user", user, application)
@@ -1719,6 +1738,7 @@ class AndroidPackageLaunch:
     user: str
     digest: str
     openxr_diagnostic: bool = False
+    device_boot_time: int | None = None
     process: DeployedProcess | None = None
     attempted: bool = False
     recovery: AndroidLaunchRecovery | None = None
@@ -1734,6 +1754,7 @@ class AndroidPackageLaunch:
         launch_options = ["--es", DEPLOY_LAUNCH_EXTRA, nonce]
         self.device.require_identity()
         require_deploy_user(self.device, self.user)
+        require_deploy_boot(self.device, self.device_boot_time)
         deadline_ms = None
         if self.openxr_diagnostic:
             remaining = math.ceil((self.device.deadline - time.monotonic()) * 1000)
@@ -1836,6 +1857,7 @@ class AndroidPackageLaunch:
                                    time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
         try:
             device.require_identity()
+            require_deploy_boot(device, self.device_boot_time)
             if device.process_id(self.application) is None:
                 if self.process is None:
                     raise AndroidDeployError("launch_process_unattributed")
@@ -1846,6 +1868,7 @@ class AndroidPackageLaunch:
                 self.recover_process(device, uid)
             elif uid != self.process.uid or deployed_process(device, self.application, uid) != self.process:
                 raise AndroidDeployError("application_process_changed")
+            require_deploy_boot(device, self.device_boot_time)
             device.require_identity()
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:
@@ -2033,7 +2056,9 @@ def android_deploy_main(argv=None) -> int:
                 raise AndroidDeployError("device_connection_mismatch")
             user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
             report["device"] = {"androidApi": api, "abi": abi}
+            device_boot_time = None
             if openxr:
+                device_boot_time = deploy_device_boot_time(device)
                 device_build = deploy_device_build_digest(device)
                 report["device"]["buildSha256"] = device_build
                 expected_build = arguments.expect_device_build_sha256
@@ -2047,13 +2072,15 @@ def android_deploy_main(argv=None) -> int:
                 raise AndroidDeployError("application_already_running")
             device.require_identity()
             require_deploy_user(device, user)
+            require_deploy_boot(device, device_boot_time)
             installed = device.run("install", "-r", "--user", user, str(artifact.path)).splitlines()
             if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
                 raise AndroidDeployError("install_unconfirmed")
             report["stage"] = "verify_install"
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             report["stage"] = "launch"
-            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, openxr_diagnostic=openxr)
+            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256,
+                                          openxr_diagnostic=openxr, device_boot_time=device_boot_time)
             process, window = launch.start()
             report["stage"] = "diagnostics"
             observe_seconds = arguments.observe_seconds or 0
@@ -2075,6 +2102,7 @@ def android_deploy_main(argv=None) -> int:
                 raise AndroidDeployError("device_build_changed")
             device.require_identity()
             require_deploy_user(device, user)
+            require_deploy_boot(device, device_boot_time)
         report["observed"] = observed
         if openxr:
             runtime["status"] = "cold_system_discovered"
