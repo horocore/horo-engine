@@ -113,6 +113,37 @@ namespace Horo::Editor {
         CHECK(viewport.requests == 2);
     }
 
+    TEST_CASE("Editor accessibility review retains only bounded focus transitions", "[editor][accessibility][contrast]") {
+        using History = EditorControlFocusHistory;
+        History history;
+        const Detail::EditorControlMetadataRecord first{.window = 1, .item = 11};
+        const Detail::EditorControlMetadataRecord next{.window = 2, .item = 11};
+        history.Observe(2, &first, true);
+        history.Observe(2, &next, false);
+        history.Observe(3, &first, true);
+        REQUIRE(history.Size() == 1);
+        CHECK(history.Read(0)->state == History::State::Named);
+        history.Observe(4, &next, false);
+        REQUIRE(history.Size() == 2);
+        CHECK(history.Read(1)->state == History::State::Unnamed);
+        history.BreakContinuity();
+        history.Observe(5, &next, false);
+        REQUIRE(history.Size() == 3);
+        CHECK(history.Read(2)->frame == 5);
+
+        for (std::uint64_t frame = 6; frame < 6 + History::Capacity; ++frame)
+            history.Observe(frame, frame % 2 ? &first : nullptr, true);
+        REQUIRE(history.Size() == History::Capacity);
+        CHECK(history.Read(0)->frame == 6);
+        CHECK(history.Read(0)->state == History::State::NoFocus);
+        CHECK(history.Read(History::Capacity - 1)->frame == 5 + History::Capacity);
+        CHECK_FALSE(history.Read(History::Capacity));
+        history = {};
+        CHECK_FALSE(history.Read(0));
+        history.Observe(2, &first, true);
+        REQUIRE(history.Size() == 1);
+    }
+
     TEST_CASE("Contrast tool rejects intermediate drafts and never reports a previous valid result", "[editor][accessibility][contrast]") {
         ContrastInspectionDraft draft;
         REQUIRE(draft.Evaluate().Value().ratio == Catch::Approx(21));

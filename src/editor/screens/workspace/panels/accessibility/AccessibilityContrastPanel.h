@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 struct ImVec4;
 
@@ -59,6 +60,47 @@ namespace Horo::Editor {
     [[nodiscard]] Result<Accessibility::TextContrast> EvaluateThemeContrastPair(ThemeContrastPair pair,
                                                                                 Accessibility::ContrastTextSize size);
 
+    /** @brief Bounded opt-in history of focus transitions. It stores no names, text or widget values. */
+    class EditorControlFocusHistory final {
+    public:
+        static constexpr std::size_t Capacity = 12;
+        enum class State : std::uint8_t {
+            NoFocus,
+            Named,
+            Unnamed
+        };
+
+        struct Entry final {
+            std::uint64_t frame{};
+            State state{};
+        };
+
+        /** @brief Observes a completed frame and its observed focus, if present, once. */
+        void Observe(std::uint64_t frame, const Detail::EditorControlMetadataRecord *focused, bool named) noexcept;
+        /** @brief Restarts change detection after an incomplete observation, preserving earlier evidence. */
+        void BreakContinuity() noexcept;
+
+        /** @brief Returns the number of retained transitions. */
+        [[nodiscard]] std::size_t Size() const noexcept {
+            return count_;
+        }
+
+        /** @brief Reads a retained transition in oldest-to-newest order, or empty for an invalid index. */
+        [[nodiscard]] std::optional<Entry> Read(std::size_t index) const noexcept;
+
+    private:
+        struct Focus final {
+            std::uint32_t window{}, item{};
+            State state{};
+            bool operator==(const Focus &) const noexcept = default;
+        };
+
+        std::array<Entry, Capacity> entries_{};
+        std::optional<Focus> previous_;
+        std::uint64_t lastFrame_{};
+        std::size_t oldest_{}, count_{};
+    };
+
     /** @brief Persistent developer tool for composed sRGB drafts and explicit token/native style pair inspection. */
     class AccessibilityContrastPanel final : public IWorkspacePanel {
     public:
@@ -97,7 +139,9 @@ namespace Horo::Editor {
         /** @brief Shows opt-in observations from the last full editor control frame. */
         void DrawControlInspection(const EditorGuiContext &context);
         /** @brief Displays a completed control frame or its capture status. */
-        void DrawControlInspectionFrame(const EditorGuiContext &context, const Detail::EditorControlMetadataFrame &frame) const;
+        void DrawControlInspectionFrame(const EditorGuiContext &context, const Detail::EditorControlMetadataFrame &frame);
+        /** @brief Shows the recent focus transitions without persisting any captured text. */
+        void DrawControlFocusHistory(const EditorGuiContext &context) const;
         /** @brief Starts the context-local capture, or reports that its owner is unavailable. */
         void StartControlInspection();
         /** @brief Releases captured frame data when the tool stops being presented. */
@@ -109,6 +153,7 @@ namespace Horo::Editor {
         int previewSelection_{};
         bool previewRejected_{};
         std::unique_ptr<Detail::EditorControlMetadataCapture> controlCapture_;
+        EditorControlFocusHistory focusHistory_;
         bool controlCaptureUnavailable_{};
     };
 }  // namespace Horo::Editor

@@ -82,6 +82,33 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorControlFocusHistory::Observe */
+    void EditorControlFocusHistory::Observe(const std::uint64_t frame, const Detail::EditorControlMetadataRecord *focused,
+                                            const bool named) noexcept {
+        if (frame <= lastFrame_)
+            return;
+        lastFrame_ = frame;
+        const auto focus = focused ? Focus{focused->window, focused->item, named ? State::Named : State::Unnamed} : Focus{};
+        if (previous_ == focus)
+            return;
+        previous_ = focus;
+        entries_[(oldest_ + count_) % Capacity] = {frame, focus.state};
+        if (count_ == Capacity)
+            oldest_ = (oldest_ + 1) % Capacity;
+        else
+            ++count_;
+    }
+
+    /** @copydoc EditorControlFocusHistory::BreakContinuity */
+    void EditorControlFocusHistory::BreakContinuity() noexcept {
+        previous_.reset();
+    }
+
+    /** @copydoc EditorControlFocusHistory::Read */
+    std::optional<EditorControlFocusHistory::Entry> EditorControlFocusHistory::Read(const std::size_t index) const noexcept {
+        return index < count_ ? std::optional{entries_[(oldest_ + index) % Capacity]} : std::nullopt;
+    }
+
     /** @copydoc AccessibilityContrastPanel::GetId */
     std::string AccessibilityContrastPanel::GetId() const {
         return "horo.accessibility_contrast";
@@ -171,6 +198,7 @@ namespace Horo::Editor {
     /** @copydoc AccessibilityContrastPanel::ResetControlInspection */
     void AccessibilityContrastPanel::ResetControlInspection() noexcept {
         controlCapture_.reset();
+        focusHistory_ = {};
         controlCaptureUnavailable_ = false;
     }
 
@@ -187,13 +215,15 @@ namespace Horo::Editor {
         }
         if (controlCaptureUnavailable_)
             ImGui::TextWrapped("%s", LocalizedText(localization, "controls_unavailable").c_str());
-        if (controlCapture_)
+        if (controlCapture_) {
             DrawControlInspectionFrame(context, controlCapture_->Frame());
+            DrawControlFocusHistory(context);
+        }
     }
 
     /** @copydoc AccessibilityContrastPanel::DrawControlInspectionFrame */
     void AccessibilityContrastPanel::DrawControlInspectionFrame(const EditorGuiContext &context,
-                                                                const Detail::EditorControlMetadataFrame &frame) const {
+                                                                const Detail::EditorControlMetadataFrame &frame) {
         const auto &localization = context.localization;
         using enum Detail::EditorControlMetadataStatus;
         // Binding starts during this panel's draw. The first frame missed controls drawn before it.
@@ -202,6 +232,7 @@ namespace Horo::Editor {
             return;
         }
         if (frame.status != Complete) {
+            focusHistory_.BreakContinuity();
             ImGui::TextWrapped("%s", LocalizedText(localization, "controls_incomplete").c_str());
             return;
         }
@@ -211,13 +242,31 @@ namespace Horo::Editor {
         const auto focused = std::ranges::find_if(frame.controls, [](const Detail::EditorControlMetadataRecord &control) {
             return !control.clipped && control.state.Has(Runtime::Ui::UiAccessibilityStateFlag::Focused);
         });
-        if (focused == frame.controls.end())
+        if (focused == frame.controls.end()) {
+            focusHistory_.Observe(frame.sequence, nullptr, false);
             return;
+        }
         const auto name = frame.Text(focused->name);
+        focusHistory_.Observe(frame.sequence, std::to_address(focused), !name.empty());
         if (name.empty())
             ImGui::TextWrapped("%s", LocalizedText(localization, "controls_focus_unnamed").c_str());
         else
-            ImGui::TextWrapped("%s %.*s", LocalizedText(localization, "controls_focus").c_str(), static_cast<int>(name.size()), name.data());
+            ImGui::TextWrapped("%s %.*s", LocalizedText(localization, "controls_focus").c_str(), static_cast<int>(name.size()),
+                               name.data());
+    }
+
+    /** @copydoc AccessibilityContrastPanel::DrawControlFocusHistory */
+    void AccessibilityContrastPanel::DrawControlFocusHistory(const EditorGuiContext &context) const {
+        if (focusHistory_.Size() == 0)
+            return;
+        const auto &localization = context.localization;
+        ImGui::TextWrapped("%s", LocalizedText(localization, "controls_focus_history").c_str());
+        constexpr std::array labels{"controls_history_no_focus", "controls_history_named", "controls_focus_unnamed"};
+        for (std::size_t index = 0; index < focusHistory_.Size(); ++index) {
+            const auto entry = focusHistory_.Read(index).value();
+            ImGui::TextWrapped("%llu %s", static_cast<unsigned long long>(entry.frame),
+                               LocalizedText(localization, labels[static_cast<std::size_t>(entry.state)]).c_str());
+        }
     }
 
     /** @copydoc AccessibilityContrastPanel::DrawIcon */

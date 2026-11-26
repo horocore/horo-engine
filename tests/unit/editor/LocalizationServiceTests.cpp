@@ -417,6 +417,10 @@ namespace {
     }
 
     void RequireSettingsCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array focusHistoryKeys{"workspace.accessibility_contrast.controls_focus_history",
+                                               "workspace.accessibility_contrast.controls_history_no_focus",
+                                               "workspace.accessibility_contrast.controls_history_named"};
+        RequireCatalogKeys(service, focusHistoryKeys);
         REQUIRE_FALSE(service.Get("editor", "settings.nav.packages").starts_with("[missing:"));
         REQUIRE_FALSE(service.Get("editor", "settings.nav.updates").starts_with("[missing:"));
         constexpr std::array updateKeys{"settings.updates.check",

@@ -412,6 +412,12 @@ publisher storage lease; equal numeric revisions are insufficient. It never
 acknowledges speech. Extension forms already export accessible metadata; that
 does not supply default metadata for all built-in shared controls.
 
+The editor Contrast Checker's opt-in control inspection shows the last 12
+observed focus changes and whether an accessible name was present. It keeps
+only frame numbers and focus outcomes in history, and clears them when
+inspection stops or the panel is hidden. This helps review editor metadata.
+Native screen-reader delivery requires separate verification.
+
 `HoroGameplayAccessibility` is Foundation-only. Each tick must capture the
 configuration authority regardless of dropped/stale revision hints. The adapter
 publishes only `ConfigurationRevision`; preferences never become bus state or a
