@@ -1201,7 +1201,10 @@ Rate limiting, quota exhaustion, offline state, credential loss, and provider
 failure are normal lifecycle results. They may offer an admitted local provider,
 queue a user-visible retry, or stop the request. They never trigger unbounded
 background retries, silently switch data residency, or mutate scene state.
-Cancellation and shutdown revoke retries and release provider work.
+Cancellation and shutdown revoke retries and release provider work. While a
+recognition operation is active, the speech deadline watchdog also observes the
+immutable authoring context. Retirement of the document or context generation
+signals the recognizer even when it has not delivered a callback.
 
 ## Conversation Management
 

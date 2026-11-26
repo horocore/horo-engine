@@ -19,6 +19,7 @@ namespace Horo::Editor {
         constexpr std::uint64_t NanosecondsPerSecond = 1'000'000'000;
         constexpr auto MaximumInputSeconds = static_cast<std::uint64_t>(ImmersiveSpeechTranscription::MaximumInputDuration.count());
         constexpr std::uint32_t MaximumHypotheses = 64;
+        constexpr auto ContextCheckInterval = std::chrono::milliseconds{10};
 
         /** @brief Accepts a bounded ASCII language tag with nonempty hyphen-separated subtags. */
         bool ValidLocale(const std::string_view locale) noexcept {
@@ -71,7 +72,7 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @brief Signals elapsed-time or host cancellation during a synchronous provider call. */
+    /** @brief Stops a synchronous provider call on elapsed time, host cancellation, or stale authoring context. */
     struct ImmersiveSpeechTranscription::ProviderWindow final {
         struct RelayStop final {
             std::stop_source target;
@@ -87,12 +88,16 @@ namespace Horo::Editor {
         std::stop_callback<RelayStop> relay;
         std::jthread timer;
 
-        ProviderWindow(const Clock::time_point deadline, const std::stop_token parent)
-            : relay(parent, RelayStop{providerStop}), timer([this, deadline](const std::stop_token done) {
+        ProviderWindow(const Clock::time_point deadline, const std::stop_token parent, const ImmersivePlanningContext &context)
+            : relay(parent, RelayStop{providerStop}), timer([this, deadline, context](const std::stop_token done) {
                   std::unique_lock lock{mutex};
-                  wake.wait_until(lock, done, deadline, [] {
-                      return false;
-                  });
+                  auto now = Clock::now();
+                  while (!done.stop_requested() && now < deadline && context.IsCurrent()) {
+                      wake.wait_until(lock, done, std::min(deadline, now + ContextCheckInterval), [] {
+                          return false;
+                      });
+                      now = Clock::now();
+                  }
                   lock.unlock();
                   if (!done.stop_requested())
                       providerStop.request_stop();
@@ -168,7 +173,7 @@ namespace Horo::Editor {
             return status == Accepted ? InvalidRequest : status;
         deadline_ = Clock::now() + providerBudget_;
         try {
-            providerWindow_ = std::make_unique<ProviderWindow>(deadline_, evidence_.stop_);
+            providerWindow_ = std::make_unique<ProviderWindow>(deadline_, evidence_.stop_, evidence_.context_);
         } catch (const std::bad_alloc &) {
             return CloseWith(ResourceUnavailable);
         } catch (const std::system_error &) {

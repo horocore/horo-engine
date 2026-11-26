@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -66,8 +67,8 @@ namespace Horo::Editor {
             void WaitForStop(SpeechOperation operation, std::stop_token stop) noexcept {
                 if (operation != waitDuring)
                     return;
-                if (cancelWhileWaiting)
-                    cancelWhileWaiting->request_stop();
+                if (beforeWait)
+                    beforeWait();
                 std::mutex mutex;
                 std::condition_variable_any wake;
                 std::unique_lock lock{mutex};
@@ -76,7 +77,7 @@ namespace Horo::Editor {
             }
 
             std::stop_source *stopDuringPoll{};
-            std::stop_source *cancelWhileWaiting{};
+            std::function<void()> beforeWait;
             std::optional<SpeechOperation> waitDuring;
             SpeechProviderPoll next;
             unsigned opens{};
@@ -105,7 +106,7 @@ namespace Horo::Editor {
             ImmersiveAuthoringMode mode{ImmersiveAuthoringMode::Edit};
 
             /** @brief Publishes a real context whose live owner can revoke it while the worker holds a copy. */
-            ImmersivePlanningContext Context() {
+            ImmersivePlanningContext Context(const CancellationToken &lifetime = {}) {
                 const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
                 const ImmersiveContextIdentity identity{1,
                                                         1,
@@ -120,7 +121,7 @@ namespace Horo::Editor {
                                                         mode == ImmersiveAuthoringMode::Edit ? 0U : 7U,
                                                         true,
                                                         true};
-                const auto context = owner.Publish(identity, {});
+                const auto context = owner.Publish(identity, {}, lifetime);
                 REQUIRE(context);
                 return *context;
             }
@@ -329,7 +330,7 @@ namespace Horo::Editor {
                 provider.next = Transcript(Kind::Final);
                 SECTION("Deadline") {}
                 SECTION("Host cancellation") {
-                    provider.cancelWhileWaiting = &fixture.stop;
+                    provider.beforeWait = [&] { fixture.stop.request_stop(); };
                     expected = Status::Cancelled;
                 }
                 const auto update = stream.Poll();
@@ -347,6 +348,33 @@ namespace Horo::Editor {
             CHECK(expired.status == expected);
             CHECK_FALSE(expired.evidence);
             CHECK((std::array{provider.opens, provider.blocks, provider.finished, provider.polls}) == operationCounts);
+            CHECK(provider.cancelled == 1);
+        }
+
+        TEST_CASE("Immersive speech stops a quiet recognizer when its authoring context is retired", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            CancellationSource document;
+            auto prepared = ImmersiveSpeechTranscription::Prepare(fixture.owner, fixture.Context(document.Token()), fixture.source,
+                                                                  "tr-TR", 0.5F, fixture.stop.get_token(), std::chrono::seconds(5));
+            REQUIRE(prepared.stream);
+            auto &stream = *prepared.stream;
+            auto &provider = fixture.provider;
+            REQUIRE(stream.Start(provider) == Status::Accepted);
+            REQUIRE(stream.Append(fixture.source, fixture.FirstBlock(), fixture.Samples) == Status::Accepted);
+            REQUIRE(stream.FinishInput() == Status::Accepted);
+            provider.waitDuring = SpeechOperation::Poll;
+            provider.next = Transcript(Kind::Final);
+            SECTION("document lifetime is withdrawn") {
+                provider.beforeWait = [&] { document.RequestCancellation(); };
+            }
+            SECTION("editor context owner retires its generation") {
+                provider.beforeWait = [&] { fixture.owner.Revoke(); };
+            }
+            const auto update = stream.Poll();
+            CHECK(update.status == Status::StaleContext);
+            CHECK_FALSE(update.evidence);
+            CHECK(provider.observedStop);
+            CHECK_FALSE(fixture.stop.stop_requested());
             CHECK(provider.cancelled == 1);
         }
 
