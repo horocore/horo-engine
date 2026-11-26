@@ -616,10 +616,13 @@ namespace Horo::Application::Internal {
                 liveCell->limits.maximumCellAssetBytes = liveAssets->bytes;
             }
             if (liveCell) {
-                if (!launch.sceneInput.world || initialCell || launch.gameplay)
+                if (!launch.sceneInput.world || initialCell)
                     return Result<void>::Failure(
                         MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                                  "Live World demand requires a standalone mount without a startup cell or gameplay module."));
+                                  "Live World demand requires a standalone mount without a startup cell."));
+                if (launch.gameplay && launch.gameplay->nativeArtifact.empty())
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Live World demand supports only native gameplay modules."));
                 if (!liveCell->limits.IsValid())
                     return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World asset limits."));
                 launch.sceneInput.world->liveCell = std::move(liveCell);

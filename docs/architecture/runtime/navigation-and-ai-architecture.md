@@ -4179,6 +4179,14 @@ keep the agent canonical, as do attached children. The same structural budget
 limits both directions, with retirements given priority. The Scene transaction
 captures the last world position upon retirement.
 
+Standalone may run a selected native Gameplay module alongside a live mounted
+World. At the lifecycle cutoff, the paired Gameplay owner drains pending
+commands first. World attachment or retirement can then publish through Scene,
+after which the reduced population samples the committed anchor and queues
+eligible transfers. Each publication keeps its own structural receipt and
+budget. Live cell decoding still requires approved schemas for any opaque
+Gameplay components or behaviors.
+
 Hosts can compose an `AiDecisionSimulationProfile` through
 `AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
 accepts the latest `AiDecisionRelevance` for an exact registered agent through

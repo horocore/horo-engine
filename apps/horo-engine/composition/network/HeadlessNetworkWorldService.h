@@ -264,14 +264,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return AdvanceReplicaPrefabs();
             if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && configuredActivated_) {
                 const auto previous = record_->perception.Current();
-                if (gameplay_) {
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && SelectsLiveMount()) {
+                    if (auto advanced = AdvanceLiveMount(); advanced.HasError())
+                        return advanced;
+                } else if (gameplay_) {
                     const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
                     if (auto advanced = gameplay_->OnPhase(phase, frame); advanced.HasError())
                         return advanced;
                 }
-                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && SelectsLiveMount())
-                    if (auto advanced = AdvanceLiveMount(); advanced.HasError())
-                        return advanced;
                 if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && record_->reducedPopulation)
                     if (auto reconciled = AdvanceReducedTransfers(phase); reconciled.HasError())
                         return reconciled;
@@ -332,7 +332,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                        : nullptr;
         }
 
-        /** @brief The existing configured Scene/Physics pair owns this one cutoff when no gameplay owner is installed. */
+        /** @brief Publishes pending Gameplay commands before admitting World changes at the same structural cutoff. */
         Result<void> AdvanceLiveMount() const {
             if (!record_->mountedWorld || !owners_->fixed)
                 return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
@@ -341,12 +341,19 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             Runtime::RuntimeDispatchFacts facts;
             if (evidence.Read(owners_->fixed->Source(), cutoff, facts) != Runtime::RuntimeDispatchStatus::Valid)
                 return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
-            const auto advanced = record_->mountedWorld->AdvanceLiveCell(evidence);
-            if (advanced.HasError() && advanced.ErrorValue().code.Value() != WorldStreaming::WorldArtifactErrors::Cancelled.code.Value())
-                return Result<void>::Failure(advanced.ErrorValue());
             const Runtime::FrameContext frame{.frameNumber = facts.frame,
                                               .cancellation = record_->sceneCancellation,
                                               .dispatchEvidence = evidence};
+            if (gameplay_) {
+                const auto committed = gameplay_->OnPhase(cutoff, frame);
+                if (committed.HasError() || !record_->scenes->CanQueueStructuralCommands())
+                    return committed;
+            }
+            const auto advanced = record_->mountedWorld->AdvanceLiveCell(evidence);
+            if (advanced.HasError() && advanced.ErrorValue().code.Value() != WorldStreaming::WorldArtifactErrors::Cancelled.code.Value())
+                return Result<void>::Failure(advanced.ErrorValue());
+            if (gameplay_ && record_->scenes->CanQueueStructuralCommands())
+                return Result<void>::Success();
             return record_->scenes->OnPhase(cutoff, frame);
         }
 
@@ -534,8 +541,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(structural.ErrorValue());
             if (auto added = record_->scenes->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
                 return added;
-            // Live CoreEcs admits no gameplay module. Scene itself rejects any component that needs an absent owner.
-            if (SelectsLiveMount() || (!selectedGameplay_ && OwnsCookedDecisionExecution() && input.cookedDecisions->reducedPopulation))
+            // An absent owner must not block structural groups that require only Scene, Physics or AI.
+            if (!owners_->gameplay &&
+                (SelectsLiveMount() || (OwnsCookedDecisionExecution() && input.cookedDecisions->reducedPopulation)))
                 return Result<void>::Success();
             if (auto added = record_->scenes->AddStructuralParticipant(MakeGameplayStructuralParticipant(record_->activeGameplay));
                 added.HasError())

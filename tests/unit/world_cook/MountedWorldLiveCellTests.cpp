@@ -9,6 +9,7 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Gameplay/GameModule.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
@@ -24,6 +25,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <thread>
 
@@ -172,7 +174,8 @@ namespace Horo::WorldCook {
         class MountedCellProduct final {
         public:
             explicit MountedCellProduct(const bool enableLive, const bool firstDemand, const std::size_t maximumResidents = 1,
-                                        const bool withReducedPopulation = false) {
+                                        const bool withReducedPopulation = false,
+                                        const std::optional<GameplayWorldSelection> &gameplay = std::nullopt) {
                 namespace N = Network;
                 if (withReducedPopulation) {
                     reduced_.emplace(registry_, jobs_);
@@ -204,7 +207,11 @@ namespace Horo::WorldCook {
                     selection.liveCell = CommittedWorldLiveSelection{limits, firstDemand ? std::optional{demand_} : std::nullopt};
                 }
                 S::SceneDefinitionBuilder root{{99}, {1}};
-                root.Add({.object = parentObject_});
+                S::RuntimeEntityDefinition parent{.object = parentObject_};
+                if (gameplay)
+                    parent.components.behaviors.push_back(
+                        {{1}, Gameplay::BehaviorTypeId::Parse("game.tests.replicated_presentation_motion").Value()});
+                root.Add(std::move(parent));
                 auto built = std::move(root).Build();
                 REQUIRE(built.HasValue());
                 HeadlessSceneActivationInput input{.mode = Physics::PhysicsRuntimeMode::Null,
@@ -219,7 +226,7 @@ namespace Horo::WorldCook {
                                                    .worldJobs = &jobs_};
                 auto composition =
                     ComposeHeadlessSceneNetworkServices(std::make_shared<const S::RuntimeSceneDefinition>(std::move(built).Value()),
-                                                        std::move(input));
+                                                        std::move(input), {}, gameplay);
                 REQUIRE(composition.HasValue());
                 auto services = std::move(composition).Value();
                 auto &scene = services.factories.services[static_cast<std::size_t>(N::NetworkModeServiceKind::Scene)];
@@ -301,6 +308,15 @@ namespace Horo::WorldCook {
                 const auto origin = lease->Get();
                 REQUIRE(origin.HasValue());
                 return CaptureProjectSceneWorldPosition(*scene, entity, origin.Value().Origin());
+            }
+
+            /** @brief Reads the vertical position driven by the native fixture's ordinary gameplay callback. */
+            std::int64_t ParentHeight() const {
+                const auto parent = Find(parentObject_);
+                REQUIRE(parent);
+                const auto position = WorldPosition(*parent);
+                REQUIRE(position.HasValue());
+                return position.Value().Millimeters()[1];
             }
 
             const AI::DecisionGraphTestSupport::Probe &ReducedDecisions() const {
@@ -721,7 +737,18 @@ namespace Horo::WorldCook {
     TEST_CASE("Mounted headless World transfers reduced agents as the streamed anchor moves",
               "[world_cook][native][mounted_world][live_cell][product][reduced-population]") {
         using Population = MountedReducedPopulation;
-        MountedCellProduct product{true, false, 1, true};
+        std::optional<GameplayWorldSelection> gameplay;
+        SECTION("with only Scene and AI owners") {}
+        SECTION("with a selected native Gameplay owner") {
+            gameplay.emplace();
+            gameplay->moduleId = "game.tests";
+            gameplay->nativeArtifact = HORO_TEST_GAME_MODULE_PATH;
+            gameplay->moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
+            std::ifstream revision{HORO_TEST_GAME_MODULE_REVISION_PATH};
+            REQUIRE((revision >> gameplay->descriptorRevision));
+        }
+        MountedCellProduct product{true, false, 1, true, gameplay};
+        const auto initialHeight = product.ParentHeight();
         REQUIRE_FALSE(product.Find(Population::Anchor));
         REQUIRE_FALSE(product.Find(Population::Agent));
         product.Request();
@@ -738,6 +765,8 @@ namespace Horo::WorldCook {
         REQUIRE_FALSE(product.Find(Population::DistantAgent));
         REQUIRE(product.ReducedDecisions().starts == 1);
         CHECK(product.WorldPosition(*first).Value() == Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0));
+        if (gameplay)
+            CHECK(product.ParentHeight() < initialHeight);
 
         product.Withdraw();
         static_cast<void>(product.UntilAttached(false));

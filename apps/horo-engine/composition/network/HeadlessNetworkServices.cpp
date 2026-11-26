@@ -800,9 +800,12 @@ namespace Horo::Application::Internal {
                                                 const std::optional<GameplayWorldSelection> &gameplay) {
             if (!input.mountedWorld || !input.mountedWorld->liveCell)
                 return Result<void>::Success();
-            if (!input.worldJobs || input.mountedWorld->initialCell || gameplay)
+            if (!input.worldJobs || input.mountedWorld->initialCell)
                 return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
                                                        "Live mounted CoreEcs requires the standalone Scene structural owner."));
+            if (gameplay && (!gameplay->enabled || gameplay->nativeArtifact.empty() || !gameplay->scriptSource.empty()))
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                       "Live mounted CoreEcs requires a selected native gameplay module."));
             return Result<void>::Success();
         }
 
