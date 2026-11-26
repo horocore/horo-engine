@@ -865,7 +865,15 @@ namespace Horo::Application::Internal {
             if (current.HasValue())
                 estimate.emplace(std::move(current).Value());
         }
-        auto projected = light.projection.Update(light.scope, *cutoff, estimate ? &*estimate : nullptr);
+        // A stalled Input cutoff cannot extend the lifetime of a lighting observation.
+        const auto now = clock_.RuntimeNow();
+        if (!mayPublish()) {
+            light.active = false;
+            return std::nullopt;
+        }
+        if (now.HasError() || now.Value() < *cutoff)
+            return std::nullopt;
+        auto projected = light.projection.Update(light.scope, now.Value(), estimate ? &*estimate : nullptr);
         return projected.HasValue() ? std::move(projected).Value() : std::nullopt;
     }
 

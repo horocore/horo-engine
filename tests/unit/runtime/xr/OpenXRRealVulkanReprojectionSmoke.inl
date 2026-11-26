@@ -840,7 +840,7 @@ namespace Horo::Tests::OpenXRApplication {
                                                  .directionalScale = 0.25F,
                                                  .maximumAbsoluteChannel = 4.0F,
                                                  .directionalIdentity = 1,
-                                                 .maximumAge = limits.maximumAge};
+                                                 .maximumAge = Duration::FromMilliseconds(200)};
         const auto denied = fixture.play->StartNativeLighting(deniedScope, limits, policy);
         REQUIRE(denied.HasError());
         CHECK(denied.ErrorValue().code.Value() == XR::XRErrors::PermissionDenied.code.Value());
@@ -853,6 +853,7 @@ namespace Horo::Tests::OpenXRApplication {
         const XR::XRLightEstimateScope scope{*session, world, RequireValue(XR::XRLightEstimateGrant::Create(2))};
         RequireValue(fixture.play->StartNativeLighting(scope, limits, policy));
         fixture.script.frames.prediction = 120'000'000;
+        std::uint64_t nextFrame = 2;
         SECTION("The platform withdraws capability while the grant remains allowed") {
             fixture.Project(1);
             permission->supported = false;
@@ -901,12 +902,22 @@ namespace Horo::Tests::OpenXRApplication {
             fixture.images->onRelease = {};
             permission->allowed = true;
         }
+        SECTION("An expired estimate is omitted even when the Input cutoff stalls") {
+            fixture.Project(1);
+            REQUIRE(fixture.script.frames.layers == 1);
+            fixture.script.clock.sample = 211'000'000;
+            fixture.script.frames.prediction = 230'000'000;
+            fixture.Project(nextFrame++, nullptr, nullptr, {.beforePresent = [&] {
+                permission->allowed = false;
+            }});
+            CHECK(fixture.script.frames.layers == 1);
+        }
         REQUIRE(nativeLight.sampleCalls == 1);
         fixture.script.clock.sample = fixture.script.frames.prediction;
         // Advance the native prediction with one full period reserved for the next frame.
         fixture.script.frames.prediction += fixture.script.frames.period;
         RequireValue(fixture.scheduler->RunFrame());
-        fixture.Project(2);
+        fixture.Project(nextFrame);
         CHECK(nativeLight.sampleCalls == 1);
         RequireValue(fixture.play->StopNativeLighting());
         CHECK(nativeLight.retireCalls == 1);

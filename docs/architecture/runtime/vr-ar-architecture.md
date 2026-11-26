@@ -1050,6 +1050,9 @@ the owner discards the candidate and withdraws cached observations before
 returning control to the renderer.
 Reads and sampling requests check the exact grant before validating the
 observation time, so an out-of-order request still processes revocation.
+Rendering checks observation age against the current native runtime clock
+and uses the stricter of the estimator and projection age limits. A stalled
+Input cutoff cannot keep an old estimate visible.
 When physical retirement fails, Editor Play keeps the exact withdrawn grant
 and retries outside an admitted frame. Neither the retained handle nor a
 permission restoration republishes old lighting.

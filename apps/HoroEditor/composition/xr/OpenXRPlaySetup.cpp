@@ -23,6 +23,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (scene_->nativeLighting)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        policy.maximumAge = std::min(policy.maximumAge, limits.maximumAge);
         auto projection = XRLightProjection::Create(scope, policy);
         if (projection.HasError())
             return Result<void>::Failure(projection.ErrorValue());
