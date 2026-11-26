@@ -70,6 +70,7 @@ namespace Horo::AI {
     private:
         friend class SymbolicDomain;
         friend class SymbolicHierarchy;
+        friend class SymbolicPlanningJob;
         SymbolicPlanStatus status_{SymbolicPlanStatus::InvalidInput};
         std::uint64_t cost_{};
         std::array<SymbolicPlanStep, MaximumStates - 1> steps_{};
@@ -209,8 +210,8 @@ namespace Horo::AI {
 
         [[nodiscard]] Result<void> Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const override;
         /** @brief Reads the immutable result at the task owner's safe point.
-         * @return Null before completion or if cancellation has withdrawn a solved result. Unsolved results contain no steps.
-         * @details Reacquire at each use. A previously borrowed pointer does not grant authority to execute its steps.
+         * @return Null before completion or if later cancellation withdrew the outcome. An explicitly cancelled search remains readable.
+         * @details Reacquire at each use. A previously borrowed pointer does not grant authority to act on the outcome.
          */
         [[nodiscard]] const SymbolicPlan *Read() const noexcept;
 

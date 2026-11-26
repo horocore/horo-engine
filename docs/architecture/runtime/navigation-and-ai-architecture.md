@@ -2897,8 +2897,10 @@ and produces an ordered sequence of stable action and task identities. Unsolved,
 cancelled and budget-limited searches expose no task sequence. The GOAP work
 allowance covers frontier search and assembly of the ordered result. A host can
 submit the same detached computation through the existing AI task job service.
-The owner's safe-point read withholds solved results if task, capability,
-reservation or worker cancellation has since withdrawn the computation.
+The owner's safe-point read withholds a completed outcome if task, capability,
+reservation or worker cancellation has since withdrawn the computation. This
+also prevents stale no-plan and budget outcomes from selecting a fallback. A
+search that completed as cancelled remains readable as a typed cancellation.
 HTN depth and pending-task limits discard only the affected branch. Search tries
 later admitted methods in stable order while shared work remains. If every
 alternative fails and any branch was truncated, the outcome is budget exhaustion.

@@ -176,9 +176,15 @@ namespace Horo::AI {
             }
         }
 
-        TEST_CASE("Completed symbolic jobs hide solved sequences after cancellation", "[ai][planning][jobs]") {
+        TEST_CASE("Completed symbolic jobs withdraw decisions after cancellation", "[ai][planning][jobs]") {
             DomainFixture input;
-            const auto job = SymbolicPlanningJob::Create(std::make_shared<const SymbolicDomain>(input.Capture()), {}, input.goal, 1024);
+            using enum SymbolicPlanStatus;
+            const auto expected = GENERATE(Solved, NoPlan, BudgetExhausted);
+            const auto actions = expected == NoPlan ? std::span<const SymbolicActionSource>{} : std::span<const SymbolicActionSource>{input.actions};
+            auto domain = SymbolicDomain::Capture(input.facts, actions, input.Registry());
+            REQUIRE(domain.HasValue());
+            const auto job = SymbolicPlanningJob::Create(std::make_shared<const SymbolicDomain>(std::move(domain).Value()), {}, input.goal,
+                                                        expected == BudgetExhausted ? 1 : 1024);
             REQUIRE(job.HasValue());
             const auto incarnation = Id<AiRuntimeIncarnation>(1);
             AiTaskOperationContext operation{.taskDefinition = input.openTask, .task = {incarnation, {2, 1}}, .agent = {incarnation, {1, 1}}};
@@ -190,7 +196,7 @@ namespace Horo::AI {
             (scope ? operation.*scope : worker) = owner.Token();
             REQUIRE(job.Value()->Run(operation, worker).HasValue());
             REQUIRE(job.Value()->Read());
-            REQUIRE(job.Value()->Read()->Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(job.Value()->Read()->Status() == expected);
             owner.RequestCancellation();
             CHECK(job.Value()->Read() == nullptr);
         }

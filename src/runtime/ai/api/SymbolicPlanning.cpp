@@ -477,15 +477,18 @@ namespace Horo::AI {
             result_ = hierarchy_->SearchImpl(initial, root_, work_, cancellation, &operation);
         else
             result_ = domain_->SearchImpl(initial, std::span{goal_}.first(goalCount_), work_, cancellation, &operation);
-        const bool cancelled = result_.Status() == SymbolicPlanStatus::Cancelled || PlanningCancelled(cancellation, &operation);
+        if (PlanningCancelled(cancellation, &operation)) {
+            result_ = {};
+            result_.status_ = SymbolicPlanStatus::Cancelled;
+        }
         state_.store(State::Complete, std::memory_order_release);
-        return cancelled ? JobCancelled() : Result<void>::Success();
+        return result_.Status() == SymbolicPlanStatus::Cancelled ? JobCancelled() : Result<void>::Success();
     }
 
     const SymbolicPlan *SymbolicPlanningJob::Read() const noexcept {
         if (state_.load(std::memory_order_acquire) != State::Complete)
             return nullptr;
-        if (result_.Status() == SymbolicPlanStatus::Solved &&
+        if (result_.Status() != SymbolicPlanStatus::Cancelled &&
             std::ranges::any_of(resultCancellation_, &CancellationToken::IsCancellationRequested))
             return nullptr;
         return &result_;
