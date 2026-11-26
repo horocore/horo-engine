@@ -204,6 +204,45 @@ TEST_CASE("Package install leaves the previous record active when a durable comm
     CHECK_FALSE(std::filesystem::exists(project.Path() / ".horo/packages.install.pending"));
 }
 
+TEST_CASE("Mounted package assets resolve only through the exact installed record", "[packages][install][mounted-asset]") {
+    TemporaryDirectory project;
+    NativeDurableFileSystem files;
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
+    REQUIRE(created.HasValue());
+    auto service = std::move(created).Value();
+    auto graph = Graph();
+    graph->packages.front().lock.contributions = {"assets"};
+    REQUIRE(service.Install(graph, {}).HasValue());
+    const auto installed = service.InstalledRecord();
+    REQUIRE(installed);
+
+    constexpr std::string_view portable = "package://com.horo.install-fixture/assets/data.bin";
+    constexpr std::string_view pinned = "package-pinned://com.horo.install-fixture@1.0.0/assets/data.bin";
+    for (const auto reference : {portable, pinned}) {
+        const auto read = installed->ReadMountedAsset(reference, 14);
+        REQUIRE(read.HasValue());
+        const std::string_view text{reinterpret_cast<const char *>(read.Value().data()), read.Value().size()};
+        CHECK(text == "verified bytes");
+        CHECK(installed->ReadMountedAsset(reference, 13).HasError());
+    }
+    for (const auto reference : {"package://com.horo.other/assets/data.bin", "package://com.horo.install-fixture/assets/DATA.bin",
+                                 "package://com.horo.install-fixture/horo-package.toml",
+                                 "package-pinned://com.horo.install-fixture@2.0.0/assets/data.bin"}) {
+        const auto unavailable = installed->ReadMountedAsset(reference, 14);
+        REQUIRE(unavailable.HasError());
+        CHECK(unavailable.ErrorValue().code.Value() == PackageInstallErrors::MountedAssetUnavailable.code.Value());
+    }
+    for (const auto reference : {"file://assets/data.bin", "package://com.horo.install-fixture/assets/../data.bin",
+                                 "package://com.horo.install-fixture/assets/%64ata.bin",
+                                 "package://com.horo.install-fixture@1.0.0/assets/data.bin", "package://com.horo.install-fixture/"})
+        CHECK(installed->ReadMountedAsset(reference, 14).HasError());
+
+    graph->packages.front().lock.contributions.clear();
+    REQUIRE(service.Install(graph, {}).HasValue());
+    REQUIRE(service.InstalledRecord()->ReadMountedAsset(portable, 14).HasError());
+    CHECK(installed->ReadMountedAsset(portable, 14).HasValue());
+}
+
 TEST_CASE("Package install rejects noncanonical project roots and incomplete graphs", "[packages][install]") {
     TemporaryDirectory project;
     NativeDurableFileSystem files;

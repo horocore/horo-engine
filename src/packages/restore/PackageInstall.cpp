@@ -18,6 +18,61 @@ namespace Horo::Packages {
     namespace {
         constexpr std::size_t MaximumInstalledPackages = 4096U;
 
+        /** @brief Separates the exact installed package selector from a portable inventory path. */
+        struct MountedAssetReference final {
+            HoroPackageId package;
+            std::optional<PackageVersion> version;
+            PackagePath path;
+        };
+
+        /** @brief Parses mounted and explicitly pinned references without URL decoding or authority fallback. */
+        Result<MountedAssetReference> ParseMountedAsset(std::string_view reference) {
+            using Output = Result<MountedAssetReference>;
+            constexpr std::string_view mounted{"package://"};
+            constexpr std::string_view pinned{"package-pinned://"};
+            constexpr std::size_t maximumReferenceBytes = 2048U;
+            const bool isPinned = reference.starts_with(pinned);
+            const auto scheme = isPinned ? pinned : mounted;
+            if (reference.size() > maximumReferenceBytes || !reference.starts_with(scheme) ||
+                reference.find_first_of("%?#") != std::string_view::npos)
+                return Output::Failure(MakeError(PackageInstallErrors::InvalidInput));
+            reference.remove_prefix(scheme.size());
+            const auto slash = reference.find('/');
+            if (slash == std::string_view::npos)
+                return Output::Failure(MakeError(PackageInstallErrors::InvalidInput));
+            const auto authority = reference.substr(0, slash);
+            const auto separator = authority.find('@');
+            if (isPinned != (separator != std::string_view::npos))
+                return Output::Failure(MakeError(PackageInstallErrors::InvalidInput));
+            auto package = HoroPackageId::Parse(authority.substr(0, separator));
+            if (package.HasError())
+                return Output::Failure(package.ErrorValue());
+            std::optional<PackageVersion> version;
+            if (isPinned) {
+                auto parsed = PackageVersion::Parse(authority.substr(separator + 1));
+                if (parsed.HasError())
+                    return Output::Failure(parsed.ErrorValue());
+                version.emplace(std::move(parsed).Value());
+            }
+            auto path = PackagePath::Parse(reference.substr(slash + 1));
+            if (path.HasError())
+                return Output::Failure(path.ErrorValue());
+            return Output::Success({std::move(package).Value(), std::move(version), std::move(path).Value()});
+        }
+
+        /** @brief Requires an exact non-executable inventory member belonging to the package asset root. */
+        bool IsMountedAsset(const PackageRestorePackage &package, const PackagePath &path) {
+            if (!path.Value().starts_with("assets/") ||
+                std::ranges::find(package.lock.contributions, "assets") == package.lock.contributions.end())
+                return false;
+            const auto files = package.archive->Manifest().Entries();
+            const auto entry = std::ranges::find_if(files, [&](const PackageFileEntry &file) {
+                return file.id.path.Value() == path.Value();
+            });
+            return entry != files.end() && !entry->executable &&
+                   (!entry->contributionRoot || entry->contributionRoot->Value() == "assets");
+        }
+
         /** @brief Rejects forged or incomplete graph evidence before any project write. */
         [[nodiscard]] Result<void> ValidateGraph(const PackageRestoreGraph &graph) {
             if (graph.packages.size() > MaximumInstalledPackages || graph.platform.operatingSystem.empty() ||
@@ -78,6 +133,26 @@ namespace Horo::Packages {
                    '\n';
         }
     }  // namespace
+
+    /** @copydoc VerifiedPackageInstallRecord::ReadMountedAsset */
+    Result<std::vector<std::byte>> VerifiedPackageInstallRecord::ReadMountedAsset(const std::string_view reference,
+                                                                                  const std::uint64_t maximumBytes) const {
+        using Output = Result<std::vector<std::byte>>;
+        if (maximumBytes == 0)
+            return Output::Failure(MakeError(PackageInstallErrors::InvalidInput));
+        auto parsed = ParseMountedAsset(reference);
+        if (parsed.HasError())
+            return Output::Failure(parsed.ErrorValue());
+        const auto &asset = parsed.Value();
+        const auto &installed = graph_->packages;
+        const auto package = std::ranges::find_if(installed, [&](const PackageRestorePackage &entry) {
+            return entry.lock.package == asset.package;
+        });
+        if (package == installed.end() || (asset.version && package->lock.version != *asset.version) ||
+            !IsMountedAsset(*package, asset.path))
+            return Output::Failure(MakeError(PackageInstallErrors::MountedAssetUnavailable));
+        return package->archive->ReadDeclaredFile(asset.path, maximumBytes);
+    }
 
     class PackageInstallService::Impl final {
     public:

@@ -15,6 +15,11 @@ namespace Horo::Packages::PackageInstallErrors {
                                                .defaultSeverity = ErrorSeverity::Error,
                                                .summary = "Package archive evidence differs from the locked graph.",
                                                .remediationHint = "Restore the exact locked packages again before installation."};
+    const ErrorCodeDescriptor MountedAssetUnavailable{.domain = Domain,
+                                                     .code = ErrorCode{"packages.install.mounted_asset_unavailable"},
+                                                     .defaultSeverity = ErrorSeverity::Error,
+                                                     .summary = "The installed package does not expose the requested asset.",
+                                                     .remediationHint = "Check the asset path and exact installed package version."};
     const ErrorCodeDescriptor Cancelled{.domain = Domain,
                                         .code = ErrorCode{"packages.install.cancelled"},
                                         .defaultSeverity = ErrorSeverity::Info,

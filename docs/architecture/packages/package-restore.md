@@ -267,6 +267,13 @@ On a new machine, restore fetches the package and the reference resolves again.
 Imported project assets use project GUIDs and keep source-package provenance as
 metadata only.
 
+An installed-record mount read resolves the package and optional explicit
+version against the exact verified graph. It accepts canonical,
+non-executable inventory members under the currently supported `assets/` root
+and requires the lock to declare the asset contribution. The caller supplies a
+byte limit and receives owned bytes from the verified archive. File reads do
+not change enablement or choose another installed version.
+
 ## Bootstrap Integration
 
 New machine flow:

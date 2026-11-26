@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string_view>
 
 namespace Horo::Packages {
     class PackageInstallService;
@@ -25,6 +26,13 @@ namespace Horo::Packages {
         [[nodiscard]] std::uint64_t Revision() const noexcept {
             return revision_;
         }
+
+        /** @brief Reads a mounted asset from this exact installed archive generation.
+         * @param reference Canonical package or version-pinned package URL under the installed assets root.
+         * @param maximumBytes Caller-owned positive bound applied before allocating the result.
+         * @return Owned bytes or a typed path, availability, or archive error.
+         */
+        [[nodiscard]] Result<std::vector<std::byte>> ReadMountedAsset(std::string_view reference, std::uint64_t maximumBytes) const;
 
     private:
         friend class PackageInstallService;
