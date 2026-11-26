@@ -1,4 +1,4 @@
-"""Export or verify a redacted evaluation manifest under an explicit offline approval."""
+"""Export, verify or read a redacted evaluation manifest under an explicit offline approval."""
 
 from __future__ import annotations
 
@@ -230,32 +230,47 @@ def verify_source_evidence(record: dict, path: Path) -> None:
     require(summarize_source(data) == record["evidence"], "Manifest evidence does not match the approved source replay")
 
 
+def emit_json(value: dict) -> None:
+    print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def require_current_expiry(expiry: str) -> None:
+    require(datetime.now(UTC).date() < date.fromisoformat(expiry), "Export approval has expired")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Existing headless evidence.json or retained evaluation manifest")
     parser.add_argument("--approval", required=True, type=Path, help="Explicit, digest-bound offline export approval")
     retained = parser.add_mutually_exclusive_group()
     retained.add_argument("--verify-retained", action="store_true", help="Check a stored manifest against its original approval and UTC expiry")
+    retained.add_argument("--read-retained", action="store_true", help="Emit a current stored manifest after reproducing its approved evidence")
     retained.add_argument("--audit-retention", action="store_true", help="Report the UTC retention status of a stored manifest and its approval")
-    parser.add_argument("--source-replay", type=Path, help="With --verify-retained, reproduce the evidence from the original approved replay")
+    parser.add_argument("--source-replay", type=Path, help="Reproduce the evidence from the original approved replay")
     args = parser.parse_args()
-    if args.source_replay is not None and not args.verify_retained:
-        parser.error("--source-replay requires --verify-retained")
+    if args.read_retained and args.source_replay is None:
+        parser.error("--read-retained requires --source-replay")
+    if args.source_replay is not None and not (args.verify_retained or args.read_retained):
+        parser.error("--source-replay requires --verify-retained or --read-retained")
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
         if args.audit_retention:
             record = decode(read_bounded(args.input, MAX_MANIFEST_BYTES))
-            print(json.dumps(audit_retention(record, approval, today), sort_keys=True, separators=(",", ":")))
+            emit_json(audit_retention(record, approval, today))
             return 0
-        if args.verify_retained:
+        if args.verify_retained or args.read_retained:
             record = validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)
             if args.source_replay is not None:
                 verify_source_evidence(record, args.source_replay)
+                require_current_expiry(record["expiresOnUtc"])
+            if args.read_retained:
+                emit_json(record)
             return 0
         data, replay_digest = read_replay(args.input)
         allowed = validate_approval(approval, replay_digest, today)
         evidence = summarize_source(data)
+        require_current_expiry(allowed["expiresOnUtc"])
     except _EvidenceError as error:
         print(error, file=sys.stderr)
         return 1
@@ -264,7 +279,7 @@ def main() -> int:
         return 1
     manifest = {"format": MANIFEST_FORMAT, "schemaVersion": 1, "purpose": APPROVAL_PURPOSE,
                 "qualificationSource": QUALIFICATION_SOURCE, "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
-    print(json.dumps(manifest, sort_keys=True, separators=(",", ":")))
+    emit_json(manifest)
     return 0
 
 

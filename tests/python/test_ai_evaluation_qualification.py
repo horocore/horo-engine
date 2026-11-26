@@ -129,6 +129,15 @@ def test_source_replay_is_only_available_in_verification_mode(monkeypatch, capsy
     assert not result.out and "--source-replay requires --verify-retained" in result.err
 
 
+def test_read_retained_requires_the_original_replay_argument(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", "manifest.json", "--approval", "approval.json", "--read-retained"])
+    with pytest.raises(SystemExit) as exit_status:
+        evaluation.main()
+    result = capsys.readouterr()
+    assert exit_status.value.code == 2
+    assert not result.out and "--read-retained requires --source-replay" in result.err
+
+
 @pytest.mark.parametrize("mode", ["--verify-retained", "--audit-retention"])
 @pytest.mark.parametrize("scenario", ["valid", "expired", "extended", "different-replay", "different-provider", "raw-record", "bad-count"])
 def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatch, capsys, mode, scenario):
@@ -173,8 +182,9 @@ def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatc
     assert (retained.read_bytes(), grant.read_bytes()) == inputs
 
 
-@pytest.mark.parametrize("scenario", ["valid", "changed-count", "changed-provenance", "wrong-source", "expired"])
-def test_source_verification_rejects_well_formed_but_unreproducible_evidence(export, tmp_path, monkeypatch, capsys, scenario):
+@pytest.mark.parametrize("mode", ["--verify-retained", "--read-retained"])
+@pytest.mark.parametrize("scenario", ["valid", "changed-count", "changed-provenance", "wrong-source", "expired", "expired-while-reading", "raw-record"])
+def test_source_verification_fences_retained_evidence(export, tmp_path, monkeypatch, capsys, mode, scenario):
     replay = tmp_path / "evidence.json"
     grant = tmp_path / "approval.json"
     original = json.dumps(frame(3, 2)).encode()
@@ -191,16 +201,38 @@ def test_source_verification_rejects_well_formed_but_unreproducible_evidence(exp
         expired = approval_for(original) | {"expiresOnUtc": datetime.now(UTC).date().isoformat()}
         grant.write_text(json.dumps(expired), encoding="utf-8")
         replay = tmp_path / "missing-replay.json"
+    elif scenario == "expired-while-reading":
+        expiry = datetime.fromisoformat(manifest["expiresOnUtc"]).replace(tzinfo=UTC)
+        times = iter((expiry - timedelta(seconds=1), expiry))
+
+        class Clock:
+            @staticmethod
+            def now(tz):
+                assert tz == UTC
+                return next(times)
+
+        monkeypatch.setattr(evaluation, "datetime", Clock)
+    elif scenario == "raw-record":
+        manifest["evidence"]["frames"][0]["decision"]["rawText"] = PRIVATE
     retained = tmp_path / "manifest.json"
     retained.write_text(json.dumps(manifest), encoding="utf-8")
+    retained_bytes = retained.read_bytes()
     monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(retained), "--approval", str(grant),
-                                      "--verify-retained", "--source-replay", str(replay)])
+                                      mode, "--source-replay", str(replay)])
     assert evaluation.main() == (0 if scenario == "valid" else 1)
     result = capsys.readouterr()
-    assert not result.out and PRIVATE not in result.err
+    if mode == "--read-retained" and scenario == "valid":
+        assert json.loads(result.out) == manifest
+        assert PRIVATE not in result.out
+    else:
+        assert not result.out
+    assert PRIVATE not in result.err
+    assert retained.read_bytes() == retained_bytes
     if scenario.startswith("changed-"):
         assert "evidence does not match" in result.err
     elif scenario == "wrong-source":
         assert "approved digest" in result.err
-    elif scenario == "expired":
+    elif scenario in ("expired", "expired-while-reading"):
         assert "approval has expired" in result.err
+    elif scenario == "raw-record":
+        assert "Unexpected fields" in result.err

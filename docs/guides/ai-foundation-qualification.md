@@ -143,6 +143,17 @@ When using a manifest as reproducible evidence, also pass `--source-replay evide
 This verifies the original replay bytes against the approved digest and
 reproduces the redacted counts and frame provenance for comparison. The
 verification emits neither raw replay values nor regenerated evidence.
+
+Consumers that need the stored manifest as input can use `--read-retained`.
+This emits the redacted manifest only after checking the current UTC expiry,
+matching the original approval, and reproducing its evidence from the approved
+source replay. Consumers can use the verified output directly without opening
+the file again after a separate check.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --read-retained --source-replay evidence.json
+```
+
 For retention automation, use `--audit-retention` with the same manifest and
 original approval. It returns a schema-versioned JSON record with `status`
 (`current` or `expired`) and `expiresOnUtc`. A matched record switches to
