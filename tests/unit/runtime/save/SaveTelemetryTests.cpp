@@ -630,7 +630,7 @@ TEST_CASE("Support bundles withhold diagnostic records that embed a private Save
     CHECK(archive.find("unrelated-diagnostic") != std::string::npos);
 }
 
-TEST_CASE("Support bundles withhold unclassified text alongside private Save evidence", "[save][telemetry][privacy][bundle]") {
+TEST_CASE("Support bundles withhold unclassified scalar values alongside private Save evidence", "[save][telemetry][privacy][bundle]") {
     Session session;
     REQUIRE(session.host);
     const auto input = session.directory / "diagnostics";
@@ -638,15 +638,22 @@ TEST_CASE("Support bundles withhold unclassified text alongside private Save evi
     constexpr std::string_view wrapper =
         R"({"message":"private-wrapper-copy","error":{"domain":"horo.save","message":"private-save-message"}})";
     constexpr std::string_view mixed = R"(["private-array-copy",{"domain":"horo.save","message":"private-save-message"}])";
-    constexpr std::string_view safe = R"({"message":"retained-standalone-report"})";
+    constexpr std::string_view numericWrapper =
+        R"({"numericSlotId":6915374168053928091,"error":{"domain":"horo.save","message":"private-save-message"}})";
+    constexpr std::string_view numericArray = R"([6517473283808069338,{"domain":"horo.save","message":"private-save-message"}])";
+    constexpr std::string_view booleanWrapper =
+        R"({"private-flag-name":true,"error":{"domain":"horo.save","message":"private-save-message"}})";
+    constexpr std::string_view safe = R"({"message":"retained-standalone-report","count":23786038})";
     {
         std::ofstream output{input, std::ios::binary};
         SECTION("Crash archive with unclassified object and array entries") {
-            output << '[' << wrapper << ',' << mixed << ',' << safe << ']';
+            output << '[' << wrapper << ',' << mixed << ',' << numericWrapper << ',' << numericArray << ',' << booleanWrapper << ','
+                   << safe << ']';
         }
         SECTION("Crash JSONL with independent unclassified records") {
             entry.replace_extension(".jsonl");
-            output << wrapper << '\n' << mixed << '\n' << safe << '\n';
+            output << wrapper << '\n' << mixed << '\n' << numericWrapper << '\n' << numericArray << '\n' << booleanWrapper << '\n'
+                   << safe << '\n';
         }
         REQUIRE(output.good());
     }
@@ -658,7 +665,11 @@ TEST_CASE("Support bundles withhold unclassified text alongside private Save evi
     CHECK(archive.find("private-wrapper-copy") == std::string::npos);
     CHECK(archive.find("private-array-copy") == std::string::npos);
     CHECK(archive.find("private-save-message") == std::string::npos);
+    CHECK(archive.find("6915374168053928091") == std::string::npos);
+    CHECK(archive.find("6517473283808069338") == std::string::npos);
+    CHECK(archive.find("private-flag-name") == std::string::npos);
     CHECK(archive.find("retained-standalone-report") != std::string::npos);
+    CHECK(archive.find("23786038") != std::string::npos);
 }
 
 TEST_CASE("Support bundles discard keys used to index withheld Save diagnostics", "[save][telemetry][privacy][bundle]") {

@@ -149,9 +149,9 @@ namespace Horo::Diagnostics {
 
         constexpr std::array DiagnosticNamespaceFields{"category", "subsystem", "domain"};
 
-        /** @brief Identifies direct text that could repeat a sibling's private diagnostic values. */
-        [[nodiscard]] bool HasInlineText(const Json &value) {
-            return std::ranges::any_of(value, &Json::is_string);
+        /** @brief Identifies direct values that could repeat a sibling's private diagnostic data. */
+        [[nodiscard]] bool HasInlineData(const Json &value) {
+            return std::ranges::any_of(value, [](const Json &child) { return child.is_primitive() && !child.is_null(); });
         }
 
         /** @brief Reports whether the record belongs to a host-owned summary rather than the raw export. */
@@ -219,14 +219,14 @@ namespace Horo::Diagnostics {
         /** @brief Withholds records that may repeat private descendant values, while preserving unrelated aggregate entries. */
         DiagnosticRedaction RedactObject(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
-            const bool hasInlineText = !namespaces.empty() && HasInlineText(value);
+            const bool hasInlineData = !namespaces.empty() && HasInlineData(value);
             Json sanitizedEntries;
             bool privateDescendant = false;
             for (auto child = value.begin(); child != value.end();) {
                 const auto redaction = FirstAbsolutePath(child.key()) != std::string_view::npos ? Withheld : RedactJson(*child, namespaces);
                 const bool sensitiveKey = Detail::IsSensitiveKey(child.key());
                 if (redaction != Kept) {
-                    if (hasInlineText || IsCausalField(child.key())) {
+                    if (hasInlineData || IsCausalField(child.key())) {
                         value = nullptr;
                         return Withheld;
                     }
@@ -245,7 +245,7 @@ namespace Horo::Diagnostics {
             return FinishAggregate(value, privateDescendant);
         }
 
-        /** @brief Retains independent structured entries and withholds text mixed with private entries. */
+        /** @brief Retains independent structured entries and withholds scalar data mixed with private entries. */
         DiagnosticRedaction RedactArray(Json &value, const std::span<const std::string> namespaces) {
             using enum DiagnosticRedaction;
             bool privateDescendant = false;
@@ -260,7 +260,7 @@ namespace Horo::Diagnostics {
                 ++retained;
             }
             value.erase(retained, value.end());
-            if (privateDescendant && HasInlineText(value)) {
+            if (privateDescendant && HasInlineData(value)) {
                 value = nullptr;
                 return Withheld;
             }
