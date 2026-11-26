@@ -119,6 +119,16 @@ def test_requires_explicit_approval_argument(monkeypatch, capsys):
     assert not result.out and "--approval" in result.err
 
 
+def test_source_replay_is_only_available_in_verification_mode(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", "input.json", "--approval", "approval.json",
+                                      "--source-replay", "evidence.json"])
+    with pytest.raises(SystemExit) as exit_status:
+        evaluation.main()
+    result = capsys.readouterr()
+    assert exit_status.value.code == 2
+    assert not result.out and "--source-replay requires --verify-retained" in result.err
+
+
 @pytest.mark.parametrize("scenario", ["valid", "expired", "extended", "different-replay", "different-provider", "raw-record", "bad-count"])
 def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatch, capsys, scenario):
     data = json.dumps(frame(3, 2)).encode()
@@ -148,3 +158,36 @@ def test_retention_check_uses_the_original_approval(export, tmp_path, monkeypatc
     result = capsys.readouterr()
     assert not result.out and PRIVATE not in result.err
     assert bool(result.err) == (scenario != "valid")
+
+
+@pytest.mark.parametrize("scenario", ["valid", "changed-count", "changed-provenance", "wrong-source", "expired"])
+def test_source_verification_rejects_well_formed_but_unreproducible_evidence(export, tmp_path, monkeypatch, capsys, scenario):
+    replay = tmp_path / "evidence.json"
+    grant = tmp_path / "approval.json"
+    original = json.dumps(frame(3, 2)).encode()
+    status, result = export(original, approval_for(original))
+    assert status == 0, result.err
+    manifest = json.loads(result.out)
+    if scenario == "changed-count":
+        manifest["evidence"]["decisionOutcomes"].update(succeeded=0, failed=1)
+    elif scenario == "changed-provenance":
+        manifest["evidence"]["frames"][0]["decision"]["planSha256"] = "7" * 64
+    elif scenario == "wrong-source":
+        replay.write_bytes(json.dumps(frame(3, 3)).encode())
+    elif scenario == "expired":
+        expired = approval_for(original) | {"expiresOnUtc": datetime.now(UTC).date().isoformat()}
+        grant.write_text(json.dumps(expired), encoding="utf-8")
+        replay = tmp_path / "missing-replay.json"
+    retained = tmp_path / "manifest.json"
+    retained.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(retained), "--approval", str(grant),
+                                      "--verify-retained", "--source-replay", str(replay)])
+    assert evaluation.main() == (0 if scenario == "valid" else 1)
+    result = capsys.readouterr()
+    assert not result.out and PRIVATE not in result.err
+    if scenario.startswith("changed-"):
+        assert "evidence does not match" in result.err
+    elif scenario == "wrong-source":
+        assert "approved digest" in result.err
+    elif scenario == "expired":
+        assert "approval has expired" in result.err

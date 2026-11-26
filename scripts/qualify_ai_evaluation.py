@@ -194,7 +194,7 @@ def validate_retained_evidence(value: object) -> None:
         validate_retained_frame(frame)
 
 
-def validate_retained_manifest(value: object, approval: object, today: date) -> None:
+def validate_retained_manifest(value: object, approval: object, today: date) -> dict:
     record = exact_fields(value, {"format", "schemaVersion", "purpose", "qualificationSource", "sourceReplaySha256",
                                   "expiresOnUtc", "qualification", "evidence"}, "evaluation manifest")
     require(record["format"] == MANIFEST_FORMAT and schema(record["schemaVersion"]) == 1, "Unsupported evaluation manifest")
@@ -204,6 +204,22 @@ def validate_retained_manifest(value: object, approval: object, today: date) -> 
     require(record["expiresOnUtc"] == allowed["expiresOnUtc"] and qualification_tuple(record["qualification"]) == allowed["qualification"],
             "Manifest does not match its approval")
     validate_retained_evidence(record["evidence"])
+    return record
+
+
+def read_replay(path: Path) -> tuple[bytes, str]:
+    data = read_bounded(path, MAX_FRAME_BYTES * MAX_FRAMES)
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def summarize_source(data: bytes) -> dict:
+    return summarize_replay(replay_frames(decode(data), len(data)))
+
+
+def verify_source_evidence(record: dict, path: Path) -> None:
+    data, source_digest = read_replay(path)
+    require(source_digest == record["sourceReplaySha256"], "Source replay does not match the approved digest")
+    require(summarize_source(data) == record["evidence"], "Manifest evidence does not match the approved source replay")
 
 
 def main() -> int:
@@ -211,17 +227,21 @@ def main() -> int:
     parser.add_argument("input", type=Path, help="Existing headless evidence.json or retained evaluation manifest")
     parser.add_argument("--approval", required=True, type=Path, help="Explicit, digest-bound offline export approval")
     parser.add_argument("--verify-retained", action="store_true", help="Check a stored manifest against its original approval and UTC expiry")
+    parser.add_argument("--source-replay", type=Path, help="With --verify-retained, reproduce the evidence from the original approved replay")
     args = parser.parse_args()
+    if args.source_replay is not None and not args.verify_retained:
+        parser.error("--source-replay requires --verify-retained")
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
         if args.verify_retained:
-            validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)
+            record = validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)
+            if args.source_replay is not None:
+                verify_source_evidence(record, args.source_replay)
             return 0
-        data = read_bounded(args.input, MAX_FRAME_BYTES * MAX_FRAMES)
-        replay_digest = hashlib.sha256(data).hexdigest()
+        data, replay_digest = read_replay(args.input)
         allowed = validate_approval(approval, replay_digest, today)
-        evidence = summarize_replay(replay_frames(decode(data), len(data)))
+        evidence = summarize_source(data)
     except _EvidenceError as error:
         print(error, file=sys.stderr)
         return 1

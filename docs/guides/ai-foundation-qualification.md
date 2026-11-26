@@ -138,7 +138,11 @@ python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval appr
 
 The check returns zero for a current, schema-valid manifest. It rejects expired
 approvals, mismatched replay digests or qualification tuples, and extra fields
-outside the redacted schema. The check reads the manifest and approval only.
+outside the redacted schema.
+When using a manifest as reproducible evidence, also pass `--source-replay evidence.json`.
+This verifies the original replay bytes against the approved digest and
+reproduces the redacted counts and frame provenance for comparison. The
+verification emits neither raw replay values nor regenerated evidence.
 The storage owner enforces deletion and controls write access to both records.
 
 The exporter emits schema 1 with decision outcome counts and exact source, scene,
