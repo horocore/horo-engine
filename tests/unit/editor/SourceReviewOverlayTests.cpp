@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "SourceEditorSession.h"
+#include "SourceEditorTools.h"
 #include "SourceReviewOverlay.h"
 #include "editor/language/LspResultProjection.h"
 #include "helpers/editor_ui/SourceEditorWidgetFixture.h"
@@ -71,6 +72,34 @@ TEST_CASE("Source review shows and navigates only changed bytes in the editing s
     CHECK(DrawsColor(colors.statusError));
     CHECK(DrawsColor(colors.actionPrimary));
     CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+}
+
+TEST_CASE("Narrow source review keeps its localized dismissal inside the content width", "[editor][source][review]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "alpha\nbeta\n");
+    fixture.first.Publish(source);
+    REQUIRE(fixture.first.PresentReview(Overlay(source, {{0, "alpha", "Alpha"}, {6, "beta", "Beta"}})));
+
+    EngineDataBus engineEvents;
+    EditorDataBus editorEvents;
+    LocalizationService locale{LocaleTag{"tr-TR"}};
+    REQUIRE(locale.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/tr-TR.json"));
+    REQUIRE(locale.Prepare(LocaleTag{"tr-TR"}));
+    REQUIRE(locale.ActivatePrepared());
+    const ThemeContext theme{Theme::Fonts{}};
+    const EditorSettingsSnapshot settings;
+    const EditorGuiContext context{engineEvents, editorEvents, locale, theme, settings};
+    SourceEditorTools tools;
+
+    fixture.gui.BeginFrame();
+    ImGui::SetNextWindowSize({96, 500});
+    ImGui::Begin("Narrow review", nullptr, ImGuiWindowFlags_NoScrollbar);
+    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+    CHECK_FALSE(tools.Draw(fixture.first, source, {}, {}, context));
+    CHECK(ImGui::GetItemRectMax().x <= right);
+    ImGui::End();
+    fixture.gui.EndFrame();
+    CHECK(source.IsCurrent());
 }
 
 TEST_CASE("Source review is isolated by exact publication and retires after typing", "[editor][source][review]") {

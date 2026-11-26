@@ -20,13 +20,20 @@ namespace Horo::Editor {
         bool Button(const EditorGuiContext &context, const char *key, const bool enabled = true) {
             const auto &label = Text(context, key);
             const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
-            if (const float width = [&context, &metrics, &label] {
+            const float width = [&context, &metrics, &label] {
                 const Theme::ScopedTextStyle style{context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans};
                 return ImGui::CalcTextSize(label.c_str()).x + metrics.paddingX * 2;
-            }(); ImGui::GetContentRegionAvail().x < width)
+            }();
+            if (ImGui::GetContentRegionAvail().x < width && ImGui::GetCursorPosX() > ImGui::GetCursorStartPos().x)
                 ImGui::NewLine();
-            const bool clicked = Ui::Button(
-                {.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .enabled = enabled, .font = context.theme.fonts.sans});
+            const bool clipped = ImGui::GetContentRegionAvail().x < width;
+            const bool clicked = Ui::Button({.label = label.c_str(),
+                                             .variant = Ui::ButtonVariant::Secondary,
+                                             .enabled = enabled,
+                                             .font = context.theme.fonts.sans,
+                                             .style = {.width = clipped ? Ui::StyleWidth::FillAvailable : Ui::StyleWidth::FitContent}});
+            if (clipped && (ImGui::IsItemFocused() || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)))
+                Ui::ShowTooltip(label.c_str(), &context.theme.fonts);
             ImGui::SameLine();
             return clicked;
         }
