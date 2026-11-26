@@ -84,6 +84,20 @@ namespace {
             REQUIRE(reviews.Status().feedback != SourceTransactionFeedback::Preparing);
         }
 
+        /** @brief Waits until the sole preparation worker finishes, without publishing on the owner lane. */
+        void AwaitPrepared() {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (std::chrono::steady_clock::now() < deadline) {
+                const auto snapshot = jobs.SnapshotIfChanged(0);
+                if (snapshot && snapshot->jobs.size() == 1 && snapshot->jobs.front().terminalResult) {
+                    REQUIRE(snapshot->jobs.front().state == JobState::Succeeded);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            FAIL("Source review preparation did not finish");
+        }
+
         /** @brief Dispatches through the same authority used to verify publication. */
         bool Process(const EditorWorkspaceViewCommandData &command) {
             return reviews.Process(command, documents, &jobs, project.directory, &files);
@@ -1364,5 +1378,46 @@ namespace {
         CHECK(applied.ErrorValue().code.Value() == SourceDocumentErrors::SaveConflict.code.Value());
         CHECK(before[0].IsCurrent());
         CHECK(before[1].IsCurrent());
+    }
+
+    TEST_CASE("Prepared source proposals still require live authority and unchanged files", "[editor][source][review][concurrency]") {
+        ReviewWorkspace workspace;
+        const auto command = workspace.Queue("proposal", "agent");
+        const auto before = workspace.Snapshots();
+        REQUIRE(workspace.Process(command));
+        workspace.AwaitPrepared();
+        REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Preparing);
+
+        const auto path = workspace.project.directory / "b.cpp";
+        auto expectedFeedback = SourceTransactionFeedback::Conflict;
+        std::string_view expectedDisk = "disk";
+        SECTION("same-size external rewrite with the original timestamp") {
+            const auto previousTime = std::filesystem::last_write_time(path);
+            workspace.project.Put(expectedDisk, "b.cpp");
+            std::filesystem::last_write_time(path, previousTime);
+            REQUIRE(std::filesystem::last_write_time(path) == previousTime);
+        }
+        SECTION("workspace closes after the worker completes") {
+            workspace.lifetime.RequestCancellation();
+            expectedFeedback = SourceTransactionFeedback::Cancelled;
+            expectedDisk = "base";
+        }
+
+        CHECK_FALSE(workspace.reviews.Poll(workspace.documents, &workspace.files));
+        const auto status = workspace.reviews.Status();
+        CHECK(status.feedback == expectedFeedback);
+        CHECK_FALSE(status.canUndo);
+        CHECK_FALSE(status.audit);
+        for (const auto &source : before) {
+            CHECK(source.IsCurrent());
+            CHECK_FALSE(source.Dirty());
+            CHECK(source.Text() == "base");
+        }
+        const auto first = workspace.files.ReadFileBounded(workspace.project.directory / "a.cpp", 16, {});
+        const auto second = workspace.files.ReadFileBounded(path, 16, {});
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        CHECK(std::ranges::equal(first.Value(), std::string_view{"base"}));
+        CHECK(std::ranges::equal(second.Value(), expectedDisk));
     }
 }  // namespace

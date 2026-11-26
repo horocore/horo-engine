@@ -104,6 +104,12 @@ ctest --test-dir build/skeleton --output-on-failure -R '^(HoroProposedChangeSetT
 | Editor GUI with the loopback local-model fixture | The chat panel receives complete replies and dispatches only the review associated with the offered source publication. |
 | Provider adapters with the loopback HTTP fixture | The provider contract suite covers local and OpenAI-compatible transport paths using test data. |
 
+The `[concurrency]` cases hold owner-lane publication until the preparation job
+has finished. They verify that retiring the workspace or replacing one file
+with different bytes of the same size and timestamp prevents the complete
+apply. Both buffers and disk files stay as observed just before publication,
+and the audit and undo state remain empty.
+
 Run the native storage cases on Windows, Linux and macOS when qualifying those
 platforms. Keep results per platform because path identity, exclusive moves and
 directory durability depend on the filesystem. The loopback fixture can run
