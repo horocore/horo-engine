@@ -5,6 +5,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::WorldCook {
     namespace {
@@ -12,6 +13,29 @@ namespace Horo::WorldCook {
         namespace AssetsFixture = Nav::AssetTestSupport;
         using AssetsFixture::Id;
         using namespace Application::Internal;
+
+        /** @brief Queries close to the center of one tile without reaching its neighbor. */
+        [[nodiscard]] Result<Nav::NavigationProjectionResult> ProjectFloor(const Nav::NavigationWorldReadLease &lease, const float x) {
+            const auto &active = lease.Descriptor();
+            const Nav::NavigationQueryRequirement requirement{Nav::NavigationQueryKind::NearestPoint, Nav::NavigationQualityLevel::Balanced,
+                                                              {64, 1, 2}};
+            return lease.Backend().ProjectPoint({active.world, active.topology, {x, 0, 2}, {1, 1, 1}, requirement}, lease.Cancellation());
+        }
+
+        /** @brief Uses the project's admitted filter to cross the rebuilt tile boundary. */
+        void RequireRebuiltRoute(const Nav::NavigationWorldReadLease &lease, const Nav::NavigationFilterId filter) {
+            const auto &active = lease.Descriptor();
+            const auto route = lease.Backend().FindPath(
+                {.world = active.world,
+                 .topology = active.topology,
+                 .start = {2, 0, 2},
+                 .destination = {12, 0, 2},
+                 .filter = filter,
+                 .requirement = {Nav::NavigationQueryKind::Path, Nav::NavigationQualityLevel::Balanced, {64, 16, 20}}},
+                lease.Cancellation());
+            REQUIRE(route.HasValue());
+            CHECK(route.Value().status == Nav::NavigationPathStatus::Reachable);
+        }
 
         /** @brief Owns the exact authored identity and policy reused by both base cook and capture. */
         struct ResidentNavigationFixture final {
@@ -122,21 +146,19 @@ namespace Horo::WorldCook {
             auto input = Nav::NavigationBakeInputSnapshot::Create(revisions, selection.catalog->Registry(), profiles, bindings, {},
                                                                   std::move(capture));
             REQUIRE(input.HasValue());
-            const Nav::NavigationRuntimeRebuildFence fence{previous, revisions, 1, 1, 2};
-            return {.expected = fence,
+            return {.expected = {previous, revisions, 1, 1, 2},
                     .nextTopology = Id<Nav::NavigationGeneration>(previous.topology.Value() + 1),
                     .input = std::make_shared<const Nav::NavigationBakeInputSnapshot>(std::move(input).Value()),
                     .compatibility = {fixture.digest, fixture.digest, fixture.digest},
-                    .observe =
-                        [fence] {
-                return Result<Nav::NavigationRuntimeRebuildFence>::Success(fence);
-            },
                     .maximumRebuiltTiles = 2,
                     .maximumOwnedBytes = 12U * 1024U * 1024U};
         }
     }  // namespace
 
-    TEST_CASE("Project resident Navigation publishes an authorized rebuild at the owner cutoff", "[world_cook][navigation][native]") {
+    TEST_CASE("Project resident Navigation gates rebuilt Detour coverage at the owner cutoff", "[world_cook][navigation][native]") {
+        const bool revokeBeforePublication = GENERATE(false, true);
+        CAPTURE(revokeBeforePublication);
+        unsigned observations{};
         const ResidentNavigationFixture fixture;
         JobSystem jobs{JobSystemConfig{1, 4}};
         const auto selection = MakeSelection(fixture, jobs);
@@ -158,19 +180,50 @@ namespace Horo::WorldCook {
         REQUIRE(scene.Startup({}).HasValue());
         REQUIRE_FALSE(AssetsFixture::ActivateService(scene, {}, std::move(startup).Build().Value()));
 
-        const auto previous = navigation->assets->Acquire().Value();
+        const auto world = navigation->assets->ActiveWorld();
+        REQUIRE(world);
+        auto previous = navigation->assets->Acquire().Value();
+        REQUIRE(ProjectFloor(previous, 2).HasValue());
+        Nav::TestSupport::RequireError(ProjectFloor(previous, 12), Nav::NavigationErrors::NoNavigationData);
         auto command = Command(fixture, *selection, previous.Descriptor());
         const auto next = command.nextTopology;
+        command.observe = [&observations, revokeBeforePublication, expected = command.expected] {
+            auto actual = expected;
+            if (++observations == 2 && revokeBeforePublication)
+                ++actual.worldChanges;
+            return Result<Nav::NavigationRuntimeRebuildFence>::Success(actual);
+        };
         const auto queued = QueueProjectSceneNavigationRebuild(*navigation, std::move(command));
         REQUIRE(queued.HasValue());
         jobs.Shutdown(ShutdownPolicy::Drain);
-        CHECK(navigation->assets->ActiveWorld()->ActiveDescriptor().Value() == previous.Descriptor());
+        CHECK(world->ActiveDescriptor().Value() == previous.Descriptor());
+        CHECK(observations == 0);
+        Nav::TestSupport::RequireError(ProjectFloor(previous, 12), Nav::NavigationErrors::NoNavigationData);
         const auto committed = CommitProjectSceneNavigationRebuild(*navigation, {});
+        CHECK(observations == 2);
+        CHECK_FALSE(world->HasStagedCandidate());
+        CHECK_FALSE(navigation->rebuild->Busy());
+        if (revokeBeforePublication) {
+            Nav::TestSupport::RequireError(committed, Nav::NavigationErrors::StaleSnapshot);
+            CHECK(world->ActiveDescriptor().Value() == previous.Descriptor());
+            CHECK_FALSE(previous.IsRevoked());
+            CHECK(ProjectFloor(previous, 2).HasValue());
+            Nav::TestSupport::RequireError(ProjectFloor(previous, 12), Nav::NavigationErrors::NoNavigationData);
+            CHECK(world->RetiredCount() == 0);
+            return;
+        }
         REQUIRE(committed.HasValue());
         CHECK(committed.Value());
         const auto current = navigation->assets->Acquire().Value();
         CHECK(current.Descriptor().topology == next);
         CHECK(previous.IsRevoked());
+        Nav::TestSupport::RequireError(ProjectFloor(previous, 2), Nav::NavigationErrors::QueryCancelled);
+        CHECK(ProjectFloor(current, 12).HasValue());
+        RequireRebuiltRoute(current, fixture.filter);
         CHECK_FALSE(navigation->assets->ActiveRuntimeRebuildTiles()->back()->Topology().IsEmpty());
+        CHECK(world->RetiredCount() == 1);
+        previous = {};
+        static_cast<void>(world->CollectRetired());
+        CHECK(world->RetiredCount() == 0);
     }
 }  // namespace Horo::WorldCook
