@@ -1180,15 +1180,16 @@ model inference. The policy can limit requests, tokens/audio duration, monetary
 estimate, concurrency, retries, and session/project totals. Usage presentation
 must distinguish an estimate from provider-authoritative billing.
 
-When the AI panel is enabled, `--ai-session-operations <count>` caps model
+When the AI panel is enabled, `--ai-session-operations <count>` caps provider
 operations across the editor process and `--ai-project-operations <count>`
 caps them independently for each attached project in that process. An omitted
-option leaves its scope uncapped. Zero disallows provider operations. Local and
-cloud modes share the counts, and detaching or reopening the dock or project
-does not reset them. Restarting the editor starts a new session. A submitted
-turn or model-list load counts once when accepted by the worker, including
-failed or cancelled operations. The panel displays the accepted operations
-against each enabled ceiling.
+option leaves its scope uncapped. Zero disallows provider operations. Local
+models, cloud models, and on-device speech share the counts. Detaching or
+reopening the dock or project preserves them. Restarting the editor starts a
+new session. A model turn, model-list load, or speech capture counts once when
+accepted by its worker, including operations that later fail or are cancelled.
+The speech budget is checked before opening the microphone. The panel displays
+the accepted operations against each enabled ceiling.
 
 Before cloud approval the panel displays the reviewed message size in UTF-8
 bytes and the output token ceiling. The completed response displays any

@@ -27,7 +27,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <map>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -270,6 +269,16 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Maps the two quota failures to their own localized messages. */
+        const char *ProviderBudgetFailureKey(const EditorProviderAdmission admission) noexcept {
+            using enum EditorProviderAdmission;
+            if (admission == SessionExhausted)
+                return "session_model_budget_exceeded";
+            if (admission == ProjectExhausted)
+                return "project_model_budget_exceeded";
+            return nullptr;
+        }
+
         /** @brief Presents and reviews results from the editor-owned background operation. */
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
@@ -278,7 +287,8 @@ namespace Horo::Editor {
                             [[maybe_unused]] EditorImmersiveListening *listening, const EditorModelProviderOptions options)
                 : IWorkspacePanel("workspace.local_agent"),
                   cloudProfiles_(options.policy == EditorModelProviderPolicy::AllowCloud ? std::move(cloudProfiles) : nullptr),
-                  background_(std::move(background)), modelOptions_(options), history_(jobs, files), files_(files), processes_(processes) {
+                  background_(std::move(background)), providerPolicy_(options.policy), providerBudget_(options.limits),
+                  history_(jobs, files), files_(files), processes_(processes) {
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 listening_ = listening;
 #endif
@@ -403,7 +413,7 @@ namespace Horo::Editor {
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
                 textFieldActive_ = false;
                 DrawProviderSelection(locale);
-                DrawModelOperationUsage(locale);
+                DrawProviderOperationUsage(locale);
                 if (cloudMode_) {
                     CancelListening();
                     ResetContactReview();
@@ -459,6 +469,7 @@ namespace Horo::Editor {
                 ResetListeningInput();
                 listeningReferences_.reset();
                 requestedListeningReferences_.reset();
+                listeningBudgetFailure_ = nullptr;
                 reviewingSurfaces_ = false;
 #endif
             }
@@ -533,10 +544,23 @@ namespace Horo::Editor {
                 }
                 DrawListeningInput(context);
                 const bool ready = listeningDevice_.has_value() && captureSceneSelection_ && listening_->CanListen();
-                if (Button(locale, "xr_listening_start", ready)) {
-                    const auto selection = captureSceneSelection_(AgentSceneSelectionPurpose::ImmersivePlay);
-                    listening_->Start(*listeningDevice_, context.settings.settings.languageTag, contextGeneration_,
-                                      selection.value_or(AgentSceneSelectionSnapshot{}));
+                if (Button(locale, "xr_listening_start", ready))
+                    StartListening(context.settings.settings.languageTag);
+                if (listeningBudgetFailure_)
+                    ImGui::TextWrapped("%s", LocalizedText(locale, listeningBudgetFailure_).c_str());
+            }
+
+            /** @brief Applies the shared quota before opening a microphone or scheduling recognition. */
+            void StartListening(const std::string_view locale) {
+                try {
+                    const auto admitted = providerBudget_.TryStart(contextProject_, [&] {
+                        const auto selection = captureSceneSelection_(AgentSceneSelectionPurpose::ImmersivePlay);
+                        listening_->Start(*listeningDevice_, locale, contextGeneration_, selection.value_or(AgentSceneSelectionSnapshot{}));
+                        return listening_->Status() == EditorImmersiveListening::State::Listening;
+                    });
+                    listeningBudgetFailure_ = ProviderBudgetFailureKey(admitted);
+                } catch (const std::bad_alloc &) {
+                    listeningBudgetFailure_ = "xr_listening_resources_unavailable";
                 }
             }
 
@@ -731,6 +755,7 @@ namespace Horo::Editor {
             EditorImmersiveListening *listening_{};
             int listeningInput_{-1};
             std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
+            const char *listeningBudgetFailure_{};
             std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
             std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent_;
             std::optional<AgentSceneReferenceReview> listeningReferences_;
@@ -910,7 +935,7 @@ namespace Horo::Editor {
 
             /** @brief Switches the selected provider only when the local composer holds no active review. */
             void DrawProviderSelection(const ILocalizationService &locale) {
-                if (modelOptions_.policy == EditorModelProviderPolicy::LocalOnly) {
+                if (providerPolicy_ == EditorModelProviderPolicy::LocalOnly) {
                     ImGui::TextWrapped("%s", LocalizedText(locale, "local_only").c_str());
                     return;
                 }
@@ -2124,37 +2149,21 @@ namespace Horo::Editor {
 
             /** @brief Charges admitted provider work once even if a failure or cancellation suppresses its result. */
             const char *StartModelOperation(BackgroundTurn::Operation task) {
-                const auto &limits = modelOptions_.limits;
-                if (limits.session && sessionOperations_ >= *limits.session)
-                    return "session_model_budget_exceeded";
-                std::uint32_t *projectOperations = nullptr;
-                if (limits.project) {
-                    projectOperations = &projectOperations_[contextProject_];
-                    if (*projectOperations >= *limits.project)
-                        return "project_model_budget_exceeded";
-                }
-                if (!background_->Start(std::move(task)))
-                    return "failed";
-                if (limits.session)
-                    ++sessionOperations_;
-                if (projectOperations)
-                    ++*projectOperations;
-                return nullptr;
+                const auto admitted = providerBudget_.TryStart(contextProject_, [&] { return background_->Start(std::move(task)); });
+                return admitted == EditorProviderAdmission::NotStarted ? "failed" : ProviderBudgetFailureKey(admitted);
             }
 
             /** @brief Displays the operation counts for the enabled scopes in either provider mode. */
-            void DrawModelOperationUsage(const ILocalizationService &locale) const {
-                const auto &limits = modelOptions_.limits;
+            void DrawProviderOperationUsage(const ILocalizationService &locale) const {
+                const auto &limits = providerBudget_.Limits();
                 const auto show = [&](const char *key, const std::uint32_t used, const std::uint32_t limit) {
                     ImGui::TextWrapped("%s %u/%u", LocalizedText(locale, key).c_str(), static_cast<unsigned>(used),
                                        static_cast<unsigned>(limit));
                 };
                 if (limits.session)
-                    show("session_model_budget_usage", sessionOperations_, *limits.session);
-                if (limits.project) {
-                    const auto used = projectOperations_.find(contextProject_);
-                    show("project_model_budget_usage", used == projectOperations_.end() ? 0 : used->second, *limits.project);
-                }
+                    show("session_model_budget_usage", providerBudget_.SessionOperations(), *limits.session);
+                if (limits.project)
+                    show("project_model_budget_usage", providerBudget_.ProjectOperations(contextProject_), *limits.project);
             }
 
             [[nodiscard]] bool Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {},
@@ -2379,9 +2388,8 @@ namespace Horo::Editor {
             std::optional<EditorLocalAgentContext> contextPreview_;
             std::optional<SceneQueryReview> sceneQueryReview_;
             std::shared_ptr<BackgroundTurn> background_;
-            const EditorModelProviderOptions modelOptions_;
-            std::map<std::string, std::uint32_t> projectOperations_;
-            std::uint32_t sessionOperations_{};
+            const EditorModelProviderPolicy providerPolicy_;
+            EditorProviderOperationBudget providerBudget_;
             EditorLocalAgentHistory history_;
             std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;
             std::shared_ptr<SceneQueryProgress> sceneQuery_;

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cstdint>
+#include "EditorProviderOperationBudget.h"
+
 #include <functional>
 #include <memory>
-#include <optional>
 
 namespace Horo {
     class JobSystem;
@@ -16,12 +16,6 @@ namespace Horo::Editor {
     class EditorCloudModelProfileStore;
     class EditorImmersiveListening;
 
-    /** @brief Limits accepted model operations across the editor session and for each project within it. */
-    struct EditorModelOperationLimits final {
-        std::optional<std::uint32_t> session; /**< Unset leaves the session uncapped. */
-        std::optional<std::uint32_t> project; /**< Unset leaves individual projects uncapped. */
-    };
-
     /** @brief Selects which model-provider residences the editor host can expose. */
     enum class EditorModelProviderPolicy {
         AllowCloud,
@@ -30,7 +24,7 @@ namespace Horo::Editor {
 
     /** @brief Provider policy and operation limits fixed at editor startup. */
     struct EditorModelProviderOptions final {
-        EditorModelOperationLimits limits;
+        EditorProviderOperationLimits limits;
         EditorModelProviderPolicy policy{EditorModelProviderPolicy::AllowCloud};
     };
 
@@ -45,7 +39,7 @@ namespace Horo::Editor {
      * @param cloudProfiles Optional host-owned user-profile and credential authority.
      * @param processes Optional host process authority for an isolated C++ diagnostic preview. Outlives the panel.
      * @param listening Optional host-owned immersive listening composition.
-     * @param options Provider eligibility and optional model operation ceilings for this editor session.
+     * @param options Provider eligibility and optional model and speech operation ceilings for this editor session.
      * @return Workspace panel and runtime pump that must remain on the editor lane. */
     [[nodiscard]] EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
                                                                       std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles = {},

@@ -803,7 +803,36 @@ namespace {
         CHECK(fixture.DrawnText().find("tokens reported for the final inference") == std::string::npos);
     }
 
-    TEST_CASE("AI model operation quotas survive project reattachment and include failed requests", "[.][chat-http]") {
+    TEST_CASE("Model and speech dispatch share the provider operation budget", "[editor][agent]") {
+        using enum EditorProviderAdmission;
+        EditorProviderOperationBudget budget{{.session = 2, .project = 1}};
+        unsigned modelStarts{};
+        unsigned microphoneStarts{};
+        const auto startModel = [&] {
+            ++modelStarts;
+            return true;
+        };
+        const auto startSpeech = [&] {
+            ++microphoneStarts;
+            return true;
+        };
+        CHECK(budget.TryStart("project-a", [] { return false; }) == NotStarted);
+        CHECK(budget.ProjectOperations("project-a") == 0);
+        CHECK(budget.SessionOperations() == 0);
+        CHECK(budget.TryStart("project-a", startModel) == Started);
+        CHECK(budget.TryStart("project-a", startSpeech) == ProjectExhausted);
+        CHECK(microphoneStarts == 0);
+        CHECK(budget.TryStart("project-b", startSpeech) == Started);
+        CHECK(budget.TryStart("project-c", startModel) == SessionExhausted);
+        CHECK(budget.TryStart("project-c", startSpeech) == SessionExhausted);
+        CHECK(budget.ProjectOperations("project-b") == 1);
+        CHECK(budget.ProjectOperations("project-c") == 0);
+        CHECK(budget.SessionOperations() == 2);
+        CHECK(modelStarts == 1);
+        CHECK(microphoneStarts == 1);
+    }
+
+    TEST_CASE("AI provider operation quotas survive project reattachment and include failed requests", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         REQUIRE(endpoint);
         LocalAgentFixture fixture{
@@ -831,7 +860,7 @@ namespace {
 
         attach("layout-test");
         fixture.Activate("###discover");
-        CHECK(shows("The AI model operation limit for this project has been reached."));
+        CHECK(shows("The AI provider operation limit for this project has been reached."));
         CHECK(shows("Editor session AI operations 1/2"));
 
         attach("other-project");
@@ -842,7 +871,7 @@ namespace {
 
         attach("third-project");
         fixture.Activate("###discover");
-        CHECK(shows("The AI model operation limit for this editor session has been reached."));
+        CHECK(shows("The AI provider operation limit for this editor session has been reached."));
         CHECK(shows("Project AI operations 0/1"));
     }
 
