@@ -966,6 +966,23 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(CountCameraTint(pixels) > 16);
     }
 
+    /** @brief Presents the same viewport attachment that supplies the pending capture. */
+    void PresentViewportCaptureFrame(Host &host, std::uint64_t frameNumber) {
+        host.SynchronizeViewport({});
+        host.PrepareScene();
+        auto pass = host.ViewportPass({});
+        pass.clearColor = {1, 0, 0, 1};
+        auto frame = host.Frame(frameNumber);
+        const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = pass},
+                                RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+        Check(host.viewport->ExecutePreparedFrame(frame, passes), "record viewport and bounded copy");
+        const auto view = host.viewport->TextureView();
+        REQUIRE(view.IsValid());
+        host.ComposeGui(frame, &view);
+        Check(frame.Present(), "present the same attachment after the copy");
+        host.viewport->FinishColorFrame(true);
+    }
+
     TEST_CASE("Native Vulkan publishes an authorized viewport crop without interrupting presentation",
               "[native-smoke][vulkan][gui][viewport][image-capture]") {
         if (!std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
@@ -989,31 +1006,34 @@ namespace Horo::Tests::VulkanEditor {
         CHECK_FALSE(host.viewport->ReadImageCapture(requested.Value() + 1));
         CHECK_FALSE(host.viewport->CancelImageCapture(requested.Value() + 1));
         REQUIRE(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Pending);
-        host.SynchronizeViewport({});
-        host.PrepareScene();
-        auto pass = host.ViewportPass({});
-        pass.clearColor = {1, 0, 0, 1};
-        auto frame = host.Frame(1);
-        const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = pass},
-                                RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
-        Check(host.viewport->ExecutePreparedFrame(frame, passes), "record viewport and bounded copy");
-        const auto view = host.viewport->TextureView();
-        REQUIRE(view.IsValid());
-        host.ComposeGui(frame, &view);
-        Check(frame.Present(), "present the same attachment after the copy");
-        host.viewport->FinishColorFrame(true);
+        PresentViewportCaptureFrame(host, 1);
 
-        const auto image = WaitForViewportCrop(host, {}, requested.Value());
-        REQUIRE(image.phase == EditorViewportImagePhase::Ready);
-        REQUIRE(image.artifact);
-        CHECK(image.artifact->region == region);
-        REQUIRE(image.artifact->rgba.size() == region.Bytes());
-        const std::array red{std::byte{255}, std::byte{0}, std::byte{0}, std::byte{255}};
-        for (std::size_t offset = 0; offset < region.Bytes(); offset += red.size())
-            CHECK(std::ranges::equal(std::span{image.artifact->rgba}.subspan(offset, red.size()), red));
-        authorized = false;
-        CHECK(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Cancelled);
-        CHECK(image.publication.expired());
+        SECTION("Revoking access before readback suppresses the submitted capture") {
+            const auto pending = host.viewport->ReadImageCapture(requested.Value());
+            REQUIRE(pending);
+            REQUIRE(pending->phase == EditorViewportImagePhase::Pending);
+            authorized = false;
+            PresentViewportCaptureFrame(host, 2);
+            const auto withdrawn = host.viewport->ReadImageCapture(requested.Value());
+            REQUIRE(withdrawn);
+            CHECK(withdrawn->phase == EditorViewportImagePhase::Cancelled);
+            CHECK_FALSE(withdrawn->artifact);
+            CHECK(withdrawn->publication.expired());
+        }
+
+        SECTION("Authorized pixels remain available only until access is withdrawn") {
+            const auto image = WaitForViewportCrop(host, {}, requested.Value());
+            REQUIRE(image.phase == EditorViewportImagePhase::Ready);
+            REQUIRE(image.artifact);
+            CHECK(image.artifact->region == region);
+            REQUIRE(image.artifact->rgba.size() == region.Bytes());
+            const std::array red{std::byte{255}, std::byte{0}, std::byte{0}, std::byte{255}};
+            for (std::size_t offset = 0; offset < region.Bytes(); offset += red.size())
+                CHECK(std::ranges::equal(std::span{image.artifact->rgba}.subspan(offset, red.size()), red));
+            authorized = false;
+            CHECK(host.viewport->ReadImageCapture(requested.Value())->phase == EditorViewportImagePhase::Cancelled);
+            CHECK(image.publication.expired());
+        }
         CHECK(host.Drain());
     }
 
