@@ -404,6 +404,8 @@ namespace Horo::Agent {
             const auto *plan = review.Read(*context);
             REQUIRE(plan);
             CHECK(plan->draft->text == "Result");
+            REQUIRE(plan->timing);
+            CHECK_FALSE(plan->timing->toolInspection);
             return review;
         };
         SECTION("a completed draft expires with the context used to produce it") {

@@ -376,7 +376,8 @@ namespace Horo::Agent {
         return {.status = Completed,
                 .draft = std::move(result.messages.back()),
                 .usage = result.finalUsage,
-                .tools = std::move(review.tools)};
+                .tools = std::move(review.tools),
+                .timing = review.timing};
     }
 
     /** @brief Runs the shared bounded stream and chooses either review publication or tool dispatch. */
@@ -427,7 +428,10 @@ namespace Horo::Agent {
                 if (!AdmitModelRequest(request, known).Succeeded())
                     return {BudgetExceeded, {}};
                 Detail::AgentTurnStream stream{progress.remaining};
+                const auto inferenceStart = plan ? Clock::now() : Clock::time_point{};
                 const auto outcome = StreamResponse(provider, request, stop, stream, observeText, contextGate);
+                if (plan)
+                    plan->timing.inference = Clock::now() - inferenceStart;
                 if (const auto status = CompleteModelRound(outcome, stream, stop, contextGate); status != Completed)
                     return FailedRound(status, outcome.error);
                 const auto used =
@@ -438,9 +442,12 @@ namespace Horo::Agent {
                 progress.remaining = stream.Remaining();
                 auto message = std::move(stream).TakeMessage();
                 if (plan) {
+                    const auto inspectionStart = Clock::now();
                     const auto status = ValidatePlanRound(request, message, plan->inspect, stop, contextGate, plan->tools);
                     if (status != Completed)
                         return FailedRound(status);
+                    if (!message.toolIntents.empty())
+                        plan->timing.toolInspection = Clock::now() - inspectionStart;
                 }
                 if (plan || message.toolIntents.empty()) {
                     if (context) {

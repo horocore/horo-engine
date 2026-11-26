@@ -4,6 +4,7 @@
 #include "Horo/Agent/ModelProvider.h"
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 
 namespace Horo::Agent {
@@ -117,6 +118,12 @@ namespace Horo::Agent {
     /** @brief Validates one proposed tool against host policy. Builds no operation and consumes no approval. */
     using AgentPlanToolValidator = std::function<AgentPlanToolInspection(const ModelToolIntent &)>;
 
+    /** @brief Monotonic elapsed times for the stages of an inert plan. */
+    struct AgentPlanTiming final {
+        std::chrono::steady_clock::duration inference{};                      /**< Provider call, including validated stream delivery. */
+        std::optional<std::chrono::steady_clock::duration> toolInspection{}; /**< Host inspection when the draft contains tool intents. */
+    };
+
     /** @brief One bounded inference for review. Draft intents carry neither execution authority nor tool results. */
     struct AgentTurnPlan final {
         AgentTurnStatus status{AgentTurnStatus::InvalidRequest};
@@ -126,6 +133,7 @@ namespace Horo::Agent {
         std::vector<AgentPlannedTool> tools; /**< One host result per draft intent, in the same order. */
         std::optional<Security::AgentPolicyReason> contextError;
         std::optional<std::chrono::seconds> retryAfter{}; /**< Bounded retry hint for a throttled provider. */
+        std::optional<AgentPlanTiming> timing{};          /**< Elapsed stage timings for a complete draft. */
     };
 
     /** @brief Editor-owned admission for at most one active authoring turn.
@@ -185,6 +193,7 @@ namespace Horo::Agent {
         struct PlanReview final {
             const AgentPlanToolValidator &inspect;
             std::vector<AgentPlannedTool> tools;
+            AgentPlanTiming timing;
         };
 
         struct TurnPorts final {

@@ -105,20 +105,28 @@ namespace Horo::Agent {
             expected = Cancelled;
         }
         Tools tools{registryEffect};
+        std::chrono::steady_clock::duration inference{};
+        std::chrono::steady_clock::duration inspection{};
         model.action = [&](std::size_t, const ModelEventSink &sink, std::stop_token) {
-            return Emit(sink,
-                        {Intent("first"), sibling, {.kind = ModelEventKind::Usage, .usage = {8, 2}}, {.kind = ModelEventKind::Completed}});
+            const auto start = std::chrono::steady_clock::now();
+            const auto outcome = Emit(sink, {Intent("first"), sibling, {.kind = ModelEventKind::Usage, .usage = {8, 2}},
+                                            {.kind = ModelEventKind::Completed}});
+            inference = std::chrono::steady_clock::now() - start;
+            return outcome;
         };
         const auto result = runtime.Plan(model, 1, Request(true), {}, [&](const ModelToolIntent &intent) {
+            const auto start = std::chrono::steady_clock::now();
             const auto inspected = InspectMcpPlanTool(*tools.snapshot, {}, intent);
             if (cancelDuringReview)
                 stop.request_stop();
+            inspection += std::chrono::steady_clock::now() - start;
             return inspected;
         }, stop.get_token());
         CHECK(result.status == expected);
         CHECK(model.requests.size() == 1);
         CHECK(tools.scene->calls == 0);
         REQUIRE(result.draft.has_value() == (expected == Completed));
+        CHECK(result.timing.has_value() == (expected == Completed));
         if (result.draft) {
             CHECK(result.draft->toolIntents.size() == 2);
             REQUIRE(result.tools.size() == 2);
@@ -126,6 +134,10 @@ namespace Horo::Agent {
             CHECK(result.tools[1].effect == expectedEffect);
             REQUIRE(result.usage);
             CHECK(result.usage->outputTokens == 2);
+            REQUIRE(result.timing);
+            REQUIRE(result.timing->toolInspection);
+            CHECK(result.timing->inference >= inference);
+            CHECK(*result.timing->toolInspection >= inspection);
         } else
             CHECK(result.tools.empty());
     }
