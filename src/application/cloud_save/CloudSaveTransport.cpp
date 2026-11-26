@@ -1,5 +1,4 @@
 #include "Horo/Application/CloudSaveTransport.h"
-#include "Horo/Runtime/Save/SaveSlotLifecycle.h"
 
 #include <algorithm>
 #include <array>
@@ -82,6 +81,28 @@ namespace Horo::Application {
             using enum Runtime::SaveCloudGenerationState;
             return selected.state != Deleted && selected.state != Conflicted && selected.state != Downloading &&
                    MatchesPrecondition(selected.object, key, expected);
+        }
+
+        /** @brief Restages immutable archive bytes only when the exact original intent can still describe them. */
+        Result<StagedCloudSaveUpload> RestageUpload(Runtime::SaveSlotLifecycle &lifecycle,
+                                                   const Runtime::SaveSlotLifecycleTarget &target,
+                                                   const CloudSaveDurableMutation &mutation, const std::uint64_t maximumBytes,
+                                                   const CancellationToken &cancellation) {
+            using Response = Result<StagedCloudSaveUpload>;
+            const auto exported = lifecycle.ExportVerified(target, static_cast<std::size_t>(maximumBytes), cancellation);
+            if (exported.HasError())
+                return Response::Failure(exported.ErrorValue());
+            const auto &intent = mutation.Intent();
+            const auto &archive = exported.Value();
+            if (archive.parent != intent.parent || archive.entry.publication.archiveContent != intent.archive)
+                return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
+            const auto &bytes = *archive.archive.bytes;
+            if (bytes.size() != intent.upload->size || ComputeSha256(bytes) != intent.upload->digest)
+                return Response::Failure(MakeError(CloudObjectErrors::IntegrityMismatch));
+            auto owned = CloudBlobOwnedBytes::Copy(bytes);
+            if (owned.HasError())
+                return Response::Failure(owned.ErrorValue());
+            return Response::Success({.mutation = mutation, .bytes = std::move(owned).Value()});
         }
     }
 
@@ -292,7 +313,8 @@ namespace Horo::Application {
     /** @copydoc CloudSaveTransport::ReconcileUpload */
     Result<CloudSaveUploadRecovery> CloudSaveTransport::ReconcileUpload(
         Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
-        const CloudSaveUploadProbe &probe, const PlatformRequestSnapshot<CloudBlobReadResult> &completion) const {
+        const CloudSaveUploadProbe &probe, const PlatformRequestSnapshot<CloudBlobReadResult> &completion,
+        const CancellationToken &cancellation) const {
         using Response = Result<CloudSaveUploadRecovery>;
         const auto &mutation = probe.mutation_;
         if (!frontend_->IsOpen() || mutation.partition_ != journalPartition_)
@@ -304,7 +326,7 @@ namespace Horo::Application {
             const auto published = PublishUploadConfirmation(lifecycle, access, mutation, *observed.Value());
             if (published.HasError())
                 return Response::Failure(published.ErrorValue());
-            return Response::Success(CloudSaveUploadRecovery::Confirmed);
+            return Response::Success({});
         }
 
         const auto current = lifecycle.ReadCloudRevision(access, scope_);
@@ -313,6 +335,13 @@ namespace Horo::Application {
         const auto *selected = FindUploadSelection(mutation, current.Value());
         if (!selected || !CanApplyUpload(*selected, mutation.key_, mutation.intent_.revision))
             return Response::Failure(MakeError(Runtime::SaveErrors::CloudMetadataStale));
-        return Response::Success(CloudSaveUploadRecovery::RetryOriginal);
+        const Runtime::SaveSlotLifecycleTarget target{
+            .address = {.namespaceAccess = access, .slot = selected->slot},
+            .catalogRevision = current.Value().Index().revision,
+            .generation = selected->generation};
+        auto retry = RestageUpload(lifecycle, target, mutation, probe.maximumBytes_, cancellation);
+        if (retry.HasError())
+            return Response::Failure(retry.ErrorValue());
+        return Response::Success({.retry = std::move(retry).Value()});
     }
 }

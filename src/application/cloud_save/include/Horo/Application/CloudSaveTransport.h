@@ -5,7 +5,7 @@
  * @brief Host-only bridge between Save coordinator intents and opaque cloud transport.
  */
 
-#include "Horo/Application/CloudSaveMutationJournal.h"
+#include "Horo/Application/CloudSaveUpload.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "Horo/Runtime/Save/SaveCloudRevisionMetadata.h"
@@ -15,10 +15,6 @@
 #include <optional>
 #include <type_traits>
 #include <utility>
-
-namespace Horo::Runtime {
-    class SaveSlotLifecycle;
-}
 
 namespace Horo::Application {
     /** @brief The exact platform request admitted for one owning Save operation. */
@@ -48,10 +44,9 @@ namespace Horo::Application {
         CloudSaveRequest<PlatformServices::CloudBlobReadResult> request_;
     };
 
-    /** @brief The safe action established by one complete, correlated upload observation. */
-    enum class CloudSaveUploadRecovery : std::uint8_t {
-        Confirmed,
-        RetryOriginal
+    /** @brief A published upload confirmation or the exact restaged intent and bytes for a conditional retry. */
+    struct CloudSaveUploadRecovery final {
+        std::optional<StagedCloudSaveUpload> retry; /**< Empty after durable local confirmation. */
     };
 
     /**
@@ -146,14 +141,16 @@ namespace Horo::Application {
         /** @brief Recovers an uncertain upload from the probe's correlated terminal observation.
          * @param lifecycle Local catalog authority. @param access Exact bound namespace revision.
          * @param probe Admitted read and original durable intent. @param completion Observation from that exact request.
-         * @return Durable confirmation, permission to consider the original conditional retry, or typed failure.
-         * @details The coordinator must revalidate the local selection and exact bytes before dispatching the original intent.
-         * Runs on the serialized storage lane while the authenticated frontend binding remains valid.
+         * @param cancellation Cooperative stop while restaging the original archive.
+         * @return Durable confirmation, exact restaged retry for the original conditional mutation, or typed failure.
+         * @details Runs on the serialized storage lane while the authenticated frontend binding remains valid.
+         * Dispatch of a restaged retry remains on the frontend owner lane and uses the retained immutable bytes.
          */
         [[nodiscard]] Result<CloudSaveUploadRecovery> ReconcileUpload(
             Runtime::SaveSlotLifecycle &lifecycle, const Runtime::SaveNamespaceAccessRequest &access,
             const CloudSaveUploadProbe &probe,
-            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion) const;
+            const PlatformServices::PlatformRequestSnapshot<PlatformServices::CloudBlobReadResult> &completion,
+            const CancellationToken &cancellation = {}) const;
 
     private:
         friend class CloudSaveMutationJournal;

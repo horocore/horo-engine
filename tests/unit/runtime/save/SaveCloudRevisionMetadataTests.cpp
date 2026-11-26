@@ -449,7 +449,6 @@ namespace Horo::Runtime {
 
         TEST_CASE("Uncertain uploads recover from the exact bounded provider read",
                   "[unit][save][cloud-transport][recovery]") {
-            using Application::CloudSaveUploadRecovery;
             SaveSlotLifecycleTest::Fixture fixture;
             fixture.Import(10);
             fixture.Import(11);
@@ -469,7 +468,7 @@ namespace Horo::Runtime {
             REQUIRE(transport.DispatchMutation(2, staged.Value().mutation, staged.Value().bytes).HasValue());
             REQUIRE(backend->lastCloudWrite);
             const auto write = *backend->lastCloudWrite;
-            const auto probe = transport.ProbeUpload(3, staged.Value().mutation);
+            const auto probe = transport.ProbeUpload(2, staged.Value().mutation);
             REQUIRE(probe.HasValue());
             const auto &handle = probe.Value().Request().handle;
             REQUIRE(backend->lastCloudRead);
@@ -479,10 +478,10 @@ namespace Horo::Runtime {
             REQUIRE(before.HasValue());
             REQUIRE(backend->requests.MarkRunning(handle).HasValue());
 
-            const auto recover = [&] {
+            const auto recover = [&](const CancellationToken &cancellation = CancellationToken{}) {
                 const auto snapshot = backend->requests.Query(handle);
                 REQUIRE(snapshot.HasValue());
-                return transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value());
+                return transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value(), cancellation);
             };
 
             SECTION("A commit survives loss of the write response and restart of local storage") {
@@ -490,31 +489,42 @@ namespace Horo::Runtime {
                 head.transportDigest.reset();
                 REQUIRE(backend->requests.CompleteSuccess(handle.Id(), handle.Generation(),
                             Cloud::CloudBlobReadResult{write.subject, write.subject.SessionGeneration(), head, write.bytes}).HasValue());
-                std::optional<CloudSaveUploadRecovery> delivered;
+                bool confirmed{};
                 auto subscription = transport.OnComplete(probe.Value().Request(), [&](const OperationId operation, const auto &snapshot) {
-                    CHECK(operation == 3);
+                    CHECK(operation == 2);
                     const auto result = transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot);
                     REQUIRE(result.HasValue());
-                    delivered = result.Value();
+                    confirmed = !result.Value().retry;
                 });
                 REQUIRE(subscription.HasValue());
-                CHECK_FALSE(delivered);
+                CHECK_FALSE(confirmed);
                 CHECK(backend->requests.DispatchCompletions() == 1);
-                CHECK(delivered == CloudSaveUploadRecovery::Confirmed);
+                CHECK(confirmed);
                 fixture.Reopen();
                 const auto stored = fixture.owner->ReadCloudRevision(fixture.Access(), scope);
                 REQUIRE(stored.HasValue());
                 CHECK(stored.Value().Metadata().records.front().lastConfirmed == staged.Value().mutation.Intent().mutation);
                 CHECK(stored.Value().Metadata().records.front().state == SaveCloudGenerationState::Clean);
                 CHECK(stored.Value().Index().entries == before.Value().Index().entries);
-                REQUIRE(recover().Value() == CloudSaveUploadRecovery::Confirmed);
+                const auto repeated = recover();
+                REQUIRE(repeated.HasValue());
+                CHECK_FALSE(repeated.Value().retry);
                 CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == stored.Value().Metadata());
             }
             SECTION("Only exact absence permits retry of the original conditional create") {
                 REQUIRE(backend->requests.CompleteFailure(handle, MakeError(Cloud::CloudObjectErrors::NotFound)).HasValue());
-                REQUIRE(recover().Value() == CloudSaveUploadRecovery::RetryOriginal);
+                fixture.Reopen();
+                CancellationSource stop;
+                stop.RequestCancellation();
+                Cloud::RequireError(recover(stop.Token()), SaveErrors::OperationCancelled);
+                const auto recovered = recover();
+                REQUIRE(recovered.HasValue());
+                REQUIRE(recovered.Value().retry);
+                const auto &retry = *recovered.Value().retry;
+                CHECK(retry.mutation.Intent().mutation == staged.Value().mutation.Intent().mutation);
+                CHECK(std::ranges::equal(retry.bytes.Bytes(), payload));
                 CHECK(fixture.owner->ReadCloudRevision(fixture.Access(), scope).Value().Metadata() == before.Value().Metadata());
-                REQUIRE(transport.DispatchMutation(4, staged.Value().mutation, staged.Value().bytes).HasValue());
+                REQUIRE(transport.DispatchMutation(probe.Value().Request().operation, retry.mutation, retry.bytes).HasValue());
                 CHECK(backend->lastCloudWrite->mutation == write.mutation);
                 CHECK(std::holds_alternative<Cloud::CloudCreateIfAbsent>(backend->lastCloudWrite->precondition));
                 REQUIRE(fixture.owner->Execute(fixture.Copy(11, 10)).HasValue());
@@ -590,7 +600,9 @@ namespace Horo::Runtime {
                 REQUIRE(snapshot.HasValue());
                 const auto recovery = transport.ReconcileUpload(*fixture.owner, fixture.Access(), probe.Value(), snapshot.Value());
                 REQUIRE(recovery.HasValue());
-                CHECK(recovery.Value() == Application::CloudSaveUploadRecovery::RetryOriginal);
+                REQUIRE(recovery.Value().retry);
+                CHECK(recovery.Value().retry->mutation.Intent().revision == committed.committedObject->revision);
+                CHECK(std::ranges::equal(recovery.Value().retry->bytes.Bytes(), payload));
             }
             SECTION("Missing is a conflict for a replacement") {
                 REQUIRE(backend->requests.CompleteFailure(handle, MakeError(Cloud::CloudObjectErrors::NotFound)).HasValue());
