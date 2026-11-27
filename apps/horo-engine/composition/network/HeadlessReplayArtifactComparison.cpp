@@ -206,7 +206,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Projects one unchanged version-one frame onto the ordered portable observations. */
         PortableReplay ReadReplayFrame(const Json &file) {
-            if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
+            if (file.at("format") != "horo-ai-replay-evidence" || !file.at("version").is_number_integer() || file.at("version") != 1)
                 throw InvalidEvidence{};
             auto result = ReadRequired(file);
             if (const auto stimuli = file.find("perceptionStimuli"); stimuli != file.end()) {
@@ -299,15 +299,16 @@ namespace Horo::Application::Internal {
             if (approved && ComputeSha256(std::as_bytes(std::span{bytes.Value()})) != *approved)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid, "Replay does not match its approved digest."));
             auto file = ParseReplay(bytes.Value());
-            if (file.at("format") != "horo-ai-replay-evidence")
+            const auto &version = file.at("version");
+            if (file.at("format") != "horo-ai-replay-evidence" || !version.is_number_integer())
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
-            if (file.at("version") == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes) {
+            if (version == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes) {
                 auto frame = ReadReplayFrame(file);
                 if (source)
                     *source = std::move(file);
                 return Outcome::Success({std::move(frame)});
             }
-            if (file.at("version") != 2)
+            if (version != 2 || file.size() != 3)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             const auto &frames = file.at("frames");
             if (!frames.is_array() || frames.size() < 2 || frames.size() > MaximumHeadlessReplayTicks)
@@ -315,6 +316,9 @@ namespace Horo::Application::Internal {
             std::vector<PortableReplay> result;
             result.reserve(frames.size());
             for (const auto &encoded : frames) {
+                // Portable capture reserves one byte for the trailing newline.
+                if (encoded.dump().size() >= MaximumHeadlessReplayEvidenceBytes)
+                    throw InvalidEvidence{};
                 auto frame = ReadReplayFrame(encoded);
                 if (!result.empty() &&
                     (frame.agent != result.front().agent ||

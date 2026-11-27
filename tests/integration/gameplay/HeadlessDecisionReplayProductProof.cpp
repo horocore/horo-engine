@@ -427,6 +427,14 @@ namespace Horo::Application::PrefabAtomicTest {
                 changed << window;
                 REQUIRE(changed.good());
             };
+            const auto expectRejected = [&] {
+                CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
+                auto path = candidate.u8string();
+                std::array<char *, 1> arguments{reinterpret_cast<char *>(path.data())};
+                std::ostringstream out, err;
+                CHECK(Internal::RunHeadlessReplayTimeline(arguments, out, err) == 2);
+                CHECK(out.str().empty());
+            };
             for (const std::string_view field : {"\"version\":2", "\"tick\":\"3\""}) {
                 auto ambiguous = window.dump();
                 const auto position = ambiguous.find(field);
@@ -436,13 +444,24 @@ namespace Horo::Application::PrefabAtomicTest {
                 duplicate << ambiguous;
                 duplicate.close();
                 REQUIRE(duplicate.good());
-                CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
-                auto path = candidate.u8string();
-                std::array<char *, 1> arguments{reinterpret_cast<char *>(path.data())};
-                std::ostringstream out, err;
-                CHECK(Internal::RunHeadlessReplayTimeline(arguments, out, err) == 2);
-                CHECK(out.str().empty());
+                expectRejected();
             }
+            window["version"] = 2.0;
+            writeCandidate();
+            expectRejected();
+            window["version"] = 2;
+            window["extra"] = true;
+            writeCandidate();
+            expectRejected();
+            window.erase("extra");
+            encoded.at(0)["version"] = 1.0;
+            writeCandidate();
+            expectRejected();
+            encoded.at(0)["version"] = 1;
+            encoded.at(0)["extra"] = std::string(Internal::MaximumHeadlessReplayEvidenceBytes, 'x');
+            writeCandidate();
+            expectRejected();
+            encoded.at(0).erase("extra");
             std::array distinctScenes{frames.front(), frames.back()};
             ++distinctScenes.back().definition.value;
             const auto mixedPath = (output.Directory() / "mixed-scenes").u8string();
