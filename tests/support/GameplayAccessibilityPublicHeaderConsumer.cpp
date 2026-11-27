@@ -7,6 +7,8 @@
 
 static_assert(std::same_as<decltype(std::declval<const Horo::Gameplay::BehaviorContext &>().AssistPreferences()),
                            std::optional<Horo::Gameplay::GameplayAssistPreferences>>);
+static_assert(std::same_as<decltype(std::declval<const Horo::Gameplay::BehaviorContext &>().ColorAccessibility()),
+                           const Horo::Accessibility::IColorAccessibilityQuery *>);
 
 int main() {
     Horo::ConfigurationSchema schema;
