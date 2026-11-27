@@ -909,7 +909,8 @@ if(HORO_BUILD_AUDIO_SDL3)
             unit/runtime/audio/Sdl3CaptureStreamTests.cpp
     )
     target_compile_features(HoroAudioSdl3Tests PRIVATE cxx_std_20)
-    target_link_libraries(HoroAudioSdl3Tests PRIVATE HoroEngine::AudioSdl3)
+    target_include_directories(HoroAudioSdl3Tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+    target_link_libraries(HoroAudioSdl3Tests PRIVATE HoroEngine::AudioSdl3 HoroApplicationAudioExport HoroEngine::Platform)
     horo_register_catch_test(HoroAudioSdl3Tests
             LABELS "unit;audio;backend"
             PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")

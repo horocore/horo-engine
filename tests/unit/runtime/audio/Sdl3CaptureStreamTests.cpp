@@ -1,4 +1,7 @@
+#include "Horo/Application/Internal/AudioRecording.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
+#include "Horo/Foundation/Platform.h"
+#include "OwnedTestDirectory.h"
 
 #include <algorithm>
 #include <array>
@@ -300,6 +303,67 @@ namespace Horo::Audio::Backend {
                 CHECK(block.sequence == 1);
                 CHECK(block.firstFrame == 0);
             }
+        }
+
+        TEST_CASE("SDL recording publishes a project audio asset only for an uninterrupted capture", "[audio][sdl3][capture][recording]") {
+            using namespace Application::Internal;
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            auto descriptor = SelectEndpoint(catalog);
+            const Sdl3CaptureGrant grant{.device = descriptor.device,
+                                         .discoveryRevision = catalog.revision,
+                                         .generation = descriptor.generation,
+                                         .authorityRevision = 1,
+                                         .intent = {.purpose = Sdl3CapturePurpose::Recording},
+                                         .foreground = true};
+            bool overflow = false;
+            SECTION("the application receives a continuous take") {
+                descriptor.slots = 64;
+                descriptor.budgetBytes = 4 * 1024 * 1024;
+            }
+            SECTION("a stalled recorder loses a complete callback block") {
+                overflow = true;
+            }
+            auto prepared = AudioRecording::Prepare(descriptor, 2U * descriptor.format.sampleRate);
+            REQUIRE(prepared.HasValue());
+            auto recording = std::move(prepared).Value();
+            REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+            if (overflow)
+                REQUIRE(WaitForOverflow(*backend, grant).droppedFrames > 0);
+            else
+                WaitForActivity(*backend);
+            auto stopped = backend->FinishRecording(descriptor.generation, grant);
+            REQUIRE(stopped.HasValue());
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+
+            Tests::OwnedTestDirectory project{"sdl-recording"};
+            const auto root = std::filesystem::canonical(project.Path());
+            NativeDurableFileSystem files;
+            Editor::ProjectMutationCoordinator mutations{files};
+            Assets::AssetRegistry registry;
+            Application::ProjectAssetImportCommitter publisher{mutations, files, &registry};
+            const AudioRecordingDestination destination{"record", root, ProjectPath::Parse("assets/take.wav").Value(),
+                                                        Assets::AssetId::FromBytes({1})};
+            const auto published = recording.Publish(std::move(stopped).Value(), destination, publisher, files, {});
+            const auto snapshot = registry.Snapshot();
+            const auto *record = snapshot.Find(destination.id);
+            if (overflow) {
+                REQUIRE(published.HasError());
+                CHECK(published.ErrorValue().code.Value() == AudioErrors::SourceInvalid.code.Value());
+                CHECK_FALSE(record);
+                CHECK_FALSE(std::filesystem::exists(root / "assets/take.wav"));
+                CHECK_FALSE(std::filesystem::exists(root / "assets/take.wav.horo"));
+                return;
+            }
+            REQUIRE(published.HasValue());
+            CHECK(published.Value().frames > 0);
+            CHECK(published.Value().sampleRate == descriptor.format.sampleRate);
+            REQUIRE(record);
+            CHECK(record->type.Value() == "core.audio");
+            CHECK(std::filesystem::is_regular_file(root / record->sourcePath.String()));
+            CHECK(std::filesystem::is_regular_file(root / record->metadataPath.String()));
         }
 
         TEST_CASE("SDL speech sealing transfers only an uninterrupted authorized generation", "[audio][sdl3][capture]") {
