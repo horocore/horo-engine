@@ -525,6 +525,14 @@ return horo.behavior {
         auto objects = fixture.source.objects;
         SceneSource::SceneObjectSnapshot floorCollider{.id = {4}, .parent = SceneSource::SceneObjectId{2}, .name = "Floor collider"};
         floorCollider.components.colliders = objects[1].components.colliders;
+        floorCollider.components.colliders.front().localPose.translation.y = -0.5F;
+        floorCollider.components.colliders.front().source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{{6, 0.5F, 2}}};
+        auto sibling = floorCollider;
+        sibling.id = {5};
+        sibling.name = "Distant collider on the same body";
+        sibling.components.colliders.front().localPose.translation.x = 16.0F;
+        sibling.components.colliders.front().id = {22};
+        sibling.components.colliders.front().collider = {202};
         auto body = objects[1];
         body.id = {3};
         body.name = "Dynamic contact body";
@@ -542,6 +550,7 @@ return horo.behavior {
         objects.push_back(std::move(body));
         objects[1].components.colliders.clear();
         objects.push_back(std::move(floorCollider));
+        objects.push_back(std::move(sibling));
 
         Gameplay::BehaviorRegistry registry;
         REQUIRE(registry.Freeze().HasValue());
@@ -555,8 +564,10 @@ return horo.behavior {
         start();
         const auto bodyRef = play.SceneView()->Find({3});
         const auto floorRef = play.SceneView()->Find({4});
+        const auto siblingRef = play.SceneView()->Find({5});
         REQUIRE(bodyRef);
         REQUIRE(floorRef);
+        REQUIRE(siblingRef);
         CHECK_FALSE(play.ReadAgentSceneContacts(*bodyRef));
         RequirePlayStarted(play.FixedUpdate({}, {1.0 / 60.0}));
         const auto review = play.ReadAgentSceneContacts(*bodyRef);
@@ -568,6 +579,14 @@ return horo.behavior {
         CHECK(review->contacts[0].peer == floorRef->entity);
         using enum Editor::EditorPlayContactSnapshot::Kind;
         CHECK(review->contacts[0].kind == (sensor ? TriggerEnter : ContactBegin));
+        const auto fromFloor = play.ReadAgentSceneContacts(*floorRef);
+        REQUIRE(fromFloor);
+        CHECK(fromFloor->anchor == *floorRef);
+        REQUIRE(fromFloor->count == 1);
+        CHECK(fromFloor->contacts[0].peer == bodyRef->entity);
+        const auto fromSibling = play.ReadAgentSceneContacts(*siblingRef);
+        REQUIRE(fromSibling);
+        CHECK(fromSibling->count == 0);
         play.Stop();
         CHECK_FALSE(play.ReadAgentSceneContacts(*bodyRef));
         start();

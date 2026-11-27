@@ -47,16 +47,24 @@ namespace Horo::Application::Internal {
 
         /** @brief Collects exact selected handles. An empty filter falls back to a complete tick when the filter is too small. */
         std::optional<std::span<const Physics::BodyHandle>> SelectContactBodyFilter(
-            const std::span<const Physics::PhysicsSceneBodyBinding> bindings, const Runtime::SceneObjectId object,
+            const Physics::Detail::PhysicsSceneHostScope &scope, const Runtime::SceneObjectId object,
             const std::span<Physics::BodyHandle> storage) {
             std::size_t count{};
-            for (const auto &binding : bindings) {
-                if (binding.object != object)
-                    continue;
+            const auto add = [&](const Physics::BodyHandle body) {
+                const auto used = storage.first(count);
+                if (std::ranges::find(used, body) != used.end())
+                    return true;
                 if (count == storage.size())
+                    return false;
+                storage[count++] = body;
+                return true;
+            };
+            for (const auto &binding : scope.bodyBindings)
+                if (binding.object == object && !add(binding.handle))
                     return std::span<const Physics::BodyHandle>{};
-                storage[count++] = binding.handle;
-            }
+            for (const auto &binding : scope.shapeBindings)
+                if (binding.object == object && !add(binding.body))
+                    return std::span<const Physics::BodyHandle>{};
             if (count == 0)
                 return std::nullopt;
             return storage.first(count);
@@ -69,17 +77,26 @@ namespace Horo::Application::Internal {
             return found == bindings.end() ? Runtime::SceneObjectId{} : found->object;
         }
 
+        /** @brief Collider source and whether the selected object could own it. */
+        struct ContactColliderOwner final {
+            Runtime::SceneObjectId object{};
+            bool includesSelection{};
+            bool ambiguous{};
+        };
+
         /** @brief Resolves the collider owner without guessing when several authored objects share the reported slot. */
-        Runtime::SceneObjectId ReadContactCollider(const std::span<const Physics::PhysicsSceneShapeBinding> bindings,
-                                                   const Physics::PhysicsEventEndpoint &endpoint) {
-            Runtime::SceneObjectId owner{};
+        ContactColliderOwner ReadContactCollider(const std::span<const Physics::PhysicsSceneShapeBinding> bindings,
+                                                 const Physics::PhysicsEventEndpoint &endpoint, const Runtime::SceneObjectId selected) {
+            ContactColliderOwner owner;
             for (const auto &binding : bindings) {
                 if (binding.body != endpoint.body || (endpoint.collider != 0 && binding.collider.value != endpoint.collider))
                     continue;
-                if (owner.value != 0 && owner != binding.object)
-                    return {};
-                owner = binding.object;
+                owner.includesSelection |= binding.object == selected;
+                owner.ambiguous |= owner.object.value != 0 && owner.object != binding.object;
+                owner.object = binding.object;
             }
+            if (owner.ambiguous)
+                owner.object = {};
             return owner;
         }
 
@@ -108,16 +125,17 @@ namespace Horo::Application::Internal {
             const auto kind = ContactTransition(record.kind);
             if (!kind)
                 return true;
-            const auto first = ReadContactObject(scope.bodyBindings, record.pair.first.body);
-            const auto second = ReadContactObject(scope.bodyBindings, record.pair.second.body);
-            if (first != anchor && second != anchor)
+            const auto first = ReadContactCollider(scope.shapeBindings, record.pair.first, anchor);
+            const auto second = ReadContactCollider(scope.shapeBindings, record.pair.second, anchor);
+            const bool firstSelected = first.includesSelection || ReadContactObject(scope.bodyBindings, record.pair.first.body) == anchor;
+            const bool secondSelected = second.includesSelection || ReadContactObject(scope.bodyBindings, record.pair.second.body) == anchor;
+            if (!firstSelected && !secondSelected)
                 return true;
-            if (first == anchor && second == anchor)
+            if ((firstSelected && first.ambiguous) || (secondSelected && second.ambiguous))
+                return false;
+            if (firstSelected && secondSelected)
                 return true;
-            const auto &endpoint = first == anchor ? record.pair.second : record.pair.first;
-            const auto peer = ReadContactCollider(scope.shapeBindings, endpoint);
-            if (peer == anchor)
-                return true;
+            const auto peer = firstSelected ? second.object : first.object;
             const auto entity = scene.Find(peer);
             if (!entity)
                 return false;
@@ -145,9 +163,8 @@ namespace Horo::Application::Internal {
         if (anchor.HasError() || !anchor.Value().authoredObject)
             return std::nullopt;
         const auto anchorId = *anchor.Value().authoredObject;
-        const auto bindings = scope.Value().bodyBindings;
         std::array<Physics::BodyHandle, Physics::PhysicsQueryEventCapability::MaximumEventBodyFilter> bodies;
-        const auto filter = SelectContactBodyFilter(bindings, anchorId, bodies);
+        const auto filter = SelectContactBodyFilter(scope.Value(), anchorId, bodies);
         if (!filter)
             return std::nullopt;
 
