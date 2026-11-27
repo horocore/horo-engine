@@ -62,8 +62,14 @@ namespace Horo::Editor {
         class OrderedSpeechProvider final : public ISpeechProvider {
         public:
             OrderedSpeechProvider(const float confidence, const bool reviseDraft, std::stop_source *const revokeOnFinal,
-                                  const std::string_view finalText) noexcept
-                : revokeOnFinal_(revokeOnFinal), finalText_(finalText), confidence_(confidence), reviseDraft_(reviseDraft) {}
+                                  const std::string_view finalText, std::promise<void> *const retired) noexcept
+                : revokeOnFinal_(revokeOnFinal), finalText_(finalText), confidence_(confidence), reviseDraft_(reviseDraft),
+                  retired_(retired) {}
+
+            ~OrderedSpeechProvider() override {
+                if (retired_)
+                    retired_->set_value();
+            }
 
             std::unique_ptr<ISpeechProviderStream> Open(std::string_view, const Audio::AudioProcessingFormat &,
                                                         std::stop_token) noexcept override {
@@ -79,6 +85,7 @@ namespace Horo::Editor {
             std::string_view finalText_;
             float confidence_{};
             bool reviseDraft_{};
+            std::promise<void> *retired_{};
         };
 
         /** @brief Signals when a failed provider has been released by the worker. */
@@ -133,8 +140,9 @@ namespace Horo::Editor {
             }
 
             void Start(const float confidence = 0.9F, const bool reviseDraft = false, const bool revokeOnFinal = false,
-                       const std::string_view finalText = "Both blocks") {
-                StartWith(std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft, revokeOnFinal ? &capture : nullptr, finalText));
+                       const std::string_view finalText = "Both blocks", std::promise<void> *const retired = nullptr) {
+                StartWith(
+                    std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft, revokeOnFinal ? &capture : nullptr, finalText, retired));
             }
         };
 
@@ -176,6 +184,8 @@ namespace Horo::Editor {
         }
 
         TEST_CASE("Speech worker drains live PCM before its sealed tail and preserves lease revocation", "[agent][immersive][speech]") {
+            std::promise<void> retired;
+            const auto providerReleased = retired.get_future();
             SpeechWorkerFixture fixture;
             CHECK_FALSE(fixture.worker.ReadProgress());
             auto expected = Finished;
@@ -188,7 +198,7 @@ namespace Horo::Editor {
             SECTION("permission revocation during final polling hides both results") {
                 expected = Cancelled;
             }
-            fixture.Start(expected == LowConfidence ? 0.2F : 0.9F, false, expected == Cancelled);
+            fixture.Start(expected == LowConfidence ? 0.2F : 0.9F, false, expected == Cancelled, "Both blocks", &retired);
             const auto started = fixture.worker.ReadProgress();
             REQUIRE(started);
             CHECK(started->admittedAudio == std::chrono::nanoseconds::zero());
@@ -224,6 +234,17 @@ namespace Horo::Editor {
                 CHECK(finishing->afterCapture.has_value());
                 CHECK(finishing->admittedAudio >= live->admittedAudio);
             }
+            std::optional<ImmersiveSpeechProgress> ready;
+            if (expected == Finished) {
+                REQUIRE(providerReleased.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+                ready = fixture.worker.ReadProgress();
+                REQUIRE(ready);
+                REQUIRE(ready->afterCapture);
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
+                const auto delayed = fixture.worker.ReadProgress();
+                REQUIRE(delayed);
+                CHECK(delayed->afterCapture == ready->afterCapture);
+            }
             const auto completed = WaitForUpdate(fixture.worker);
             CHECK_FALSE(fixture.worker.Busy());
             REQUIRE(completed.status == expected);
@@ -240,6 +261,7 @@ namespace Horo::Editor {
             REQUIRE(finalProgress);
             REQUIRE(finishing);
             REQUIRE(finalProgress->afterCapture);
+            CHECK(finalProgress->afterCapture == ready->afterCapture);
             CHECK(finalProgress->afterCapture >= finishing->afterCapture);
             CHECK(finalProgress->admittedAudio == std::chrono::nanoseconds{41'666});
             std::this_thread::sleep_for(std::chrono::milliseconds{2});

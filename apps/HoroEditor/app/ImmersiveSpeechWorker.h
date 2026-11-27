@@ -9,7 +9,7 @@ namespace Horo::Editor {
     /** @brief Transient progress for one current utterance. */
     struct ImmersiveSpeechProgress final {
         std::chrono::nanoseconds admittedAudio; /**< PCM duration after the provider has accepted the samples. */
-        std::optional<std::chrono::milliseconds> afterCapture; /**< From microphone detachment to editor receipt of final text. */
+        std::optional<std::chrono::milliseconds> afterCapture; /**< From microphone detachment to recognition of final text. */
     };
 
     /** @brief One editor-owned listening operation with fixed PCM and recognition-result storage.

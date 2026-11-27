@@ -49,7 +49,8 @@ namespace Horo::Editor {
      * @details Control owns the live writer and initializes the tail before publishing sealed. The worker
      * reads the tail only after acquiring sealed and draining the live queue. A separate mutex covers only
      * the single latest partial. Control polls that mutex with try_lock and never waits on the worker.
-     * The worker publishes only the scalar PCM duration. Control owns the two receipt timestamps.
+     * The worker publishes the PCM duration and writes the final timestamp once before releasing finalReady.
+     * Control acquires finalReady before reading the timestamp and owns the detachment and delivery state.
      */
     struct ImmersiveSpeechWorker::State final {
         Capture::AudioCaptureBuffer live;
@@ -62,8 +63,10 @@ namespace Horo::Editor {
         std::optional<SpeechTranscriptionUpdate> partial;
         const ImmersivePlanningContext context;
         std::atomic<std::chrono::nanoseconds::rep> admittedAudio{};
+        std::atomic<bool> finalReady{};
+        Clock::time_point finalizedAt{};
         std::optional<Clock::time_point> detachedAt;
-        std::optional<Clock::time_point> receivedAt;
+        bool finalDelivered{};
 
         State(Capture::AudioCaptureBuffer queue, const std::stop_token captureRevoked, const ImmersivePlanningContext &scope)
             : live(std::move(queue)), revoke(captureRevoked, RevokeWorker{cancel}), context(scope) {}
@@ -118,8 +121,7 @@ namespace Horo::Editor {
                 return {ProviderUnavailable, {}};
             if (reply->evidence && !reply->evidence->IsCurrent())
                 return {StaleContext, {}};
-            if (reply->status == Finished && reply->evidence)
-                receivedAt = Clock::now();
+            finalDelivered = reply->status == Finished && reply->evidence.has_value();
             return std::move(*reply);
         }
 
@@ -154,8 +156,13 @@ namespace Horo::Editor {
                 if (fed != Pending && fed != Accepted)
                     return {fed, {}};
                 auto update = stream.Poll();
-                if (!stream.IsActive())
+                if (!stream.IsActive()) {
+                    if (update.status == Finished && update.evidence) {
+                        finalizedAt = Clock::now();
+                        finalReady.store(true, std::memory_order_release);
+                    }
                     return update;
+                }
                 if (update.evidence || update.status == DraftWithdrawn)
                     Publish(std::move(update));
                 if (fed == Pending)
@@ -256,11 +263,12 @@ namespace Horo::Editor {
 
     /** @copydoc ImmersiveSpeechWorker::ReadProgress */
     std::optional<ImmersiveSpeechProgress> ImmersiveSpeechWorker::ReadProgress() const noexcept {
-        if (!state_ || state_->cancel.stop_requested() || !state_->context.IsCurrent() || (!Busy() && !state_->receivedAt))
+        if (!state_ || state_->cancel.stop_requested() || !state_->context.IsCurrent() || (!Busy() && !state_->finalDelivered))
             return std::nullopt;
         ImmersiveSpeechProgress progress{std::chrono::nanoseconds{state_->admittedAudio.load(std::memory_order_relaxed)}};
         if (state_->detachedAt) {
-            const auto end = state_->receivedAt ? *state_->receivedAt : Clock::now();
+            const auto now = Clock::now();
+            const auto end = state_->finalReady.load(std::memory_order_acquire) ? state_->finalizedAt : now;
             progress.afterCapture = std::chrono::duration_cast<std::chrono::milliseconds>(end - *state_->detachedAt);
         }
         return progress;
