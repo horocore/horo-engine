@@ -106,6 +106,19 @@ namespace {
         REQUIRE_FALSE(found->canonicalMapping);
         const auto id = found->id;
         backend.BeginFrame(2);
+        SDL_Event event{};
+        event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+        event.gbutton.which = native.native;
+        event.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+        event.gbutton.down = true;
+        backend.ProcessEvent(event);
+        event = {};
+        event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        event.gaxis.which = native.native;
+        event.gaxis.axis = SDL_GAMEPAD_AXIS_LEFTX;
+        event.gaxis.value = 24575;
+        backend.ProcessEvent(event);
+
         REQUIRE(SDL_SetJoystickVirtualButton(native.joystick, 0, true));
         SDL_UpdateJoysticks();
         backend.PollEvents();
@@ -120,6 +133,10 @@ namespace {
                     .HasValue());
         auto context = router.PushContext(contextId, InputContextKind::FocusedGuiWidget);
         router.BeginFrame(backend.Commit());
+        const auto *raw = router.Snapshot().FindGamepad(id);
+        REQUIRE(raw != nullptr);
+        CHECK_FALSE(raw->buttons[static_cast<std::size_t>(GamepadButton::South)].down);
+        CHECK(raw->axes[static_cast<std::size_t>(GamepadAxis::LeftX)] == 0.0F);
         REQUIRE(router.AssignGamepad(1, id));
         REQUIRE(router.ReadAction(context, ActionId{"confirm"}, 1).pressed);
         REQUIRE(backend.PlayRumble(id, {.lowFrequency = 0.5F, .durationMilliseconds = 1000}).HasError());

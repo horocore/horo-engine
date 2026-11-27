@@ -644,12 +644,12 @@ namespace Horo::Input {
                 break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
-                if (const auto found = devices.find(event.gbutton.which); found != devices.end())
+                if (const auto found = devices.find(event.gbutton.which); found != devices.end() && found->second.gamepad)
                     if (const auto button = MapGamepadButton(event.gbutton.button))
                         (void)collector.SetGamepadButton(found->second.id, *button, event.gbutton.down);
                 break;
             case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-                if (const auto found = devices.find(event.gaxis.which); found != devices.end())
+                if (const auto found = devices.find(event.gaxis.which); found != devices.end() && found->second.gamepad)
                     if (const auto axis = MapGamepadAxis(event.gaxis.axis)) {
                         const float normalized = event.gaxis.value < 0 ? static_cast<float>(event.gaxis.value) / 32768.0F
                                                                        : static_cast<float>(event.gaxis.value) / 32767.0F;

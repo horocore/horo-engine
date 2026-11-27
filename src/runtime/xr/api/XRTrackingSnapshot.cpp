@@ -195,6 +195,7 @@ namespace Horo::XR {
                     (!action.active && (action.x != 0.0F || action.y != 0.0F)))
                     return Reject<void>(XRErrors::TrackingSnapshotInvalid);
                 if (action.active && (descriptor.focus != XRTrackingFocusState::Focused ||
+                                      descriptor.visibility != XRTrackingVisibilityState::Visible ||
                                       (descriptor.state != XRTrackingState::Active && descriptor.state != XRTrackingState::TrackingLost) ||
                                       device->state == XRTrackedDeviceState::Disconnected))
                     return Reject<void>(XRErrors::TrackingSnapshotInvalid);

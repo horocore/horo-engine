@@ -418,6 +418,14 @@ namespace Horo::XR {
         descriptor.focus = XRTrackingFocusState::Unfocused;
         CHECK(!SnapshotHasValue(descriptor, fixture));
         descriptor.focus = XRTrackingFocusState::Focused;
+        descriptor.visibility = XRTrackingVisibilityState::Hidden;
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+        actions[0].active = false;
+        actions[0].x = 0.0F;
+        CHECK(SnapshotHasValue(descriptor, fixture));
+        descriptor.visibility = XRTrackingVisibilityState::Visible;
+        actions[0].active = true;
+        actions[0].x = 1.0F;
         actions[0].device = {fixture.session, {21, 2}};
         CHECK(!SnapshotHasValue(descriptor, fixture));
         CHECK(actions[0].device.slot.generation == 2);
