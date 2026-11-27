@@ -333,9 +333,11 @@ namespace Horo::Editor {
                 projectFiles_ = context.agentProjectFiles;
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
+                readSelectedPlayReferences_ = context.readSelectedPlayReferences;
+                canReviewSelectedPlayReferences_ = context.canReviewSelectedPlayReferences;
+                agentSceneReferencesCurrent_ = context.agentSceneReferencesCurrent;
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 reviewAgentSceneReferences_ = context.reviewAgentSceneReferences;
-                agentSceneReferencesCurrent_ = context.agentSceneReferencesCurrent;
 #endif
                 readAgentSceneContacts_ = context.readAgentSceneContacts;
                 agentSceneContactsCurrent_ = context.agentSceneContactsCurrent;
@@ -377,6 +379,7 @@ namespace Horo::Editor {
             void OnPresentationHidden(EditorWorkspaceViewCommandData &) override {
                 CancelListening();
                 ResetContactReview();
+                ResetPlaySelectionReview();
                 textInput_.Reset();
                 sceneQueryReview_.reset();
                 cloudReview_.reset();
@@ -419,6 +422,7 @@ namespace Horo::Editor {
                 if (cloudMode_) {
                     CancelListening();
                     ResetContactReview();
+                    ResetPlaySelectionReview();
                     DrawCloud(locale, fonts);
                     UpdateTextInputFocus();
                     ImGui::EndChild();
@@ -427,6 +431,7 @@ namespace Horo::Editor {
                 ReviewOfferedViewport();
                 DrawProvider(locale, fonts);
                 DrawOptionalListening(context);
+                DrawSelectedPlayReferences(context);
                 DrawPlayContacts(context);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "prompt"), Theme::Text(), fonts);
                 ImGui::BeginDisabled(awaitingCheckpoint_ || ContextLocksComposer() || sceneQueryReview_);
@@ -669,24 +674,6 @@ namespace Horo::Editor {
                                        static_cast<long long>(progress->afterCapture->count()));
             }
 
-            /** @brief Projects owner-issued reference states without selecting a candidate. */
-            static const char *ReferenceStateKey(const AgentSceneReferenceState state) noexcept {
-                using enum AgentSceneReferenceState;
-                switch (state) {
-                    case Available:
-                        return "xr_reference_available";
-                    case Hidden:
-                        return "xr_reference_hidden";
-                    case Locked:
-                        return "xr_reference_locked";
-                    case Deleted:
-                        return "xr_reference_deleted";
-                    case OutOfScope:
-                        return "xr_reference_out_of_scope";
-                }
-                return "xr_reference_out_of_scope";
-            }
-
             /** @brief Rechecks the captured selection on demand and displays its exact revision and every candidate. */
             void DrawListeningReferences(const EditorGuiContext &context) {
                 const auto &locale = context.localization;
@@ -730,33 +717,8 @@ namespace Horo::Editor {
                                     Theme::Muted(), fonts);
                     return;
                 }
-                const auto &review = listeningReferences_->scene;
-                if (review.mounted)
-                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mounted"), Theme::Muted(), fonts);
-                Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
-                                Theme::Muted(), fonts);
-                if (review.Candidates().empty())
-                    Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_empty" : "xr_reference_empty"), Theme::Muted(),
-                                    fonts);
-                else if (listeningReferences_->hasMissedPress)
-                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mixed_miss"), Theme::Text(), fonts);
-                else if (review.RequiresClarification())
-                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
-                for (const auto &candidate : review.Candidates()) {
-                    Ui::WrappedText(width,
-                                    LocalizedText(locale, ReferenceStateKey(candidate.state)) + " #" + std::to_string(candidate.object),
-                                    Theme::Text(), fonts);
-                    if (const auto &point = candidate.worldPosition)
-                        DrawListeningCoordinates(context, width, *point);
-                }
-            }
-
-            /** @brief Uses the same recorded World coordinate format for mesh and physical surface hits. */
-            void DrawListeningCoordinates(const EditorGuiContext &context, const float width, const Math::Vec3 point) const {
-                Ui::WrappedText(width,
-                                std::format("{} X {} · Y {} · Z {}", LocalizedText(context.localization, "xr_location_coordinates"),
-                                            point.x, point.y, point.z),
-                                Theme::Muted(), context.theme.fonts);
+                DrawReferenceCandidates(context, listeningReferences_->scene, pointing ? "xr_pointing_empty" : "xr_reference_empty",
+                                        listeningReferences_->hasMissedPress);
             }
 
             /** @brief Maps portable plane classification to localized presentation. */
@@ -793,7 +755,7 @@ namespace Horo::Editor {
                     Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
                 for (const auto &hit : std::span{review->hits}.first(review->count)) {
                     Ui::WrappedText(width, LocalizedText(locale, SurfaceClassificationKey(hit.classification)), Theme::Text(), fonts);
-                    DrawListeningCoordinates(context, width, hit.worldPosition);
+                    DrawReferenceCoordinates(context, width, hit.worldPosition);
                 }
             }
 
@@ -802,11 +764,97 @@ namespace Horo::Editor {
             std::optional<Audio::AudioCaptureDeviceId> listeningDevice_;
             const char *listeningBudgetFailure_{};
             std::function<std::optional<AgentSceneReferenceReview>(const AgentSceneReferenceRequest &)> reviewAgentSceneReferences_;
-            std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent_;
             std::optional<EditorImmersiveListening::ReferenceReview> listeningReferences_;
             std::optional<AgentSceneReferenceSource> requestedListeningReferences_;
             bool reviewingSurfaces_{};
 #endif
+
+            /** @brief Projects owner-issued reference states without selecting a candidate. */
+            static const char *ReferenceStateKey(const AgentSceneReferenceState state) noexcept {
+                using enum AgentSceneReferenceState;
+                switch (state) {
+                    case Available:
+                        return "xr_reference_available";
+                    case Hidden:
+                        return "xr_reference_hidden";
+                    case Locked:
+                        return "xr_reference_locked";
+                    case Deleted:
+                        return "xr_reference_deleted";
+                    case OutOfScope:
+                        return "xr_reference_out_of_scope";
+                }
+                return "xr_reference_out_of_scope";
+            }
+
+            /** @brief Uses the same recorded World coordinate format for mesh and physical surface hits. */
+            void DrawReferenceCoordinates(const EditorGuiContext &context, const float width, const Math::Vec3 point) const {
+                Ui::WrappedText(width,
+                                std::format("{} X {} · Y {} · Z {}", LocalizedText(context.localization, "xr_location_coordinates"),
+                                            point.x, point.y, point.z),
+                                Theme::Muted(), context.theme.fonts);
+            }
+
+            /** @brief Draws the shared localized reference receipt without exposing provider controls. */
+            void DrawReferenceCandidates(const EditorGuiContext &context, const AgentSceneReferenceReview &review, const char *emptyKey,
+                                         const bool missedPress = false) {
+                const auto &locale = context.localization;
+                const auto width = ImGui::GetContentRegionAvail().x;
+                const auto &fonts = context.theme.fonts;
+                if (review.mounted)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mounted"), Theme::Muted(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, "xr_reference_revision") + " " + std::to_string(review.documentRevision),
+                                Theme::Muted(), fonts);
+                if (review.Candidates().empty())
+                    Ui::WrappedText(width, LocalizedText(locale, emptyKey), Theme::Muted(), fonts);
+                else if (missedPress)
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_mixed_miss"), Theme::Text(), fonts);
+                else if (review.RequiresClarification())
+                    Ui::WrappedText(width, LocalizedText(locale, "xr_reference_ambiguous"), Theme::Text(), fonts);
+                for (const auto &candidate : review.Candidates()) {
+                    Ui::WrappedText(width,
+                                    LocalizedText(locale, ReferenceStateKey(candidate.state)) + " #" + std::to_string(candidate.object),
+                                    Theme::Text(), fonts);
+                    if (const auto &point = candidate.worldPosition)
+                        DrawReferenceCoordinates(context, width, *point);
+                }
+            }
+
+            /** @brief Releases the independent no-voice receipt when its presentation leaves Play. */
+            void ResetPlaySelectionReview() noexcept {
+                playSelectionReview_.reset();
+                playSelectionRequested_ = false;
+            }
+
+            /** @brief Requests the current Play selection once per explicit local action. */
+            void DrawSelectedPlayReferences(const EditorGuiContext &context) {
+                if (!readSelectedPlayReferences_ || !agentSceneReferencesCurrent_ || !canReviewSelectedPlayReferences_ ||
+                    !canReviewSelectedPlayReferences_()) {
+                    ResetPlaySelectionReview();
+                    return;
+                }
+                const auto &locale = context.localization;
+                if (Button(locale, "xr_play_selection_review", true)) {
+                    playSelectionReview_ = readSelectedPlayReferences_();
+                    playSelectionRequested_ = true;
+                }
+                if (!playSelectionRequested_)
+                    return;
+                if (!playSelectionReview_ || playSelectionReview_->count > playSelectionReview_->candidates.size() ||
+                    !agentSceneReferencesCurrent_(*playSelectionReview_)) {
+                    playSelectionReview_.reset();
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "xr_reference_stale"), Theme::Muted(),
+                                    context.theme.fonts);
+                    return;
+                }
+                DrawReferenceCandidates(context, *playSelectionReview_, "xr_play_selection_empty");
+            }
+
+            std::function<std::optional<AgentSceneReferenceReview>()> readSelectedPlayReferences_;
+            std::function<bool()> canReviewSelectedPlayReferences_;
+            std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent_;
+            std::optional<AgentSceneReferenceReview> playSelectionReview_;
+            bool playSelectionRequested_{};
 
             /** @brief Clears the explicitly requested Physics snapshot. */
             void ResetContactReview() noexcept {
@@ -932,8 +980,11 @@ namespace Horo::Editor {
                 captureSceneSelection_ = {};
 #if defined(HORO_EDITOR_MAC_MICROPHONE_PERMISSION) && defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 reviewAgentSceneReferences_ = {};
-                agentSceneReferencesCurrent_ = {};
 #endif
+                readSelectedPlayReferences_ = {};
+                canReviewSelectedPlayReferences_ = {};
+                agentSceneReferencesCurrent_ = {};
+                ResetPlaySelectionReview();
                 readAgentSceneContacts_ = {};
                 agentSceneContactsCurrent_ = {};
                 canReviewAgentSceneContacts_ = {};

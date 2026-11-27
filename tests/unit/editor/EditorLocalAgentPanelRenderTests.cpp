@@ -488,6 +488,46 @@ namespace {
         CHECK(reads == 1);
     }
 
+    TEST_CASE("Play selection review needs no speech or model provider", "[editor][agent][gui][play]") {
+        std::size_t reads{};
+        bool current = true;
+        bool playing = false;
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.readSelectedPlayReferences = [&] {
+                ++reads;
+                AgentSceneReferenceReview review{.documentRevision = 9};
+                review.candidates[0] = {42, AgentSceneReferenceState::Available};
+                review.count = 1;
+                return std::optional{review};
+            };
+            context.agentSceneReferencesCurrent = [&](const auto &) {
+                return current;
+            };
+            context.canReviewSelectedPlayReferences = [&] {
+                return playing;
+            };
+        }};
+        constexpr std::string_view button = "Review current Play selection";
+        constexpr std::string_view candidate = "Available #42";
+        CHECK(fixture.DrawnText().find(button) == std::string::npos);
+        playing = true;
+        CHECK(fixture.DrawnText().find(button) != std::string::npos);
+        CHECK(reads == 0);
+
+        fixture.Activate("###xr_play_selection_review");
+        CHECK(fixture.DrawnText().find(candidate) != std::string::npos);
+        CHECK(reads == 1);
+        current = false;
+        CHECK(fixture.DrawnText().find(candidate) == std::string::npos);
+        CHECK(fixture.DrawnText().find("The captured selection or Play scene is no longer current.") != std::string::npos);
+        current = true;
+        playing = false;
+        CHECK(fixture.DrawnText().find(button) == std::string::npos);
+        playing = true;
+        CHECK(fixture.DrawnText().find(candidate) == std::string::npos);
+        CHECK(reads == 1);
+    }
+
     TEST_CASE("Viewport numbers are captured only after a user opens their review", "[editor][agent][gui][viewport]") {
         CancellationSource owner;
         int captured{};

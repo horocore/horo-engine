@@ -290,6 +290,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 [this] {
             return controller_->CanReviewAgentSceneContacts();
         },
+            .readSelectedPlayReferences =
+                [this] {
+            return controller_->ReadSelectedPlayReferences();
+        },
+            .canReviewSelectedPlayReferences =
+                [this] {
+            return controller_->CanReviewSelectedPlayReferences();
+        },
         };
         if (std::ranges::any_of(contributions_.panels.GetAllPanels(), [](const auto &panel) {
             return panel->GetId() == LocalAgentWorkspacePanelId;

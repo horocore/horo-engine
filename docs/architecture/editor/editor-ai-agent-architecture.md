@@ -355,6 +355,10 @@ Reference requests must carry the cancellation token from their
 `AgentSceneSelectionSnapshot`. Both reference and contact reviews retain that
 workspace lifetime. Switching the mounted or authored Play source revokes the
 old lifetime permanently, even if the user returns to the original source.
+During authored Play, the local Agent panel can also request the current
+selection without microphone permission, speech recognition or a model. The
+owner returns the same bounded reference receipt, and the panel withdraws it
+when the selection, scene or Play mode changes.
 
 Immersive requests follow an explicit presentation state machine:
 

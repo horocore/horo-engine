@@ -344,6 +344,10 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewAgentSceneReferences(const AgentSceneReferenceRequest &request) const;
         /** @brief Checks whether a retained reference review still describes the active Play publication. */
         [[nodiscard]] bool AgentSceneReferencesCurrent(const AgentSceneReferenceReview &review) const;
+        /** @brief Captures and reviews the current authored selection in the exact live Play scene. */
+        [[nodiscard]] std::optional<AgentSceneReferenceReview> ReadSelectedPlayReferences();
+        /** @brief Checks availability of the read-only authored Play reference workflow. */
+        [[nodiscard]] bool CanReviewSelectedPlayReferences() const noexcept;
         /** @brief Reads the selected ordinary Scene object's latest complete Physics tick. */
         [[nodiscard]] std::optional<AgentSceneContactReview> ReadAgentSceneContacts();
         /** @brief Reports whether read-only contact review is available for the active Play selection. */

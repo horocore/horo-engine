@@ -776,6 +776,26 @@ namespace Horo::Editor {
                review.selectionRevision == m_selection.Current().revision.value && review.mounted == m_mountedWorldPlaySelected;
     }
 
+    /** @copydoc EditorWorkspaceController::ReadSelectedPlayReferences */
+    std::optional<AgentSceneReferenceReview> EditorWorkspaceController::ReadSelectedPlayReferences() {
+        const auto play = ReadAgentReferenceScene();
+        if (!play || !CanReviewSelectedPlayReferences())
+            return std::nullopt;
+        const auto selection = CaptureAgentSceneSelection(AgentSceneSelectionPurpose::ImmersivePlay);
+        if (!selection || selection->truncated)
+            return std::nullopt;
+        return ReviewAgentSceneReferences({.documentEpoch = selection->documentEpoch,
+                                           .documentRevision = selection->documentRevision,
+                                           .worldGeneration = play->RuntimeId().value,
+                                           .objects = std::span{selection->objects}.first(selection->objectCount),
+                                           .lifetime = selection->lifetime});
+    }
+
+    /** @copydoc EditorWorkspaceController::CanReviewSelectedPlayReferences */
+    bool EditorWorkspaceController::CanReviewSelectedPlayReferences() const noexcept {
+        return m_playSession.State() == EditorPlaySessionState::Playing && !m_viewModel.worldDocument && !m_mountedWorldPlaySelected;
+    }
+
     /** @copydoc EditorWorkspaceController::AgentSceneContactsCurrent */
     bool EditorWorkspaceController::AgentSceneContactsCurrent(const AgentSceneContactReview &review) const {
         const auto play = ReadAgentReferenceScene();
@@ -789,8 +809,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::CanReviewAgentSceneContacts */
     bool EditorWorkspaceController::CanReviewAgentSceneContacts() const {
-        return m_playSession.State() == EditorPlaySessionState::Playing && !m_viewModel.worldDocument &&
-               !m_mountedWorldPlaySelected && m_selection.Current().primary.has_value();
+        return CanReviewSelectedPlayReferences() && m_selection.Current().primary.has_value();
     }
 
     /** @copydoc EditorWorkspaceController::ReadAgentSceneContacts */

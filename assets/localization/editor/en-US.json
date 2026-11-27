@@ -209,6 +209,8 @@
     "workspace.local_agent.xr_listening_cancel": {"text": "Cancel listening"},
     "workspace.local_agent.xr_listening_discard": {"text": "Discard transcript"},
     "workspace.local_agent.xr_reference_review": {"text": "Review selected references"},
+    "workspace.local_agent.xr_play_selection_review": {"text": "Review current Play selection"},
+    "workspace.local_agent.xr_play_selection_empty": {"text": "No scene objects are selected."},
     "workspace.local_agent.xr_pointing_review": {"text": "Review pointed references"},
     "workspace.local_agent.xr_location_review": {"text": "Review pointed locations"},
     "workspace.local_agent.xr_location_coordinates": {"text": "Recorded position (m)"},

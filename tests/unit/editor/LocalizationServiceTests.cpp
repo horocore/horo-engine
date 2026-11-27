@@ -256,6 +256,8 @@ namespace {
             "workspace.local_agent.xr_reference_mixed_miss",
             "workspace.local_agent.xr_reference_hidden",     "workspace.local_agent.xr_reference_locked",
             "workspace.local_agent.xr_reference_deleted",    "workspace.local_agent.xr_reference_out_of_scope",
+            "workspace.local_agent.xr_play_selection_review",
+            "workspace.local_agent.xr_play_selection_empty",
         };
         RequireCatalogKeys(service, keys);
     }

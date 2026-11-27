@@ -209,6 +209,8 @@
     "workspace.local_agent.xr_listening_cancel": {"text": "Dinlemeyi iptal et"},
     "workspace.local_agent.xr_listening_discard": {"text": "Konuşma metnini sil"},
     "workspace.local_agent.xr_reference_review": {"text": "Seçili referansları incele"},
+    "workspace.local_agent.xr_play_selection_review": {"text": "Play modundaki güncel seçimi incele"},
+    "workspace.local_agent.xr_play_selection_empty": {"text": "Seçili sahne nesnesi yok."},
     "workspace.local_agent.xr_pointing_review": {"text": "İşaret edilen referansları incele"},
     "workspace.local_agent.xr_location_review": {"text": "İşaret edilen konumları incele"},
     "workspace.local_agent.xr_location_coordinates": {"text": "Kayıt anındaki konum (m)"},

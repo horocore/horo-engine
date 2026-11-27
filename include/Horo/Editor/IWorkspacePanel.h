@@ -158,6 +158,10 @@ namespace Horo::Editor {
         std::function<bool(const AgentSceneReferenceReview &)> agentSceneReferencesCurrent{};
         /** @brief Checks whether the workspace can review contact events for its selected Play object. */
         std::function<bool()> canReviewAgentSceneContacts{};
+        /** @brief Reviews the live authored Play selection on explicit request without speech capture. */
+        std::function<std::optional<AgentSceneReferenceReview>()> readSelectedPlayReferences{};
+        /** @brief Checks availability without capturing a selection or requesting microphone access. */
+        std::function<bool()> canReviewSelectedPlayReferences{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

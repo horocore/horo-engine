@@ -1527,6 +1527,12 @@ namespace {
         REQUIRE(activeHost);
         const auto playScene = activeHost->Scenes().ActiveScene();
         REQUIRE(playScene);
+        const auto selectionReview = workspace.ReadSelectedPlayReferences();
+        REQUIRE(selectionReview);
+        REQUIRE(selectionReview->Candidates().size() == 1);
+        CHECK(selectionReview->Candidates().front().object == original.value);
+        CHECK(selectionReview->Candidates().front().state == AgentSceneReferenceState::Available);
+        CHECK(workspace.AgentSceneReferencesCurrent(*selectionReview));
         VerifyPlayReferenceReview(workspace, *playScene, original);
         VerifyPlayLocationReview(workspace, *playScene, original);
         VerifyMountedPlayReferenceReview(workspace, *playScene, original);
@@ -1535,6 +1541,8 @@ namespace {
         CHECK_FALSE(workspace.AgentSceneContactsCurrent(contactReview));
 
         workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
+        CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*selectionReview));
+        CHECK_FALSE(workspace.ReadSelectedPlayReferences());
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);
         const auto second = play();
         CHECK(second.scene != first.scene);
