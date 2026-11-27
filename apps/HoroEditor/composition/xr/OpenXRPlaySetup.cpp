@@ -253,13 +253,16 @@ namespace Horo::Application::Internal {
         report.focused = state.admitsActions && !eventsPending_;
         CopyInspectionCapabilities(report, scene_->projection->capabilities, *plan, composition_.session.EyeGazeAvailability());
 
+        const auto routing = input_.router ? input_.router->RoutingState({}) : Input::InputRoutingState{};
+        const bool currentInput = routing.configurationRevision != 0 && routing.configurationRevision == input_.inspectionConfiguration &&
+                                  routing.assignmentRevision == input_.interactionAssignment;
         if (eventsPending_)
             report.status = EventsPending;
         else if (!state.admitsActions)
             report.status = Unfocused;
         else if (const auto *tracking = tracking_.Current(); tracking && tracking->Session() == state.session &&
                                                              tracking->WorldOriginRevision() == input_.origin && input_.admitted &&
-                                                             input_.play == Editor::EditorPlayState::Playing) {
+                                                             currentInput && input_.play == Editor::EditorPlayState::Playing) {
             CopyOpenXRInspectionTracking(report, *tracking);
             report.stageBoundary = composition_.session.ReadStageBoundary(*tracking);
             if (const auto availability = composition_.session.ReadHandAvailability(*tracking)) {

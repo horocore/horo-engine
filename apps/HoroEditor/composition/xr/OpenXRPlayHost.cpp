@@ -965,7 +965,7 @@ namespace Horo::Application::Internal {
         }
         auto frame = std::move(opened).Value();
         // The first raw commit can enable routing; assignment evidence must precede native callbacks.
-        const auto interactionAssignment = input_.router->RoutingState({}).assignmentRevision;
+        const auto routing = input_.router->RoutingState({});
         const auto sampled = AppendInput(context, frame);
         const bool profileChanged = sampled.HasError() && RetireIfInputProfileChanged(sampled.ErrorValue());
         if (pendingRevoke_) {
@@ -988,7 +988,8 @@ namespace Horo::Application::Internal {
             RevokeSource();
             return sampled;
         }
-        input_.interactionAssignment = interactionAssignment;
+        input_.interactionAssignment = routing.assignmentRevision;
+        input_.inspectionConfiguration = routing.configurationRevision;
         if (const auto *tracking = tracking_.Current()) {
             if (const auto advisory = composition_.session.ReadStageBoundary(*tracking))
                 composition_.metrics.RecordStageBoundary(*advisory);

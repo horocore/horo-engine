@@ -2572,6 +2572,11 @@ namespace Horo::Tests::OpenXRApplication {
         auto mismatched = original;
         mismatched.front().required = !mismatched.front().required;
         REQUIRE(fixture.router.SetActionMap(mismatched).HasValue());
+        const auto staleMap = fixture.play->ReadInspection();
+        CHECK(staleMap.status == EditorXrInspectionStatus::WaitingForSample);
+        CHECK(staleMap.trackingRevision == 0);
+        CHECK(staleMap.actionCount == 0);
+        CHECK(staleMap.sessionGeneration == generation);
         CHECK_FALSE(runCutoff().down);
         CHECK_FALSE(runCutoff().down);
         REQUIRE(fixture.router.SetActionMap(original).HasValue());
@@ -3120,6 +3125,10 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(listening->SharesLineage(*continuedListening));
         CHECK_FALSE(beforeReassignment.PoseCaptureTime());
         fixture.router.AssignKeyboardMouse(player + 1);
+        const auto reassigned = fixture.play->ReadInspection();
+        CHECK(reassigned.status == Editor::EditorXrInspectionStatus::WaitingForSample);
+        CHECK(reassigned.trackingRevision == 0);
+        CHECK(reassigned.actionCount == 0);
         const auto staleAssignment = fixture.play->ReadInteractionCandidates(beforeReassignment.Scope(), probes);
         REQUIRE(staleAssignment.HasError());
         CHECK(staleAssignment.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());

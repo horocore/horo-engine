@@ -887,6 +887,7 @@ namespace Horo::Application::Internal {
             std::unique_ptr<XR::XRActionBindingCoordinator> coordinator;
             XR::XRWorldOriginRevision origin;
             std::optional<std::uint64_t> interactionAssignment;
+            std::uint64_t inspectionConfiguration{}; /**< Input configuration at the committed tracking cutoff. */
             std::optional<Math::Transform> sampledWorldPlacement; /**< Offset applied to the current tracking publication. */
             std::optional<std::pair<OpenXRPlayInteractionScope, XR::XRLocomotionComfortHint>> comfortHint;
             Editor::EditorPlayState play{Editor::EditorPlayState::Idle};
