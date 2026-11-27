@@ -215,8 +215,9 @@ from the observed Android system build. It must match the row's
 usable for claims without an attached Android preflight.
 The checker accepts only the typed fields emitted by the redacted deployment schema.
 Unknown or invalid fields are rejected without printing their contents.
-The cold-discovery APK has its own digest. The smoke record still identifies
-the exact product binary, headset, physical checks and package receipt.
+The diagnostic APK and its preflight receipt have separate digests from the
+product binary and product package receipt named by the physical smoke record.
+The checker rejects any digest shared between these two sets of artifacts.
 
 Store the exact tested executable, package receipt, physical smoke record,
 every referenced check observation, and each subsystem review as files in a

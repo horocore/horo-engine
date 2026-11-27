@@ -202,6 +202,9 @@ def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: 
     """Match a deployment receipt to the standalone Android build recorded in the physical smoke run."""
     identity = record["tuple"]
     require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
+    product_artifacts = {identity["buildSha256"], identity["packageReceiptSha256"]}
+    require(product_artifacts.isdisjoint({expected["apkSha256"], expected["receiptSha256"]}),
+            "Android preflight artifacts cannot identify the qualified product")
     provenance = record["provenance"]
     observed_build = provenance.get("androidDeviceBuildSha256")
     require(observed_build is not None, "Physical smoke record does not identify its Android system build")

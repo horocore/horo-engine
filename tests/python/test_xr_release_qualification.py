@@ -687,6 +687,8 @@ def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(rele
     ("revision", "Android preflight is from another source revision"),
     ("runtime", "Android preflight uses a different runtime version"),
     ("transport", "Android preflight uses a different ADB connection"),
+    ("diagnostic-apk-as-product", "Android preflight artifacts cannot identify the qualified product"),
+    ("diagnostic-receipt-as-product-receipt", "Android preflight artifacts cannot identify the qualified product"),
 ])
 def test_single_device_checker_verifies_android_deployment(release, change, reason):
     matrix, evidence = release
@@ -704,6 +706,10 @@ def test_single_device_checker_verifies_android_deployment(release, change, reas
 
     expected = row["androidPreflight"]
     expected["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    if change == "diagnostic-apk-as-product":
+        update_claim_identity(row, evidence, buildSha256=expected["apkSha256"])
+    if change == "diagnostic-receipt-as-product-receipt":
+        update_claim_identity(row, evidence, packageReceiptSha256=expected["receiptSha256"])
     declaration = evidence.parent / "physical declaration.json"
     declaration.write_text(json.dumps(row["declaration"]), encoding="utf-8")
     preflight = evidence.parent / "Android preflight declaration.json"
@@ -724,6 +730,10 @@ def test_single_device_checker_verifies_android_deployment(release, change, reas
         assert result.returncode == 1
         assert reason in result.stderr
         assert not result.stdout
+    if change in {"diagnostic-apk-as-product", "diagnostic-receipt-as-product-receipt"}:
+        matrix_result = run_matrix(release)
+        assert matrix_result.returncode == 1
+        assert reason in matrix_result.stderr
 
 
 @pytest.mark.parametrize(("build", "reason"), [
