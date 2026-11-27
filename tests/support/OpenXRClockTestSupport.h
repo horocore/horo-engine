@@ -4,6 +4,7 @@
 #include "support/OpenXRNativeTestSupport.h"
 
 #include <bit>
+#include <functional>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -29,6 +30,7 @@ namespace Horo::Tests::OpenXR {
         XrTime sample{42'000'000};
         XrResult result{XR_SUCCESS};
         std::size_t conversions{};
+        std::function<void()> onConvert;
         bool reenter{};
         bool nestedRejected{};
         bool missing{};
@@ -56,6 +58,8 @@ namespace Horo::Tests::OpenXR {
 #endif
             CHECK(instance != XR_NULL_HANDLE);
             ++active->conversions;
+            if (active->onConvert)
+                active->onConvert();
             if (active->reenter && active->clock)
                 active->nestedRejected = active->clock->PresentationNow().HasError();
             *output = active->sample;

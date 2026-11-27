@@ -2025,7 +2025,8 @@ namespace Horo::Tests::OpenXRApplication {
         using enum Editor::EditorXrPlaneCaptureState;
         OpenXR::SpatialCaptureScript native;
         OpenXR::PlaneSnapshotFixture geometry;
-        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, Unrequested, true};
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, PointerBindingDocument(), Unrequested, true};
+        fixture.script.actions.tracking.enabled = true;
         constexpr std::array<std::string_view, 3> extensions{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME,
                                                              XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME};
         fixture.script.native.extraExtensions = extensions;
@@ -2037,7 +2038,8 @@ namespace Horo::Tests::OpenXRApplication {
         const bool grant = GENERATE(false, true);
         if (grant)
             RequireValue(preview.ArmPlaneCapture());
-        auto scene = ActivatePlay(fixture, std::nullopt);
+        constexpr Input::PlayerId player = 7;
+        auto scene = ActivatePlay(fixture, player);
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         auto *observed = cutoff.get();
         RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
@@ -2092,6 +2094,22 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(native.scans == 1);
             bool pendingScan = true;
             bool contextRetired = false;
+            SECTION("pointer assignment changes during a live plane query") {
+                REQUIRE(sample(620'000'000).HasValue());
+                const auto pointer = fixture.play->ReadWorldUiPointer(player);
+                REQUIRE(pointer);
+                REQUIRE(pointer->sample.selectDown);
+                REQUIRE(fixture.play->QueryPointedPlanes(*pointer, 2).HasValue());
+                fixture.script.clock.onConvert = [&] {
+                    fixture.router.AssignKeyboardMouse(player + 1);
+                };
+                const auto stale = fixture.play->QueryPointedPlanes(*pointer, 2);
+                fixture.script.clock.onConvert = {};
+                REQUIRE(stale.HasError());
+                CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::IdentityStale.code.Value());
+                CHECK(fixture.play->ReadPlaneObservations().HasValue());
+                preview.RevokePlaneCapture();
+            }
             SECTION("operator revokes after the next scan is queued") {
                 CHECK(sample(620'000'000).HasValue());
                 preview.RevokePlaneCapture();

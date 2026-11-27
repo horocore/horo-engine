@@ -473,13 +473,15 @@ namespace Horo::Application::Internal {
     Result<XR::XRSpatialHits> OpenXRPlayHost::QueryPointedPlanes(const OpenXRWorldUiPointerFrame &frame,
                                                                  const std::uint32_t maximumHits) const {
         using Hits = Result<XR::XRSpatialHits>;
-        const auto active = ReadPressedPointer(frame);
-        if (!active)
+        if (!ReadPressedPointer(frame))
             return Hits::Failure(MakeError(XR::XRErrors::IdentityStale));
         XR::XRRuntimeTime observedAt;
         const auto source = ReadPlaneObservationsAtCurrentTime(observedAt);
         if (source.HasError())
             return Hits::Failure(source.ErrorValue());
+        const auto active = ReadPressedPointer(frame);
+        if (!active)
+            return Hits::Failure(MakeError(XR::XRErrors::IdentityStale));
         const auto &snapshot = source.Value();
         if (snapshot.Scope().space != active->sample.space || snapshot.SampledAt() > active->cutoff.sampledAt)
             return Hits::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
