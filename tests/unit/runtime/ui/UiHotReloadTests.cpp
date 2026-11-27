@@ -62,9 +62,15 @@ namespace Horo::Runtime::Ui::ReloadTests {
             REQUIRE(canvas.routes->Push(Stable<UiRouteId>(9)).Value().IsCommitted());
             const auto route = canvas.routes->Top()->id;
             const auto &tree = canvas.tree;
-            const UiActionOwnerContext owner{tree.Instance(),       tree.Canvas(),
-                                             tree.SourceDocument(), tree.SourceDocumentRevision(),
-                                             tree.Revision(),       Revision<UiInteractionRevision>(1)};
+            UiActionOwnerContext owner{tree.Instance(),       tree.Canvas(),
+                                       tree.SourceDocument(), tree.SourceDocumentRevision(),
+                                       tree.Revision(),       Revision<UiInteractionRevision>(1)};
+            bool stale{};
+            SECTION("current route action owner") {}
+            SECTION("route action owner from a different tree revision") {
+                owner.treeRevision = Revision<UiRuntimeTreeRevision>(2);
+                stale = true;
+            }
             auto router = UiActionRouter::Create({owner, 2});
             REQUIRE(router.HasValue());
             REQUIRE(canvas.routes->AttachActions(route, std::move(router).Value()).HasValue());
@@ -73,6 +79,11 @@ namespace Horo::Runtime::Ui::ReloadTests {
             REQUIRE(request.HasValue());
             const auto lease = publisher.Acquire().Value();
             const auto captured = publisher.Inspect(lease, canvas.id, {}, route);
+            if (stale) {
+                REQUIRE(captured.HasError());
+                CHECK(captured.ErrorValue().code.Value() == UiErrors::ActionSourceStale.code.Value());
+                return;
+            }
             REQUIRE(captured.HasValue());
             REQUIRE(captured.Value().actions);
             REQUIRE(captured.Value().actions->actions.size() == 1);

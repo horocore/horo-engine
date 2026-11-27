@@ -185,6 +185,8 @@ namespace Horo::Runtime::Ui {
             if (!router)
                 return Failure<Snapshot>(UiErrors::RouteOperationStale);
         }
+        if (router && !UiReloadDetail::MatchesActionOwner(router->Owner(), found->tree))
+            return Failure<Snapshot>(UiErrors::ActionSourceStale);
         Snapshot snapshot{found->tree.Canvas(), found->tree.Revision(), route};
         if (found->bindings) {
             auto rows = found->bindings->Inspect(found->tree, limits.providers, limits.bindings);
