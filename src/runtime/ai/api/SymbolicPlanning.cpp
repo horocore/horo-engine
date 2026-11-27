@@ -36,6 +36,7 @@ namespace Horo::AI {
     struct SymbolicDomain::Frontier final {
         std::array<Label, SymbolicPlan::MaximumStates> labels{};
         std::size_t count{1};
+        std::optional<std::uint64_t> minimumOmittedCost;
 
         std::size_t Pop() noexcept {
             auto next = NoNode;
@@ -49,18 +50,20 @@ namespace Horo::AI {
             return next;
         }
 
-        bool Relax(const Label &candidate) noexcept {
+        /** @brief Tracks a lower bound for every route omitted after reaching the state limit. */
+        void Relax(const Label &candidate) noexcept {
             const auto used = std::span{labels}.first(count);
             const auto previous = std::ranges::find(used, candidate.state, &Label::state);
             if (previous != used.end()) {
                 if (!previous->closed && candidate.cost < previous->cost)
                     *previous = candidate;
-                return true;
+                return;
             }
-            if (count == labels.size())
-                return false;
+            if (count == labels.size()) {
+                minimumOmittedCost = std::min(minimumOmittedCost.value_or(candidate.cost), candidate.cost);
+                return;
+            }
             labels[count++] = candidate;
-            return true;
         }
 
         std::optional<SymbolicPlanStatus> Expand(const std::size_t current, const std::span<const Action> actions, AiWorkBudget &budget,
@@ -75,8 +78,11 @@ namespace Horo::AI {
                 if (!action.preconditions.Matches(label.state))
                     continue;
                 const auto next = (label.state & ~action.effects.known) | action.effects.values;
-                if (next != label.state && (!budget.Consume(count) || !Relax({next, label.cost + action.cost, current, index})))
+                if (next == label.state)
+                    continue;
+                if (!budget.Consume(count))
                     return SymbolicPlanStatus::BudgetExhausted;
+                Relax({next, label.cost + action.cost, current, index});
             }
             return std::nullopt;
         }
@@ -187,7 +193,10 @@ namespace Horo::AI {
                 return Frontier::Stopped(BudgetExhausted);
             const auto current = queue.Pop();
             if (current == NoNode)
-                return Frontier::Stopped(NoPlan);
+                return Frontier::Stopped(queue.minimumOmittedCost ? BudgetExhausted : NoPlan);
+            // Positive action costs prevent an omitted route from beating any strictly cheaper queued state.
+            if (queue.minimumOmittedCost && queue.labels[current].cost >= *queue.minimumOmittedCost)
+                return Frontier::Stopped(BudgetExhausted);
             if (required->Matches(queue.labels[current].state))
                 return queue.Complete(current, actions, budget, cancellation, operation);
             if (const auto stopped = queue.Expand(current, actions, budget, cancellation, operation))

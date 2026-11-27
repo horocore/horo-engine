@@ -2898,8 +2898,11 @@ The opt-in symbolic planning contract compiles Boolean facts and positive-cost
 transitions against frozen task declarations. Search owns only copied values
 and produces an ordered sequence of stable action and task identities. Unsolved,
 cancelled and budget-limited searches expose no task sequence. The GOAP work
-allowance covers frontier search and assembly of the ordered result. A host can
-submit the same detached computation through the existing AI task job service.
+allowance covers frontier search and assembly of the ordered result. When the
+fixed state table is full, GOAP can still return a queued goal whose cost is
+strictly below the cheapest omitted route. An omitted route that can compete
+with the remaining frontier results in budget exhaustion. A host can submit
+the same detached computation through the existing AI task job service.
 The owner's safe-point read withholds a completed outcome if task, capability,
 reservation or worker cancellation has since withdrawn the computation. This
 also prevents stale no-plan and budget outcomes from selecting a fallback. A

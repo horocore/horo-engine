@@ -1,6 +1,7 @@
 #include "BehaviorTreeAsyncTestSupport.h"
 #include "Horo/AI/SymbolicPlanning.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -124,6 +125,42 @@ namespace Horo::AI {
             CHECK(plan.Steps().front().task == input.pickTask);
             CHECK(plan.Steps().back().task == input.openTask);
             CHECK(plan.Cost() == 3);
+        }
+
+        TEST_CASE("A full GOAP frontier still admits a provably cheaper queued goal", "[ai][planning]") {
+            const DomainFixture input;
+            std::array<SymbolicFactId, 9> facts;
+            std::array<SymbolicLiteral, facts.size()> effects;
+            std::array<SymbolicActionSource, facts.size()> actions;
+            for (std::size_t index = 0; index < facts.size(); ++index) {
+                facts[index] = Id<SymbolicFactId>(index + 1);
+                effects[index] = {facts[index], true};
+                actions[index] = {.action = Id<SymbolicActionId>(index + 1),
+                                  .task = input.pickTask,
+                                  .cost = 1,
+                                  .effects = std::span{&effects[index], 1}};
+            }
+            const auto captured = SymbolicDomain::Capture(facts, actions, input.Registry());
+            REQUIRE(captured.HasValue());
+            const auto &domain = captured.Value();
+            // The initial state and the first four layers fill the table. Expanding the first
+            // four-action state omits a five-action state before this queued goal.
+            const auto plan = domain.Search({}, std::span{effects}.last(4), SymbolicDomain::MaximumWork);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            CHECK(plan.Cost() == 4);
+            REQUIRE(plan.Steps().size() == 4);
+            for (std::size_t index = 0; index < plan.Steps().size(); ++index)
+                CHECK(plan.Steps()[index].action == actions[actions.size() - plan.Steps().size() + index].action);
+
+            std::array<SymbolicActionSource, actions.size() + 1> withShortcut;
+            std::ranges::copy(actions, withShortcut.begin());
+            withShortcut.back() = {.action = Id<SymbolicActionId>(10), .task = input.openTask, .cost = 10, .effects = effects};
+            const auto shortcutDomain = SymbolicDomain::Capture(facts, withShortcut, input.Registry());
+            REQUIRE(shortcutDomain.HasValue());
+            const auto exhausted = shortcutDomain.Value().Search({}, effects, SymbolicDomain::MaximumWork);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            CHECK(exhausted.Cost() == 0);
         }
 
         TEST_CASE("Symbolic searches distinguish cancellation, no plan and work exhaustion", "[ai][planning]") {
