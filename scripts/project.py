@@ -1829,7 +1829,7 @@ class AndroidPackageLaunch:
         return AndroidLaunchReceipt(process, confirmed_deadline)
 
     def confirm_retired_crash(self) -> bool:
-        """Read exact app receipts for a cold OpenXR Activity that exited before PID admission."""
+        """Read exact app receipts for a cold OpenXR Activity that exited before or during capture."""
         recovery = self.recovery
         if recovery is None:
             return False
@@ -1854,6 +1854,8 @@ class AndroidPackageLaunch:
         launch, crash = receipts.get("launch"), receipts.get("crash")
         if not (launch and crash and launch[0] < crash[0] and launch[1:] == crash[1:]
                 and self.device.process_id(self.application) is None):
+            return False
+        if self.process is not None and launch[1:] != (self.process.pid, self.process.start_ticks):
             return False
         self.require_rollback_target(self.device)
         return True
@@ -2132,14 +2134,17 @@ def android_deploy_main(argv=None) -> int:
                                           openxr_diagnostic=openxr, device_boot_time=device_boot_time)
             try:
                 process, window = launch.start()
-            except AndroidDeployError:
+                report["stage"] = "diagnostics"
+                observe_seconds = arguments.observe_seconds or 0
+                observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, observe_seconds)
+            except AndroidDeployError as error:
+                if openxr and report["stage"] == "diagnostics" and error.code == "application_process_unavailable":
+                    launch.retired_crash = launch.confirm_retired_crash()
                 if launch.retired_crash:
                     launch.confirm_capture_target(device_build)
                     report["observed"] = {"crashObserved": True}
+                    raise AndroidDeployError("application_crashed") from None
                 raise
-            report["stage"] = "diagnostics"
-            observe_seconds = arguments.observe_seconds or 0
-            observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, observe_seconds)
             runtime_candidate = runtime.copy()
             try:
                 check_deploy_capture(observed, applicable, observe_seconds)

@@ -215,9 +215,10 @@ and process retirement. Cold discovery remains setup evidence. The physical
 smoke record proves the on-device observations.
 The APK digest and the contents of its reported native images are checked on
 the same opened file. A changed APK invalidates the receipt check.
-If the Activity exits before process admission, the deployment tool checks the
+If the Activity exits before or during capture, the deployment tool checks the
 installed APK, selected Android build, foreground user, transport and boot before
-including the attributed crash in the report.
+including the attributed crash in the report. A crash during capture must match
+the admitted process ID and start time.
 Before requesting a package stop, it also rechecks the process ID and start time
 after validating the cleanup transport and boot. If the process exits between
 those reads, the tool accepts retirement only after confirming that no matching

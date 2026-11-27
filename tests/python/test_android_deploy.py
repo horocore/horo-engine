@@ -539,6 +539,30 @@ class AndroidDeployTests(unittest.TestCase):
         for private in (LAUNCH_NONCE, "startTicks", "private-data"):
             self.assertNotIn(private, json.dumps(report))
 
+    def test_openxr_checks_crash_receipts_if_the_admitted_process_exits_during_capture(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        application = profile["applicationId"]
+        for pid, start_ticks, expected in ((123, 123456, "application_crashed"),
+                                           (124, 123456, "application_process_unavailable"),
+                                           (123, 123457, "application_process_unavailable")):
+            with self.subTest(pid=pid, start_ticks=start_ticks):
+                launch = LAUNCH_MARKER.replace("123456", str(start_ticks))
+                crash = LAUNCH_CRASH_MARKER.replace("123456", str(start_ticks))
+                log = log_line(launch, stamp=LAUNCH_TIME, pid=pid) + log_line(crash, stamp=END, pid=pid)
+                status, report, commands = self.execute({
+                    ("shell", "pidof", application): [(1, "")] * 2 + ["123"] * 2 + [(1, "")] * 5,
+                    LOGCAT: log_line(OPENXR),
+                    QUALIFICATION_LOGCAT: log,
+                }, OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["stage"], report["error"]), (1, "diagnostics", expected))
+                if pid == 123 and start_ticks == 123456:
+                    self.assertEqual(report["observed"], {"crashObserved": True})
+                else:
+                    self.assertNotIn("observed", report)
+                self.assertEqual(report["cleanup"], {"status": "already_exited"})
+                self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
     def test_openxr_revalidates_the_target_before_publishing_an_early_crash(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
         _, profile = project.load_contract(name, ["arm64-v8a"])
