@@ -413,6 +413,8 @@ of its saved Scene or Prefab bytes. Unreadable sources block the review and
 appear alongside findings from readable sources within the diagnostic limit.
 With a complete asset inventory, the preview also reports missing and
 wrong-type child Scene and Prefab sources alongside the confirmed attachments.
+It reports recursive child Scene links and cycles through nested and variant
+Prefab links from those same saved sources.
 Missing object identities and duplicate object or attachment identities make
 a Scene's edit addresses unusable. The preview reports the address and keeps matches
 from other readable sources.

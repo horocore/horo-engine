@@ -51,6 +51,20 @@ namespace Horo::Application::Internal {
             }
         };
 
+        enum class CompositionVisit {
+            Unseen,
+            Active,
+            Done
+        };
+
+        /** @brief Resolved outgoing edges for one admitted saved Scene or Prefab. */
+        struct CompositionNode final {
+            std::vector<const Assets::AssetRecord *> targets;
+            CompositionVisit visit{CompositionVisit::Unseen};
+        };
+
+        using CompositionGraph = std::map<const Assets::AssetRecord *, CompositionNode>;
+
         /** @brief Bounded matches from the same captured Scene and Prefab bytes. */
         struct SavedReferenceScan final {
             References behaviors;
@@ -58,6 +72,8 @@ namespace Horo::Application::Internal {
             std::vector<Diagnostic> senses;
             std::vector<Diagnostic> components;
             std::vector<Diagnostic> composition;
+            CompositionGraph compositionGraph;
+            std::size_t compositionEdges{};
             std::vector<Diagnostic> unusableAddresses;
             PackageSourceReviewFailures failures;
         };
@@ -255,27 +271,92 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Confirms a composition edge can be inspected elsewhere in this same registry scan. */
+        /** @brief Reports one invalid composition edge without losing independent reference findings. */
+        Result<void> ReportCompositionEdge(std::vector<Diagnostic> &diagnostics, const Assets::AssetRecord &source,
+                                           const Assets::AssetId &target, std::string_view type, const char *code) {
+            const auto path = source.sourcePath.String();
+            if (diagnostics.size() >= MaximumBehaviorReferences)
+                return Result<void>::Failure(ReferenceError("packages.host.composition_reference_limit", path));
+            diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, std::string{type}, SourceLocation{std::string{path}},
+                                     target.ToString());
+            return Result<void>::Success();
+        }
+
+        /** @brief Confirms and records a composition edge from this captured registry inventory. */
         struct CompositionSourceReview final {
             std::span<const Assets::AssetRecord> catalog;
-            std::vector<Diagnostic> &diagnostics;
-            std::string_view path;
+            SavedReferenceScan &scan;
+            const Assets::AssetRecord &source;
 
             /** @brief Reports the unresolved asset identity, expected kind and authored source. */
             Result<void> Check(const Assets::AssetId &asset, std::string_view type) const {
                 const auto found = std::ranges::lower_bound(catalog, asset, {}, &Assets::AssetRecord::id);
                 const bool missing = found == catalog.end() || found->id != asset;
-                if (!missing && found->type.Value() == type)
-                    return Result<void>::Success();
-                if (diagnostics.size() >= MaximumBehaviorReferences)
-                    return Result<void>::Failure(ReferenceError("packages.host.composition_reference_limit", path));
-                const auto *code = missing ? "packages.host.composition_reference_missing"
-                                           : "packages.host.composition_reference_type_mismatch";
-                diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, std::string{type},
-                                         SourceLocation{std::string{path}}, asset.ToString());
+                if (missing || found->type.Value() != type) {
+                    const auto *code =
+                        missing ? "packages.host.composition_reference_missing" : "packages.host.composition_reference_type_mismatch";
+                    return ReportCompositionEdge(scan.composition, source, asset, type, code);
+                }
+                constexpr std::size_t maximumEdges = 1'048'576;
+                if (scan.compositionEdges == maximumEdges)
+                    return Result<void>::Failure(ReferenceError("packages.host.composition_reference_limit", source.sourcePath.String()));
+                scan.compositionGraph[&source].targets.push_back(&*found);
+                ++scan.compositionEdges;
                 return Result<void>::Success();
             }
         };
+
+        /** @brief One active depth-first frame over immutable, already decoded edges. */
+        struct CompositionFrame final {
+            CompositionGraph::iterator source;
+            std::size_t next{};
+        };
+
+        /** @brief Walks one root with active-path markers and reports only edges back into that path. */
+        Result<void> InspectCompositionRoot(SavedReferenceScan &scan, const Platform::ProjectReadContext &context,
+                                            CompositionGraph::iterator root, std::vector<CompositionFrame> &pending) {
+            auto &graph = scan.compositionGraph;
+            root->second.visit = CompositionVisit::Active;
+            pending.push_back({root});
+            while (!pending.empty()) {
+                if (auto current = Platform::CheckProjectReadContext(context); current.HasError())
+                    return current;
+                auto &frame = pending.back();
+                auto &[source, node] = *frame.source;
+                if (frame.next == node.targets.size()) {
+                    node.visit = CompositionVisit::Done;
+                    pending.pop_back();
+                    continue;
+                }
+                const auto target = graph.find(node.targets[frame.next++]);
+                if (target == graph.end() || target->second.visit == CompositionVisit::Done)
+                    continue;
+                if (target->second.visit == CompositionVisit::Unseen) {
+                    target->second.visit = CompositionVisit::Active;
+                    pending.push_back({target});
+                    continue;
+                }
+                const auto &asset = *target->first;
+                auto cycle = ReportCompositionEdge(scan.composition, *source, asset.id, asset.type.Value(),
+                                                   "packages.host.composition_reference_cycle");
+                if (cycle.HasError())
+                    return cycle;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Visits each graph component once and reuses the same bounded traversal stack. */
+        Result<void> InspectCompositionCycles(SavedReferenceScan &scan, const Platform::ProjectReadContext &context) {
+            auto &graph = scan.compositionGraph;
+            std::vector<CompositionFrame> pending;
+            for (auto root = graph.begin(); root != graph.end(); ++root) {
+                if (root->second.visit != CompositionVisit::Unseen)
+                    continue;
+                if (auto inspected = InspectCompositionRoot(scan, context, root, pending); inspected.HasError())
+                    return inspected;
+            }
+            return Result<void>::Success();
+        }
 
         /** @brief Verifies child scene and prefab identities without composing or executing the scene. */
         Result<void> InspectSceneSourceLinks(const SceneSource::SceneSourceDocument &scene, const CompositionSourceReview &review) {
@@ -333,7 +414,9 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads direct authored attachments; each referenced child or prefab has its own registry entry. */
-        Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceReview &review, std::string_view path, std::string_view text) {
+        Result<void> InspectScene(SavedReferenceScan &scan, const SavedReferenceReview &review, const Assets::AssetRecord &record,
+                                  std::string_view text) {
+            const auto path = record.sourcePath.String();
             const auto scene = SceneSource::DecodeSceneSourceWithChildReferences(text);
             if (scene.HasError())
                 return scan.failures.Record(path,
@@ -351,7 +434,7 @@ namespace Horo::Application::Internal {
                 if (auto checked = CheckSceneMigrationAddresses(scene.Value(), scan, first, path); checked.HasError())
                     return checked;
             }
-            if (auto links = InspectSceneSourceLinks(scene.Value(), {review.compositionCatalog, scan.composition, path}); links.HasError())
+            if (auto links = InspectSceneSourceLinks(scene.Value(), {review.compositionCatalog, scan, record}); links.HasError())
                 return links;
             return !owners.senses.empty() && RequiresSenseReview(scene.Value()) ? CollectSenseReview(scan, owners, path)
                                                                                  : Result<void>::Success();
@@ -386,7 +469,7 @@ namespace Horo::Application::Internal {
             const auto &owners = review.owners;
             if (auto found = InspectPrefabObjects(data, scan, owners, path); found.HasError())
                 return found;
-            if (auto links = InspectPrefabSourceLinks(data.composition, {review.compositionCatalog, scan.composition, path}); links.HasError())
+            if (auto links = InspectPrefabSourceLinks(data.composition, {review.compositionCatalog, scan, record}); links.HasError())
                 return links;
             return !owners.senses.empty() && RequiresSenseReview(data) ? CollectSenseReview(scan, owners, path)
                                                                        : Result<void>::Success();
@@ -402,7 +485,7 @@ namespace Horo::Application::Internal {
                 return scan.failures.Record(path, WithCause(ReferenceError("packages.host.behavior_reference_unreadable", path),
                                                              source.ErrorValue()));
             const auto before = scan.behaviors.size();
-            auto inspected = record.type.Value() == SceneAssetType ? InspectScene(scan, review, path, *source.Value().text)
+            auto inspected = record.type.Value() == SceneAssetType ? InspectScene(scan, review, record, *source.Value().text)
                                                                    : InspectPrefab(scan, review, record, *source.Value().text, limits);
             if (inspected.HasValue() && scan.behaviors.size() != before)
                 scan.behaviorSourceRevisions.emplace(path, source.Value().revision);
@@ -427,6 +510,9 @@ namespace Horo::Application::Internal {
                 if (inspected.HasError())
                     return Inspection::Failure(inspected.ErrorValue());
             }
+            if (const auto cycles = InspectCompositionCycles(scan, context); cycles.HasError())
+                return Inspection::Failure(cycles.ErrorValue());
+            scan.compositionGraph.clear();
             if (const auto current = Platform::CheckProjectReadContext(context); current.HasError())
                 return Inspection::Failure(current.ErrorValue());
             return Inspection::Success(std::move(scan));

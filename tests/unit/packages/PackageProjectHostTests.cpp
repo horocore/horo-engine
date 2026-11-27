@@ -1256,6 +1256,7 @@ namespace {
     }
 
     TEST_CASE("Package removal verifies indirect saved composition sources", "[packages][application][host][removal]") {
+        const bool cyclic = GENERATE(false, true);
         HostFixture fixture{true, NativeArchiveContributions::ModuleOnly};
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
                                           .platform = {"linux", "x64", "horo-sdk-2"}};
@@ -1273,25 +1274,34 @@ namespace {
         sources.registrations = owners;
         const auto path = policy.projectRoot / "Assets/Parent.horoasset";
         const auto parentId = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0e").Value();
-        const auto missingId = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0f").Value();
-        const SceneSource::SceneChildReference child{{1}, missingId};
+        const auto childId = Assets::AssetId::Parse("10213243-5465-7687-98a9-bacbdcedfe0f").Value();
+        const SceneSource::SceneChildReference child{{1}, childId};
         const SceneSource::ScenePrefabInstance prefab{.instanceId = Prefab::PrefabInstanceId::Create(2).Value(),
                                                       .sourcePrefab = Prefab::PrefabAssetReference::Create(parentId).Value()};
         std::ofstream{path.parent_path() / "Parent.horoasset.horo"}
             << nlohmann::json{{"schemaVersion", 1}, {"assetId", parentId.ToString()}, {"assetType", "core.scene"}};
         std::ofstream{path} << SceneSource::EncodeSceneSource({{}, std::span{&prefab, 1}, std::span{&child, 1}});
+        if (cyclic) {
+            const SceneSource::SceneChildReference ancestor{{1}, parentId};
+            std::ofstream{path.parent_path() / "Child.horoasset"}
+                << SceneSource::EncodeSceneSource({.childScenes = std::span{&ancestor, 1}});
+            std::ofstream{path.parent_path() / "Child.horoasset.horo"}
+                << nlohmann::json{{"schemaVersion", 1}, {"assetId", childId.ToString()}, {"assetType", "core.scene"}};
+        }
         const auto priorLock = fixture.Read("packages.lock");
         const auto priorRequest = fixture.Read("packages.json");
         const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(blocked.HasError());
         const auto &diagnostics = blocked.ErrorValue().diagnostics;
         REQUIRE(diagnostics.size() == 2);
-        CHECK(diagnostics[0].code.Value() == "packages.host.composition_reference_missing");
-        CHECK(diagnostics[0].path == missingId.ToString());
-        CHECK(diagnostics[1].code.Value() == "packages.host.composition_reference_type_mismatch");
-        CHECK(diagnostics[1].path == parentId.ToString());
-        CHECK(diagnostics[0].location.source == "Assets/Parent.horoasset");
-        CHECK(diagnostics[1].location.source == "Assets/Parent.horoasset");
+        const auto &mismatch = diagnostics[cyclic ? 0 : 1];
+        CHECK(mismatch.code.Value() == "packages.host.composition_reference_type_mismatch");
+        CHECK(mismatch.path == parentId.ToString());
+        CHECK(mismatch.location.source == "Assets/Parent.horoasset");
+        const auto &link = diagnostics[cyclic ? 1 : 0];
+        CHECK(link.code.Value() == (cyclic ? "packages.host.composition_reference_cycle" : "packages.host.composition_reference_missing"));
+        CHECK(link.path == (cyclic ? parentId : childId).ToString());
+        CHECK(link.location.source == (cyclic ? "Assets/Child.horoasset" : "Assets/Parent.horoasset"));
         CHECK(fixture.Read("packages.lock") == priorLock);
         CHECK(fixture.Read("packages.json") == priorRequest);
         std::ofstream{path} << SceneSource::EncodeSceneSource({});

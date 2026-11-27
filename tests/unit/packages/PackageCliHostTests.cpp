@@ -957,12 +957,53 @@ namespace {
         DuplicateAttachment
     };
 
+    enum class MigrationComposition {
+        Independent,
+        Unresolved,
+        Cyclic,
+        Shared
+    };
+
+    /** @brief Writes the matching graph's child Scene edges, including a shared leaf or a two-document cycle. */
+    std::vector<SceneSource::SceneChildReference> WriteMigrationChildScenes(const NativeProject &fixture, const Assets::AssetId &root,
+                                                                            MigrationComposition composition) {
+        constexpr auto firstId = "10213243-5465-7687-98a9-bacbdcedfe11";
+        constexpr auto leafId = "10213243-5465-7687-98a9-bacbdcedfe12";
+        if (composition == MigrationComposition::Independent)
+            return {};
+        const SceneSource::SceneChildReference first{{1}, Assets::AssetId::Parse(firstId).Value()};
+        if (composition == MigrationComposition::Unresolved)
+            return {first};
+        if (composition == MigrationComposition::Cyclic) {
+            const SceneSource::SceneChildReference ancestor{{1}, root};
+            fixture.WriteScene("MigrationChild.horoasset", firstId,
+                               SceneSource::EncodeSceneSource({.childScenes = std::span{&ancestor, 1}}));
+            return {first};
+        }
+        const SceneSource::SceneChildReference leaf{{2}, Assets::AssetId::Parse(leafId).Value()};
+        fixture.WriteScene("MigrationChild.horoasset", firstId, SceneSource::EncodeSceneSource({.childScenes = std::span{&leaf, 1}}));
+        fixture.WriteScene("MigrationLeaf.horoasset", leafId, SceneSource::EncodeSceneSource({}));
+        return {first, leaf};
+    }
+
+    /** @brief Saves one verified prefab source and retains the exact authored bytes for preview assertions. */
+    std::string WriteMigrationPrefab(const NativeProject &fixture, const char *name, Prefab::PrefabDocumentData data) {
+        const auto asset = data.assetId.ToString();
+        const auto prefab = Prefab::PrefabDocument::Create(std::move(data), Prefab::PrefabLimitProfile::Create({}).Value());
+        REQUIRE(prefab.HasValue());
+        auto serialized = prefab.Value().SerializeCanonical();
+        REQUIRE(serialized.HasValue());
+        fixture.WriteSource(name, asset.c_str(), serialized.Value(), "core.prefab");
+        return std::move(serialized).Value();
+    }
+
     /** @brief Writes distinct Scene and Prefab snapshots that use the same legacy behavior. */
-    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType, bool unresolvedLinks,
-                                                             SceneMigrationAddress address) {
+    std::array<std::string, 2> WriteBehaviorMigrationSources(const NativeProject &fixture, std::string_view oldType,
+                                                             MigrationComposition composition, SceneMigrationAddress address) {
         constexpr auto sceneId = "10213243-5465-7687-98a9-bacbdcedfe0e";
         constexpr auto prefabId = "10213243-5465-7687-98a9-bacbdcedfe0f";
-        constexpr auto missingId = "10213243-5465-7687-98a9-bacbdcedfe11";
+        constexpr auto variantId = "10213243-5465-7687-98a9-bacbdcedfe10";
+        const auto root = Assets::AssetId::Parse(sceneId).Value();
         const Gameplay::BehaviorComponent behavior{.instanceId = {3}, .typeId = Gameplay::BehaviorTypeId::Parse(oldType).Value(),
                                                     .enabled = false};
         SceneSource::SceneObjectSnapshot object{.id = {7}, .name = "Actor"};
@@ -977,8 +1018,7 @@ namespace {
         std::vector objects{object};
         if (address == SceneMigrationAddress::DuplicateObject)
             objects.push_back(object);
-        const SceneSource::SceneChildReference child{{1}, Assets::AssetId::Parse(missingId).Value()};
-        const auto children = unresolvedLinks ? std::span{&child, 1} : std::span<const SceneSource::SceneChildReference>{};
+        const auto children = WriteMigrationChildScenes(fixture, root, composition);
         const auto scene = SceneSource::EncodeSceneSource({.objects = objects, .childScenes = children});
         fixture.WriteScene("Migration.horoasset", sceneId, scene);
         const auto version = ParseHoroVersion("1.2.3").Value();
@@ -986,21 +1026,29 @@ namespace {
         Prefab::PrefabDocumentData data{.projectVersion = version,
                                         .assetId = Assets::AssetId::Parse(prefabId).Value(),
                                         .objects = {{.name = "Prefab Root", .behaviors = {behavior}}}};
-        if (unresolvedLinks) {
-            const auto source = Assets::AssetId::Parse(sceneId).Value();
+        const Prefab::PrefabSourceRevision authored{.projectVersion = version, .contentDigest = digest};
+        if (composition == MigrationComposition::Unresolved || composition == MigrationComposition::Cyclic) {
+            const auto source = composition == MigrationComposition::Unresolved ? root : Assets::AssetId::Parse(variantId).Value();
             data.referencedAssets.push_back(source);
             const Prefab::NestedPrefabPlacement nested{.placementLocalId = {8},
                                                        .sourcePrefab = Prefab::PrefabAssetReference::Create(source).Value(),
-                                                       .authoredAgainst = {.projectVersion = version, .contentDigest = digest}};
+                                                       .authoredAgainst = authored};
             data.composition = Prefab::PrefabComposition{.nestedPlacements = {nested}};
         }
-        const auto prefab = Prefab::PrefabDocument::Create(std::move(data), Prefab::PrefabLimitProfile::Create({}).Value());
-        REQUIRE(prefab.HasValue());
-        const auto serialized = prefab.Value().SerializeCanonical();
-        REQUIRE(serialized.HasValue());
-        fixture.WriteSource("Migration.prefab", prefabId, serialized.Value(), "core.prefab");
+        if (composition == MigrationComposition::Cyclic) {
+            const auto base = data.assetId;
+            static_cast<void>(
+                WriteMigrationPrefab(fixture, "MigrationVariant.prefab",
+                                     {.projectVersion = version,
+                                      .assetId = Assets::AssetId::Parse(variantId).Value(),
+                                      .composition =
+                                          Prefab::PrefabComposition{.variantParent = Prefab::PrefabAssetReference::Create(base).Value(),
+                                                                    .variantAuthoredAgainst = authored},
+                                      .referencedAssets = {base}}));
+        }
+        const auto serialized = WriteMigrationPrefab(fixture, "Migration.prefab", std::move(data));
         const auto revision = [](std::string_view bytes) { return FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes}))); };
-        return {revision(scene), revision(serialized.Value())};
+        return {revision(scene), revision(serialized)};
     }
 
     /** @brief Verifies which saved revisions contributed usable preview evidence. */
@@ -1035,10 +1083,11 @@ namespace {
         const bool applies = GENERATE(true, false);
         const bool unreadable = GENERATE(true, false);
         const bool degraded = GENERATE(true, false);
-        const bool unresolvedLinks = GENERATE(true, false);
+        using enum MigrationComposition;
+        const auto composition = GENERATE(Independent, Unresolved, Cyclic, Shared);
         using enum SceneMigrationAddress;
         const auto address = GENERATE(Unique, MissingObjectIdentity, DuplicateObject, DuplicateAttachment);
-        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType, unresolvedLinks, address);
+        const auto revisions = WriteBehaviorMigrationSources(fixture, oldType, composition, address);
         if (unreadable)
             fixture.WriteScene("Unreadable.horoasset", "10213243-5465-7687-98a9-bacbdcedfe0d", "{");
         if (degraded) {
@@ -1094,11 +1143,16 @@ namespace {
                            diagnostic.location.source == source && diagnostic.path == asset;
                 });
             };
-            const bool expectLinkFindings = applies && !degraded && unresolvedLinks;
+            const bool expectLinkFindings = applies && !degraded && composition == Unresolved;
             CHECK(hasCompositionFinding("packages.host.composition_reference_missing", "Assets/Migration.horoasset",
                                         "10213243-5465-7687-98a9-bacbdcedfe11") == expectLinkFindings);
             CHECK(hasCompositionFinding("packages.host.composition_reference_type_mismatch", "Assets/Migration.prefab",
                                         "10213243-5465-7687-98a9-bacbdcedfe0e") == expectLinkFindings);
+            const bool expectCycles = applies && !degraded && composition == Cyclic;
+            CHECK(hasCompositionFinding("packages.host.composition_reference_cycle", "Assets/MigrationChild.horoasset",
+                                        "10213243-5465-7687-98a9-bacbdcedfe0e") == expectCycles);
+            CHECK(hasCompositionFinding("packages.host.composition_reference_cycle", "Assets/MigrationVariant.prefab",
+                                        "10213243-5465-7687-98a9-bacbdcedfe0f") == expectCycles);
             CHECK(std::ranges::any_of(error.diagnostics, [](const auto &diagnostic) {
                 return diagnostic.severity == DiagnosticSeverity::Error && diagnostic.path == "Assets/Unrelated.horoasset.horo";
             }) == (applies && degraded));
