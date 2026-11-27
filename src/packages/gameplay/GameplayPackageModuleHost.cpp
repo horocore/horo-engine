@@ -138,12 +138,29 @@ namespace Horo::Packages {
             });
         }
 
+        /** @brief Retains the exact native member selected by the verified package file manifest. */
+        struct StagedGameplayArtifact final {
+            std::filesystem::path path;
+            Sha256Digest digest;
+        };
+
+        /** @brief Checks signature policy and binds the native member to the locked archive. */
+        Result<void> VerifyGameplayArtifact(const Security::NativeArtifactGate &gate, const StagedGameplayArtifact &artifact) {
+            const auto evidence = gate.Verify(artifact.path);
+            if (evidence.HasError())
+                return Result<void>::Failure(evidence.ErrorValue());
+            if (evidence.Value().ArtifactDigest() != artifact.digest)
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::TrustRequired));
+            return Result<void>::Success();
+        }
+
         /** @brief Stages and verifies an immutable artifact under the host's private owner-only root. */
-        Result<std::filesystem::path> StageGameplayArtifact(GameplayRoleState &state, const GameplayPackageHostConfiguration &configuration,
+        Result<StagedGameplayArtifact> StageGameplayArtifact(GameplayRoleState &state, const GameplayPackageHostConfiguration &configuration,
                                                             const CancellationToken &cancellation) {
+            using Output = Result<StagedGameplayArtifact>;
             auto root = Detail::CreatePrivatePackageRoot(configuration.temporaryRoot, PackageLifecycleErrors::StorageFailed);
             if (root.HasError())
-                return Result<std::filesystem::path>::Failure(root.ErrorValue());
+                return Output::Failure(root.ErrorValue());
             state.root = std::move(root).Value();
             const auto &packages = state.verified.Install()->Graph()->packages;
             const auto selected = std::ranges::find(packages, state.verified.Identity().package, [](const auto &package) {
@@ -156,28 +173,26 @@ namespace Horo::Packages {
                                                            {PackageLifecycleErrors::InvalidCandidate, PackageLifecycleErrors::StorageFailed,
                                                             PackageLifecycleErrors::Cancelled});
                 staged.HasError())
-                return Result<std::filesystem::path>::Failure(staged.ErrorValue());
-            const auto artifact = state.root / state.verified.Artifact().Value();
+                return Output::Failure(staged.ErrorValue());
             const auto files = state.verified.Package().archive->Manifest().Entries();
             const auto expected = std::ranges::find_if(files, [&state](const auto &file) {
                 return file.id.path.Value() == state.verified.Artifact().Value();
             });
             if (expected == files.end())
-                return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-            auto evidence = configuration.artifactGate->Verify(artifact);
-            if (evidence.HasError())
-                return Result<std::filesystem::path>::Failure(evidence.ErrorValue());
-            if (evidence.Value().ArtifactDigest() != expected->digest)
-                return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::TrustRequired));
-            return Result<std::filesystem::path>::Success(artifact);
+                return Output::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+            StagedGameplayArtifact artifact{state.root / state.verified.Artifact().Value(), expected->digest};
+            if (const auto verified = VerifyGameplayArtifact(*configuration.artifactGate, artifact); verified.HasError())
+                return Output::Failure(verified.ErrorValue());
+            return Output::Success(std::move(artifact));
         }
 
         /** @brief Checks SDK identity before binding world authority, then retains any partial native initializer. */
         Result<void> LoadGameplayOwner(GameplayRoleState &state, const GameplayPackageModuleBinding &binding,
-                                       const std::filesystem::path &artifact, const CancellationToken &cancellation) {
+                                       const StagedGameplayArtifact &artifact, const Security::NativeArtifactGate &gate,
+                                       const CancellationToken &cancellation) {
             const Gameplay::GameModuleLoadExpectation expected{binding.module, binding.buildFingerprint, binding.descriptorRevision};
             Gameplay::GameModuleHost validation{binding.capabilities};
-            if (auto compatible = validation.ValidateArtifact(artifact, expected); compatible.HasError())
+            if (auto compatible = validation.ValidateArtifact(artifact.path, expected); compatible.HasError())
                 return compatible;
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
@@ -188,8 +203,14 @@ namespace Horo::Packages {
                     return Result<void>::Failure(resolved.ErrorValue());
                 physics = std::move(resolved).Value();
             }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
+            if (const auto verified = VerifyGameplayArtifact(gate, artifact); verified.HasError())
+                return verified;
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             state.host = std::make_unique<Gameplay::GameModuleHost>(binding.capabilities, std::move(physics));
-            auto loaded = state.host->Load(artifact, expected);
+            auto loaded = state.host->Load(artifact.path, expected);
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
             auto candidate = std::move(loaded).Value();
@@ -272,7 +293,8 @@ namespace Horo::Packages {
                 state->failure = artifact.ErrorValue();
             else if (cancellation.IsCancellationRequested())
                 state->failure = MakeError(PackageLifecycleErrors::Cancelled);
-            else if (auto activated = LoadGameplayOwner(*state, *binding, artifact.Value(), cancellation); activated.HasError())
+            else if (auto activated = LoadGameplayOwner(*state, *binding, artifact.Value(), *impl_->configuration.artifactGate, cancellation);
+                     activated.HasError())
                 state->failure = activated.ErrorValue();
         } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             state->failure = std::move(activationFailure);

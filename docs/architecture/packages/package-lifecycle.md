@@ -229,6 +229,8 @@ provider parent. Revocation closes new Lua callbacks, and package retirement
 cannot unload the native image or remove its verified staged resources until
 the Lua programs, executors and cleanup have released those leases. A manifest
 role or generic `ScriptInvocationProvider` never certifies a node factory.
+After binding its world services, the Gameplay host rechecks the native member
+against the verified archive and signature policy before loading the module.
 Node descriptor versions are separate from package versions; the existing
 locked resolver selects package versions before these APIs can acquire them.
 

@@ -28,6 +28,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <thread>
 using namespace Horo::Packages::Tests::Support;
 
@@ -76,6 +77,7 @@ namespace {
         EnabledPackageModule enabled{Parse<HoroPackageId>("fixture.gameplay"), Parse<PackagePath>("extensions/native/extension.json"),
                                      "game.tests", Extensions::ExtensionModuleRole::RuntimeParticipant};
         unsigned worldFactories{};
+        std::function<void(const VerifiedPackageModule &)> onWorldFactory;
 
         explicit GameplayFixture(const bool approved = true, const bool correctFingerprint = true, const bool composeHost = true,
                                  const bool mixed = false, const ImporterApproval importerApproval = ImporterApproval::Unrestricted)
@@ -91,8 +93,10 @@ namespace {
                                                                     : "wrong-sdk",
                                                  Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
                                                  {},
-                                                 [this](const VerifiedPackageModule &) {
+                                                 [this](const VerifiedPackageModule &module) {
                 ++worldFactories;
+                if (onWorldFactory)
+                    onWorldFactory(module);
                 return Result<std::shared_ptr<Gameplay::GameplayPhysicsContext>>::Success({});
             }};
             gameplay =
@@ -220,6 +224,30 @@ TEST_CASE("Required gameplay role cannot be satisfied by native extension metada
     GameplayFixture fixture(true, true, false);
     CHECK(fixture.Activate().HasError());
     CHECK(fixture.worldFactories == 0);
+}
+
+TEST_CASE("Package gameplay activation rejects a staged image changed during world binding", "[packages][gameplay][decision-node]") {
+    GameplayFixture fixture;
+    unsigned edited{};
+    fixture.onWorldFactory = [&](const VerifiedPackageModule &module) {
+        const auto filename = std::filesystem::path{module.Artifact().Value()}.filename();
+        for (const auto &entry : std::filesystem::recursive_directory_iterator{fixture.base.temporary.Path()}) {
+            if (entry.path().filename() != filename)
+                continue;
+            std::ofstream output{entry.path(), std::ios::binary | std::ios::app};
+            output.put('\0');
+            output.close();
+            if (output)
+                ++edited;
+        }
+    };
+    const auto activated = fixture.Activate();
+    REQUIRE(edited > 0);
+    REQUIRE(activated.HasError());
+    CHECK(fixture.worldFactories == 1);
+    CHECK_FALSE(fixture.base.service->Active());
+    CHECK(fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service).Value().empty());
+    CHECK(fixture.retirement->Close().HasValue());
 }
 
 TEST_CASE("Package gameplay replacement requires exact previous generation retirement", "[packages][gameplay][hybrid]") {
