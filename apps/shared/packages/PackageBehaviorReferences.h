@@ -67,6 +67,13 @@ namespace Horo::Application::Internal {
         const Error *registrationFailure{}; /**< A failed capture invalidates live role evidence. */
     };
 
+    /** @brief Checks that a published registration observation belongs to the exact locked artifact.
+     * @param registration Retained role observation. @param locked Current package lock entry.
+     * @return Whether the observation may be used to attribute current saved references.
+     */
+    [[nodiscard]] bool MatchesLockedArtifact(const Packages::GameplayPackageModuleHost::RegistrationInventory &registration,
+                                             const Packages::LockedPackage &locked) noexcept;
+
     /** @brief Reports when a locked contribution requires a live owner for removal.
      * @param package Exact departing lock entry.
      * @return A blocker for unsupported contributions or no lock-level blocker for an asset-only entry.

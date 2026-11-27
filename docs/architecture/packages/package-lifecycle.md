@@ -535,6 +535,9 @@ identifies the blocked contribution, module, or archive path and keeps any
 confirmed references found in saved sources. Incomplete descriptor or archive
 review also preserves independently verified gameplay roles for registration
 diagnostics while the unsupported archive remains blocked.
+Retained registration history from a replaced artifact is excluded from saved
+Scene, Prefab, and Decision attribution. An unobserved role in the current
+locked artifact still blocks removal.
 
 The desktop editor can apply a reviewed removal for verified asset packages
 and packages owned entirely by the native gameplay runtime. The workspace requires saved documents and stopped Play before

@@ -878,6 +878,14 @@ namespace {
         return {Graph(1), 1, SchemaId(), {1, 1}, Location(), {}, std::move(utility)};
     }
 
+    /** @brief Reproduces two observations retained across a same-version package replacement. */
+    auto WithPreviousArtifact(Packages::GameplayPackageModuleHost::RegistrationInventory current) {
+        auto previous = current;
+        previous.artifact.bytes.front() ^= 1U;
+        ++current.activationGeneration;
+        return std::array{std::move(previous), std::move(current)};
+    }
+
     TEST_CASE("Package removal protects saved graphs using a departing Decision node", "[packages][application][host][removal]") {
         HostFixture fixture{true};
         const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
@@ -910,7 +918,8 @@ namespace {
                                                  {"assetId", "174ee050-f0a1-4351-89c4-04a5895bff81"},
                                                  {"assetType", AI::DecisionAssetType(kind)}};
         auto sources = fixture.RemovalSources(*assets);
-        sources.registrations = owners;
+        const auto history = WithPreviousArtifact(owners.front());
+        sources.registrations = history;
         const auto oldLock = fixture.Read("packages.lock");
         const auto publish = [&] { return PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources); };
         const auto blocked = publish();
@@ -919,6 +928,13 @@ namespace {
         REQUIRE(blocked.ErrorValue().diagnostics.size() == 1);
         CHECK(blocked.ErrorValue().diagnostics.front().location.source == relative);
         CHECK(blocked.ErrorValue().diagnostics.front().path == (kind == StateMachine ? "1/entry" : "2"));
+        sources.registrations = std::span{history}.first(1);
+        const auto missingCurrent = publish();
+        REQUIRE(missingCurrent.HasError());
+        CHECK(missingCurrent.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
+        REQUIRE(missingCurrent.ErrorValue().diagnostics.size() == 1);
+        CHECK(missingCurrent.ErrorValue().diagnostics.front().path == owners.front().moduleId);
+        sources.registrations = history;
 
         const auto broken = file.parent_path() / ("Broken" + file.extension().string());
         auto brokenSidecar = broken;
@@ -974,13 +990,14 @@ namespace {
                                                                                      {},
                                                                                      "extensions/native/extension.json"}};
         owners.front().hasCustomSenses = true;
+        const auto history = WithPreviousArtifact(owners.front());
         auto sources = fixture.RemovalSources(*assets);
         const auto unobserved = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(unobserved.HasError());
         CHECK(unobserved.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
         REQUIRE(unobserved.ErrorValue().diagnostics.size() == 1);
         CHECK(unobserved.ErrorValue().diagnostics.front().path == "com.horo.application-fixture.native");
-        sources.registrations = owners;
+        sources.registrations = history;
         const Error observationError{ErrorCode{"fixture.registry.capture_failed"}, ErrorDomainId{"fixture.registry"}};
         sources.registrationFailure = &observationError;
         const auto incomplete = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
@@ -1113,11 +1130,10 @@ namespace {
         REQUIRE(std::filesystem::remove(invalidSidecar));
         REQUIRE(std::filesystem::remove(invalidSource));
 
-        owners.front().artifact = {};
+        sources.registrations = std::span{history}.first(1);
         const auto stale = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
         REQUIRE(stale.HasError());
         CHECK(stale.ErrorValue().code.Value() == "packages.host.runtime_registration_unobserved");
-        owners.front().artifact = locked.artifactDigest;
         writeAsset("Scene.horoasset", sceneAsset, "core.scene", scene, locked.package.Value());
         sources.registrations = {};
         const auto missing = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);

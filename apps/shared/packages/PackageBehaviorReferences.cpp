@@ -17,6 +17,13 @@
 #include <set>
 
 namespace Horo::Application::Internal {
+    /** @copydoc MatchesLockedArtifact */
+    bool MatchesLockedArtifact(const Packages::GameplayPackageModuleHost::RegistrationInventory &registration,
+                               const Packages::LockedPackage &locked) noexcept {
+        return registration.activationGeneration != 0 && registration.package == locked.package &&
+               registration.version == locked.version && registration.artifact == locked.artifactDigest;
+    }
+
     namespace {
         /** @brief One saved attachment with its package claim and authored identity. */
         struct PackageBehaviorReference final {
@@ -94,23 +101,16 @@ namespace Horo::Application::Internal {
             return std::ranges::find(removal.removed, package, &Packages::LockedPackageReference::package) != removal.removed.end();
         }
 
-        /** @brief Confirms that an observed role belongs to the exact locked artifact. */
-        bool MatchesLockedArtifact(const Registration &registration, const Packages::LockedPackage &locked) {
-            return registration.activationGeneration != 0 && registration.package == locked.package &&
-                   registration.version == locked.version && registration.artifact == locked.artifactDigest;
-        }
-
         /** @brief Accepts only registrations attributed to the exact locked artifact being withdrawn. */
-        Result<SavedReferenceOwners> IndexOwners(std::span<const Registration> registrations, const Packages::ValidatedPackageLockfileV1 &lock,
-                                                const Packages::PackageRemovalGraphPreview &removal) {
-            using Indexed = Result<SavedReferenceOwners>;
+        SavedReferenceOwners IndexOwners(std::span<const Registration> registrations, const Packages::ValidatedPackageLockfileV1 &lock,
+                                         const Packages::PackageRemovalGraphPreview &removal) {
             SavedReferenceOwners owners;
             for (const auto &registration : registrations) {
                 if (!IsDeparting(removal, registration.package))
                     continue;
                 if (const auto entry = std::ranges::find(lock.Packages(), registration.package, &Packages::LockedPackage::package);
                     entry == lock.Packages().end() || !MatchesLockedArtifact(registration, *entry))
-                    return Indexed::Failure(ReferenceError("packages.host.behavior_ownership_stale"));
+                    continue;
                 for (const auto &type : registration.behaviors)
                     owners.behaviors[type].insert(registration.package);
                 for (const auto &type : registration.components)
@@ -118,7 +118,7 @@ namespace Horo::Application::Internal {
                 if (registration.hasCustomSenses)
                     owners.senses.insert(registration.package);
             }
-            return Indexed::Success(std::move(owners));
+            return owners;
         }
 
         /** @brief Records exact component usage without interpreting serialized payload bytes. */
@@ -895,13 +895,11 @@ namespace Horo::Application::Internal {
         const Assets::AssetRegistryCandidate &inventory) {
         using Inspection = Result<std::vector<Diagnostic>>;
         const auto owners = IndexOwners(sources.registrations, lock, removal);
-        if (owners.HasError())
-            return Inspection::Failure(owners.ErrorValue());
-        auto inspected = ScanSavedReferences(sources.files, sources.context, owners.Value(), inventory);
+        auto inspected = ScanSavedReferences(sources.files, sources.context, owners, inventory);
         if (inspected.HasError())
             return Inspection::Failure(inspected.ErrorValue());
         auto scan = std::move(inspected).Value();
-        if (!owners.Value().Empty() && inventory.status != Assets::AssetRegistryBuildStatus::Complete)
+        if (!owners.Empty() && inventory.status != Assets::AssetRegistryBuildStatus::Complete)
             scan.failures.MarkInventoryIncomplete();
         std::vector<Diagnostic> diagnostics;
         diagnostics.reserve(scan.behaviors.size() + scan.senses.size() + scan.components.size() + scan.composition.size());

@@ -31,22 +31,22 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Indexes only departing providers with evidence from the exact locked artifact. */
-        Result<ProviderOwners> IndexProviderOwners(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
-                                                   const Packages::PackageRemovalGraphPreview &removal) {
+        ProviderOwners IndexProviderOwners(const PackageRemovalSources &sources, const Packages::ValidatedPackageLockfileV1 &lock,
+                                            const Packages::PackageRemovalGraphPreview &removal) {
             ProviderOwners owners;
             for (const auto &role : sources.registrations) {
                 if ((role.decisionNodes.empty() && !role.hasCustomSenses) ||
                     std::ranges::find(removal.removed, role.package, &Packages::LockedPackageReference::package) == removal.removed.end())
                     continue;
                 const auto entry = std::ranges::find(lock.Packages(), role.package, &Packages::LockedPackage::package);
-                if (entry == lock.Packages().end() || entry->version != role.version || entry->artifactDigest != role.artifact)
-                    return Result<ProviderOwners>::Failure(ReferenceError("packages.host.decision_ownership_stale", role.package.Value()));
+                if (entry == lock.Packages().end() || !MatchesLockedArtifact(role, *entry))
+                    continue;
                 for (const auto type : role.decisionNodes)
                     owners.decisions[type.Value()].insert(role.package);
                 if (role.hasCustomSenses)
                     owners.customSenses.insert(role.package);
             }
-            return Result<ProviderOwners>::Success(std::move(owners));
+            return owners;
         }
 
         /** @brief Reports each departing sense owner when the source may depend on its Perception facts. */
@@ -303,10 +303,8 @@ namespace Horo::Application::Internal {
                                                                    const Packages::PackageRemovalGraphPreview &removal,
                                                                    const Assets::AssetRegistryCandidate &inventory) {
         const auto owners = IndexProviderOwners(sources, lock, removal);
-        if (owners.HasError())
-            return ReferenceScan::Failure(owners.ErrorValue());
-        if (owners.Value().decisions.empty() && owners.Value().customSenses.empty())
+        if (owners.decisions.empty() && owners.customSenses.empty())
             return ReferenceScan::Success({});
-        return ScanProviderSources(sources, owners.Value(), inventory);
+        return ScanProviderSources(sources, owners, inventory);
     }
 }  // namespace Horo::Application::Internal
