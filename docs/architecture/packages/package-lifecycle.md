@@ -407,6 +407,9 @@ locks, quarantine artifacts, or write package metadata. Apply verifies the
 archives again before publication.
 Missing current or candidate archives are reported with their package and role.
 The review continues across independent entries up to the diagnostic limit.
+During an offline package exchange, a rejected migration declaration still
+allows the preview to report independent departing archive and saved-reference
+findings.
 
 Behavior rename previews identify each matching attachment with the SHA-256
 of its saved Scene or Prefab bytes. Unreadable sources block the review and

@@ -466,7 +466,7 @@ namespace {
         };
         const auto replacementKind = GENERATE(Replacement::Asset, Replacement::InvalidMigration, Replacement::Native);
         NativeProject fixture;
-        const auto replacement = HoroPackageId::Parse("com.horo.replacement-assets").Value();
+        const auto replacement = HoroPackageId::Parse("com.horo.added-replacement-assets").Value();
         const auto archive = replacementKind == Replacement::InvalidMigration
                                  ? HistoricalAssetAddition(fixture, true, replacement)
                                  : Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("replacement bytes"));
@@ -537,6 +537,16 @@ namespace {
                 };
                 checkBlockers(preview.adapter->Execute(update, context));
                 checkBlockers(apply.adapter->Execute(applyRequest, context));
+                const auto partialRoot = cacheRoot.parent_path() / "candidate-only";
+                auto partial = PackageCacheStore::Create(files, partialRoot).Value();
+                REQUIRE(partial.Publish(archive).HasValue());
+                update.options.back() = NativeProject::PathOption("package-cache-root", partialRoot);
+                const auto incomplete = preview.adapter->Execute(update, context);
+                checkBlockers(incomplete);
+                CHECK(std::ranges::any_of(incomplete.ErrorValue().diagnostics, [&](const auto &entry) {
+                    return entry.code.Value() == "packages.host.removal_archive_evidence_unavailable" &&
+                           entry.path == fixture.graph.package.Value();
+                }));
                 CHECK(read("packages.json") == oldRequest);
                 CHECK(read("packages.lock") == oldLock);
                 return;

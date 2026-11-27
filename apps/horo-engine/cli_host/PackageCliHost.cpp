@@ -437,7 +437,33 @@ namespace Horo::Application::Internal {
             return InspectPackageRemovalImporters(*inventory.Value().assets, impact);
         }
 
-        /** @brief Checks optional sealed cache evidence without restoring packages or activating executable code. */
+        /** @brief Checks the exact cache evidence of one addition, replacement or withdrawal. */
+        Result<void> ReviewCachedWithdrawalChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
+                                                  std::vector<Diagnostic> &diagnostics) {
+            const auto &entry = change.current ? *change.current : *change.candidate;
+            const auto archive = ReadUpdateArchive(cache, entry);
+            const auto reportMissing = [&diagnostics](const char *code, const Packages::LockedPackage &locked, const Error &error) {
+                diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, error.code.Value(),
+                                         SourceLocation{"packages.lock"}, locked.package.Value());
+            };
+            if (archive.HasError()) {
+                reportMissing(change.candidate ? "packages.host.update_archive_evidence_unavailable"
+                                               : "packages.host.removal_archive_evidence_unavailable",
+                              entry, archive.ErrorValue());
+                return Result<void>::Success();
+            }
+            if (!change.current)
+                return ReviewAddedArchive(entry, archive.Value(), diagnostics);
+            if (!change.candidate)
+                return AppendOfflineRemovalArchiveBlockers(diagnostics, entry, archive.Value());
+            const auto candidate = ReadUpdateArchive(cache, *change.candidate);
+            if (candidate.HasValue())
+                return ReviewAssetFiles(entry, archive.Value(), *change.candidate, candidate.Value(), diagnostics);
+            reportMissing("packages.host.update_archive_evidence_unavailable", *change.candidate, candidate.ErrorValue());
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks optional sealed evidence while retaining failures from independent packages. */
         Result<void> ReviewCachedRemoval(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
                                          const Cli::CliExecutionContext &context, std::vector<Diagnostic> &diagnostics) {
             if (std::ranges::find(request.options, "package-cache-root", &Cli::CliParsedOption::name) == request.options.end())
@@ -449,38 +475,26 @@ namespace Horo::Application::Internal {
             const auto cache = Packages::PackageCacheStore::Create(files, root.Value(), update.policy.limits.validation);
             if (cache.HasError())
                 return Result<void>::Failure(cache.ErrorValue());
+            std::optional<Error> firstFailure;
             for (const auto &change : update.preview.changes) {
                 if (context.IsStopRequested())
                     return Result<void>::Failure(UpdateStopped(context));
-                const auto &entry = change.current ? *change.current : *change.candidate;
-                const auto archive = ReadUpdateArchive(cache.Value(), entry);
-                if (archive.HasError()) {
-                    const auto *code = change.candidate ? "packages.host.update_archive_evidence_unavailable"
-                                                       : "packages.host.removal_archive_evidence_unavailable";
-                    diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, archive.ErrorValue().code.Value(),
-                                             SourceLocation{"packages.host"}, entry.package.Value());
-                } else if (!change.current) {
-                    if (auto reviewed = ReviewAddedArchive(entry, archive.Value(), diagnostics); reviewed.HasError())
-                        return reviewed;
-                } else if (change.candidate) {
-                    const auto candidate = ReadUpdateArchive(cache.Value(), *change.candidate);
-                    if (candidate.HasError()) {
-                        diagnostics.emplace_back(DiagnosticCode{"packages.host.update_archive_evidence_unavailable"}, DiagnosticSeverity::Error,
-                                                 candidate.ErrorValue().code.Value(), SourceLocation{"packages.lock"},
-                                                 change.candidate->package.Value());
-                    } else if (auto reviewed = ReviewAssetFiles(*change.current, archive.Value(), *change.candidate, candidate.Value(), diagnostics);
-                               reviewed.HasError()) {
-                        return reviewed;
-                    }
-                } else {
-                    if (auto reviewed = AppendOfflineRemovalArchiveBlockers(diagnostics, *change.current, archive.Value()); reviewed.HasError())
-                        return reviewed;
+                if (auto reviewed = ReviewCachedWithdrawalChange(change, cache.Value(), diagnostics); reviewed.HasError()) {
+                    auto error = std::move(reviewed).ErrorValue();
+                    const auto &entry = change.candidate ? *change.candidate : *change.current;
+                    diagnostics.emplace_back(DiagnosticCode{error.code.Value()}, DiagnosticSeverity::Error, error.message,
+                                             SourceLocation{"packages.lock"}, entry.package.Value());
+                    if (!firstFailure)
+                        firstFailure.emplace(std::move(error));
                 }
                 if (diagnostics.size() > MaximumRemovalCoverageDiagnostics)
                     return Result<void>::Failure(
                         Error{ErrorCode{"packages.host.removal_reference_coverage_limit"}, ErrorDomainId{"packages.host"}});
             }
-            return ReviewCachedRetainedEntries(update, cache.Value(), context, diagnostics, MaximumRemovalCoverageDiagnostics);
+            auto retained = ReviewCachedRetainedEntries(update, cache.Value(), context, diagnostics, MaximumRemovalCoverageDiagnostics);
+            if (retained.HasError() || !firstFailure)
+                return retained;
+            return Result<void>::Failure(std::move(*firstFailure));
         }
 
         Result<void> ReviewOfflineRemoval(const InspectedPackageUpdate &update, const Cli::CliCommandRequest &request,
