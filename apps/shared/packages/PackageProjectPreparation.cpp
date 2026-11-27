@@ -89,8 +89,6 @@ namespace Horo::Application::Internal {
                 return Digest(request) == expected.requestDocumentDigest && Digest(lock) == expected.lockDigest;
             }
 
-            bool operator==(const MetadataDocuments &) const = default;
-
             bool Fits(const Packages::PackageLockfileLimits &limits) const {
                 return request.size() <= RequestLimit && lock.size() <= limits.documentBytes;
             }
@@ -362,13 +360,14 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(lease.ErrorValue());
         }
 
-        /** @brief Detects changes to the approved pair by a writer outside the project lease. */
-        Result<void> RecheckMetadataBase(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
-                                         const MetadataDocuments &previous, const CancellationToken &cancellation) {
+        /** @brief Detects changes to the expected publication phase by a writer outside the project lease. */
+        Result<void> RecheckMetadataPair(const std::filesystem::path &metadata, const Packages::PackageLockfileLimits &limits,
+                                         const std::string_view request, const std::string_view lock,
+                                         const CancellationToken &cancellation) {
             const auto current = ReadDocuments(metadata, limits, cancellation);
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
-            if (current.Value() != previous)
+            if (current.Value().request != request || current.Value().lock != lock)
                 return Result<void>::Failure(MetadataConflict());
             return Result<void>::Success();
         }
@@ -408,7 +407,7 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(pending.ErrorValue());
             if (pending.Value())
                 return Result<void>::Failure(MakeError(Packages::PackageRestoreErrors::Busy));
-            return RecheckMetadataBase(metadata, limits, expected, cancellation);
+            return RecheckMetadataPair(metadata, limits, expected.request, expected.lock, cancellation);
         }
 
         /** @brief The durable request precedes the lock, whose native replacement is the commit point. */
@@ -425,7 +424,8 @@ namespace Horo::Application::Internal {
                 if (auto references = recheck(); references.HasError())
                     return Publication::Failure(std::move(references).ErrorValue());
             }
-            if (auto stable = RecheckMetadataBase(metadata, limits, previous, context.cancellation); stable.HasError())
+            if (auto stable = RecheckMetadataPair(metadata, limits, previous.request, previous.lock, context.cancellation);
+                stable.HasError())
                 return Publication::Failure(stable.ErrorValue());
             if (auto authority = Platform::CheckProjectReadContext(context); authority.HasError())
                 return Publication::Failure(authority.ErrorValue());
@@ -433,7 +433,7 @@ namespace Horo::Application::Internal {
                 return Publication::Failure(recorded.ErrorValue());
             // Journal staging can race an independent editor that does not hold the project mutation lease.
             // Once recorded, complete the check and transaction even if the caller closes.
-            if (auto stable = RecheckMetadataBase(metadata, limits, previous, {}); stable.HasError()) {
+            if (auto stable = RecheckMetadataPair(metadata, limits, previous.request, previous.lock, {}); stable.HasError()) {
                 if (auto discarded = files.RemoveDurable(journalPath); discarded.HasError())
                     return Publication::Failure(WithCause(std::move(stable).ErrorValue(), std::move(discarded).ErrorValue()));
                 return Publication::Failure(std::move(stable).ErrorValue());
@@ -441,6 +441,8 @@ namespace Horo::Application::Internal {
             AtomicFileReplacementReceipt requestReceipt;
             if (auto written = ReplaceMetadata(metadata / "packages.json", next.request, files, requestReceipt); written.HasError())
                 return Publication::Failure(written.ErrorValue());
+            if (auto stable = RecheckMetadataPair(metadata, limits, next.request, previous.lock, {}); stable.HasError())
+                return Publication::Failure(stable.ErrorValue());
             AtomicFileReplacementReceipt lockReceipt;
             if (auto written = ReplaceMetadata(metadata / "packages.lock", next.lock, files, lockReceipt); written.HasError())
                 return lockReceipt.WasCommitted() ? Publication::Success({written.ErrorValue()})
@@ -825,7 +827,9 @@ namespace Horo::Application::Internal {
         const auto review = [&] { return CheckRemovalReferences(sources, plan.lock, plan.impact); };
         if (auto references = review(); references.HasError())
             return Publication::Failure(std::move(references).ErrorValue());
-        if (auto stable = RecheckMetadataBase(metadata, policy.limits.lockfile, previous.Value(), cancellation); stable.HasError())
+        if (auto stable = RecheckMetadataPair(metadata, policy.limits.lockfile, previous.Value().request, previous.Value().lock,
+                                              cancellation);
+            stable.HasError())
             return Publication::Failure(stable.ErrorValue());
         auto published = CommitWithRollbackPoint(metadata, previous.Value(), plan.next, policy.limits.lockfile, files, sources.context, review);
         if (published.HasValue() && sources.live)

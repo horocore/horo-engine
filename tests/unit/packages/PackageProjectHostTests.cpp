@@ -87,6 +87,10 @@ namespace {
             observeJournal_ = std::move(observe);
         }
 
+        void OnRequestPublication(std::function<void()> observe) {
+            observeRequest_ = std::move(observe);
+        }
+
         void OnInspect(std::function<void(const std::filesystem::path &)> observe) {
             observeInspection_ = std::move(observe);
         }
@@ -140,6 +144,8 @@ namespace {
                 observeCheckpoint_();
             if (replaced.HasValue() && observeJournal_ && destination.filename() == "package-metadata.pending")
                 observeJournal_();
+            if (replaced.HasValue() && observeRequest_ && destination.filename() == "packages.json")
+                observeRequest_();
             if (replaced.HasValue() && lock && write_ == LockWrite::FailAfterReplace)
                 return Result<void>::Failure(Failure());
             return replaced;
@@ -161,6 +167,7 @@ namespace {
         NativeDurableFileSystem native_;
         std::function<void()> observeCheckpoint_;
         std::function<void()> observeJournal_;
+        std::function<void()> observeRequest_;
         std::function<void(const std::filesystem::path &)> observeInspection_;
         LockWrite write_{LockWrite::Normal};
         bool blockRecoveryRequest_{};
@@ -738,6 +745,39 @@ namespace {
             files.SetLockWrite(MetadataFiles::LockWrite::FailBeforeReplace);
             REQUIRE(PublishPackageProjectUpdate(policy, update, files, context).HasError());
             CHECK(fixture.Read("packages.json") == originalRequest);
+        }
+        SECTION("an external metadata edit after request publication is preserved") {
+            auto expectedRequest = requestJson;
+            auto expectedLock = originalLock;
+            bool editLock = false;
+            SECTION("external lock edit") {
+                expectedLock += '\n';
+                editLock = true;
+            }
+            SECTION("external request edit") {
+                expectedRequest += '\n';
+            }
+            files.OnRequestPublication([&] {
+                if (editLock)
+                    fixture.Write("packages.lock", expectedLock);
+                else
+                    fixture.Write("packages.json", expectedRequest);
+            });
+            const auto rejected = PublishPackageProjectUpdate(policy, update, files, context);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "packages.host.metadata_conflict");
+            CHECK(fixture.Read("packages.lock") == expectedLock);
+            CHECK(fixture.Read("packages.json") == expectedRequest);
+            CHECK(std::filesystem::exists(journal));
+            CHECK(ReadPackageProjectRollback(policy, files, {}).HasError());
+            files.OnRequestPublication({});
+            fixture.Write("packages.json", requestJson);
+            fixture.Write("packages.lock", originalLock);
+            REQUIRE(PreparePackageProject(policy, files, {}).HasValue());
+            CHECK(fixture.Read("packages.json") == originalRequest);
+            CHECK(fixture.Read("packages.lock") == originalLock);
+            CHECK_FALSE(std::filesystem::exists(journal));
+            return;
         }
         SECTION("retry can keep the exact published pair after uncertain lock durability") {
             files.SetLockWrite(MetadataFiles::LockWrite::FailAfterReplace);

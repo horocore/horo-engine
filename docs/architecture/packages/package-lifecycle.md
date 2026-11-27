@@ -455,7 +455,9 @@ approved base pair before admitting the journal. An external edit detected
 there remains in place and the uncommitted rollback point is discarded.
 After writing the journal, the host checks the pair again before replacing
 either document. A changed pair aborts publication and leaves the external edit
-in place.
+in place. After replacing the request, the host checks that the published
+request and prior lock still match before replacing the lock. An independent
+edit at that point leaves the journal available for recovery.
 Failed updates retain a previous completed rollback point. The point
 records package metadata and does not include project document migrations.
 
