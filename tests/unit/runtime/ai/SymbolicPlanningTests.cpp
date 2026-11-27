@@ -521,6 +521,23 @@ namespace Horo::AI {
                 REQUIRE(current.Register({input.openTask, Id<BlackboardSchemaId>(51)}).HasValue());
                 CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
             }
+            SECTION("task acquired a schema even though the execution asset matches it") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                REQUIRE(current.Register({input.openTask, scene.schema->Identity()}).HasValue());
+                REQUIRE(current.Register({input.forceTask}).HasValue());
+                const auto declarations = current.Freeze();
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, declarations).HasError());
+                const auto fresh = SymbolicDomain::Capture(input.facts, input.actions, declarations, scene.schema->Identity());
+                REQUIRE(fresh.HasValue());
+                CHECK(CompileSymbolicTaskSequence(fresh.Value().Search({}, input.goal, 1024), bindings, declarations).HasValue());
+            }
+            SECTION("task switched its authoring origin without changing its identity") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                REQUIRE(current.Register({input.openTask, {}, AiTaskAuthoring::Script}).HasValue());
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
+            }
             SECTION("owner supplies another task for a planned action") {
                 occurrences[1].task = input.forceTask;
                 CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());

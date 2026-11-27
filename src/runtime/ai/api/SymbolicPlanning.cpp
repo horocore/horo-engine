@@ -159,7 +159,8 @@ namespace Horo::AI {
             if (!source.action.IsValid() || source.cost == 0 || !task || (task->blackboard && task->blackboard != blackboard) || !before ||
                 !after)
                 return Domain::Failure(MakeError(AIErrors::TaskContextInvalid));
-            result.actions_[result.actionCount_++] = {{source.action, source.task}, source.cost, *before, *after};
+            result.actions_[result.actionCount_++] = {
+                {source.action, source.task, task->blackboard, task->authoring}, source.cost, *before, *after};
         }
         const auto identity = [](const Action &action) {
             return action.identity.action;
@@ -415,7 +416,8 @@ namespace Horo::AI {
                 const auto &occurrence = bindings.occurrences[index];
                 const auto task = tasks.Find(step.task);
                 const auto *node = FindAssetNode(*bindings.asset, occurrence.node);
-                if (!task || (task->blackboard && task->blackboard != schema->Identity()) || !occurrence.node.IsValid() ||
+                if (!task || task->blackboard != step.blackboard || task->authoring != step.authoring ||
+                    (step.blackboard && step.blackboard != schema->Identity()) || !occurrence.node.IsValid() ||
                     occurrence.action != step.action || occurrence.task != step.task || !node || !node->type.IsValid())
                     return Compiled::Failure(MakeError(AIErrors::TaskContextInvalid));
                 root.children.push_back(occurrence.node);

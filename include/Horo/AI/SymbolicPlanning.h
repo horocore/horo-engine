@@ -35,9 +35,12 @@ namespace Horo::AI {
         std::span<const SymbolicLiteral> effects;
     };
 
+    /** @brief Inert action and exact task declaration admitted by the planning domain. */
     struct SymbolicPlanStep final {
         SymbolicActionId action;
         TaskId task; /**< Inert registered task identity. Execution remains with the decision owner. */
+        std::optional<BlackboardSchemaId> blackboard; /**< Schema requirement when the task was admitted. */
+        AiTaskAuthoring authoring{AiTaskAuthoring::Native}; /**< Authored task kind when the task was admitted. */
     };
 
     enum class SymbolicPlanStatus : std::uint8_t {

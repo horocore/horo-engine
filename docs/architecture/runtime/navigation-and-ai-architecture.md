@@ -2917,7 +2917,11 @@ alternative fails and any branch was truncated, the outcome is budget exhaustion
 At its normal safe point, the decision owner rechecks the world revision and
 supplies the exact compiled asset and primitive node occurrences. The symbolic
 sequence adapter re-admits the task identities against the current declarations
-and uses the standard Behavior Tree compiler. Its asset must bind an intrinsic
+and uses the standard Behavior Tree compiler. Each step records the admitted
+task kind and Blackboard requirement. A changed declaration requires a fresh
+search, even when the task ID is unchanged. Consumers rebuilding against
+`SymbolicPlanStep` can continue reading its action and task fields.
+Its asset must bind an intrinsic
 Sequence root and provider-backed task occurrences. Callers using generic
 provider metadata for the root must compile it as an intrinsic Sequence first.
 Its result uses the existing task
