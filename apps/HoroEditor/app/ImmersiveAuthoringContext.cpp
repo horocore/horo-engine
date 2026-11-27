@@ -2,6 +2,8 @@
 
 #include "AgentTurnMcp.h"
 #include "EditorCommandMcpSession.h"
+#include "EditorInspectionMcpTools.h"
+#include "Horo/Mcp/McpErrors.h"
 
 #include <algorithm>
 #include <atomic>
@@ -105,16 +107,35 @@ namespace Horo::Editor {
     }
 
     ImmersivePlanReview::ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, const std::stop_token stop,
-                                             CancellationToken projectLifetime, CancellationToken trustLifetime,
-                                             std::shared_ptr<const Agent::McpPlanCatalog> catalog,
-                                             const std::chrono::steady_clock::time_point projectDeadline)
-        : context_(std::move(context)), plan_(std::move(plan)), stop_(stop), projectLifetime_(std::move(projectLifetime)),
-          trustLifetime_(std::move(trustLifetime)), catalog_(std::move(catalog)), projectDeadline_(projectDeadline) {}
+                                             Agent::AgentTurnFreshness authority,
+                                             std::weak_ptr<const EditorInspectionCommandEndpoint> scene)
+        : context_(std::move(context)), plan_(std::move(plan)), stop_(stop), authority_(std::move(authority)), scene_(std::move(scene)) {}
 
     /** @copydoc ImmersivePlanReview::HasCurrentAuthority */
     bool ImmersivePlanReview::HasCurrentAuthority() const noexcept {
-        return context_.IsCurrent() && !projectLifetime_.IsCancellationRequested() && !trustLifetime_.IsCancellationRequested() &&
-               std::chrono::steady_clock::now() < projectDeadline_ && (!catalog_ || catalog_->IsCurrent());
+        return authority_ && authority_();
+    }
+
+    /** @copydoc ImmersivePlanReview::StageScenePreview */
+    Result<std::uint64_t> ImmersivePlanReview::StageScenePreview(const ImmersivePlanningContext &current) const {
+        using Output = Result<std::uint64_t>;
+        if (current.Identity().mode != ImmersiveAuthoringMode::Edit)
+            return Output::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));
+        const auto scene = scene_.lock();
+        if (!scene || scene->owner != std::this_thread::get_id() || !scene->inspectEditTargets)
+            return Output::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
+        const auto *plan = Read(current, [&scene](const Agent::AgentPlanObjectScope &scope) {
+            return scene->inspectEditTargets({scope.opening, scope.revision}, scope.objects).HasValue();
+        });
+        if (!plan || !plan->draft || plan->draft->toolIntents.size() != 1 || plan->tools.size() != 1 || !plan->tools.front().scope ||
+            plan->tools.front().effect != Agent::AgentPlannedEffect::Presentation)
+            return Output::Failure(MakeError(Mcp::McpErrors::ToolUnavailable));
+        const auto &intent = plan->draft->toolIntents.front();
+        auto authorized = [authority = authority_, stop = stop_] {
+            return !stop.stop_requested() && authority();
+        };
+        return StageEditorScenePlan(*scene, intent.name, nlohmann::json::parse(intent.argumentsJson, nullptr, false),
+                                    std::move(authorized));
     }
 
     /** @copydoc ImmersivePlanReview::Status */
@@ -177,13 +198,13 @@ namespace Horo::Editor {
         };
         const auto projectLifetime = approvedContext ? approvedContext->project.cancellation : CancellationToken{};
         const auto projectDeadline = approvedContext ? approvedContext->project.deadline : std::chrono::steady_clock::time_point::max();
-        const Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime,
-                                                              trust = *trustLifetime, projectDeadline]() noexcept {
+        Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime, trust = *trustLifetime,
+                                                       projectDeadline]() noexcept {
             return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && !trust.IsCancellationRequested() &&
                    std::chrono::steady_clock::now() < projectDeadline && (!catalog || catalog->IsCurrent());
         };
         auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext, providerAuthority);
-        return {context_, std::move(plan), stop, projectLifetime, *trustLifetime, catalog_, projectDeadline};
+        return {context_, std::move(plan), stop, std::move(providerAuthority), scene_};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}
@@ -257,8 +278,8 @@ namespace Horo::Editor {
     }
 
     ImmersiveMcpCatalog::ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog,
-                                             std::string project)
-        : context_(std::move(context)), catalog_(std::move(catalog)), project_(std::move(project)) {}
+                                             std::string project, std::weak_ptr<const EditorInspectionCommandEndpoint> scene)
+        : context_(std::move(context)), catalog_(std::move(catalog)), project_(std::move(project)), scene_(std::move(scene)) {}
 
     /** @copydoc ImmersiveAuthoringContext::CaptureMcpCatalog */
     std::optional<ImmersiveMcpCatalog> ImmersiveAuthoringContext::CaptureMcpCatalog(
@@ -288,7 +309,7 @@ namespace Horo::Editor {
                                                              std::move(source->isCurrent));
         if (!catalog || !context.IsCurrent())
             return std::nullopt;
-        return ImmersiveMcpCatalog{context, std::move(catalog), std::move(source->project)};
+        return ImmersiveMcpCatalog{context, std::move(catalog), std::move(source->project), std::move(source->scene)};
     }
 
     /** @copydoc ImmersiveAuthoringContext::CaptureMcpPlan */
@@ -304,8 +325,10 @@ namespace Horo::Editor {
         request.tools = catalog.catalog_->Tools();
         request.requiredFeatures.bits |= static_cast<std::uint32_t>(Agent::ModelFeature::Tools);
         auto captured = CapturePlan(context, std::move(request), catalog.project_.empty() ? projectIdentity : catalog.project_);
-        if (captured)
+        if (captured) {
             captured->catalog_ = catalog.catalog_;
+            captured->scene_ = catalog.scene_;
+        }
         return captured;
     }
 }  // namespace Horo::Editor

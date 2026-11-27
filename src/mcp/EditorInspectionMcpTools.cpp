@@ -14,6 +14,8 @@ namespace Horo::Editor {
         using JsonResult = Result<Json>;
         constexpr auto MaximumObjects = ObjectInspectionRequest::MaximumObjects;
         constexpr auto SmallestPositiveNumber = std::numeric_limits<double>::denorm_min();
+        constexpr std::string_view SceneEditsTool = "scene.propose_edits";
+        constexpr std::string_view SceneTransformsTool = "scene.propose_transforms";
         enum class SceneProposalKind {
             Transforms,
             Edits
@@ -643,6 +645,16 @@ namespace Horo::Editor {
             return Result<Mcp::McpToolDraftScope>::Success(std::move(scope));
         }
 
+        /** @brief Sends the shared validated Scene payload to the existing preview owner. */
+        Result<std::uint64_t> StageSceneProposal(const EditorInspectionCommandEndpoint &endpoint, const Json &arguments,
+                                                 std::function<bool()> authorized) {
+            const auto proposal = ReadSceneProposal(arguments);
+            if (proposal.HasError())
+                return Result<std::uint64_t>::Failure(proposal.ErrorValue());
+            const auto &edits = proposal.Value();
+            return endpoint.proposeEdits(edits.revision, edits.transforms, edits.renames, edits.lights, std::move(authorized));
+        }
+
         /** @brief Stages the exact proposal on the editor lane and retains a revocable, weak principal lease. */
         class SceneProposalTool final : public Mcp::IMcpToolAdapter {
         public:
@@ -657,16 +669,11 @@ namespace Horo::Editor {
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));
                 if (context.IsStopRequested())
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
-                const auto proposal = ReadSceneProposal(arguments);
-                if (proposal.HasError())
-                    return JsonResult::Failure(proposal.ErrorValue());
                 auto authorized = [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
                     const auto active = principal.lock();
                     return active && !active->IsStopRequested();
                 };
-                const auto &edits = proposal.Value();
-                const auto result =
-                    endpoint->proposeEdits(edits.revision, edits.transforms, edits.renames, edits.lights, std::move(authorized));
+                const auto result = StageSceneProposal(*endpoint, arguments, std::move(authorized));
                 if (result.HasError())
                     return JsonResult::Failure(result.ErrorValue());
                 return JsonResult::Success({{"reviewId", std::to_string(result.Value())}});
@@ -681,7 +688,7 @@ namespace Horo::Editor {
                                                       const SceneProposalKind kind) {
             const bool broader = kind == SceneProposalKind::Edits;
             return {.descriptor =
-                        {.id = {broader ? "scene.propose_edits" : "scene.propose_transforms"},
+                        {.id = {std::string{broader ? SceneEditsTool : SceneTransformsTool}},
                          .description = broader
                                             ? "Preview authored names, local transforms, and light enablement for local operator review."
                                             : "Preview authored local transforms in the viewport for local operator review.",
@@ -727,6 +734,17 @@ namespace Horo::Editor {
                 tools.push_back(Registration<Read>(endpoint, std::move(id), std::move(description), input(), schema()));
         }
     }  // namespace
+
+    /** @copydoc StageEditorScenePlan */
+    Result<std::uint64_t> StageEditorScenePlan(const EditorInspectionCommandEndpoint &endpoint, const std::string_view tool,
+                                               const nlohmann::json &arguments, std::function<bool()> authorized) {
+        using Output = Result<std::uint64_t>;
+        if (endpoint.owner != std::this_thread::get_id() || !endpoint.proposeEdits)
+            return Output::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
+        if ((tool != SceneEditsTool && tool != SceneTransformsTool) || !authorized || !authorized())
+            return Output::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));
+        return StageSceneProposal(endpoint, arguments, std::move(authorized));
+    }
 
     /** @copydoc MakeEditorInspectionMcpTools */
     Result<std::vector<Mcp::McpToolRegistration>> MakeEditorInspectionMcpTools(

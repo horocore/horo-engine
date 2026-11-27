@@ -23,6 +23,7 @@ namespace Horo::Editor {
         std::vector<std::string> grants;
         std::string project;
         std::function<bool()> isCurrent; /**< Checks the exact session and principal without retaining the host. */
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene; /**< Preview owner of this exact command binding. */
     };
 
     /** @brief A local host's preapproved client and project binding. */
@@ -96,7 +97,8 @@ namespace Horo::Editor {
     private:
         EditorCommandMcpSession(std::shared_ptr<Mcp::McpAuthorization> policy, std::shared_ptr<Mcp::McpController> controller,
                                 std::shared_ptr<Mcp::McpSessionManager> manager, std::shared_ptr<Mcp::McpInProcessAdapter> client,
-                                std::shared_ptr<const Mcp::McpToolSnapshot> tools, Mcp::McpSessionAdmission admission);
+                                std::shared_ptr<const Mcp::McpToolSnapshot> tools, Mcp::McpSessionAdmission admission,
+                                std::weak_ptr<const EditorInspectionCommandEndpoint> scene);
 
         std::shared_ptr<Mcp::McpAuthorization> policy_;
         std::shared_ptr<Mcp::McpController> controller_;
@@ -104,6 +106,7 @@ namespace Horo::Editor {
         std::shared_ptr<Mcp::McpInProcessAdapter> client_;
         std::shared_ptr<const Mcp::McpToolSnapshot> tools_;
         Mcp::McpRequestContext sessionContext_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
         std::optional<std::uint64_t> pendingApproval_;
     };
 }  // namespace Horo::Editor

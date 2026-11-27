@@ -334,6 +334,11 @@ Ownership rules:
   selection for the plan and pins the project identity before inference.
   Disconnect, principal expiry, or withdrawal of the selected tools invalidates
   retained drafts without giving the planner an MCP execution channel.
+  A local Edit action can take one validated batched Scene proposal to the
+  normal viewport preview owner. The exact session's workspace endpoint
+  revalidates each target first, then uses the same typed decoder as the MCP
+  proposal tool. The viewport retains the plan's revocation checks and still
+  requires its separate transaction confirmation.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

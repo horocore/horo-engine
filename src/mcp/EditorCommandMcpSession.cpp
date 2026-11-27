@@ -121,14 +121,16 @@ namespace Horo::Editor {
         }
         return SessionResult::Success(std::unique_ptr<EditorCommandMcpSession>(
             new EditorCommandMcpSession(std::move(policy), std::move(controller).Value(), std::move(manager).Value(),
-                                        std::move(client).Value(), registry->Read(), std::move(authenticated).Value())));
+                                        std::move(client).Value(), registry->Read(), std::move(authenticated).Value(),
+                                        std::move(endpoints.inspection))));
     }
 
     EditorCommandMcpSession::EditorCommandMcpSession(std::shared_ptr<Mcp::McpAuthorization> policy,
                                                      std::shared_ptr<Mcp::McpController> controller,
                                                      std::shared_ptr<Mcp::McpSessionManager> manager,
                                                      std::shared_ptr<Mcp::McpInProcessAdapter> client,
-                                                     std::shared_ptr<const Mcp::McpToolSnapshot> tools, Mcp::McpSessionAdmission admission)
+                                                     std::shared_ptr<const Mcp::McpToolSnapshot> tools, Mcp::McpSessionAdmission admission,
+                                                     std::weak_ptr<const EditorInspectionCommandEndpoint> scene)
         : policy_(std::move(policy)), controller_(std::move(controller)), manager_(std::move(manager)), client_(std::move(client)),
           tools_(std::move(tools)), sessionContext_{.session = client_->Session(),
                                                     .clientIdentity = std::move(admission.clientIdentity),
@@ -138,7 +140,8 @@ namespace Horo::Editor {
                                                     .registryRevision = admission.registryRevision,
                                                     .deadline = admission.authority->ExpiresAt(),
                                                     .authority = std::move(admission.authority),
-                                                    .authorization = policy_} {}
+                                                    .authorization = policy_},
+          scene_(std::move(scene)) {}
 
     EditorCommandMcpSession::~EditorCommandMcpSession() {
         static_cast<void>(Close());
@@ -160,7 +163,8 @@ namespace Horo::Editor {
         };
         if (!sessionContext_.projectIdentity || !isCurrent())
             return std::nullopt;
-        return EditorMcpPlanningSource{tools_, sessionContext_.capabilities, *sessionContext_.projectIdentity, std::move(isCurrent)};
+        return EditorMcpPlanningSource{tools_, sessionContext_.capabilities, *sessionContext_.projectIdentity, std::move(isCurrent),
+                                       scene_};
     }
 
     /** @copydoc EditorCommandMcpSession::ToolEffect */

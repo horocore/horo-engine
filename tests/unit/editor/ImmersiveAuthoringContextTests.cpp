@@ -2,6 +2,7 @@
 #include "AgentTurnTestTools.h"
 #include "EditorCommandMcpSession.h"
 #include "EditorInspectionMcpTools.h"
+#include "Horo/Mcp/McpErrors.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <condition_variable>
@@ -457,6 +458,8 @@ namespace Horo::Editor {
             REQUIRE(context);
 
             std::size_t staged{};
+            std::function<bool()> viewportAuthority;
+            bool targetsAvailable = true;
             const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
                 EditorInspectionCommandEndpoint{.project = std::string{projectIdentity},
                                                 .authorizationRevision = 3,
@@ -465,9 +468,25 @@ namespace Horo::Editor {
                                                     [](const ObjectInspectionRequest &) {
                 return Result<TransformInspectionPage>::Success({});
             },
-                                                .proposeEdits = [&](auto, auto, auto, auto, auto) {
+                                                .proposeEdits =
+                                                    [&](const InspectionSceneRevision revision, auto transforms, auto renames, auto lights,
+                                                        std::function<bool()> authorized) {
+                CHECK((revision == InspectionSceneRevision{identity.documentOpening, identity.documentRevision}));
+                CHECK(transforms.empty());
+                CHECK(lights.empty());
+                REQUIRE(renames.size() == 1);
+                CHECK(renames.front().object == 42);
+                CHECK(renames.front().name == "Reviewed");
+                viewportAuthority = std::move(authorized);
                 ++staged;
                 return Result<std::uint64_t>::Success(1);
+            },
+                                                .inspectEditTargets = [&](InspectionSceneRevision revision,
+                                                                          std::span<const std::uint64_t> objects) {
+                CHECK((revision == InspectionSceneRevision{identity.documentOpening, identity.documentRevision}));
+                REQUIRE(objects.size() == 1);
+                CHECK(objects.front() == 42);
+                return targetsAvailable ? Result<void>::Success() : Result<void>::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
             }});
             auto opened = EditorCommandMcpSession::Create({.inspection = endpoint},
                                                           {"immersive-fixture",
@@ -525,6 +544,16 @@ namespace Horo::Editor {
             };
             CHECK(review.Read(*context, inspect));
             CHECK(staged == 0);
+            targetsAvailable = false;
+            CHECK(review.StageScenePreview(*context).HasError());
+            CHECK(staged == 0);
+            targetsAvailable = true;
+            const auto stagedReview = review.StageScenePreview(*context);
+            REQUIRE(stagedReview.HasValue());
+            CHECK(stagedReview.Value() == 1);
+            CHECK(staged == 1);
+            REQUIRE(viewportAuthority);
+            CHECK(viewportAuthority());
 
             SECTION("closing the command session withdraws the retained plan") {
                 REQUIRE(session.Close().HasValue());
@@ -534,8 +563,19 @@ namespace Horo::Editor {
                 toolApproval.RequestCancellation();
                 CHECK(session.SessionKey().principal != 0);
             }
+            SECTION("switching to Simulate withdraws the viewport review") {
+                auto simulate = identity;
+                simulate.mode = ImmersiveAuthoringMode::Simulate;
+                simulate.worldGeneration = 1;
+                const auto switched = owner.Publish(simulate, {});
+                REQUIRE(switched);
+                CHECK(review.StageScenePreview(*switched).HasError());
+            }
             CHECK(review.Status() == ContextDenied);
             CHECK_FALSE(review.Read(*context, inspect));
+            CHECK_FALSE(viewportAuthority());
+            CHECK(review.StageScenePreview(*context).HasError());
+            CHECK(staged == 1);
             CHECK_FALSE(owner.CaptureMcpPlan(*context, Prompt(), *catalog));
         }
 

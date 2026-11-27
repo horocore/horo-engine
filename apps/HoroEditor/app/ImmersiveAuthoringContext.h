@@ -26,6 +26,7 @@ namespace Horo::Mcp {
 
 namespace Horo::Editor {
     class EditorCommandMcpSession;
+    struct EditorInspectionCommandEndpoint;
 
     enum class ImmersiveAuthoringMode : std::uint8_t {
         Edit,
@@ -112,10 +113,11 @@ namespace Horo::Editor {
     private:
         friend class ImmersiveAuthoringContext;
         ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog,
-                            std::string project = {});
+                            std::string project = {}, std::weak_ptr<const EditorInspectionCommandEndpoint> scene = {});
         ImmersivePlanningContext context_;
         std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
         std::string project_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
     };
 
     /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
@@ -142,12 +144,16 @@ namespace Horo::Editor {
         [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current,
                                                        const TargetValidator &inspectTargets = {}) const && = delete;
 
+        /** @brief Opens the existing viewport review for an explicitly selected, single batched Scene proposal.
+         * @param current Current Edit generation. Targets are revalidated by the captured workspace owner.
+         * @return Preview ID or rejection. The viewport owner requires separate approval before changing the document.
+         */
+        [[nodiscard]] Result<std::uint64_t> StageScenePreview(const ImmersivePlanningContext &current) const;
+
     private:
         friend class ImmersiveAgentRequest;
         ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
-                            CancellationToken projectLifetime = {}, CancellationToken trustLifetime = {},
-                            std::shared_ptr<const Agent::McpPlanCatalog> catalog = {},
-                            std::chrono::steady_clock::time_point projectDeadline = std::chrono::steady_clock::time_point::max());
+                            Agent::AgentTurnFreshness authority = {}, std::weak_ptr<const EditorInspectionCommandEndpoint> scene = {});
 
         /** @brief Checks workspace, project, trust, deadline and catalog authority for this review. */
         [[nodiscard]] bool HasCurrentAuthority() const noexcept;
@@ -155,10 +161,8 @@ namespace Horo::Editor {
         ImmersivePlanningContext context_;
         Agent::AgentTurnPlan plan_;
         std::stop_token stop_;
-        CancellationToken projectLifetime_;
-        CancellationToken trustLifetime_;
-        std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
-        std::chrono::steady_clock::time_point projectDeadline_;
+        Agent::AgentTurnFreshness authority_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
     };
 
     /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
@@ -203,6 +207,7 @@ namespace Horo::Editor {
         bool reviewOnly_{};
         std::string projectIdentity_;
         std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
     };
 
     /** @brief Cold owner-lane publication and admission for one Editor opening. */
