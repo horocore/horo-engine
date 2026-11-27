@@ -236,13 +236,20 @@ namespace Horo::Editor {
         auto kind = view.renames.empty() ? DocumentChangeKind::TransformChanged : DocumentChangeKind::Renamed;
         if (!view.lights.empty())
             kind = DocumentChangeKind::ComponentChanged;
-        view.id = ++m_agentSceneReviewSerial;
-        m_agentSceneReview.emplace(view.id, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
+        const auto review = ++m_agentSceneReviewSerial;
+        view.id = review;
+        m_agentSceneReview.emplace(review, std::move(lifetime), context, std::move(owner).Value(), std::move(preview).Value(),
                                    std::move(authorized), kind);
         m_viewModel.agentSceneReview = std::move(view);
         if (m_viewModel.agentSceneReview->hasSpatialPreview)
             AdvanceViewportSceneRevision();
-        return Output::Success(m_agentSceneReviewSerial);
+        if (!IsAgentSceneReviewCurrent(review)) {
+            const auto failure = context.cancellation.IsCancellationRequested() ? SceneTransactionFailure::Cancelled
+                                                                                 : SceneTransactionFailure::Stale;
+            static_cast<void>(CancelAgentSceneReview(review));
+            return Output::Failure(RejectReview(failure));
+        }
+        return Output::Success(review);
     }
 
     /** @copydoc EditorWorkspaceController::ApproveAgentSceneReview */

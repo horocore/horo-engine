@@ -54,6 +54,8 @@ namespace {
 
         bool CancelImageCapture(const std::uint64_t id) noexcept override {
             cancelledId = id;
+            if (onCancel)
+                onCancel();
             return true;
         }
 
@@ -92,6 +94,7 @@ namespace {
         EditorViewportExtent extent{640, 480};
         EditorViewportImageRegion submitted;
         std::function<bool()> current;
+        std::function<void()> onCancel;
         std::uint64_t requests{};
         std::optional<std::uint64_t> cancelledId;
     };
@@ -693,6 +696,26 @@ namespace {
             CHECK(controller.ViewModel().objects.front().name == object.name);
             CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
             CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+            CHECK(events.empty());
+        }
+        SECTION("viewport capture cancellation can withdraw a proposal before staging returns") {
+            REQUIRE(controller.CancelAgentSceneReview(preview.Value()));
+            const auto endpoint = controller.BindDebugCapture("scene-review-project", 1, &viewport).lock();
+            REQUIRE(endpoint);
+            const auto source = endpoint->readImageSource();
+            REQUIRE(source);
+            const auto capture = endpoint->startImage(*source, {2, 3, 24, 16}, [] { return true; });
+            REQUIRE(capture.HasValue());
+            viewport.onCancel = [&proposal] { proposal.RequestCancellation(); };
+
+            const auto denied = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token());
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == SceneTransactionError(SceneTransactionFailure::Cancelled).code.Value());
+            CHECK(viewport.cancelledId == capture.Value());
+            CHECK_FALSE(controller.ViewModel().agentSceneReview);
+            CHECK(controller.ViewportScene().instances.size() == 1);
+            CHECK(origin() == baseline);
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
         }
