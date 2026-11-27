@@ -5,6 +5,9 @@
 #include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpController.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace Horo::Agent {
     namespace {
         constexpr std::string_view SceneToolDescription = "Read the object count approved by the editor user for this turn.";
@@ -96,15 +99,33 @@ namespace Horo::Agent {
                                               const LocalSceneAuditObserver &observeAudit) {
         if (!request.tools.empty() || turnId == 0)
             return {AgentTurnStatus::InvalidRequest};
-        const auto supported = ConfirmOllamaModelTools(config, request.model, stop);
         if (stop.stop_requested())
             return {AgentTurnStatus::Cancelled};
+        if (config.timeout.count() <= 0 || config.timeout.count() > (std::numeric_limits<long>::max)())
+            return {.status = AgentTurnStatus::ProviderFailed, .providerError = ModelErrorCode::InvalidRequest};
+
+        using Clock = std::chrono::steady_clock;
+        constexpr AgentTurnLimits limits{.maximumToolCalls = 1};
+        config.timeout = std::min(config.timeout, limits.timeout);
+        const auto deadline = Clock::now() + config.timeout;
+        const auto stopped = [&]() -> std::optional<AgentTurnStatus> {
+            if (stop.stop_requested())
+                return AgentTurnStatus::Cancelled;
+            if (Clock::now() >= deadline)
+                return AgentTurnStatus::TimedOut;
+            return std::nullopt;
+        };
+        const auto supported = ConfirmOllamaModelTools(config, request.model, stop);
+        if (const auto status = stopped())
+            return {*status};
         if (!supported.Succeeded()) {
             const auto &failure = *supported.error;
             return {.status = AgentTurnStatus::ProviderFailed, .providerError = failure.code, .retryAfter = failure.retryAfter};
         }
         const Json input = {{"type", "object"}, {"additionalProperties", false}};
         const auto session = OpenSceneTool(objectCount, input, std::move(entropy), observeAudit);
+        if (const auto status = stopped())
+            return {*status};
         if (session.HasError())
             return {AgentTurnStatus::ToolDenied};
         const auto &admitted = session.Value();
@@ -115,9 +136,10 @@ namespace Horo::Agent {
         config.enabledFeatures.bits |= tools;
         request.requiredFeatures.bits |= tools;
         request.tools.emplace_back(std::string{LocalSceneCountTool}, std::string{SceneToolDescription}, input.dump());
+        using namespace std::chrono_literals;
+        config.timeout = std::max(1ms, std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now()));
         auto provider = CreateOllamaModelProvider(std::move(config));
         AgentTurnRuntime runtime;
-        return runtime.Run(*provider, &admitted.bridge, turnId, std::move(request), {.maximumToolCalls = 1}, stop, nullptr, {},
-                           observeTool);
+        return runtime.RunBefore(*provider, admitted.bridge, turnId, std::move(request), limits, deadline, stop, observeTool);
     }
 }  // namespace Horo::Agent

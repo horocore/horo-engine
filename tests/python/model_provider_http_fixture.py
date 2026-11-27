@@ -12,6 +12,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+DELAYED_SCENE_MODEL = "editor-delayed-scene-tool"
+APPROVED_SCENE_MODELS = {"editor-approved-tool", DELAYED_SCENE_MODEL}
+SCENE_PHASE_DELAY = 0.85
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -21,8 +26,8 @@ class Handler(BaseHTTPRequestHandler):
     def handle(self):
         try:
             super().handle()
-        except (BrokenPipeError, ConnectionResetError):
-            # The cancellation tests deliberately close the active connection.
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Cancellation and deadline tests deliberately close the active connection.
             pass
 
     def send_records(self, records, content_type="application/json", status=200, retry_after=None):
@@ -50,10 +55,13 @@ class Handler(BaseHTTPRequestHandler):
             if payload == {"model": "editor-throttled-tool-probe"} and self.headers.get("Authorization") is None:
                 self.send_records(["{}"], status=429, retry_after="30")
                 return
-            if self.headers.get("Authorization") is not None or payload not in ({"model": "editor-approved-tool"}, {"model": "normal"}):
+            model = payload.get("model")
+            if self.headers.get("Authorization") is not None or payload.keys() != {"model"} or model not in APPROVED_SCENE_MODELS | {"normal"}:
                 self.send_records(["{}"], status=400)
                 return
-            supports_tools = payload["model"] == "editor-approved-tool"
+            if model == DELAYED_SCENE_MODEL:
+                time.sleep(SCENE_PHASE_DELAY)
+            supports_tools = model in APPROVED_SCENE_MODELS
             self.server.approved_tool_probe = supports_tools
             self.send_records([json.dumps({"capabilities": ["completion", "tools"] if supports_tools else ["completion"]})])
             return
@@ -64,7 +72,7 @@ class Handler(BaseHTTPRequestHandler):
         if cloud and self.headers.get("Authorization") != "Bearer fixture-token":
             self.send_records([json.dumps({"error": "private"})], status=401)
             return
-        if not cloud and payload["model"] in {"editor-local-tool", "editor-approved-tool"}:
+        if not cloud and payload["model"] in APPROVED_SCENE_MODELS | {"editor-local-tool"}:
             self.send_editor_local_tool(payload)
             return
         editor_chat = {
@@ -225,10 +233,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") is not None or tools != ["scene.inspect"]:
             self.send_records(["{}"], status=400)
             return
-        if payload["model"] == "editor-approved-tool" and not self.server.approved_tool_probe:
+        if payload["model"] in APPROVED_SCENE_MODELS and not self.server.approved_tool_probe:
             self.send_records(["{}"], status=400)
             return
         if len(messages) == 1:
+            if payload["model"] == DELAYED_SCENE_MODEL:
+                time.sleep(SCENE_PHASE_DELAY)
             if messages[0].get("content") == "Hold the approved scene query":
                 gate = self.server.chat_gate / "scene-query"
                 gate.mkdir(exist_ok=True)

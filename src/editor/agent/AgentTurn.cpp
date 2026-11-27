@@ -39,12 +39,11 @@ namespace Horo::Agent {
         /** @brief Combines the deadline, authority withdrawal, and host cancellation into the cooperative token. */
         class TurnStop final {
         public:
-            TurnStop(const std::chrono::milliseconds timeout, const std::stop_token parent,
-                     const AgentTurnFreshness *const providerAuthority)
-                : deadline_(Clock::now() + timeout), parent_(parent), cancel_(parent,
-                                                                              [this] {
-                                                                                  stop_.request_stop();
-                                                                              }),
+            TurnStop(const Clock::time_point deadline, const std::stop_token parent, const AgentTurnFreshness *const providerAuthority)
+                : deadline_(deadline), parent_(parent), cancel_(parent,
+                                                                [this] {
+                                                                    stop_.request_stop();
+                                                                }),
                   timer_([this, providerAuthority](const std::stop_token shutdown) {
                       Observe(shutdown, providerAuthority);
                   }) {}
@@ -348,6 +347,13 @@ namespace Horo::Agent {
         return RunTurn(provider, turnId, std::move(request), limits, cancellation, {tools, context, observeText, observeTool, nullptr});
     }
 
+    /** @copydoc AgentTurnRuntime::RunBefore */
+    AgentTurnResult AgentTurnRuntime::RunBefore(IModelProvider &provider, const IAgentTurnTools &tools, const std::uint64_t turnId,
+                                                ModelRequest request, const AgentTurnLimits &limits, const Clock::time_point deadline,
+                                                const std::stop_token cancellation, const AgentToolActivityObserver &observeTool) {
+        return RunTurn(provider, turnId, std::move(request), limits, cancellation, {&tools, nullptr, {}, observeTool, nullptr}, deadline);
+    }
+
     /** @copydoc AgentTurnRuntime::RunScopedText */
     AgentTurnResult AgentTurnRuntime::RunScopedText(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
                                                     const AgentTurnLimits &limits, const std::stop_token cancellation,
@@ -382,7 +388,8 @@ namespace Horo::Agent {
 
     /** @brief Runs the shared bounded stream and chooses either review publication or tool dispatch. */
     AgentTurnResult AgentTurnRuntime::RunTurn(IModelProvider &provider, const std::uint64_t turnId, ModelRequest request,
-                                              const AgentTurnLimits &limits, const std::stop_token cancellation, const TurnPorts &ports) {
+                                              const AgentTurnLimits &limits, const std::stop_token cancellation, const TurnPorts &ports,
+                                              const Clock::time_point deadline) {
         const auto &[tools, context, observeText, observeTool, plan, providerAuthority] = ports;
         if (cancellation.stop_requested())
             return {Cancelled, {}};
@@ -415,7 +422,7 @@ namespace Horo::Agent {
 
             if (providerAuthority && !HasProviderAuthority(*providerAuthority))
                 return StaleContextResult();
-            TurnStop stop{limits.timeout, cancellation, providerAuthority};
+            TurnStop stop{std::min(deadline, Clock::now() + limits.timeout), cancellation, providerAuthority};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
             TurnProgress progress{remaining, stop, contextGate, turnId, observeTool};

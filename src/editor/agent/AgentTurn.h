@@ -164,6 +164,19 @@ namespace Horo::Agent {
                                           const AgentTurnContext *context = nullptr, const AgentTurnTextObserver &observeText = {},
                                           const AgentToolActivityObserver &observeTool = {});
 
+        /** @brief Continues an already timed tool turn without extending its deadline.
+         * @param provider Exact host-selected provider. @param tools Independently authorized MCP session.
+         * @param turnId Nonzero host-issued identity. @param request Turn with host-admitted tools.
+         * @param limits Remaining non-time budgets and the runtime's maximum duration.
+         * @param deadline Absolute limit established by the caller before preflight.
+         * @param cancellation Host cancellation. @param observeTool Optional tool lifecycle observer.
+         * @return Terminal turn outcome, including timeout before any dispatch if the deadline has passed.
+         */
+        [[nodiscard]] AgentTurnResult RunBefore(IModelProvider &provider, const IAgentTurnTools &tools, std::uint64_t turnId,
+                                                ModelRequest request, const AgentTurnLimits &limits,
+                                                std::chrono::steady_clock::time_point deadline, std::stop_token cancellation,
+                                                const AgentToolActivityObserver &observeTool);
+
         /** @brief Runs a text-only turn under a revocable host scope.
          * @param provider Exact host-selected provider. @param turnId Nonzero host-issued identity.
          * @param request Bounded conversation without tools. @param limits Budget covering the entire turn.
@@ -205,8 +218,10 @@ namespace Horo::Agent {
             const AgentTurnFreshness *providerAuthority{};
         };
 
-        [[nodiscard]] AgentTurnResult RunTurn(IModelProvider &provider, std::uint64_t turnId, ModelRequest request,
-                                              const AgentTurnLimits &limits, std::stop_token cancellation, const TurnPorts &ports);
+        [[nodiscard]] AgentTurnResult RunTurn(
+            IModelProvider &provider, std::uint64_t turnId, ModelRequest request, const AgentTurnLimits &limits,
+            std::stop_token cancellation, const TurnPorts &ports,
+            std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
 
         AgentTurnFreshness isCurrent_;
         std::atomic_flag active_{};

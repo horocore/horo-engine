@@ -243,6 +243,19 @@ TEST_CASE("The approved scene turn preserves tool probe throttling and cancellat
     CHECK(cancelled.messages.empty());
 }
 
+TEST_CASE("Approved scene capability and model calls spend one turn deadline", "[agent][model][http]") {
+    const ModelProviderConfig config{.endpoint = Endpoint(), .timeout = std::chrono::milliseconds{1300}};
+    const auto entropy = std::make_shared<Horo::Mcp::Test::Entropy>();
+    const auto observe = [](const AgentToolActivity) {
+        FAIL_CHECK("An expired scene query must not run the tool");
+    };
+    const auto result = RunApprovedLocalSceneTurn(config, Request("editor-delayed-scene-tool"), 11, 3, entropy, {}, observe);
+    CHECK(result.status == AgentTurnStatus::TimedOut);
+    CHECK_FALSE(result.providerError);
+    CHECK_FALSE(result.retryAfter);
+    CHECK(result.messages.empty());
+}
+
 TEST_CASE("Local editor inference reports unavailable or missing models and the same provider recovers", "[agent][model][http]") {
     auto provider = Create(false);
     AgentTurnRuntime runtime;
