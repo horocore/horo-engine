@@ -642,6 +642,8 @@ Uninstall and withdrawal rollback recheck saved references after staging the
 rollback point and before writing the metadata journal. The second review uses
 the same mutation lease, cancellation and deadline. A late reference blocks the
 operation and preserves the previous package metadata.
+An update or rollback that drops a package requires the withdrawal publication
+path, even when the staged candidate and approval are valid.
 
 A withdrawal rollback may also restore a retained asset package at the same
 version and with the same locked source, dependencies and contribution policy.

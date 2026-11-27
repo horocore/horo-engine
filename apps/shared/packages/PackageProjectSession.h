@@ -120,7 +120,8 @@ namespace Horo::Application::Internal {
      * @return Commit result or a typed failure. A failed pre-commit publication attempts immediate journal recovery.
      * @pre The caller owns approval, has checked live executable ownership and reference safety, and uses the host's publisher policy
      * for staging. Any project-document migration must share a recovery boundary with publication.
-     * @details Publication never executes or activates a package. The unchanged lock is a no-op.
+     * @details Withdrawing packages requires the dedicated publication path with withdrawal evidence.
+     * Publication never executes or activates a package. The unchanged lock is a no-op.
      */
     [[nodiscard]] Result<PackageMetadataPublication> PublishPackageProjectUpdate(const PackageProjectPolicy &policy,
                                                                                  const ApprovedPackageProjectUpdate &update,

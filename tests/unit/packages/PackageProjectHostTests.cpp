@@ -577,6 +577,44 @@ namespace {
         CHECK_FALSE(std::filesystem::exists(journal));
     }
 
+    TEST_CASE("Package update publication requires withdrawal evidence even for an approved empty candidate",
+              "[packages][application][host][update]") {
+        namespace RestoreTests = Horo::Tests::PackageRestore;
+        HostFixture fixture;
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto base = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(base.HasValue());
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        auto intent = nlohmann::json::parse(oldRequest);
+        intent["dependencies"] = nlohmann::json::object();
+        const auto requestJson = intent.dump();
+        const auto request = Packages::ValidatedPackageRequest::Parse(requestJson);
+        REQUIRE(request.HasValue());
+        const auto lock = Packages::ValidatedPackageLockfileV1::Generate({}, {}, request.Value().Digest(), {});
+        REQUIRE(lock.HasValue());
+        const auto lockJson = lock.Value().SerializeCanonical();
+        RestoreTests::ServiceFixture restore(fixture.graph.bytes);
+        const auto operation = restore.service->StartStaged({.projectRoot = policy.projectRoot, .lockfileJson = lockJson,
+                                                             .expectedRequestHash = request.Value().Digest(), .platform = policy.platform});
+        REQUIRE(operation.HasValue());
+        const auto id = operation.Value().Id();
+        REQUIRE(RestoreTests::WaitForTerminal(*restore.service, id).outcome == Packages::PackageRestoreOutcome::Ready);
+        const auto staged = restore.service->Staged(id);
+        REQUIRE(staged);
+        const ApprovedPackageProjectUpdate update{base.Value(), *staged,
+                                                   {base.Value().requestDocumentDigest, base.Value().lockDigest,
+                                                    RestoreTests::Digest(requestJson), RestoreTests::Digest(lockJson)},
+                                                   requestJson, lockJson};
+        const auto result = PublishPackageProjectUpdate(policy, update, fixture.files, HostFixture::ReadContext());
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == "packages.host.removal_requires_lifecycle_owner");
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK(ReadPackageProjectRollback(policy, fixture.files, {}).HasError());
+    }
+
     TEST_CASE("Package update publishes only the reviewed staged candidate and recovers a failed commit",
               "[packages][application][host][update]") {
         HostFixture fixture;

@@ -12,6 +12,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <set>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -613,6 +614,19 @@ namespace Horo::Application::Internal {
             return diagnostics.empty() ? Result<void>::Success() : Result<void>::Failure(UpdateNeedsMigration(std::move(diagnostics)));
         }
 
+        /** @brief Finds packages absent from the verified candidate graph by stable package identity. */
+        Packages::PackageRemovalGraphPreview WithdrawalImpact(const Packages::ValidatedPackageLockfileV1 &lock,
+                                                              const Packages::PackageRestoreGraph &candidate) {
+            std::set<Packages::HoroPackageId> retained;
+            for (const auto &entry : candidate.packages)
+                retained.insert(entry.lock.package);
+            Packages::PackageRemovalGraphPreview impact;
+            for (const auto &entry : lock.Packages())
+                if (!retained.contains(entry.package))
+                    impact.removed.push_back({entry.package, entry.version});
+            return impact;
+        }
+
         /** @brief Reviews compatible retained assets and saved references to every exact departing package. */
         Result<void> CheckUpdateWithdrawals(const MetadataDocuments &current, const Packages::PackageLockfileLimits &limits,
                                             const Packages::PackageRestoreGraph &candidate, const PackageRemovalSources &sources) {
@@ -623,12 +637,7 @@ namespace Horo::Application::Internal {
             if (!installed || installed->requestHash != lock.Value().RequestHash())
                 return Result<void>::Failure(MetadataConflict());
             auto retained = ReviewWithdrawalCandidate(*installed, candidate, lock.Value(), sources.context);
-            Packages::PackageRemovalGraphPreview impact;
-            for (const auto &entry : lock.Value().Packages()) {
-                if (std::ranges::none_of(candidate.packages, [&](const auto &retained) { return retained.lock.package == entry.package; }))
-                    impact.removed.push_back({entry.package, entry.version});
-            }
-            auto references = CheckRemovalReferences(sources, lock.Value(), impact);
+            auto references = CheckRemovalReferences(sources, lock.Value(), WithdrawalImpact(lock.Value(), candidate));
             if (retained.HasValue())
                 return references;
             std::optional<Error> blocked{std::move(retained).ErrorValue()};
@@ -705,6 +714,14 @@ namespace Horo::Application::Internal {
         const auto previous = ReadApprovedDocuments(metadata, limits, update.base, files, context.cancellation);
         if (previous.HasError())
             return Publication::Failure(previous.ErrorValue());
+        if (!withdrawal) {
+            const auto lock = Packages::ValidatedPackageLockfileV1::Parse(previous.Value().lock, limits);
+            if (lock.HasError())
+                return Publication::Failure(lock.ErrorValue());
+            if (!WithdrawalImpact(lock.Value(), *update.staged.Graph()).removed.empty())
+                return Publication::Failure(
+                    Error{ErrorCode{"packages.host.removal_requires_lifecycle_owner"}, ErrorDomainId{"packages.host"}});
+        }
         // Reuse the same withdrawal review at the journal boundary after staging the rollback point.
         const auto review = [&]() {
             return withdrawal ? CheckUpdateWithdrawals(previous.Value(), limits, *update.staged.Graph(), *withdrawal)
