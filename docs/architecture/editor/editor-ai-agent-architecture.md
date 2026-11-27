@@ -414,6 +414,11 @@ latency with speculative authoritative world mutation. Feedback supports
 captions, non-voice input, reduced motion, handedness, localization, and more
 than color/audio alone for critical states.
 
+The Play listening preview keeps speech and pointing data on the device.
+When the pointing source retires, the capture revokes derived reference
+reviews and the panel discards its copied spatial observations. An otherwise
+valid local transcript can continue without those references.
+
 ## Numeric-First Agent Perception
 
 The agent must stay as close to engine-authoritative data as possible. Visual

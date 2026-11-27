@@ -251,6 +251,16 @@ namespace Horo::Editor {
                (count_ == 0 || BelongsToHistory(cutoff_, cutoff));
     }
 
+    /** @copydoc ImmersiveCommandEnvelope::DiscardRetiredSpatial */
+    void ImmersiveCommandEnvelope::DiscardRetiredSpatial() noexcept {
+        if (!spatialLifetime_.IsCancellationRequested())
+            return;
+        std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});
+        cutoff_ = {};
+        count_ = 0;
+        spatialLifetime_ = {};
+    }
+
     /** @copydoc ImmersiveCommandEnvelope::Assemble */
     ImmersiveCommandAssembly ImmersiveCommandEnvelope::Assemble(const ImmersivePlanningContext &current,
                                                                 const ImmersiveSpeechEvidence &speech,

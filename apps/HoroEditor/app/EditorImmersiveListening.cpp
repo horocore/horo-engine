@@ -222,6 +222,8 @@ namespace Horo::Editor {
             static_cast<void>(speech_.Advance(false));
             return;
         }
+        if (preview_)
+            preview_->DiscardRetiredSpatial();
         const auto current = Current();
         if (!current) {
             Fail();

@@ -144,6 +144,9 @@ namespace Horo::Editor {
         /** @brief Rechecks speech cancellation and the current XR cutoff before adopting the command. */
         [[nodiscard]] bool IsCurrent(const XR::XRInteractionCutoff &cutoff) const noexcept;
 
+        /** @brief Clears copied spatial samples after their capture authority retires, preserving local speech. */
+        void DiscardRetiredSpatial() noexcept;
+
         [[nodiscard]] const ImmersiveSpeechEvidence &Speech() const & noexcept {
             return speech_;
         }

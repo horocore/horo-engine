@@ -1003,15 +1003,19 @@ namespace Horo::Editor {
             }
             SECTION("the pointer is replaced after the panel receives the final result") {
                 capture.Seal();
-                const auto aligned = capture.AssemblePreview(speech, sample.cutoff);
+                auto aligned = capture.AssemblePreview(speech, sample.cutoff);
                 REQUIRE(aligned.status == CommandStatus::Aligned);
                 REQUIRE(aligned.envelope);
                 REQUIRE(aligned.envelope->Spatial().size() == 1);
                 const auto reviewLifetime = aligned.envelope->SpatialLifetime();
                 CHECK_FALSE(reviewLifetime.IsCancellationRequested());
+                aligned.envelope->DiscardRetiredSpatial();
+                CHECK(aligned.envelope->Spatial().size() == 1);
                 capture.RetirePointingSource();
                 CHECK(reviewLifetime.IsCancellationRequested());
+                aligned.envelope->DiscardRetiredSpatial();
                 CHECK(aligned.envelope->Spatial().empty());
+                CHECK(aligned.envelope->IsCurrent());
                 CHECK(aligned.envelope->Speech().Hypothesis().text == Transcript().text);
             }
             CHECK(capture.PointingSourceRetired());
