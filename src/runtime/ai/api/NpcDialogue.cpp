@@ -156,7 +156,7 @@ namespace Horo::AI {
                                                  std::chrono::steady_clock::time_point deadline, const CancellationToken &cancellation) {
         using Accepted = Result<NpcDialogueJob>;
         if (!binding.provider || !binding.imageLease || binding.route != grant.route || binding.generation != grant.providerGeneration ||
-            binding.approval.IsCancellationRequested())
+            binding.approval == CancellationToken{} || binding.approval.IsCancellationRequested())
             return Accepted::Failure(MakeError(AIErrors::CapabilityUnavailable));
         const auto context = turn.Context(current, grant, tick, cancellation);
         if (!context || std::chrono::steady_clock::now() >= deadline)

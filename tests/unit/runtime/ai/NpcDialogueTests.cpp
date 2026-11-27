@@ -162,7 +162,9 @@ namespace Horo::AI {
             expected = NpcDialogueStatus::Fallback;
             cue = scenario.fallback;
         }
-        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider};
+        CancellationSource approval;
+        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider,
+                                                 approval.Token()};
         auto captured = scenario.Capture();
         REQUIRE(captured.HasValue());
         auto queued = NpcDialogueJob::Start(jobs, std::move(captured).Value(), scenario.request, scenario.grant, binding, 1,
@@ -185,15 +187,24 @@ namespace Horo::AI {
 
     TEST_CASE("Rejected NPC dialogue job admission leaves the turn available for fallback", "[ai][npc-dialogue][jobs]") {
         const Scenario scenario;
-        JobSystem jobs({.ioWorkerCount = 0});
+        unsigned ioWorkers = 1;
+        CancellationSource approval;
+        auto lifetime = approval.Token();
+        SECTION("there is no I/O lane") { ioWorkers = 0; }
+        SECTION("there is no host approval lifetime") { lifetime = {}; }
+        SECTION("the host revoked approval before admission") { approval.RequestCancellation(); }
+        JobSystem jobs({.ioWorkerCount = ioWorkers});
         const auto provider = std::make_shared<ScriptedDialogueProvider>();
-        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider};
+        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider,
+                                                 lifetime};
         auto captured = scenario.Capture();
         REQUIRE(captured.HasValue());
         auto turn = std::move(captured).Value();
         CHECK(NpcDialogueJob::Start(jobs, std::move(turn), scenario.request, scenario.grant, binding, 1,
                                     std::chrono::steady_clock::now() + 5s, {}).HasError());
         CHECK(turn.Resolve(scenario.request, scenario.grant, 1, {}, std::nullopt).cue == scenario.fallback);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        CHECK(provider->worker == std::thread::id{});
     }
 
     TEST_CASE("Queued NPC dialogue cannot disclose context after the owner revokes its grant", "[ai][npc-dialogue][jobs]") {

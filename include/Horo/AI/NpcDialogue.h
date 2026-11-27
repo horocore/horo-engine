@@ -162,7 +162,7 @@ namespace Horo::AI {
         std::uint64_t generation{};
         std::shared_ptr<const void> imageLease;
         std::shared_ptr<const INpcDialogueProvider> provider;
-        CancellationToken approval; /**< Host-owned disclosure authority for this activation. */
+        CancellationToken approval; /**< Nonempty host-owned disclosure authority required to queue provider work. */
     };
 
     /** @brief Owner-lane tracking for one detached, bounded NPC dialogue request. */
