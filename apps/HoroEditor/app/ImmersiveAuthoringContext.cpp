@@ -176,19 +176,20 @@ namespace Horo::Editor {
     /** @copydoc ImmersivePlanReview::Status */
     Agent::AgentTurnStatus ImmersivePlanReview::Status() const noexcept {
         using enum Agent::AgentTurnStatus;
-        if (plan_.status != Completed)
+        if (plan_.status != Completed && plan_.status != ProviderFailed)
             return plan_.status;
         if (stop_.stop_requested())
             return Cancelled;
-        return HasCurrentAuthority() ? Completed : ContextDenied;
+        return HasCurrentAuthority() ? plan_.status : ContextDenied;
     }
 
     /** @copydoc ImmersivePlanReview::ProviderFailure */
-    std::optional<Agent::ModelErrorCode> ImmersivePlanReview::ProviderFailure(const ImmersivePlanningContext &current) const noexcept {
-        if (plan_.status != Agent::AgentTurnStatus::ProviderFailed || !context_.SharesGeneration(current) || stop_.stop_requested() ||
-            !HasCurrentAuthority())
+    std::optional<ImmersivePlanReview::ProviderFailureInfo> ImmersivePlanReview::ProviderFailure(
+        const ImmersivePlanningContext &current) const noexcept {
+        if (!context_.SharesGeneration(current) || Status() != Agent::AgentTurnStatus::ProviderFailed || !plan_.providerError)
             return std::nullopt;
-        return plan_.providerError;
+        const auto code = *plan_.providerError;
+        return ProviderFailureInfo{code, code == Agent::ModelErrorCode::RateLimited ? plan_.retryAfter : std::nullopt};
     }
 
     /** @copydoc ImmersivePlanReview::Read */

@@ -18,6 +18,7 @@ namespace Horo::Editor {
             std::size_t calls{};
             std::vector<Agent::ModelToolIntent> tools;
             std::optional<Agent::ModelErrorCode> failure;
+            std::optional<std::chrono::seconds> retryAfter;
             std::vector<Agent::ModelTool> advertised;
 
             Agent::ProviderDiscovery Discover(std::stop_token) override {
@@ -37,7 +38,7 @@ namespace Horo::Editor {
                 if (!sink({.kind = Agent::ModelEventKind::TextDelta, .text = "Plan"}))
                     return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 if (failure)
-                    return {Agent::ModelError{*failure, "Fixture failure", std::nullopt}};
+                    return {Agent::ModelError{*failure, "Fixture failure", std::nullopt, retryAfter}};
                 if (!sink({.kind = Agent::ModelEventKind::Completed}))
                     return {Agent::ModelError{Agent::ModelErrorCode::Cancelled, "Stopped by callback", std::nullopt}};
                 return {};
@@ -351,13 +352,26 @@ namespace Horo::Editor {
             REQUIRE(request);
             PlanningModel model;
             model.failure = Agent::ModelErrorCode::RateLimited;
+            model.retryAfter = std::chrono::seconds{30};
+            auto expectedRetry = model.retryAfter;
+            SECTION("a route can omit its retry hint") {
+                model.retryAfter.reset();
+                expectedRetry.reset();
+            }
+            SECTION("a non-throttling error has no retry hint") {
+                model.failure = Agent::ModelErrorCode::Unavailable;
+                expectedRetry.reset();
+            }
             std::stop_source stop;
             const auto review = request->Plan(model, 1, {}, [](const auto &) {
                 return Agent::AgentPlanToolInspection{Agent::AgentTurnStatus::ToolDenied};
             }, stop.get_token());
 
             CHECK(review.Status() == Agent::AgentTurnStatus::ProviderFailed);
-            CHECK(review.ProviderFailure(*context) == Agent::ModelErrorCode::RateLimited);
+            const auto failure = review.ProviderFailure(*context);
+            REQUIRE(failure);
+            CHECK(failure->code == *model.failure);
+            CHECK(failure->retryAfter == expectedRetry);
             CHECK_FALSE(review.Read(*context));
             CHECK(model.calls == 1);
 
@@ -369,10 +383,12 @@ namespace Horo::Editor {
             }
             SECTION("the original scope is revoked") {
                 owner.Revoke();
+                CHECK(review.Status() == Agent::AgentTurnStatus::ContextDenied);
                 CHECK_FALSE(review.ProviderFailure(*context));
             }
             SECTION("the worker is cancelled before presentation") {
                 stop.request_stop();
+                CHECK(review.Status() == Agent::AgentTurnStatus::Cancelled);
                 CHECK_FALSE(review.ProviderFailure(*context));
             }
         }

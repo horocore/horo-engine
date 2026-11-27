@@ -1300,6 +1300,9 @@ approved query or publish a response. Until the route backoff expires, explicit
 discovery and model turn retries for that route consume no additional quota.
 Speech and other routes retain their
 own admission paths. An absent hint leaves existing manual retry behavior intact.
+An immersive plan review exposes the failure class and throttle hint only to
+the current authoring context. Cancellation or scope retirement withdraws that
+metadata before presentation.
 Cancellation and shutdown revoke retries and release provider work. While a
 recognition operation is active, the speech deadline watchdog also observes the
 immutable authoring context. Retirement of the document or context generation

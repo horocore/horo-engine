@@ -141,14 +141,20 @@ namespace Horo::Editor {
     public:
         using TargetValidator = std::function<bool(const Agent::AgentPlanObjectScope &)>;
 
+        /** @brief Redacted failure metadata available for a manual retry. */
+        struct ProviderFailureInfo final {
+            Agent::ModelErrorCode code;
+            std::optional<std::chrono::seconds> retryAfter; /**< Provider hint for a throttled request. */
+        };
+
         /** @brief Reports terminal status, including cancellation or stale scope after inference. */
         [[nodiscard]] Agent::AgentTurnStatus Status() const noexcept;
 
-        /** @brief Returns a provider failure class without exposing a partial reply.
+        /** @brief Returns the provider failure and optional retry hint without exposing a partial reply.
          * @param current Editor-owned context at presentation time.
-         * @return The failure class only while the original request authority remains current.
+         * @return Failure metadata only while the original request authority remains current.
          */
-        [[nodiscard]] std::optional<Agent::ModelErrorCode> ProviderFailure(const ImmersivePlanningContext &current) const noexcept;
+        [[nodiscard]] std::optional<ProviderFailureInfo> ProviderFailure(const ImmersivePlanningContext &current) const noexcept;
 
         /** @brief Borrows the validated draft and effects for the exact current authoring generation.
          * @param current Editor-owned context at presentation time.
