@@ -45,7 +45,6 @@ class Evidence:
             require(view_count == PRIMARY_STEREO_VIEW_COUNT, "Desktop preflight must report primary stereo for XR 1.0")
 
     def android_preflight(self, expected: dict, record: dict) -> None:
-        self.verify(expected["apkSha256"])
         check_android_preflight_file(self.path(expected["receiptSha256"]), self.path(expected["apkSha256"]), expected, record)
 
     def smoke_record(self, digest: str) -> dict:

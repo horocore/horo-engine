@@ -15,6 +15,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 try:
+    import qualify_xr_android
     from qualify_xr_device import ALL_CHECKS, IDENTITY_FIELDS
     from qualify_xr_release import REVIEWS
 finally:
@@ -680,7 +681,7 @@ def test_android_discovery_can_accompany_physical_evidence_with_its_own_apk(rele
 
 @pytest.mark.parametrize(("change", "reason"), [
     (None, None),
-    ("apk", "Artifact content does not match"),
+    ("apk", "Android diagnostic APK does not match the approved digest"),
     ("loader", "Android preflight loader digest does not match the APK"),
     ("build", "Android preflight and physical smoke use different system builds"),
     ("revision", "Android preflight is from another source revision"),
@@ -847,6 +848,27 @@ def test_android_matrix_checks_receipt_digests_against_actual_apk_members(releas
 
     assert result.returncode == 1
     assert f"Android preflight {label} digest does not match the APK" in result.stderr
+
+
+def test_android_apk_is_rechecked_after_member_inspection(release, monkeypatch):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence)
+    receipt = android_receipt(row, evidence)
+    apk = evidence / row["androidPreflight"]["apkSha256"]
+    expected = row["androidPreflight"]
+    raw = json.dumps(receipt).encode()
+    expected["receiptSha256"] = hashlib.sha256(raw).hexdigest()
+    inspect = qualify_xr_android.check_android_apk_members
+
+    def inspect_then_append(source, *args):
+        inspect(source, *args)
+        with apk.open("ab") as changed:
+            changed.write(b"trailing bytes")
+
+    monkeypatch.setattr(qualify_xr_android, "check_android_apk_members", inspect_then_append)
+    with pytest.raises(ValueError, match="Android diagnostic APK changed during verification"):
+        qualify_xr_android.check_android_preflight(raw, expected, REVISION, "1.2.3", apk=apk)
 
 
 def test_android_discovery_is_checked_against_the_runtime_version_in_the_smoke_tuple(release):

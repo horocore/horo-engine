@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
+import stat
+from typing import BinaryIO
 import zipfile
 import zlib
 
 from project import OPENXR_DEVELOPMENT_PROFILES, OPENXR_LOADER_NAME, PROVENANCE_ASSET, android_profile, archive_limits
-from qualify_xr_device import decode_record, fields, in_set, is_digest, is_standalone_android, require
+from qualify_xr_device import MAX_ARTIFACT_BYTES, decode_record, fields, in_set, is_digest, is_standalone_android, require
 
 
 MAX_ANDROID_RECEIPT_BYTES = 16 * 1024
@@ -127,8 +130,8 @@ def check_recommended_stereo_extents(value: object) -> None:
                 "Invalid Android stereo view extent")
 
 
-def check_android_apk_members(apk: Path, profile: dict, artifact: dict, abi: str) -> None:
-    """Match receipt digests to the named members of the independently pinned APK."""
+def check_android_apk_members(apk: BinaryIO, profile: dict, artifact: dict, abi: str) -> None:
+    """Match receipt digests to the named members of the already opened APK."""
     images = artifact["openxrImages"]
     members = (
         ("provenance", PROVENANCE_ASSET, artifact["provenanceSha256"]),
@@ -144,6 +147,31 @@ def check_android_apk_members(apk: Path, profile: dict, artifact: dict, abi: str
                 require(actual == digest, f"Android preflight {label} digest does not match the APK")
     except (EOFError, KeyError, RuntimeError, zipfile.BadZipFile, zlib.error):
         raise ValueError("Android diagnostic APK members could not be read") from None
+
+
+def apk_stamp(info: os.stat_result) -> tuple[int, int, int, int]:
+    require(stat.S_ISREG(info.st_mode) and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            "Android diagnostic APK is not a regular file")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def check_android_apk(path: Path, profile: dict, artifact: dict, abi: str) -> None:
+    """Verify the whole APK and its selected images through the same opened file."""
+    stamp = apk_stamp(path.lstat())
+    require(0 < stamp[2] <= MAX_ARTIFACT_BYTES, "Android diagnostic APK exceeds the size limit or is empty")
+    with path.open("rb") as source:
+        require(apk_stamp(os.fstat(source.fileno())) == stamp, "Android diagnostic APK changed before verification")
+        digest = hashlib.sha256()
+        remaining = stamp[2]
+        while remaining and (chunk := source.read(min(remaining, 1024 * 1024))):
+            digest.update(chunk)
+            remaining -= len(chunk)
+        require(not remaining and not source.read(1), "Android diagnostic APK changed during verification")
+        require(digest.hexdigest() == artifact["apkSha256"], "Android diagnostic APK does not match the approved digest")
+        source.seek(0)
+        check_android_apk_members(source, profile, artifact, abi)
+        require(apk_stamp(os.fstat(source.fileno())) == stamp and apk_stamp(path.lstat()) == stamp,
+                "Android diagnostic APK changed during verification")
 
 
 def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_version: str,
@@ -166,7 +194,7 @@ def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_
     check_android_artifact(artifact, expected, profile, revision, abi)
     check_android_discovery(receipt.get("observed"), runtime_version, abi)
     if apk is not None:
-        check_android_apk_members(apk, profile, artifact, abi)
+        check_android_apk(apk, profile, artifact, abi)
 
 
 def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: dict) -> None:
