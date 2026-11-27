@@ -40,7 +40,7 @@ namespace Horo::Editor {
             }
             const auto spatialLifetime = preview.SpatialLifetime();
             auto scene = review(request);
-            if (!scene || spatialLifetime.IsCancellationRequested())
+            if (!scene)
                 return std::nullopt;
             return EditorImmersiveListening::ReferenceReview{std::move(*scene), pointing->hasMissedPress, spatialLifetime};
         }
@@ -86,11 +86,15 @@ namespace Horo::Editor {
         if (!preview_ || !review || !CurrentPresentation())
             return std::nullopt;
         const auto &context = preview_->Speech().Context();
+        const auto generation = context.Generation();
         const auto &identity = context.Identity();
         if (source != AgentSceneReferenceSource::Selection) {
             if (speech_.PointingSourceRetired())
                 return std::nullopt;
-            return ReviewPointedReferences(*preview_, context, review, source);
+            auto result = ReviewPointedReferences(*preview_, context, review, source);
+            if (!result || !CanPresentPreview(generation) || result->spatialLifetime.IsCancellationRequested())
+                return std::nullopt;
+            return result;
         }
         std::array<std::uint64_t, AgentSceneSelectionSnapshot::MaximumObjects> objects;
         const auto selection = context.Selection();
@@ -104,7 +108,7 @@ namespace Horo::Editor {
                              .worldGeneration = identity.worldGeneration,
                              .objects = std::span{objects}.first(selection.size()),
                              .lifetime = context.SourceLifetime()});
-        if (!scene)
+        if (!scene || !CanPresentPreview(generation))
             return std::nullopt;
         return ReferenceReview{std::move(*scene)};
     }
@@ -116,8 +120,9 @@ namespace Horo::Editor {
         const auto current = CurrentPresentation();
         if (!current)
             return std::nullopt;
+        const auto generation = preview_->Speech().Context().Generation();
         const auto planes = xr_.ReadPlaneObservations();
-        if (planes.HasError())
+        if (planes.HasError() || !CanPresentPreview(generation) || speech_.PointingSourceRetired())
             return std::nullopt;
         return CollectImmersiveSurfaceHits(preview_->Spatial(), current->interaction.scene.value, planes.Value());
     }
@@ -287,6 +292,11 @@ namespace Horo::Editor {
     std::optional<EditorImmersiveListening::Scope> EditorImmersiveListening::CurrentPresentation() const {
         const auto current = Current();
         return current && speech_.CanPresent() ? current : std::nullopt;
+    }
+
+    /** @copydoc EditorImmersiveListening::CanPresentPreview */
+    bool EditorImmersiveListening::CanPresentPreview(const std::uint64_t generation) const {
+        return CurrentPresentation() && preview_ && preview_->Speech().Context().Generation() == generation;
     }
 
     /** @copydoc EditorImmersiveListening::Fail */

@@ -97,6 +97,8 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<Scope> Current() const;
         /** @brief Rechecks the live XR scope and current microphone and speech consent. */
         [[nodiscard]] std::optional<Scope> CurrentPresentation() const;
+        /** @brief Rechecks presentation and the exact preview generation after querying an external owner. */
+        [[nodiscard]] bool CanPresentPreview(std::uint64_t generation) const;
         /** @brief Assembles the final local preview after recognition finishes. */
         void AdoptFinalSpeech(const ImmersiveSpeechEvidence &evidence, const XR::XRInteractionCutoff &cutoff);
         /** @brief Releases the capture and preserves its user-visible terminal reason. */
