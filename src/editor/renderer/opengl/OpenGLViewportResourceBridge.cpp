@@ -59,11 +59,17 @@ namespace Horo::Editor {
     /** @copydoc OpenGLViewportResourceBridge::BindRenderTarget */
     Result<void> OpenGLViewportResourceBridge::BindRenderTarget(const Render::RenderFrontend &frontend,
                                                                 const Render::RenderTargetHandle target) {
-        const auto object = ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, target));
+        const auto object = ResolveFramebuffer(frontend, target);
         if (object.HasError())
             return Result<void>::Failure(object.ErrorValue());
         glBindFramebuffer(GL_FRAMEBUFFER, object.Value());
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenGLViewportResourceBridge::ResolveFramebuffer */
+    Result<std::uint32_t> OpenGLViewportResourceBridge::ResolveFramebuffer(const Render::RenderFrontend &frontend,
+                                                                           const Render::RenderTargetHandle target) {
+        return ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, target));
     }
 
     /** @copydoc OpenGLViewportResourceBridge::BindTexture */

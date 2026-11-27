@@ -338,6 +338,15 @@ namespace Horo::Editor {
         if (size.x >= 740.0F)
             action.axisView = DrawCompass(*ImGui::GetWindowDrawList(), {origin.x + size.x - 48.0F, origin.y + 64.0F}, state.camera);
         DrawStats(origin, size, state, localization);
+        if (state.canReviewWithAgent) {
+            const auto row = ResolveViewportStatusRow(origin, size, state.objectCount, localization);
+            const auto &visible = localization.Get("editor", "workspace.viewport.review_with_agent");
+            const auto label = visible + "###ReviewViewportWithAgent";
+            if (row.actionsWidth >= ImGui::CalcTextSize(visible.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0F) {
+                ImGui::SetCursorScreenPos(row.actionsPosition);
+                action.reviewWithAgent = Ui::Button({.label = label.c_str(), .componentSize = Ui::ComponentSize::Small});
+            }
+        }
         ImGui::PopID();
         return action;
     }

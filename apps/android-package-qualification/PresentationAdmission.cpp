@@ -1,5 +1,8 @@
 #include "PresentationAdmission.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace Horo::AndroidQualification {
     namespace PresentationAdmissionErrors {
         const ErrorCodeDescriptor InvalidReceipt{ErrorDomainId{"horo.android.qualification"},
@@ -85,5 +88,60 @@ namespace Horo::AndroidQualification {
         if (auto lost = Lose(current.Value()); lost.HasError())
             return lost;
         return Publish(window);
+    }
+
+    /** @copydoc FramePacing::FramePacing */
+    FramePacing::FramePacing(const Clock::duration minimumInterval, const Clock::duration conservationInterval) noexcept
+        : minimumInterval_(minimumInterval), conservationInterval_(std::max(minimumInterval, conservationInterval)) {}
+
+    /** @copydoc FramePacing::AttemptInterval */
+    FramePacing::Clock::duration FramePacing::AttemptInterval(const Mode mode) const noexcept {
+        const bool conserving = mode > Mode::Baseline && mode <= Mode::MemoryConservation;
+        return conserving ? conservationInterval_ : minimumInterval_;
+    }
+
+    /** @copydoc FramePacing::TryAdmit */
+    bool FramePacing::TryAdmit(const Platform::AndroidLifecycleSnapshot &state, const Clock::time_point now, const Mode mode) noexcept {
+        if (minimumInterval_ <= Clock::duration::zero() || state.queuedObservationCount != 0 || !state.hasPresentation ||
+            state.process != Platform::AndroidProcessState::Running || state.activity != Platform::AndroidActivityState::Resumed)
+            return false;
+        const auto interval = AttemptInterval(mode);
+        if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < interval))
+            return false;
+        lastAttempt_ = now;
+        return true;
+    }
+
+    /** @copydoc FramePacingMailbox::Acquire */
+    FramePacingMailbox::Token FramePacingMailbox::Acquire() noexcept {
+        auto previous = state_.load(std::memory_order_acquire);
+        constexpr Token maximumGeneration = static_cast<Token>(std::numeric_limits<std::int64_t>::max()) & ~Flags;
+        if ((previous & Active) || previous >= maximumGeneration)
+            return 0;
+        const auto token = (previous + Flags + 1) | Active;
+        return state_.compare_exchange_strong(previous, token, std::memory_order_acq_rel) ? token : 0;
+    }
+
+    /** @copydoc FramePacingMailbox::Revoke */
+    void FramePacingMailbox::Revoke(const Token token) noexcept {
+        // No replacement can acquire while Active remains set, and only this lease's owner revokes it.
+        if (token && (state_.load(std::memory_order_acquire) & ~ModeBits) == token)
+            state_.fetch_and(~Flags, std::memory_order_acq_rel);
+    }
+
+    /** @copydoc FramePacingMailbox::Publish */
+    void FramePacingMailbox::Publish(const Token token, const FramePacing::Mode mode) noexcept {
+        auto previous = state_.load(std::memory_order_acquire);
+        if ((token & Flags) != Active || (previous & ~ModeBits) != token || mode > FramePacing::Mode::MemoryConservation)
+            return;
+        // Callbacks for one token are serialized. CAS failure means this owner was withdrawn.
+        static_cast<void>(state_.compare_exchange_strong(previous, token | static_cast<Token>(mode), std::memory_order_acq_rel));
+    }
+
+    /** @copydoc FramePacingMailbox::Read */
+    FramePacing::Mode FramePacingMailbox::Read(const Token token) const noexcept {
+        const auto state = state_.load(std::memory_order_acquire);
+        return (token & Flags) == Active && (state & ~ModeBits) == token ? static_cast<FramePacing::Mode>(state & ModeBits)
+                                                                         : FramePacing::Mode::Baseline;
     }
 }  // namespace Horo::AndroidQualification

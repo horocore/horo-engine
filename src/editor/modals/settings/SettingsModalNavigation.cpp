@@ -98,6 +98,8 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {general.c_str(), "G", General}, ctx);
         DrawNavItem(st, {appearance.c_str(), "A", Appearance}, ctx);
         DrawNavItem(st, {input.c_str(), "I", Input}, ctx);
+        if (HasGameplayAccessibilitySettings(st))
+            DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "accessibility.title").c_str(), "A", Accessibility}, ctx);
         const auto &codeEditor = SettingsModal::kTextScope.Text(ctx.localization, "nav.code_editor");
         const auto &keymaps = SettingsModal::kTextScope.Text(ctx.localization, "nav.keymaps");
         DrawNavGroup(codeEditor.c_str(), ctx);
@@ -114,6 +116,11 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {packages.c_str(), "K", Packages}, ctx);
         DrawNavItem(st, {updates.c_str(), "U", Updates}, ctx);
         DrawNavGroup(tools.c_str(), ctx);
+        DrawNavItem(st, {SettingsModal::kTextScope.Text(ctx.localization, "configuration.title").c_str(), "C", Configuration}, ctx);
+        if (st.projectConfiguration || st.projectConfigurationError)
+            DrawNavItem(st,
+                        {SettingsModal::kTextScope.Text(ctx.localization, "configuration.project_nav").c_str(), "P", ProjectConfiguration},
+                        ctx);
         DrawNavItem(st, {diagnostics.c_str(), "D", Diagnostics}, ctx);
         DrawNavItem(st, {plugins.c_str(), "P", Plugins}, ctx);
         if (st.extensionPages) {
@@ -398,6 +405,220 @@ namespace Horo::Editor::SettingsModalInternal {
         });
     }
 
+    namespace {
+        /** @brief Resolves exactly one label for the host-reported permission state. */
+        const char *MicrophoneStatusKey(const EditorMicrophonePermissionStatus status) noexcept {
+            using enum EditorMicrophonePermissionStatus;
+            switch (status) {
+                case Required:
+                    return "audio.microphone.required";
+                case Pending:
+                    return "audio.microphone.pending";
+                case Granted:
+                    return "audio.microphone.granted";
+                case Denied:
+                    return "audio.microphone.denied";
+                case Unavailable:
+                    return "audio.microphone.unavailable";
+            }
+            return "audio.microphone.unavailable";
+        }
+
+        /** @brief Displays the optional permission control without opening an input stream. */
+        void DrawMicrophonePermission(const EditorGuiContext &ctx) {
+            auto *permission = ctx.microphonePermission;
+            if (!permission)
+                return;
+            const auto status = permission->Status();
+            const auto &title = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.title");
+            const auto &description = SettingsModal::kTextScope.Text(ctx.localization, MicrophoneStatusKey(status));
+            const auto &action = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.request");
+            SettingRow(title.c_str(), description.c_str(), ctx.theme.fonts, [&ctx, permission, status, &action] {
+                if (Ui::Button({.label = action.c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .enabled = status == EditorMicrophonePermissionStatus::Required,
+                                .font = ctx.theme.fonts.sans}))
+                    permission->Request();
+            }, "microphone-permission", SettingRowLayout::Stacked);
+        }
+
+        /** @brief Selects an explicit endpoint using the existing keyboard-accessible combo. */
+        void DrawMicrophoneInput(SettingsAudioTab &audio, const EditorGuiContext &ctx, const IEditorMicrophonePermission &microphone) {
+            const auto inputs = microphone.Inputs();
+            if (inputs.empty())
+                return;
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.input");
+            const ComboItemSource source{.label = [inputs](const int index) {
+                return inputs[static_cast<std::size_t>(index)].c_str();
+            }};
+            SettingRow(label.c_str(), "", ctx.theme.fonts, [&audio, &ctx, inputs, &source] {
+                (void)ComboControl("##microphone-input", &audio.microphoneInput, static_cast<int>(inputs.size()), source, ctx.theme.fonts);
+            }, "microphone-input", SettingRowLayout::Stacked);
+        }
+
+        /** @brief Keeps the chosen device explicit and disables start until selection resolves. */
+        void DrawMicrophoneStart(SettingsAudioTab &audio, IEditorMicrophonePermission &microphone, const std::string &scan,
+                                 const std::string &start) {
+            if (Button({.label = scan.c_str(), .variant = ButtonVariant::Secondary})) {
+                audio.microphoneInput = -1;
+                microphone.ScanInputs();
+            }
+            const bool selected =
+                audio.microphoneInput >= 0 && static_cast<std::size_t>(audio.microphoneInput) < microphone.Inputs().size();
+            if (Button({.label = start.c_str(), .variant = ButtonVariant::Secondary, .enabled = selected}))
+                microphone.StartTest(static_cast<std::size_t>(audio.microphoneInput));
+        }
+
+        /** @brief Returns the localized live indicator separate from OS permission. */
+        const char *MicrophoneTestKey(const EditorMicrophoneTestStatus status) noexcept {
+            using enum EditorMicrophoneTestStatus;
+            switch (status) {
+                case Starting:
+                    return "audio.microphone.starting";
+                case Capturing:
+                    return "audio.microphone.capturing";
+                case Failed:
+                    return "audio.microphone.test_failed";
+                case Idle:
+                    return "audio.microphone.test_description";
+            }
+            return "audio.microphone.test_description";
+        }
+
+        /** @brief Displays the current level with a numeric value independently of the meter fill. */
+        void DrawMicrophoneLevel(const EditorGuiContext &ctx, const float peak) {
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.input_level");
+            const auto percent = static_cast<int>(std::clamp(peak, 0.0F, 1.0F) * 100.0F + 0.5F);
+            const auto value = std::format("{} / 100", percent);
+            SettingRow(label.c_str(), "", ctx.theme.fonts, [peak, &value] {
+                ImGui::ProgressBar(peak, {-1.0F, 0.0F}, value.c_str());
+            }, "microphone-level", SettingRowLayout::Stacked);
+        }
+
+        /** @brief Identifies the states in which the recorder owns capture or publication. */
+        bool RecordingBusy(const EditorMicrophoneRecordingStatus status) noexcept {
+            using enum EditorMicrophoneRecordingStatus;
+            return status == Starting || status == Recording || status == Saving;
+        }
+
+        /** @brief Returns whether the shared input owner is occupied by recording. */
+        bool RecordingBusy(const IEditorMicrophoneRecorder *recorder) noexcept {
+            return recorder && RecordingBusy(recorder->RecordingStatus());
+        }
+
+        /** @brief Keeps the live status and stop action visible until the capture owner detaches. */
+        void DrawMicrophoneTest(SettingsAudioTab &audio, const EditorGuiContext &ctx, IEditorMicrophonePermission &microphone) {
+            using enum EditorMicrophoneTestStatus;
+            const auto status = microphone.TestStatus();
+            const bool active = status == Starting || status == Capturing;
+            if (!active && microphone.Status() != EditorMicrophonePermissionStatus::Granted)
+                return;
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.test");
+            const auto &description = SettingsModal::kTextScope.Text(ctx.localization, MicrophoneTestKey(status));
+            const auto &scan = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.scan");
+            const auto &action =
+                SettingsModal::kTextScope.Text(ctx.localization, active ? "audio.microphone.stop" : "audio.microphone.start");
+            if (!active)
+                DrawMicrophoneInput(audio, ctx, microphone);
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&audio, &microphone, active, &action, &scan] {
+                if (!active)
+                    DrawMicrophoneStart(audio, microphone, scan, action);
+                else if (Button({.label = action.c_str(), .variant = ButtonVariant::Secondary}))
+                    microphone.StopTest();
+            }, "microphone-test", SettingRowLayout::Stacked);
+            if (status == Capturing)
+                DrawMicrophoneLevel(ctx, microphone.TestPeakLevel());
+        }
+
+        /** @brief Uses distinct status messages for capture and publication. */
+        const char *RecordingStatusKey(const EditorMicrophoneRecordingStatus status) noexcept {
+            using enum EditorMicrophoneRecordingStatus;
+            switch (status) {
+                case Idle:
+                    return "audio.microphone.recording.description";
+                case Starting:
+                    return "audio.microphone.recording.starting";
+                case Recording:
+                    return "audio.microphone.recording.active";
+                case Saving:
+                    return "audio.microphone.recording.saving";
+                case Saved:
+                    return "audio.microphone.recording.saved";
+                case Failed:
+                    return "audio.microphone.recording.failed";
+                case PermissionDenied:
+                    return "audio.microphone.recording.permission_denied";
+                case DeviceLost:
+                    return "audio.microphone.recording.device_lost";
+                case InsufficientSpace:
+                    return "audio.microphone.recording.insufficient_space";
+            }
+            return "audio.microphone.recording.description";
+        }
+
+        /** @brief Offers save only while capturing and cancel until publication completes. */
+        void DrawRecordingStop(const EditorGuiContext &ctx, IEditorMicrophoneRecorder &recorder) {
+            if (recorder.RecordingStatus() == EditorMicrophoneRecordingStatus::Recording) {
+                const auto &save = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.stop_save");
+                if (Button({.label = save.c_str(), .variant = ButtonVariant::Primary}))
+                    recorder.SaveRecording();
+            }
+            const auto &cancel = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.cancel");
+            if (Button({.label = cancel.c_str(), .variant = ButtonVariant::Secondary}))
+                recorder.CancelRecording();
+        }
+
+        /** @brief Starts only from a selected input and an active writable project. */
+        void DrawRecordingStart(const SettingsAudioTab &audio, const EditorGuiContext &ctx, IEditorMicrophoneRecorder &recorder,
+                                const IEditorMicrophonePermission &permission) {
+            const auto &start = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.start");
+            const bool selected =
+                audio.microphoneInput >= 0 && static_cast<std::size_t>(audio.microphoneInput) < permission.Inputs().size();
+            if (Button({.label = start.c_str(), .variant = ButtonVariant::Primary, .enabled = selected && recorder.CanRecord()}))
+                recorder.StartRecording(static_cast<std::size_t>(audio.microphoneInput), audio.recordingPath);
+        }
+
+        /** @brief Adds the published asset path only after a successful save. */
+        std::string RecordingDescription(const EditorGuiContext &ctx, const IEditorMicrophoneRecorder &recorder,
+                                         const EditorMicrophoneRecordingStatus status) {
+            auto description = SettingsModal::kTextScope.Text(ctx.localization, RecordingStatusKey(status));
+            if (status == EditorMicrophoneRecordingStatus::Saved) {
+                description += ' ';
+                description += recorder.SavedRecordingPath();
+            }
+            return description;
+        }
+
+        /** @brief Records from the chosen endpoint into a new project asset. */
+        void DrawMicrophoneRecording(SettingsAudioTab &audio, const EditorGuiContext &ctx) {
+            auto *recorder = ctx.microphoneRecorder;
+            auto *permission = ctx.microphonePermission;
+            if (!recorder || !permission)
+                return;
+            const auto status = recorder->RecordingStatus();
+            const bool busy = RecordingBusy(status);
+            const bool granted = permission->Status() == EditorMicrophonePermissionStatus::Granted;
+            if (status == EditorMicrophoneRecordingStatus::Idle && !granted)
+                return;
+            const auto &label = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.title");
+            const auto description = RecordingDescription(ctx, *recorder, status);
+            if (!busy && granted) {
+                const auto &path = SettingsModal::kTextScope.Text(ctx.localization, "audio.microphone.recording.path");
+                SettingRow(path.c_str(), "", ctx.theme.fonts, [&] {
+                    (void)InputTextControl("##microphone-recording-path", audio.recordingPath, 201, ctx.theme.fonts);
+                }, "microphone-recording-path", SettingRowLayout::Stacked);
+            }
+            SettingRow(label.c_str(), description.c_str(), ctx.theme.fonts, [&] {
+                if (busy)
+                    DrawRecordingStop(ctx, *recorder);
+                else if (granted)
+                    DrawRecordingStart(audio, ctx, *recorder, *permission);
+            }, "microphone-recording", SettingRowLayout::Stacked);
+            if (status == EditorMicrophoneRecordingStatus::Recording)
+                DrawMicrophoneLevel(ctx, recorder->RecordingPeakLevel());
+        }
+    }  // namespace
+
     void DrawAudio(SettingsState &st, const EditorGuiContext &ctx) {
         const std::array<std::string, 3> deviceText = {SettingsModal::kTextScope.Text(ctx.localization, "audio.system_default"),
                                                        SettingsModal::kTextScope.Text(ctx.localization, "audio.headphones"),
@@ -422,6 +643,11 @@ namespace Horo::Editor::SettingsModalInternal {
         SettingRow(enabledLabel.c_str(), enabledDescription.c_str(), ctx.theme.fonts, [&st, &ctx]() {
             (void)ToggleControl("audio-enabled", &st.audio.audioEnabled, ctx.theme.fonts);
         });
+        DrawMicrophonePermission(ctx);
+        if (ctx.microphonePermission && !RecordingBusy(ctx.microphoneRecorder))
+            DrawMicrophoneTest(st.audio, ctx, *ctx.microphonePermission);
+        DrawMicrophoneRecording(st.audio, ctx);
+        DrawMicrophoneMonitor(st.audio, ctx);
     }
 
     void DrawNetwork(SettingsState &st, const EditorGuiContext &ctx) {
@@ -496,6 +722,15 @@ namespace Horo::Editor::SettingsModalInternal {
             using enum SettingsTab;
             case General:
                 DrawGeneral(st, ctx);
+                break;
+            case Configuration:
+                DrawConfiguration(st, ctx, "configuration.title");
+                break;
+            case ProjectConfiguration:
+                DrawConfiguration(st, ctx, "configuration.project_title");
+                break;
+            case Accessibility:
+                DrawConfiguration(st, ctx, "accessibility.gameplay_title");
                 break;
             case Appearance:
                 DrawAppearance(st, ctx);

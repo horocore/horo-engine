@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "SourceReviewOverlay.h"
 #include "SourceSyntax.h"
 #include "SourceSyntaxProjection.h"
 #include "SourceWidgetPlatform.h"
@@ -16,6 +17,7 @@
 #include <cstddef>
 #include <format>
 #include <imgui_internal.h>
+#include <set>
 #include <string_view>
 #include <zep/mode_standard.h>
 #include <zep/tab_window.h>
@@ -29,6 +31,38 @@ namespace Horo::Editor {
     using SourceWidgetText::DisplayText;
     using SourceWidgetText::RawOffset;
 
+    namespace {
+        /** @brief Advances through original bytes once while mapping normalized display offsets. */
+        struct ReviewOffset final {
+            std::string_view text;
+            std::size_t raw{};
+            std::size_t display{};
+
+            long Advance(const std::size_t end) {
+                while (raw < end) {
+                    if (text[raw] == '\r' && raw + 1 < end && text[raw + 1] == '\n')
+                        ++raw;
+                    ++raw;
+                    ++display;
+                }
+                return static_cast<long>(display);
+            }
+        };
+
+        /** @brief Maps proposal semantics to three theme colors. */
+        Zep::ThemeColor ReviewColor(const SourceReviewKind kind) {
+            switch (kind) {
+                case SourceReviewKind::Added:
+                    return Zep::ThemeColor::WidgetActive;
+                case SourceReviewKind::Removed:
+                    return Zep::ThemeColor::Error;
+                case SourceReviewKind::Modified:
+                    return Zep::ThemeColor::Info;
+            }
+            return Zep::ThemeColor::Info;
+        }
+    }  // namespace
+
     /** @brief One editor per view; Zep owns its components, callbacks, display and denied filesystem. */
     struct SourceEditorWidget::Storage final {
         SourceDocumentSnapshot source;
@@ -38,6 +72,9 @@ namespace Horo::Editor {
         std::string mirror;
         std::uint64_t update{};
         SourceSyntaxPresentation syntax;
+        SourceReviewStatus reviewStatus{SourceReviewStatus::None};
+        std::set<std::shared_ptr<Zep::RangeMarker>> reviewMarkers;
+        std::vector<std::size_t> reviewLocations;
         bool pending{};
         bool pointerCaptured{};
         Zep::GlyphIterator pointerAnchor;
@@ -52,6 +89,22 @@ namespace Horo::Editor {
         std::optional<SourceEditSubmission> planned;
         SourceEditingViewId viewIdentity{};
         std::string inputName;
+
+        /** @brief Removes native markers before the editor can replace or mutate the mirror. */
+        void RemoveReviewMarkers() {
+            if (!reviewMarkers.empty())
+                buffer->ClearRangeMarkers(reviewMarkers);
+            reviewMarkers.clear();
+            reviewLocations.clear();
+        }
+
+        /** @brief Preserves the conflict status until a fresh overlay or an explicit dismissal. */
+        void InvalidateReview() {
+            if (reviewStatus == SourceReviewStatus::Ready) {
+                RemoveReviewMarkers();
+                reviewStatus = SourceReviewStatus::Conflicted;
+            }
+        }
 
         /** @brief Captures the actual camera after keyboard reveal/layout, not an accumulated input delta. */
         float ScrollPosition() const {
@@ -466,6 +519,10 @@ namespace Horo::Editor {
         }
         if (!state.pending && state.source.SharesStateWith(snapshot))
             return;
+        if (state.source.Revision() && state.source.Identity().instance != snapshot.Identity().instance)
+            ClearReview();
+        else
+            state.InvalidateReview();
         const auto text = snapshot.Text().substr(snapshot.Metadata().utf8Bom ? 3 : 0);
         const auto display = DisplayText(text);
         const auto previous = state.PreviousView(snapshot);
@@ -508,6 +565,8 @@ namespace Horo::Editor {
             state.RestoreViewport();
             const Input::InputBindingProfile defaultKeymap;
             state.Input(focused, hovered, frame.keymap ? *frame.keymap : defaultKeymap, frame.skipKeyboard);
+            if (!state.source.IsCurrent() || state.update != state.buffer->GetUpdateCount())
+                state.InvalidateReview();
             state.ApplyScroll(inputEnabled && hovered, origin, extent);
             display.SetCursorColor(state.editor->GetTheme().GetColor(Zep::ThemeColor::CursorInsert));
             display.Bind(state.buffer, state.syntax.ForMirror(state.buffer->GetUpdateCount()));
@@ -547,6 +606,19 @@ namespace Horo::Editor {
     /** @copydoc SourceEditorWidget::Selection */
     SourceWidgetSelection SourceEditorWidget::Selection() const {
         return storage_->CaptureSelection();
+    }
+
+    /** @copydoc SourceEditorWidget::ReadSelection */
+    std::optional<SourceContextRange> SourceEditorWidget::ReadSelection(const SourceDocumentSnapshot &snapshot) const {
+        const auto &state = *storage_;
+        if (!state.buffer || state.pending || !snapshot.IsCurrent() || !state.source.SharesStateWith(snapshot) ||
+            !state.buffer->HasSelection())
+            return std::nullopt;
+        const auto selection = state.CaptureSelection();
+        const auto [first, last] = std::minmax(selection.anchor, selection.caret);
+        if (first == last)
+            return std::nullopt;
+        return SourceContextRange{first, last - first};
     }
 
     /** @copydoc SourceEditorWidget::Identity */
@@ -613,6 +685,75 @@ namespace Horo::Editor {
         auto &state = *storage_;
         if (!state.buffer || revision != state.source.Revision() || decorations.size() > 4096)
             return false;
-        return PublishSourceWidgetDecorations(*state.buffer, state.source, decorations);
+        if (!PublishSourceWidgetDecorations(*state.buffer, state.source, decorations))
+            return false;
+        for (const auto &marker : state.reviewMarkers)
+            state.buffer->AddRangeMarker(marker);
+        return true;
+    }
+
+    /** @copydoc SourceEditorWidget::PresentReview */
+    bool SourceEditorWidget::PresentReview(const SourceReviewOverlay &overlay) {
+        auto &state = *storage_;
+        if (!state.buffer || state.pending || !state.source.IsCurrent() || !state.source.SharesStateWith(overlay.Source()))
+            return false;
+        ClearReview();
+        state.reviewLocations.reserve(overlay.Changes().size());
+        const auto bom = state.source.Metadata().utf8Bom ? 3U : 0U;
+        ReviewOffset starts{state.source.Text(), bom};
+        auto ends = starts;
+        for (const auto &change : overlay.Changes()) {
+            auto marker = std::make_shared<Zep::RangeMarker>(*state.buffer);
+            const auto start = starts.Advance(change.begin);
+            const auto end = ends.Advance(change.end);
+            marker->SetDescription(change.description);
+            marker->SetHighlightColor(ReviewColor(change.kind));
+            marker->displayType = Zep::RangeMarkerDisplayType::Indicator | Zep::RangeMarkerDisplayType::Underline |
+                                  Zep::RangeMarkerDisplayType::TooltipAtLine;
+            // SetRange registers the marker. Insertions still need a non-empty gutter range.
+            marker->SetRange({start, std::max(end, start + 1)});
+            state.reviewMarkers.insert(std::move(marker));
+            if (state.reviewLocations.empty() || state.reviewLocations.back() != change.begin)
+                state.reviewLocations.push_back(change.begin);
+        }
+        state.reviewStatus = SourceReviewStatus::Ready;
+        return true;
+    }
+
+    /** @copydoc SourceEditorWidget::ClearReview */
+    void SourceEditorWidget::ClearReview() {
+        storage_->RemoveReviewMarkers();
+        storage_->reviewStatus = SourceReviewStatus::None;
+    }
+
+    /** @copydoc SourceEditorWidget::ShowReviewConflict */
+    void SourceEditorWidget::ShowReviewConflict() {
+        ClearReview();
+        storage_->reviewStatus = SourceReviewStatus::Conflicted;
+    }
+
+    /** @copydoc SourceEditorWidget::ReviewStatus */
+    SourceReviewStatus SourceEditorWidget::ReviewStatus() const noexcept {
+        const auto &state = *storage_;
+        if (state.reviewStatus == SourceReviewStatus::Ready && (state.pending || !state.source.IsCurrent()))
+            return SourceReviewStatus::Conflicted;
+        return state.reviewStatus;
+    }
+
+    /** @copydoc SourceEditorWidget::NavigateReview */
+    bool SourceEditorWidget::NavigateReview(const bool forward) {
+        const auto &locations = storage_->reviewLocations;
+        if (ReviewStatus() != SourceReviewStatus::Ready || locations.empty())
+            return false;
+        const auto caret = Selection().caret;
+        std::size_t destination{};
+        if (forward) {
+            const auto next = std::ranges::upper_bound(locations, caret);
+            destination = next == locations.end() ? locations.front() : *next;
+        } else {
+            const auto previous = std::ranges::lower_bound(locations, caret);
+            destination = previous == locations.begin() ? locations.back() : *std::prev(previous);
+        }
+        return Select({destination, destination});
     }
 }  // namespace Horo::Editor

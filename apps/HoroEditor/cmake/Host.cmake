@@ -10,6 +10,17 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/HoroEditorApp.cpp
         HoroEditor/app/EditorWindowChrome.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
+        HoroEditor/app/EditorLocalAgentPanel.cpp
+        HoroEditor/app/EditorCloudModelProfile.cpp
+        HoroEditor/app/EditorMcpCommandPanel.cpp
+        HoroEditor/app/EditorLocalAgentPatch.cpp
+        HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp
+        HoroEditor/app/EditorLocalAgentContext.cpp
+        HoroEditor/app/ImmersiveAuthoringContext.cpp
+        HoroEditor/app/ImmersiveCommandEnvelope.cpp
+        HoroEditor/app/ImmersiveSpeechTranscription.cpp
+        HoroEditor/app/ImmersiveSpeechWorker.cpp
+        HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
         HoroEditor/app/EditorAudioPreviewDecode.cpp
@@ -29,8 +40,13 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE dwmapi)
     endif()
 
-    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal)
-    target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroEngine::ProjectAssetRegistrySource
+        HoroShaderHotReloadHostInternal HoroEngine::Assets)
+    target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
+    target_link_libraries(HoroEditor PRIVATE HoroMcpEditorCommandsInternal)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::XRApi HoroEngine::SceneSourceModel)
+    target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost HoroEngine::VisualAccessibility)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::GameplayAccessibility)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)
     include(HoroEditorGuiLiveReloadHost)
     if(HORO_EDITOR_LIVE_UI)
@@ -77,6 +93,15 @@ if(HORO_BUILD_EDITOR_GUI)
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
             MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         )
+        if(TARGET HoroAudioSdl3)
+            set(HORO_EDITOR_CAPTURE_TR "${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/resources/tr.lproj/InfoPlist.strings")
+            set_source_files_properties("${HORO_EDITOR_CAPTURE_TR}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/tr.lproj")
+            target_sources(HoroEditor PRIVATE "${HORO_EDITOR_CAPTURE_TR}")
+            set_target_properties(HoroEditor PROPERTIES
+                MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/resources/HoroEditorCaptureInfo.plist.in"
+                XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/resources/HoroEditorCapture.entitlements"
+            )
+        endif()
         install(TARGETS HoroEditor
             BUNDLE DESTINATION "."
             COMPONENT Editor
@@ -127,7 +152,11 @@ if(HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroEditor PRIVATE cxx_std_20)
     set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
         APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
+    # The desktop composition exceeds the standard COFF section limit in MSVC Debug.
+    set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
+        APPEND PROPERTY COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
     target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::RuntimeConsole HoroEditorConsoleLaunchInternal HoroEditorRuntimeConsoleViewInternal)
 
     if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
         target_sources(HoroEditor PRIVATE HoroEditor/app/EditorSurfaceLifecycleQualification.cpp)
@@ -153,11 +182,13 @@ if(HORO_BUILD_EDITOR_GUI)
             HORO_GAMEPLAY_SDK_PACKAGE_DIR="${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
             HORO_GAMEPLAY_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
             HORO_GAMEPLAY_CMAKE_EXECUTABLE="${CMAKE_COMMAND}"
+            HORO_GAMEPLAY_CTEST_EXECUTABLE="${CMAKE_CTEST_COMMAND}"
     )
 
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroEditorImageProviderHostInternal
             HoroRuntimeUiPaintHost
             HoroEditorUiStyleHostInternal
             HoroEditorTerrainHostInternal
@@ -170,6 +201,7 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::Runtime
             HoroEngine::RuntimeScene
             HoroEngine::PhysicsSceneIntegration
+            HoroEngine::AISceneIntegration
             HoroEditorSceneProductHost
             HoroEditorPlaySceneHostInternal
             HoroScenePhysicsHost
@@ -186,7 +218,8 @@ if(HORO_BUILD_EDITOR_GUI)
             nlohmann_json::nlohmann_json
     )
 
-    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull)
+    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull
+        HoroAudioCaptureBuffer HoroEngine::Security)
     if(HORO_BUILD_XR_OPENXR)
         set(HORO_EDITOR_XR_BOOTSTRAP_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_xr_bootstrap_headers")
         file(MAKE_DIRECTORY "${HORO_EDITOR_XR_BOOTSTRAP_HEADERS}")
@@ -204,11 +237,27 @@ if(HORO_BUILD_EDITOR_GUI)
         if(TARGET HoroOpenXRApplicationHost)
             target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENXR_VULKAN_HOST=1)
             target_link_libraries(HoroEditor PRIVATE HoroOpenXRApplicationHost)
+            target_include_directories(HoroEditor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared/xr")
         endif()
     endif()
     if(TARGET HoroAudioSdl3)
         target_link_libraries(HoroEditor PRIVATE HoroEngine::AudioSdl3)
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=1)
+        target_sources(HoroEditor PRIVATE HoroEditor/app/EditorMicrophoneMonitor.cpp)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+            set(_HORO_EDITOR_MAC_SPEECH_SOURCE HoroEditor/app/MacOnDeviceSpeechProvider.mm)
+            set_source_files_properties(${_HORO_EDITOR_MAC_SPEECH_SOURCE} PROPERTIES
+                LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
+            target_sources(HoroEditor PRIVATE HoroEditor/app/EditorMicrophoneAuthorization.cpp
+                HoroEditor/app/EditorMicrophonePermission.cpp HoroEditor/app/EditorMicrophoneRecording.cpp
+                HoroEditor/app/EditorMicrophoneSpeechSession.cpp
+                ${_HORO_EDITOR_MAC_SPEECH_SOURCE})
+            target_link_libraries(HoroEditor PRIVATE HoroApplicationAudioExport "-framework Speech" "-framework AVFoundation")
+            target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_MAC_MICROPHONE_PERMISSION=1)
+            if(TARGET HoroOpenXRApplicationHost)
+                target_sources(HoroEditor PRIVATE HoroEditor/app/EditorImmersiveListening.cpp)
+            endif()
+        endif()
     else()
         target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
     endif()

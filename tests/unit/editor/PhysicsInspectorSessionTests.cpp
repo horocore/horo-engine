@@ -1,4 +1,4 @@
-#include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
+#include "editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorSession.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>

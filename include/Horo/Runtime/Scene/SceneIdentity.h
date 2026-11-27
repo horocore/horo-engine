@@ -6,6 +6,7 @@
  */
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 
 namespace Horo::Runtime {
@@ -29,6 +30,20 @@ namespace Horo::Runtime {
 
     /** @brief Stable authored object identity, independent from process-local entity handles. */
     using SceneObjectId = SceneStableId<SceneObjectIdentityTag>;
+
+    /** @brief Separates child composition policies at the Scene ownership boundary. */
+    enum class SceneInstanceMode : std::uint8_t {
+        Embedded,  /**< Child entities share the parent's canonical runtime. */
+        Streamed,  /**< A streaming authority controls residency relative to the parent. */
+        Activated, /**< Independent child runtime linked to its parent's lifetime. */
+    };
+
+    struct SceneInstanceIdentityTag;
+    /** @brief Stable authored child occurrence identity within one parent. */
+    using SceneInstanceId = SceneStableId<SceneInstanceIdentityTag>;
+
+    /** @brief Absolute concurrent Activated child ceiling for one live parent. */
+    inline constexpr std::size_t MaximumActivatedSceneInstances = 32;
 
     /** @brief Monotonic authored content revision carried through runtime activation. */
     struct SceneDefinitionRevision final {

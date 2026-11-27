@@ -1,5 +1,6 @@
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/AudioEditorDocument.h"
+#include "Horo/Editor/EditorMicrophoneMonitorSettings.h"
 
 #include <type_traits>
 
@@ -10,3 +11,5 @@ static_assert(std::is_copy_constructible_v<Horo::Editor::AudioEditorDocumentSnap
 static_assert(std::is_abstract_v<Horo::Editor::IAudioComponentPreview>);
 static_assert(std::is_copy_constructible_v<Horo::Editor::AudioComponentPreviewRequest>);
 static_assert(std::is_copy_constructible_v<Horo::Editor::AudioComponentPreviewSnapshot>);
+static_assert(std::is_abstract_v<Horo::Editor::IEditorMicrophoneMonitor>);
+static_assert(std::is_copy_constructible_v<Horo::Editor::EditorMicrophoneMonitorOption>);

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Navigation/NavigationAgentRegistry.h"
 #include "Horo/Navigation/NavigationDynamicRegistry.h"
@@ -29,6 +30,15 @@ namespace Horo::Navigation {
         Count,
     };
 
+    /** @brief Exact topology incarnation and host-verified content fingerprints for a deterministic capture. */
+    struct NavigationCrowdDeterministicStamp final {
+        NavigationGeneration topology;
+        Sha256Digest topologyContent;
+        Sha256Digest profile;
+
+        auto operator<=>(const NavigationCrowdDeterministicStamp &) const noexcept = default;
+    };
+
     /** @brief Product-owned finite work and storage limits for one owner-safe-point capture. */
     struct NavigationCrowdSnapshotLimits final {
         std::size_t maximumAgents{4096};
@@ -40,6 +50,7 @@ namespace Horo::Navigation {
         std::size_t maximumBoundaryChecks{4'000'000};
         float cellSizeMeters{4.0F};
         AvoidanceExecutionMode mode{AvoidanceExecutionMode::BestEffortBounded};
+        NavigationCrowdDeterministicStamp deterministicStamp; /**< Empty for best-effort captures. */
     };
 
     /** @brief Profile-local neighborhood policy resolved before capture, never chosen by a provider or renderer. */
@@ -50,6 +61,8 @@ namespace Horo::Navigation {
         std::uint32_t maximumNeighbors{16};
         std::uint32_t maximumBoundarySegments{16};
         NavigationDynamicLayerMask obstacleLayers{1};
+        std::uint32_t densitySaturationNeighbors{}; /**< Relevant neighbors required to reach the speed floor. Zero disables scaling. */
+        float minimumDensitySpeedScale{1.0F};       /**< Finite (0, 1] multiplier at saturation, selected by the Gameplay profile. */
     };
 
     /** @brief Project-stable avoidance layer mapped to one fixed mask bit; independent of obstacle layers. */
@@ -89,6 +102,7 @@ namespace Horo::Navigation {
         std::uint32_t firstBoundary{};
         std::uint32_t boundaryCount{};
         std::uint32_t truncatedBoundaries{};
+        float densitySpeedScale{1.0F}; /**< Route-speed multiplier from the full observed neighborhood, before storage truncation. */
     };
 
     /** @brief Stable source identity of a conservative planar obstacle boundary. */
@@ -142,6 +156,8 @@ namespace Horo::Navigation {
         [[nodiscard]] std::uint64_t CaptureTick() const noexcept;
         /** @brief Returns the declared execution mode. @return Mode captured at the owner safe point. */
         [[nodiscard]] AvoidanceExecutionMode Mode() const noexcept;
+        /** @brief Returns the host-verified evidence captured with this tick. @return Empty stamp for unstamped captures. */
+        [[nodiscard]] NavigationCrowdDeterministicStamp DeterministicStamp() const noexcept;
         /** @brief Returns stable-handle-ordered agents. @return Snapshot-owned contiguous facts. */
         [[nodiscard]] std::span<const NavigationCrowdAgentFact> Agents() const noexcept;
         /** @brief Returns each agent's selected neighbor indices, addressed by its range. @return Contiguous indices. */

@@ -25,6 +25,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -67,11 +68,42 @@ namespace Horo::Editor {
             : frontend(&resourceFrontend), graphicsBridge(&borrowedGraphicsBridge),
               resources(resourceFrontend, {.depthFormat = Render::RenderTextureFormat::Depth32Float,
                                            .depthAspect = Render::RenderTextureAspect::Depth,
-                                           .resolveImage = &MetalViewportResourceBridge::EditorImageIdentity}) {}
+                                           .resolveImage = &MetalViewportResourceBridge::EditorImageIdentity,
+                                           .colorReadback = true}) {}
 
         Render::RenderFrontend *frontend{nullptr};
         Render::MetalEditorGraphicsBridge *graphicsBridge{nullptr};
         EditorViewportResources resources;
+        EditorGraphViewportImageCapture imageCapture;
+        const std::thread::id owner{std::this_thread::get_id()};
+
+        /** @brief Captures the live desktop presentation texture and its exact allocation extent. */
+        EditorGraphViewportImageCapture::Source ImageSource() const noexcept {
+            const auto extent = resources.AllocatedExtent();
+            return {resources.Target(), resources.PresentationTexture(), {extent.width, extent.height}};
+        }
+
+        /** @brief Encodes one authorized crop after the legacy render encoder has stored the color attachment. */
+        void RecordLegacyCapture() {
+            const auto copy = imageCapture.Pending();
+            if (!copy)
+                return;
+            using ResourceAccess = Render::Detail::RenderFrontendResourceAccess;
+            const auto view = ResourceAccess::BackendInstance(*frontend, resources.ColorTextureView());
+            const auto staging = ResourceAccess::BackendInstance(*frontend, copy->staging);
+            if (view.HasError() || staging.HasError()) {
+                imageCapture.Fail();
+                return;
+            }
+            const auto &region = copy->region;
+            if (graphicsBridge->RecordViewportColor(view.Value(), staging.Value(), {region.x, region.y, region.width, region.height})
+                    .HasError()) {
+                imageCapture.Fail();
+                return;
+            }
+            imageCapture.Recorded();
+        }
+
         __strong id<MTLDevice> device{nil};
         __strong id<MTLLibrary> library{nil};
         __strong id<MTLRenderPipelineState> pipeline{nil};
@@ -652,6 +684,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererMetal::Shutdown */
     void EditorViewportRendererMetal::Shutdown() noexcept {
+        impl_->imageCapture.Shutdown(*impl_->frontend);
         impl_->graphicsBridge->WaitUntilIdle();
         impl_->clusteredFrame.reset();
         impl_->color.reset();
@@ -788,7 +821,37 @@ namespace Horo::Editor {
         // Resource preparation runs before the panel draws. Consume the preceding
         // UI frame's request here so the current frame can publish a fresh request
         // that survives pass execution and advances an asynchronous resize next frame.
-        return impl_->resources.Prepare(scene, std::exchange(impl_->requestedExtent, EditorViewportExtent{}));
+        const auto extent = std::exchange(impl_->requestedExtent, EditorViewportExtent{});
+        const auto prepared = impl_->resources.Prepare(scene, extent);
+        if (prepared.HasError()) {
+            impl_->imageCapture.Fail();
+            return prepared;
+        }
+        const auto source = extent.IsValid() ? impl_->ImageSource() : EditorGraphViewportImageCapture::Source{};
+        impl_->imageCapture.Prepare(frontend, source,
+                                    {impl_->graphicsBridge, [](void *owner, std::uint64_t instance, Render::RenderTimelinePoint,
+                                                               std::span<std::byte> destination) {
+            return static_cast<Render::MetalEditorGraphicsBridge *>(owner)->ReadCompletedColor(instance, destination);
+        }});
+        return prepared;
+    }
+
+    /** @copydoc IEditorViewportRenderer::RequestImageCapture */
+    Result<std::uint64_t> EditorViewportRendererMetal::RequestImageCapture(EditorViewportImageRegion region,
+                                                                           std::function<bool()> authorized) {
+        if (impl_->owner != std::this_thread::get_id() || !impl_->initialized)
+            return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
+        return impl_->imageCapture.Request(impl_->ImageSource(), region, std::move(authorized));
+    }
+
+    /** @copydoc IEditorViewportRenderer::ReadImageCapture */
+    std::optional<EditorViewportImageSnapshot> EditorViewportRendererMetal::ReadImageCapture(std::uint64_t id) {
+        return impl_->owner == std::this_thread::get_id() ? impl_->imageCapture.Read(id, impl_->ImageSource()) : std::nullopt;
+    }
+
+    /** @copydoc IEditorViewportRenderer::CancelImageCapture */
+    bool EditorViewportRendererMetal::CancelImageCapture(std::uint64_t id) noexcept {
+        return impl_->owner == std::this_thread::get_id() && impl_->imageCapture.Cancel(id);
     }
 
     /** @copydoc EditorViewportRendererMetal::ExecuteStaticMeshPass */
@@ -825,7 +888,10 @@ namespace Horo::Editor {
             if (encoded.HasError())
                 return encoded;
         }
-        return impl_->EncodeViewportPass(commandBuffer, descriptor, shadow.Value(), frameResources.Value(), aspect);
+        const auto rendered = impl_->EncodeViewportPass(commandBuffer, descriptor, shadow.Value(), frameResources.Value(), aspect);
+        if (rendered.HasValue())
+            impl_->RecordLegacyCapture();
+        return rendered;
     }
 
     /** @copydoc EditorViewportRendererMetal::TextureView */

@@ -87,42 +87,57 @@ namespace Horo::AI {
             return Result<void>::Success();
         }
 
+        /** @brief Resolves an optional context selector after the ordinary property checks. */
+        [[nodiscard]] Result<QueryContextRequirement> SelectContext(const QueryAssetStage &stage, const QueryContextChoice &choice) {
+            const auto authored = std::ranges::find(stage.properties, choice.property, &QueryPropertyValue::id);
+            if (authored == stage.properties.end())
+                return Result<QueryContextRequirement>::Success(choice.options.front());
+            if (const auto id = QueryContextId::Create(std::get<std::uint64_t>(authored->value)); id.HasValue()) {
+                const auto selected = std::ranges::find(choice.options, id.Value(), &QueryContextRequirement::id);
+                if (selected != choice.options.end())
+                    return Result<QueryContextRequirement>::Success(*selected);
+            }
+            return Result<QueryContextRequirement>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+        }
+
+        /** @brief Applies the same admission rules to the generator output and the test input. */
+        template <typename Descriptor>
+        [[nodiscard]] Result<QueryPlanStage> ResolveKnownStage(const QueryAssetStage &stage, const QueryResultSchema &result,
+                                                               const Descriptor *descriptor, QueryItemTypeId Descriptor::*itemType) {
+            using Resolved = Result<QueryPlanStage>;
+            if (!descriptor)
+                return Resolved::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            if (!stage.descriptorVersion.Contains(descriptor->origin.version))
+                return Resolved::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
+            if (descriptor->*itemType != result.itemType)
+                return Resolved::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            if (const auto properties = ResolveProperties(stage, descriptor->properties); properties.HasError())
+                return Resolved::Failure(properties.ErrorValue());
+            QueryPlanStage plan{.id = stage.id,
+                                .kind = stage.kind,
+                                .executionOrder = stage.executionOrder,
+                                .generator = stage.generator,
+                                .test = stage.test,
+                                .contexts = descriptor->contexts,
+                                .properties = stage.properties};
+            if (const auto &choice = descriptor->contextChoice; choice.has_value()) {
+                const auto selected = SelectContext(stage, *choice);
+                if (selected.HasError())
+                    return Resolved::Failure(selected.ErrorValue());
+                plan.selectedContext = selected.Value().id;
+                plan.contexts.push_back(selected.Value());
+            }
+            return Resolved::Success(std::move(plan));
+        }
+
         /** @brief Admits a known generator or test without ever dropping an unsupported stage. */
         [[nodiscard]] Result<QueryPlanStage> ResolveStage(const QueryAssetStage &stage, const QuerySchemaRegistry &registry,
                                                           const QueryResultSchema &result) {
             if (stage.kind == QueryStageKind::Unknown)
                 return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
-            const std::vector<QueryContextRequirement> *contexts{};
-            if (stage.kind == QueryStageKind::Generator) {
-                const auto *descriptor = registry.Find(stage.generator);
-                if (descriptor == nullptr)
-                    return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
-                if (!stage.descriptorVersion.Contains(descriptor->origin.version))
-                    return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
-                if (descriptor->outputItemType != result.itemType)
-                    return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-                if (const auto properties = ResolveProperties(stage, descriptor->properties); properties.HasError())
-                    return Result<QueryPlanStage>::Failure(properties.ErrorValue());
-                contexts = &descriptor->contexts;
-            } else {
-                const auto *descriptor = registry.Find(stage.test);
-                if (descriptor == nullptr)
-                    return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
-                if (!stage.descriptorVersion.Contains(descriptor->origin.version))
-                    return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
-                if (descriptor->inputItemType != result.itemType)
-                    return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-                if (const auto properties = ResolveProperties(stage, descriptor->properties); properties.HasError())
-                    return Result<QueryPlanStage>::Failure(properties.ErrorValue());
-                contexts = &descriptor->contexts;
-            }
-            return Result<QueryPlanStage>::Success({.id = stage.id,
-                                                    .kind = stage.kind,
-                                                    .executionOrder = stage.executionOrder,
-                                                    .generator = stage.generator,
-                                                    .test = stage.test,
-                                                    .contexts = *contexts,
-                                                    .properties = stage.properties});
+            if (stage.kind == QueryStageKind::Generator)
+                return ResolveKnownStage(stage, result, registry.Find(stage.generator), &QueryGeneratorDescriptor::outputItemType);
+            return ResolveKnownStage(stage, result, registry.Find(stage.test), &QueryTestDescriptor::inputItemType);
         }
     }  // namespace
 

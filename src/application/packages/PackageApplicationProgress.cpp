@@ -2,7 +2,29 @@
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
+#include <new>
+#include <type_traits>
+
 namespace Horo::Application {
+    namespace {
+        /** @brief Keeps framework callbacks from reentering the operation while its selection is borrowed by lifecycle. */
+        struct PumpScope final {
+            explicit PumpScope(bool &active) noexcept : active_(active) {
+                active_ = true;
+            }
+
+            ~PumpScope() {
+                active_ = false;
+            }
+
+            PumpScope(const PumpScope &) = delete;
+            PumpScope &operator=(const PumpScope &) = delete;
+
+        private:
+            bool &active_;
+        };
+    }  // namespace
+
     using PackageOperations::Failure;
 
     void PackageApplication::Impl::PumpRestore() {
@@ -46,8 +68,8 @@ namespace Horo::Application {
         restoreOperation.reset();
     }
 
-    void PackageApplication::Impl::PumpInstall() {
-        const auto job = installJob->Snapshot();
+    void PackageApplication::Impl::PumpMutation() {
+        const auto job = mutationJob->Snapshot();
         if (!job || job->state == JobState::Queued || job->state == JobState::Running)
             return;
         std::optional<Result<void>> result;
@@ -55,53 +77,85 @@ namespace Horo::Application {
             std::lock_guard guard(completion->mutex);
             result = std::move(completion->result);
         }
-        // The durable authority's commit result wins over cancellation observed after publication.
-        if (result) {
-            const bool cancelled =
-                result->HasError() && result->ErrorValue().code.Value() == Packages::PackageInstallErrors::Cancelled.code.Value();
-            if (result->HasValue()) {
-                if (const auto installed = install.InstalledRecord())
-                    operation->installedRevision = installed->Revision();
-                if (operation->kind == PackageOperationKind::Activate) {
-                    operation->phase = PackageOperationPhase::Activating;
-                    ++operation->revision;
-                } else
-                    Finish(Result<void>::Success());
-            } else
-                Finish(std::move(*result), cancelled);
-        } else
-            Finish(Result<void>::Failure(job->error.value_or(Failure("packages.application.install_failed"))),
-                   job->state == JobState::Cancelled);
-        installJob.reset();
+        if (result)
+            FinishMutation(std::move(*result));
+        else {
+            const bool removal = operation->kind == PackageOperationKind::Remove;
+            const auto failed = Failure(removal ? "packages.application.remove_failed" : "packages.application.install_failed");
+            Finish(Result<void>::Failure(job->error.value_or(failed)), job->state == JobState::Cancelled);
+        }
+        mutationJob.reset();
         completion.reset();
+    }
+
+    /** @copydoc PackageApplication::Impl::FinishMutation */
+    void PackageApplication::Impl::FinishMutation(Result<void> result) {
+        // Durable success wins over a cancellation received after publication.
+        if (operation->kind == PackageOperationKind::Remove) {
+            metadataWithdrawn = result.HasValue();
+            const bool cancelled = result.HasError() && cancellation.Token().IsCancellationRequested();
+            Finish(std::move(result), cancelled);
+            return;
+        }
+        if (result.HasError()) {
+            const bool cancelled = result.ErrorValue().code.Value() == Packages::PackageInstallErrors::Cancelled.code.Value();
+            Finish(std::move(result), cancelled);
+            return;
+        }
+        if (const auto installed = install.InstalledRecord())
+            operation->installedRevision = installed->Revision();
+        if (operation->kind == PackageOperationKind::Activate) {
+            operation->phase = PackageOperationPhase::Activating;
+            ++operation->revision;
+        } else
+            Finish(Result<void>::Success());
     }
 
     void PackageApplication::Impl::PumpActivation(const Packages::PackageActivationBoundary boundary) {
         if (cancellation.Token().IsCancellationRequested()) {
             Finish(Result<void>::Failure(Failure("packages.application.cancelled")), true);
-            enabled.clear();
             return;
         }
         if (boundary == Packages::PackageActivationBoundary::Running)
             return;
-        if (enabled.empty() && !lifecycle.Active()) {
+        if (!activation) {
+            Finish(Result<void>::Failure(Failure("packages.application.incomplete_operation")));
+            return;
+        }
+        if (std::visit(
+                [](const auto &selected) {
+            return selected.empty();
+        }, *activation) &&
+            !lifecycle.Active()) {
             Finish(Result<void>::Success());
             return;
         }
         if (auto current = configuration.validateAdmission(); current.HasError()) {
             Finish(std::move(current));
-            enabled.clear();
             return;
         }
-        auto result = lifecycle.Activate(enabled, boundary, cancellation.Token());
-        if (result.HasValue()) {
-            const auto active = lifecycle.Active();
-            operation->activeGeneration = active ? std::optional{active->generation} : std::nullopt;
+        const auto previousAttempt = lifecycle.State().attemptedGeneration;
+        auto result = std::visit([&](const auto &selected) {
+            using Entry = typename std::decay_t<decltype(selected)>::value_type;
+            if constexpr (std::is_same_v<Entry, Packages::EnabledPackageModule>)
+                return lifecycle.ActivateModules(selected, boundary, cancellation.Token());
+            else
+                return lifecycle.Activate(selected, boundary, cancellation.Token());
+        }, *activation);
+        try {
+            auto attempt = lifecycle.State();
+            if (attempt.attemptedGeneration > previousAttempt) {
+                operation->attemptedActivationGeneration = attempt.attemptedGeneration;
+                operation->moduleReports = std::move(attempt.modules);
+            }
+        } catch (const std::bad_alloc &) {
+            // Report allocation must not retry or overwrite a committed activation outcome.
         }
+        const auto active = lifecycle.Active();
+        operation->activeGeneration = active ? std::optional{active->generation} : std::nullopt;
         const bool cancelled =
             result.HasError() && result.ErrorValue().code.Value() == Packages::PackageLifecycleErrors::Cancelled.code.Value();
         Finish(std::move(result), cancelled);
-        enabled.clear();
     }
 
     /** @copydoc PackageApplication::Pump */
@@ -110,14 +164,17 @@ namespace Horo::Application {
             return lane;
         if (impl_->closed)
             return Result<void>::Failure(Failure("packages.application.closed"));
+        if (impl_->pumping)
+            return Result<void>::Failure(Failure("packages.application.busy"));
         if (boundary != Packages::PackageActivationBoundary::Startup && boundary != Packages::PackageActivationBoundary::Quiescent &&
             boundary != Packages::PackageActivationBoundary::Running)
             return Result<void>::Failure(Failure("packages.application.invalid_input"));
+        PumpScope guard{impl_->pumping};
         if (impl_->operation && impl_->operation->outcome == PackageOperationOutcome::Running) {
             if (impl_->restoreOperation)
                 impl_->PumpRestore();
-            else if (impl_->installJob)
-                impl_->PumpInstall();
+            else if (impl_->mutationJob)
+                impl_->PumpMutation();
             else if (impl_->operation->kind == PackageOperationKind::Activate || impl_->operation->kind == PackageOperationKind::Disable)
                 impl_->PumpActivation(boundary);
             else
@@ -145,8 +202,8 @@ namespace Horo::Application {
         impl_->cancellation.RequestCancellation();
         if (impl_->restoreOperation)
             return impl_->restore.RequestCancel(impl_->restoreOperation->Id());
-        if (impl_->installJob)
-            return impl_->installJob->RequestCancel();
+        if (impl_->mutationJob)
+            return impl_->mutationJob->RequestCancel();
         return Result<void>::Success();
     }
 

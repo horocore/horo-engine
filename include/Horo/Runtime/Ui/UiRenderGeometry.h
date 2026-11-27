@@ -32,6 +32,7 @@ namespace Horo::Runtime::Ui {
         SpriteRectangle,
         TextGlyphs,
         NineSliceRectangle,
+        VisualIndicators, /**< Zero or more solid quads projected from immutable control state. */
     };
 
     /** @brief One finite logical point after optional downstream physical-pixel snapping. */
@@ -112,6 +113,7 @@ namespace Horo::Runtime::Ui {
         UiRenderViewId view;             /**< Exact Horo-owned view incarnation. */
         UiRenderGeometryLimits limits;   /**< Per-plan geometry capacities reserved at creation. */
         std::uint32_t concurrentPlans{}; /**< Number of immutable plan slots reserved at creation. */
+        bool measureCpuWork{};           /**< Samples Build attempts on the owner thread. */
 
         /** @brief Validates view identity, capacities, and the bounded slot count. @return Whether the arena can be created. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -150,6 +152,19 @@ namespace Horo::Runtime::Ui {
     enum class UiRenderGeometryArenaState : std::uint8_t {
         Active,
         Closed,
+    };
+
+    /** @brief Exact geometry pressure and an approximate coverage proxy for one immutable plan. */
+    struct UiRenderGeometryInspection final {
+        UiRenderViewId view;
+        UiRenderSnapshotRevision snapshot;
+        std::uint32_t drawBatches{}; /**< Batches presented to the renderer, before native execution and grouping. */
+        std::uint32_t vertices{};
+        std::uint32_t indices{};
+        std::uint32_t clips{};          /**< Source clip table size. */
+        std::uint32_t clippedBatches{}; /**< Batches referencing a clip, regardless of visible pixel coverage. */
+        std::size_t geometryBytes{};    /**< Bytes occupied by published vertices, indices and batches. */
+        double canvasTriangleArea{};    /**< Sum of transformed triangle areas in square DIPs before clips and masks. */
     };
 
     class UiRenderGeometryArena;
@@ -191,6 +206,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const std::uint32_t> Indices() const noexcept;
         /** @brief Returns contiguous batches in authored paint order. @return Borrowed immutable batches. */
         [[nodiscard]] std::span<const UiRenderGeometryBatch> Batches() const noexcept;
+        /**
+         * @brief Inspects the exact retained plan without allocating, submitting or reading back GPU work.
+         * @param maximumIndices Explicit bound for the optional diagnostic index scan.
+         * @return Owned count and coverage evidence or a typed capacity/lifecycle failure.
+         * @note Tooling safe points only. The result is a canvas-space workload proxy and does not estimate physical pixels.
+         */
+        [[nodiscard]] Result<UiRenderGeometryInspection> Inspect(std::size_t maximumIndices) const;
 
     private:
         struct Storage;
@@ -248,6 +270,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns current arena admission state. @return Active or Closed. */
         [[nodiscard]] UiRenderGeometryArenaState State() const noexcept;
+        /** @brief Reads lifetime geometry timing on the owner thread. @return Disabled evidence after move. */
+        [[nodiscard]] UiCpuWorkStatistics CpuWorkStatistics() const noexcept;
         /**
          * @brief Returns bounded capacity, usage, peak, and failure evidence without allocating.
          * @pre Calls for one arena are serialized on its owner thread.

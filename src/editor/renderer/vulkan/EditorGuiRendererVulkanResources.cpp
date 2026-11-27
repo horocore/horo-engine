@@ -72,7 +72,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererVulkan::DestroyTexture */
     void EditorGuiRendererVulkan::DestroyTexture(const std::uintptr_t identity) noexcept {
-        if (owner_ != std::this_thread::get_id() || identity == fontIdentity_)
+        if (owner_ != std::this_thread::get_id() || identity == FontTexture())
             return;
         const auto found = std::ranges::find(textures_, identity, &Texture::identity);
         if (found != textures_.end())

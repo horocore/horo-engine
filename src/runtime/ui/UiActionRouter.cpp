@@ -268,6 +268,32 @@ namespace Horo::Runtime::Ui {
         return storage ? storage->lastIssued : UiActionSequence{};
     }
 
+    /** @copydoc UiActionRouter::Inspect */
+    Result<UiActionInspectionSnapshot> UiActionRouter::Inspect(const UiActionOwnerContext &owner, const std::size_t maximumRows) const {
+        const auto *const storage = StateStorage();
+        if (!storage || storage->state == UiActionRouterState::Stopped || storage->dispatching)
+            return Failure<UiActionInspectionSnapshot>(UiErrors::ActionLifecycleUnavailable);
+        if (!owner.IsValid() || owner != storage->owner)
+            return Failure<UiActionInspectionSnapshot>(UiErrors::ActionSourceStale);
+        if (storage->count > maximumRows)
+            return Failure<UiActionInspectionSnapshot>(UiErrors::ActionQueueCapacityExceeded);
+
+        try {
+            UiActionInspectionSnapshot snapshot{owner, storage->state};
+            snapshot.actions.reserve(storage->count);
+            for (std::size_t index = 0; index < storage->count; ++index) {
+                const auto &queued = storage->queue[(storage->head + index) % storage->queue.size()];
+                snapshot.actions.push_back({queued.source, queued.id, queued.origin, UiActionIdOf(queued.command), {}});
+            }
+            const auto pending = storage->asyncActions.AppendPendingInspection(snapshot.actions, maximumRows);
+            if (pending.HasError())
+                return Result<UiActionInspectionSnapshot>::Failure(pending.ErrorValue());
+            return Result<UiActionInspectionSnapshot>::Success(std::move(snapshot));
+        } catch (const std::bad_alloc &) {
+            return Failure<UiActionInspectionSnapshot>(UiErrors::CapacityExceeded);
+        }
+    }
+
     /** @copydoc UiActionRouter::QueuedCount */
     std::size_t UiActionRouter::QueuedCount() const noexcept {
         const auto *const storage = StateStorage();

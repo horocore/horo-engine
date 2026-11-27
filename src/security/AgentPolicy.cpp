@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 #include <span>
 #include <string_view>
 #include <unordered_set>
@@ -77,16 +78,39 @@ namespace Horo::Security {
             limits_ = {};
     }
 
+    /** @copydoc AgentPolicy::~AgentPolicy */
+    AgentPolicy::~AgentPolicy() {
+        if (revisionLifetime_)
+            revisionLifetime_->RequestCancellation();
+    }
+
     /** @copydoc AgentPolicy::SetProjectTrust */
     bool AgentPolicy::SetProjectTrust(const bool trusted, const std::uint64_t revision) noexcept {
         if (!valid_ || revision == 0 || revision <= revision_)
             return false;
+        if (revisionLifetime_) {
+            revisionLifetime_->RequestCancellation();
+            revisionLifetime_.reset();
+        }
         trusted_ = trusted;
         revision_ = revision;
         contextGrant_.reset();
         dispatchGrant_.reset();
         toolGrant_.reset();
         return true;
+    }
+
+    /** @copydoc AgentPolicy::ObserveProjectRevision */
+    std::optional<CancellationToken> AgentPolicy::ObserveProjectRevision() noexcept {
+        if (!Current(revision_))
+            return std::nullopt;
+        try {
+            if (!revisionLifetime_)
+                revisionLifetime_.emplace();
+            return revisionLifetime_->Token();
+        } catch (const std::bad_alloc &) {
+            return std::nullopt;
+        }
     }
 
     /** @copydoc AgentPolicy::GrantContextConsent */

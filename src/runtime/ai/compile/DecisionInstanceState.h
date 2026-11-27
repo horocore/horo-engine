@@ -2,10 +2,18 @@
 #include "Horo/AI/DecisionGraphInstance.h"
 
 namespace Horo::AI {
+    /** @brief Owner-lane borrowed inputs and optional evidence for the active step only. */
+    struct DecisionGraphInstance::StepObservation final {
+        const DecisionGraphStepInput &values;
+        std::optional<DecisionProviderFailure> *providerFailure;
+        const LocalPolicyUtilityInput *localPolicy;
+    };
+
     struct DecisionGraphInstance::OccurrenceState final {
         std::unique_ptr<BehaviorTreeInstance> tree;
         std::unique_ptr<StateMachineInstance> machine;
         std::unique_ptr<ActionAdapter> actions;
+        std::unique_ptr<UtilityAdapter> utility;
         std::uint32_t generation{1};
         std::uint64_t lastTick{};
         AiTaskState outcome{AiTaskState::Idle};
@@ -32,9 +40,18 @@ namespace Horo::AI {
         Result<AiTaskState> EvaluateSubplan(const BehaviorTreeEvaluationContext &, bool entering) noexcept override;
         void CancelSubplan(DecisionNodeId, AiTaskCancellationReason) noexcept override;
 
+        /** @brief Retains the first original task callback error without affecting task execution. */
+        void ObserveTaskFailure(DecisionNodeId node, const Result<AiTaskState> &result) const noexcept;
+
         [[nodiscard]] bool SupportsSubplans() const noexcept override {
             return true;
         }
+    };
+
+    struct DecisionGraphInstance::UtilityAdapter final {
+        std::vector<std::unique_ptr<BehaviorTreeInstance>> actions;
+        std::optional<std::size_t> selected;
+        std::array<UtilityScoreRecord, DecisionStepTrace::MaximumRecords> evidence;
     };
 
     struct DecisionGraphInstance::ActionAdapter final : StateMachineActions {

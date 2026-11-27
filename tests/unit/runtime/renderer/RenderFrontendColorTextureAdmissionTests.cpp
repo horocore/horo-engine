@@ -103,6 +103,48 @@ TEST_CASE("Frontend color additions require a valid advertised capability snapsh
     Unsupported(*frontend, Color(RenderTextureFormat::Rgba8Unorm, RenderTextureUsage::CopySource));
 }
 
+TEST_CASE("Frontend admits only advertised stereo coverage color attachments", "[renderer][resource][color-admission][xr]") {
+    auto support = AdvertisedColors();
+    support.features.Enable(RenderCapability::ViewIndexedShaders);
+    support.limits.maxMultiviewViews = 2;
+    auto descriptor = Color(RenderTextureFormat::R32Float, RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment);
+    descriptor.layerCount = 2;
+
+    SECTION("exact coverage texture") {
+        auto frontend = FrontendWith(support);
+        AdmitAndRelease(*frontend, descriptor);
+    }
+    SECTION("unadvertised multiview or format facts") {
+        const auto withoutMultiview = AdvertisedColors();
+        Unsupported(*FrontendWith(withoutMultiview), descriptor);
+        support.limits.maxMultiviewViews = 1;
+        Unsupported(*FrontendWith(support), descriptor);
+        support.limits.maxMultiviewViews = 2;
+        support.formats.usages[static_cast<std::size_t>(descriptor.format)] = RenderTextureUsage::RenderAttachment;
+        Unsupported(*FrontendWith(support), descriptor);
+    }
+    SECTION("expanded color format, usage or layers") {
+        auto frontend = FrontendWith(support);
+        auto invalid = descriptor;
+        invalid.format = RenderTextureFormat::Rgba32Float;
+        Unsupported(*frontend, invalid);
+        invalid = descriptor;
+        invalid.usage = ColorRoles;
+        Unsupported(*frontend, invalid);
+        invalid = descriptor;
+        invalid.layerCount = 3;
+        Unsupported(*frontend, invalid);
+    }
+    SECTION("initial upload") {
+        auto frontend = FrontendWith(support);
+        const std::array<std::byte, 4 * 4 * 2 * sizeof(float)> bytes{};
+        const auto result = frontend->CreateTexture(descriptor, bytes);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == "render.frontend.resource.unsupported");
+        NoAdmission(*frontend);
+    }
+}
+
 TEST_CASE("Frontend depth observation admits only the exact advertised attachment copy source",
           "[renderer][resource][depth-copy-admission]") {
     auto support = AdvertisedColors();

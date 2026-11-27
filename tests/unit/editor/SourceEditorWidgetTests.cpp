@@ -242,6 +242,28 @@ TEST_CASE("Reversed selections retain their orientation and invalid clipboard by
     CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Text() == "abcdef");
 }
 
+TEST_CASE("Source context can read a reversed selection only from the current existing widget mirror", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "\xEF\xBB\xBF"
+                                                 "a\xC3\xA9\r\nb");
+    SourceEditorSession session;
+    CHECK_FALSE(session.ReadSelection(source));
+    auto *view = session.Acquire(source.Identity().instance);
+    REQUIRE(view);
+    view->widget.Publish(source);
+    static_cast<void>(fixture.Frame(view->widget));
+    CHECK_FALSE(session.ReadSelection(source));
+    REQUIRE(view->widget.Select({8, 4}));
+    const auto range = session.ReadSelection(source);
+    REQUIRE(range);
+    CHECK(*range == SourceContextRange{4, 4});
+    CHECK(source.Text().substr(range->offset, range->length) == "\xC3\xA9\r\n");
+    const auto edited = fixture.documents.Documents().Edit(source.Identity().instance, {source.Revision(), 3, 1, "z"});
+    REQUIRE(edited.HasValue());
+    CHECK_FALSE(session.ReadSelection(source));
+    CHECK_FALSE(session.ReadSelection(edited.Value()));
+}
+
 TEST_CASE("An open workspace popup blocks the actual source input and IME focus", "[editor][source][widget]") {
     WidgetFixture fixture;
     const auto source = fixture.Open("code.cpp", "unchanged");

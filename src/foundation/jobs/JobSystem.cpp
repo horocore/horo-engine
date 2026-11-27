@@ -857,19 +857,20 @@ namespace Horo {
 
     TaskGroup::~TaskGroup() {
         try {
+            if (Outcome())
+                return;
             RequestCancel();
             static_cast<void>(Join());
-            // A policy rejection cannot release accepted children. Destruction has already revoked every child's
-            // cancellation token and must finish their lifetime even when a callback cannot form a new wait dependency.
-            for (const auto &child : m_state->children) {
-                const auto &record = child.m_record;
-                std::unique_lock lock(record->Mutex());
-                record->completed.wait(lock, [&record] {
-                    return IsTerminal(record->state);
-                });
-            }
         } catch (...) {  // NOSONAR(cpp:S2486) A destructor cannot report or propagate cleanup failures.
-            // Destructors must swallow any unexpected exceptions per noexcept contract
+            // Cancellation is requested before allocating the list of exact child IDs.
+        }
+        // Drain even when joining or collecting cancellation IDs cannot allocate.
+        for (const auto &child : m_state->children) {
+            const auto &record = child.m_record;
+            std::unique_lock lock(record->Mutex());
+            record->completed.wait(lock, [&record] {
+                return IsTerminal(record->state);
+            });
         }
     }
 
@@ -894,6 +895,10 @@ namespace Horo {
         descriptor.parentCancellation = m_state->cancellation.Token();
         descriptor.taskGroupId = m_state->id;
         const std::weak_ptr weakState = m_state;
+        // Prepare tracking before an accepted callback can begin mutating caller-owned batch storage.
+        auto &children = m_state->children;
+        if (children.size() == children.capacity())
+            children.reserve(std::min(children.max_size(), std::max(std::size_t{1}, children.size() * 2)));
         Result<JobHandle> submitted = m_state->jobs.SubmitContext(descriptor, [weakState, ownedWork](const JobExecutionContext &context) {
             if (context.Cancellation().IsCancellationRequested())
                 return Result<void>::Failure(MakeJobError(JobErrors::Cancelled, "Task group child was cancelled before execution."));
@@ -918,7 +923,7 @@ namespace Horo {
 
         JobHandle child = std::move(submitted).Value();
         const JobId childId = child.Id();
-        m_state->children.push_back(std::move(child));
+        children.push_back(std::move(child));
         return Result<JobId>::Success(childId);
     }
 

@@ -1,6 +1,12 @@
 #include "GameModuleHostTestHelpers.h"
 #include "GameplayRetirementTestSupport.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/FrameScheduler.h"
 #include "OwnedTestDirectory.h"
 
 #include <thread>
@@ -41,6 +47,106 @@ namespace {
         return policy;
     }
 }  // namespace
+
+TEST_CASE("Native module Start receives its animation grant and retirement cancels the retained scope", "[gameplay][module][animation]") {
+    Tests::NativeGameplayFailureControl control{0};
+    DeterministicClock clock;
+    auto scheduler = FrameScheduler::Create(clock, {.fixedStep = Duration::FromNanoseconds(10)});
+    REQUIRE(scheduler.HasValue());
+    SceneAnimationRuntimeConfig configuration;
+    configuration.expectedDispatch = scheduler.Value()->DispatchSource();
+    configuration.runtimeOwner = Animation::AnimationRuntimeId::Create(7).Value();
+    configuration.target = AssetCookTargetId::Parse("native-gameplay-test").Value();
+    auto owner = SceneAnimationRuntime::Create(configuration);
+    REQUIRE(owner.HasValue());
+    const std::shared_ptr<SceneAnimationRuntime> sceneAnimation = std::move(owner).Value();
+    const SceneRuntimeId scene{7};
+    GameModuleHostOptions options{{}, {}};
+    options.runtimeServices.animation = [scene, &sceneAnimation](std::string_view principal, const CancellationToken &lifetime) {
+        return CreateGameplayAnimationContext(sceneAnimation, scene, std::string{principal}, lifetime);
+    };
+    auto loaded = GameModuleHost{std::move(options)}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loaded.HasValue());
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    auto &module = loaded.Value().owner;
+    REQUIRE(control.control.started == 1);
+    const auto retained = control.control.animation;
+    REQUIRE(retained);
+    CHECK(retained == module->AnimationContext());
+    CHECK(retained->Scene() == scene.value);
+    CHECK(retained->ModuleId() == module->ModuleId());
+    module->RequestRetirement();
+    const auto revoked = retained->Observe({scene.value, 0, 1});
+    REQUIRE(revoked.HasError());
+    CHECK(revoked.ErrorValue().code.Value() == Animation::AnimationErrors::GraphOperationCancelled.code.Value());
+}
+
+TEST_CASE("Prepared image closes native factory admission on abandonment cancellation and failed Start",
+          "[gameplay][module][prepared-image]") {
+    Tests::NativeGameplayFailureControl control{2};
+    const auto expectation = Expectation();
+    auto prepared = GameModuleHost::PrepareImage(HORO_TEST_GAME_MODULE_PATH, expectation);
+    REQUIRE(prepared.HasValue());
+    auto acquired = prepared.Value()->AcquireDecisionNodes();
+    REQUIRE(acquired.HasValue());
+    auto generation = std::move(acquired).Value();
+    CHECK(generation->CanUse());
+    CHECK_FALSE(generation->CanAdmit());
+    CHECK(control.control.created == 0);
+    CHECK(control.control.registered == 0);
+    CHECK(control.control.started == 0);
+    CHECK(control.control.serviceCreated == 0);
+    SECTION("abandonment revokes retained metadata") {
+        std::move(prepared).Value().reset();
+    }
+    SECTION("pre-activation cancellation consumes the image and invokes no callbacks") {
+        CancellationSource source;
+        source.RequestCancellation();
+        auto activated = GameModuleHost{}.ActivatePrepared(*prepared.Value(), source.Token());
+        REQUIRE(activated.HasError());
+        CHECK(IsJobCancelled(activated.ErrorValue()));
+        CHECK(control.control.created == 0);
+        CHECK(control.control.registered == 0);
+        CHECK(control.control.started == 0);
+        CHECK(prepared.Value()->AcquireDecisionNodes().HasError());
+
+        const auto cancelled = GameModuleHost::PrepareImage(HORO_TEST_GAME_MODULE_PATH, expectation, source.Token());
+        REQUIRE(cancelled.HasError());
+        CHECK(IsJobCancelled(cancelled.ErrorValue()));
+    }
+    SECTION("a real Start failure retains the owner and never opens decision factories") {
+        GameModuleHost host{
+            GameModuleHostOptions{{},
+                                  {.physics = GameplayPhysicsContext::Withheld({.moduleId = std::string{expectation.moduleId},
+                                                                                .scene = 7,
+                                                                                .sceneGeneration = 1,
+                                                                                .moduleEnabled = true},
+                                                                               GameplayPhysicsDenial::Unavailable),
+                                   .character = GameplayCharacterContext::Withheld({.moduleId = std::string{expectation.moduleId},
+                                                                                    .scene = 7,
+                                                                                    .sceneGeneration = 1,
+                                                                                    .moduleEnabled = true},
+                                                                                   GameplayCharacterDenial::Unavailable)}}};
+        auto activated = host.ActivatePrepared(*prepared.Value());
+        REQUIRE(activated.HasValue());
+        REQUIRE(activated.Value().diagnostic);
+        CHECK(control.control.created == 1);
+        CHECK(control.control.registered == 1);
+        CHECK(control.control.started == 1);
+        CHECK_FALSE(generation->CanAdmit());
+        CHECK_FALSE(generation->CanUse());
+        auto owner = std::move(activated).Value().owner;
+        REQUIRE(owner);
+        CHECK(owner->TryRetire().HasError());
+        generation.reset();
+        control.callback.reset();
+        REQUIRE(owner->TryRetire().HasValue());
+        CHECK(control.control.destroyed == 1);
+        return;
+    }
+    CHECK_FALSE(generation->CanUse());
+    CHECK_FALSE(generation->CanAdmit());
+}
 
 TEST_CASE("Native replication admission denies activation before service factories and module Start", "[gameplay][replication][host]") {
     auto policy = NativeAdmission();

@@ -356,6 +356,11 @@ namespace Horo::Editor::Ui {
             IconDescriptor{"status.pending", DrawNothing, 0xEF4A},
             IconDescriptor{"status.success", DrawCheckIcon, 0xE86C},
             IconDescriptor{"status.cancelled", DrawNothing, 0xE5C9},
+            IconDescriptor{"asset.ai_blackboard", DrawGenericIcon, 0xE1DB},
+            IconDescriptor{"asset.ai_behavior_tree", DrawHierarchyGenericIcon, 0xE97A},
+            IconDescriptor{"asset.ai_state_machine", DrawGenericIcon, 0xE889},
+            IconDescriptor{"asset.ai_utility", DrawGenericIcon, 0xE9B0},
+            IconDescriptor{"asset.ai_environment_query", DrawGenericIcon, 0xE8B6},
         };
 
         struct IconTokenAlias {

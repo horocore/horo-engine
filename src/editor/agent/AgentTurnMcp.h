@@ -1,0 +1,153 @@
+#pragma once
+
+#include "AgentContext.h"
+#include "AgentTurn.h"
+#include "Horo/Foundation/BuildOutputStore.h"
+#include "Horo/Mcp/McpInProcessAdapter.h"
+#include "Horo/Security/SecureMemory.h"
+
+namespace Horo::Mcp {
+    class McpToolRegistry;
+    class McpToolSnapshot;
+}  // namespace Horo::Mcp
+
+namespace Horo::Agent {
+    /** @brief Exact host-approved subset of one MCP registry generation for review-only inference. */
+    class McpPlanCatalog final {
+    public:
+        /** @brief Captures only explicitly approved, granted registrations.
+         * @param registry Host-owned registry. @param capabilities Already admitted capability names.
+         * @param approvedTools Host-selected tool names.
+         * @param approvalLifetime Issuer-owned lifetime for this exact approval and capability set.
+         * @return Catalog or empty when the approval is missing, withdrawn or invalid.
+         */
+        [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> Capture(std::shared_ptr<const Mcp::McpToolRegistry> registry,
+                                                                           std::span<const std::string> capabilities,
+                                                                           std::span<const std::string> approvedTools,
+                                                                           CancellationToken approvalLifetime);
+        /** @brief Captures inert schemas from an authenticated host's immutable tool publication.
+         * @param snapshot Exact session publication. @param capabilities Exact grants of that session.
+         * @param approvedTools Tools separately approved for planning. @param approvalLifetime Lifetime of that approval.
+         * @param isCurrent Thread-safe test of the issuing session and principal, including credential expiry.
+         * @return Catalog or empty if any required authority is missing.
+         */
+        [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> CaptureSession(std::shared_ptr<const Mcp::McpToolSnapshot> snapshot,
+                                                                                  std::span<const std::string> capabilities,
+                                                                                  std::span<const std::string> approvedTools,
+                                                                                  CancellationToken approvalLifetime,
+                                                                                  AgentTurnFreshness isCurrent);
+        /** @brief Checks whether the exact approval and published registry snapshot remain current. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+
+        /** @brief Borrows the exact model schema list projected from the approved registrations. */
+        [[nodiscard]] const std::vector<ModelTool> &Tools() const noexcept {
+            return tools_;
+        }
+
+        /** @brief Inspects an inert proposal through the same catalog that advertised it. */
+        [[nodiscard]] AgentPlanToolInspection Inspect(const ModelToolIntent &intent) const;
+
+    private:
+        McpPlanCatalog() = default;
+        /** @brief Validates one explicitly approved subset against the selected tool publication. */
+        [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> CapturePublished(std::shared_ptr<const Mcp::McpToolRegistry> registry,
+                                                                                    std::shared_ptr<const Mcp::McpToolSnapshot> snapshot,
+                                                                                    std::span<const std::string> capabilities,
+                                                                                    std::span<const std::string> approvedTools,
+                                                                                    CancellationToken approvalLifetime,
+                                                                                    AgentTurnFreshness isCurrent);
+        std::shared_ptr<const Mcp::McpToolRegistry> registry_;
+        std::shared_ptr<const Mcp::McpToolSnapshot> snapshot_;
+        CancellationToken approvalLifetime_;
+        AgentTurnFreshness sessionCurrent_;
+        std::vector<std::string> capabilities_;
+        std::vector<ModelTool> tools_;
+    };
+
+    /** @brief Decodes a bounded model intent and inspects it against the host's admitted registry snapshot.
+     * @param registry Exact registry generation selected by the host. @param capabilities Its granted capability names.
+     * @param intent Untrusted proposed call. @return Registered effect or typed rejection, without running or authorizing the call.
+     */
+    [[nodiscard]] AgentPlanToolInspection InspectMcpPlanTool(const Mcp::McpToolSnapshot &registry,
+                                                             std::span<const std::string> capabilities, const ModelToolIntent &intent);
+
+    inline constexpr std::string_view ProjectDiagnosticsTool = "project.diagnostics"; /**< Shared name of the diagnostic Query. */
+
+    /** @brief Captured by the host alongside the exact authenticated project-bound MCP session. */
+    struct AgentContextProjectAuthority final {
+        std::string identity;
+        std::uint64_t generation{};
+    };
+
+    /** @brief One immutable host-selected diagnostic projection with a thread-safe freshness witness. */
+    struct AgentDiagnosticCapture final {
+        std::string revision;
+        std::vector<std::string> messages;
+        bool truncated{};
+        std::function<bool()> isCurrent;
+    };
+
+    /** @brief Reads one selected editor or build diagnostic projection through a private Query-only session.
+     * @param captured Bounded owned messages and their source revision. @param context Project and worker stop fence.
+     * @param requestId Host preview identity. @param entropy Host credential entropy.
+     * @return Owned read-only MCP response or typed failure. The query session expires before return.
+     */
+    [[nodiscard]] Result<Application::CodeQueryPage> ReadLocalDiagnostics(AgentDiagnosticCapture captured,
+                                                                          const Application::CodeQueryContext &context,
+                                                                          std::uint64_t requestId,
+                                                                          std::shared_ptr<Security::SecureRandomSource> entropy);
+
+    /** @brief Reads one bounded diagnostic capture through a private, authenticated MCP query session.
+     * @param tail Owned warning/error capture for the operation explicitly selected in the workspace.
+     * @param context Current project and synchronous worker stop fence.
+     * @param requestId Exact host preview turn.
+     * @param entropy Host entropy for the one-use local credential.
+     * @return An owned revisioned page or typed failure. No model or other capability receives the session.
+     */
+    [[nodiscard]] Result<Application::CodeQueryPage> ReadLocalBuildDiagnostics(BuildOutputOperationTail tail,
+                                                                               const Application::CodeQueryContext &context,
+                                                                               std::uint64_t requestId,
+                                                                               std::shared_ptr<Security::SecureRandomSource> entropy);
+
+    /** @brief Editor-host adapter over one already authenticated in-process MCP session generation. */
+    class AgentTurnMcp final : public IAgentTurnTools {
+    public:
+        /** @brief Captures the session generation before any model-derived operation is admitted.
+         * @param adapter Exact authenticated MCP session.
+         * @param project Same host-approved project binding as the authenticated session, or absence for turn-only use.
+         * @param pump Optional bounded pump for immutable tools owned by this caller's lane.
+         * @param observeOperation Optional presentation observer of the controller-issued operation ID. */
+        explicit AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project = {},
+                              std::function<Result<void>()> pump = {}, std::function<void(std::uint64_t)> observeOperation = {});
+
+        /** @copydoc IAgentTurnTools::ValidArguments */
+        [[nodiscard]] bool ValidArguments(std::string_view arguments) const override;
+
+        /** @copydoc IAgentTurnTools::Run */
+        [[nodiscard]] AgentTurnStatus Run(std::uint64_t turnId, std::size_t callOrdinal, const ModelToolIntent &intent,
+                                          std::chrono::steady_clock::time_point deadline, std::stop_token stop,
+                                          std::string &result) const override;
+
+        /** @brief Captures one explicit diagnostic or build-status query through the authenticated MCP controller.
+         * @param requestId Host-issued preview request identity.
+         * @param itemOrdinal Unique item ordinal in that preview request.
+         * @param query Typed explicit read-only context query.
+         * @param context Borrowed project fence, stop state and deadline.
+         * @return Typed project evidence or admission/stop failure.
+         * @pre Host runs this on a worker while the registered MCP owner pumps query work. */
+        [[nodiscard]] Result<Application::CodeQueryPage> ReadContextQuery(std::uint64_t requestId, std::size_t itemOrdinal,
+                                                                          const Application::CodeQueryRequest &query,
+                                                                          const Application::CodeQueryContext &context) const;
+
+    private:
+        /** @brief Submits and settles one session-fenced controller operation with its scoped cancellation. */
+        [[nodiscard]] Result<nlohmann::json> CallTool(std::string id, std::string_view name, nlohmann::json arguments,
+                                                      std::chrono::steady_clock::time_point deadline,
+                                                      const std::function<bool()> &stopped) const;
+        std::shared_ptr<const Mcp::McpInProcessAdapter> adapter_;
+        Mcp::McpSessionHandle session_;
+        AgentContextProjectAuthority project_;
+        std::function<Result<void>()> pump_;
+        std::function<void(std::uint64_t)> observeOperation_;
+    };
+}  // namespace Horo::Agent

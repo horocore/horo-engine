@@ -25,12 +25,12 @@ namespace Horo::Navigation {
     }  // namespace
 
     /** @copydoc NavigationMovementController::Create */
-    Result<std::unique_ptr<NavigationMovementController>> NavigationMovementController::Create(NavigationAgentRegistry &registry,
-                                                                                               NavigationWorldLifecycle &world,
-                                                                                               NavigationCoordinator &coordinator,
-                                                                                               const CrowdAgentHandle agent,
-                                                                                               const NavigationPathCaller caller) {
+    Result<std::unique_ptr<NavigationMovementController>> NavigationMovementController::Create(
+        NavigationAgentRegistry &registry, NavigationWorldLifecycle &world, NavigationCoordinator &coordinator,
+        const CrowdAgentHandle agent, const NavigationPathCaller caller, NavigationTraversalCatalog *traversal) {
         using Return = Result<std::unique_ptr<NavigationMovementController>>;
+        if (traversal && !traversal->MatchesOwners(world, registry))
+            return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
         const auto record = registry.Find(agent);
         if (record.HasError())
             return Return::Failure(record.ErrorValue());
@@ -40,8 +40,9 @@ namespace Horo::Navigation {
         if (!caller.owner.IsValid() || !caller.generation.IsValid() || !record.Value().enabled)
             return Return::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
         try {
-            return Return::Success(std::make_unique<NavigationMovementController>(ConstructionKey{}, registry, world, coordinator,
-                                                                                  record.Value(), binding.Value(), caller));
+            const InitialBinding initial{record.Value(), binding.Value(), caller};
+            return Return::Success(
+                std::make_unique<NavigationMovementController>(ConstructionKey{}, registry, world, coordinator, initial, traversal));
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
@@ -50,9 +51,10 @@ namespace Horo::Navigation {
     /** @copydoc NavigationMovementController::NavigationMovementController */
     NavigationMovementController::NavigationMovementController(ConstructionKey, NavigationAgentRegistry &registry,
                                                                NavigationWorldLifecycle &world, NavigationCoordinator &coordinator,
-                                                               const NavigationAgentRecord &agent, NavigationAgentSceneBinding binding,
-                                                               NavigationPathCaller caller) noexcept
-        : registry_(registry), world_(world), coordinator_(coordinator), agent_(agent), binding_(binding), caller_(caller) {}
+                                                               const InitialBinding &binding,
+                                                               NavigationTraversalCatalog *traversal) noexcept
+        : registry_(registry), world_(world), coordinator_(coordinator), agent_(binding.agent), binding_(binding.scene),
+          caller_(binding.caller), crossing_{traversal, {}} {}
 
     /** @copydoc NavigationMovementController::~NavigationMovementController */
     NavigationMovementController::~NavigationMovementController() {
@@ -124,6 +126,7 @@ namespace Horo::Navigation {
         if (Active(status_.state)) {
             acceptance.superseded = NavigationMovementStatus{status_.id, NavigationMovementState::Superseded, {}};
         }
+        crossing_.Abandon(agent_.handle);
         RetireQuery();
         request_ = std::move(request);
         policy_ = std::move(candidate);
@@ -207,6 +210,7 @@ namespace Horo::Navigation {
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         // The transaction's only mutation phase: all fallible authority/provider admission has completed.
+        crossing_.Abandon(agent_.handle);
         if (query_.has_value())
             static_cast<void>(coordinator_.Abandon(*query_));
         query_.reset();
@@ -223,6 +227,14 @@ namespace Horo::Navigation {
         if (Active(status_.state))
             status_.state = NavigationMovementState::Querying;
         return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationMovementController::Crossing::Abandon */
+    void NavigationMovementController::Crossing::Abandon(const CrowdAgentHandle agent) noexcept {
+        if (!intent)
+            return;
+        catalog->Abandon(intent->grant.reservation, agent);
+        intent.reset();
     }
 
     /** @copydoc NavigationMovementController::RetireQuery */
@@ -246,6 +258,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationMovementController::Finish */
     void NavigationMovementController::Finish(const NavigationMovementState state, std::optional<Error> error) noexcept {
+        crossing_.Abandon(agent_.handle);
         RetireQuery();
         policy_.Clear();
         lastIntent_.reset();

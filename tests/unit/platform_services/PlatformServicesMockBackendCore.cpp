@@ -6,6 +6,30 @@
 #include <utility>
 
 namespace Horo::PlatformServices::TestSupport {
+    namespace {
+        /** @brief Checks only the opaque cloud payload family and its advertised finite bounds. */
+        bool ValidCloudResponsePayload(const MockPlatformServicesOperation operation,
+                                       const MockPlatformServicesResponse &response) noexcept {
+            switch (operation) {
+                case MockPlatformServicesOperation::WriteCloudObject:
+                case MockPlatformServicesOperation::DeleteCloudObject:
+                    return std::holds_alternative<CloudMutationResult>(response.payload);
+                case MockPlatformServicesOperation::ListCloudObjects: {
+                    const auto *payload = std::get_if<CloudObjectPage>(&response.payload);
+                    return payload && payload->objects.size() <= MockPlatformServicesBackend::MaximumPageEntries;
+                }
+                case MockPlatformServicesOperation::ReadCloudBlob: {
+                    const auto *payload = std::get_if<CloudBlobReadResult>(&response.payload);
+                    return payload && payload->bytes.Bytes().size() <= MockPlatformServicesBackend::MaximumPayloadBytes;
+                }
+                case MockPlatformServicesOperation::QueryCloudQuota:
+                    return std::holds_alternative<CloudQuotaObservation>(response.payload);
+                default:
+                    return false;
+            }
+        }
+    }  // namespace
+
     namespace detail {
         bool IsKnownOperation(const MockPlatformServicesOperation operation) noexcept {
             return operation < MockPlatformServicesOperation::Count;
@@ -13,6 +37,14 @@ namespace Horo::PlatformServices::TestSupport {
 
         bool IsServiceOperation(const MockPlatformServicesOperation operation) noexcept {
             return IsKnownOperation(operation) && operation != MockPlatformServicesOperation::RequestCancel;
+        }
+
+        bool IsCloudOperation(const MockPlatformServicesOperation operation) noexcept {
+            return operation == MockPlatformServicesOperation::WriteCloudObject ||
+                   operation == MockPlatformServicesOperation::ListCloudObjects ||
+                   operation == MockPlatformServicesOperation::ReadCloudBlob ||
+                   operation == MockPlatformServicesOperation::DeleteCloudObject ||
+                   operation == MockPlatformServicesOperation::QueryCloudQuota;
         }
 
         std::size_t OperationIndex(const MockPlatformServicesOperation operation) noexcept {
@@ -127,7 +159,11 @@ namespace Horo::PlatformServices::TestSupport {
             case MockPlatformServicesOperation::ClearPresence:
                 return std::holds_alternative<std::monostate>(response.payload);
             case MockPlatformServicesOperation::WriteCloudObject:
-                return std::holds_alternative<CloudMutationResult>(response.payload);
+            case MockPlatformServicesOperation::DeleteCloudObject:
+            case MockPlatformServicesOperation::ListCloudObjects:
+            case MockPlatformServicesOperation::ReadCloudBlob:
+            case MockPlatformServicesOperation::QueryCloudQuota:
+                return ValidCloudResponsePayload(operation, response);
             case MockPlatformServicesOperation::ReadCloudObject: {
                 const auto *payload = std::get_if<CloudReadResult>(&response.payload);
                 return payload != nullptr && payload->bytes.size() <= MockPlatformServicesBackend::MaximumPayloadBytes;
@@ -171,8 +207,27 @@ namespace Horo::PlatformServices::TestSupport {
             (response.duplicateDelay &&
              detail::ToMilliseconds(response.delay) + detail::ToMilliseconds(*response.duplicateDelay) > detail::MaximumDelayMilliseconds))
             return false;
-        if (response.failure)
+        if (response.providerFailure)
+            return !response.failure && std::holds_alternative<std::monostate>(response.payload);
+        if (response.failure) {
+            if (detail::IsCloudOperation(operation)) {
+                const std::array allowed{&CloudObjectErrors::AlreadyExists,
+                                         &CloudObjectErrors::PreconditionFailed,
+                                         &CloudObjectErrors::QuotaExceeded,
+                                         &CloudObjectErrors::IdempotencyConflict,
+                                         &CloudObjectErrors::InvalidProviderResponse,
+                                         &CloudObjectErrors::IntegrityMismatch,
+                                         &CloudObjectErrors::PayloadTooLarge,
+                                         &CloudObjectErrors::InvalidPage,
+                                         &CloudObjectErrors::NotFound,
+                                         &CloudObjectErrors::RevisionChanged,
+                                         &CloudObjectErrors::PartialTransfer,
+                                         &CloudObjectErrors::CleanupPending};
+                if (std::ranges::find(allowed, response.failure->descriptor) == allowed.end())
+                    return false;
+            }
             return ValidateFailureResponse(response);
+        }
         return ValidateResponsePayload(operation, response);
     }
 
@@ -250,7 +305,26 @@ namespace Horo::PlatformServices::TestSupport {
                                         .binding = PlatformServiceBindingId{index + 1},
                                         .unavailableReason = std::nullopt};
         }
+        auto &cloud = snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)];
+        cloud.limits.maxConcurrentRequests = MockPlatformServicesBackend::MaximumCloudTransfers;
+        cloud.cloudMutation = CloudCapability();
         return Result<PlatformServiceCapabilitySnapshot>::Success(std::move(snapshot));
+    }
+
+    CloudObjectContractLimits MockPlatformServicesBackend::Impl::CloudLimits() {
+        return {.maxPageEntries = MockPlatformServicesBackend::MaximumPageEntries,
+                .maxObjectBytes = MockPlatformServicesBackend::MaximumPayloadBytes};
+    }
+
+    CloudMutationCapability MockPlatformServicesBackend::Impl::CloudCapability() {
+        return {.atomicity = CloudMutationAtomicity::ConditionalAtomicObject,
+                .createIfAbsent = true,
+                .replaceIfRevision = true,
+                .deleteIfRevision = true,
+                .durableMutationDedupe = true,
+                .maxNamespaceBytes = MockPlatformServicesBackend::MaximumPayloadBytes * MockPlatformServicesBackend::MaximumCloudTransfers,
+                .maxObjectCount = MockPlatformServicesBackend::MaximumScriptedResponses,
+                .maxConcurrentMutations = MockPlatformServicesBackend::MaximumCloudTransfers};
     }
 
     Result<void> MockPlatformServicesBackend::Impl::Activate(const PlatformServicesBackendConfig &config) {

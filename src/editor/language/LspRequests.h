@@ -1,0 +1,36 @@
+#pragma once
+
+/** @file LspRequests.h @brief Document request and cancellation encoding for the supported LSP features. */
+
+#include "Horo/Editor/SourceLanguageSession.h"
+#include "LspProtocol.h"
+#include "LspSourceQuery.h"
+
+#include <bitset>
+
+namespace Horo::Editor::Language {
+    inline constexpr auto LspFeatureCount = static_cast<std::size_t>(SourceLanguageRequestKind::CodeActions) + 1;
+    using LspFeatures = std::bitset<LspFeatureCount>;
+
+    /** @brief Inspects server capabilities for the document requests implemented by this adapter. */
+    [[nodiscard]] LspFeatures ReadLspFeatures(const nlohmann::json &capabilities);
+
+    /** @brief Checks whether the negotiated features support a particular document request. */
+    [[nodiscard]] bool SupportsLspRequest(const LspFeatures &features, SourceLanguageRequestKind kind) noexcept;
+
+    /** @brief Encodes a bound document request and validates all requested byte positions.
+     * @param rootUri Validated file root. @param source Current synchronized snapshot.
+     * @param kind Requested feature. @param id Local correlation number. @param query Snapshot selection.
+     * @param diagnostics Most recent correlated diagnostics for code-action context, or null.
+     * @return Wire frame or a refusal for an invalid position or unsupported request.
+     */
+    [[nodiscard]] Result<std::string> BuildLspRequest(std::string_view rootUri, const SourceDocumentSnapshot &source,
+                                                      SourceLanguageRequestKind kind, std::uint64_t id, LspSourceQuery query,
+                                                      const nlohmann::json *diagnostics = nullptr);
+
+    /** @brief Encodes cancellation using the same wire identity as the original request. */
+    [[nodiscard]] Result<std::string> BuildLspCancellation(std::uint64_t id);
+
+    /** @brief Recovers the string identity assigned to a document reply. */
+    [[nodiscard]] std::optional<std::uint64_t> ReadLspRequestId(const LspMessage &message);
+}  // namespace Horo::Editor::Language

@@ -40,6 +40,8 @@ namespace Horo::Network {
             std::size_t localPlayers{};
             NetworkModeServiceFactory transportOverride;
             std::function<void(Runtime::RuntimePhase)> beforeWorld;
+            std::function<void(const Runtime::FixedStepContext &)> onTransportFixed;
+            std::function<void()> onTransportFlush;
             std::shared_ptr<DeterministicClock> sessionSource = std::make_shared<DeterministicClock>(Duration::FromNanoseconds(21));
             std::shared_ptr<Application::Internal::NetworkProductSessionClock> sessionClock =
                 std::make_shared<Application::Internal::NetworkProductSessionClock>(sessionSource, Duration::FromNanoseconds(1),
@@ -103,10 +105,15 @@ namespace Horo::Network {
                     if (advanced.HasError())
                         return Result<void>::Failure(advanced.ErrorValue());
                 }
+                if (request_.service == NetworkModeServiceKind::Transport && phase == Runtime::RuntimePhase::NetworkFlush &&
+                    owners_->onTransportFlush)
+                    owners_->onTransportFlush();
                 return Result<void>::Success();
             }
 
-            Result<void> RunFixedTick(const Runtime::FixedStepContext &) override {
+            Result<void> RunFixedTick(const Runtime::FixedStepContext &context) override {
+                if (request_.service == NetworkModeServiceKind::Transport && owners_->onTransportFixed)
+                    owners_->onTransportFixed(context);
                 return Result<void>::Success();
             }
 

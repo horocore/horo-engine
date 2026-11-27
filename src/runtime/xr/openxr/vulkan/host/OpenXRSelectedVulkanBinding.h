@@ -36,6 +36,12 @@ namespace Horo::XR::OpenXRInternal {
          * @pre Owner lane. The borrow ends at Release/retirement; native image translators must drain first.
          */
         [[nodiscard]] Result<const XrGraphicsBindingVulkanKHR *> BorrowBinding(const XRSessionId &candidate) const;
+        /** @brief Borrows the real stable graphics binding while its native session remains private. */
+        [[nodiscard]] Result<const XrGraphicsBindingVulkanKHR *> BorrowPreparedBinding() const;
+        /** @brief Captures private device identity while the exact preflight's native session binding is live. */
+        [[nodiscard]] Result<Render::VulkanApiVersion> CaptureCompatibilityDevice();
+        /** @brief Rejects replacement or retirement of the exact preflighted renderer before qualification consumes it. */
+        [[nodiscard]] Result<void> ValidateCompatibilityDevice() const;
         [[nodiscard]] Result<void> AcquireLoader() override;
         [[nodiscard]] PFN_vkGetInstanceProcAddr GetInstanceProcAddr() noexcept override;
         [[nodiscard]] Result<std::vector<std::string>> RequiredPresentationExtensions() override;
@@ -58,6 +64,21 @@ namespace Horo::XR::OpenXRInternal {
         Render::IVulkanLoaderPort *platform_{};
         Render::Detail::VulkanEditorGraphicsBridge *graphics_{};
         XrGraphicsBindingVulkanKHR binding_{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
+
+        /** @brief Kept only in the private adapter. No native handles enter published compatibility reports. */
+        struct CompatibilityDevice final {
+            const Render::Detail::IVulkanEditorGraphicsPort *port;
+            VkInstance instance;
+            VkPhysicalDevice physical;
+            VkDevice device;
+            VkQueue queue;
+            std::uint32_t family;
+            Render::VulkanApiVersion api;
+            bool operator==(const CompatibilityDevice &) const noexcept = default;
+        };
+
+        [[nodiscard]] Result<CompatibilityDevice> ObserveCompatibilityDevice() const;
+        std::optional<CompatibilityDevice> compatibilityDevice_;
         bool acquired_{};
         bool bound_{};
     };

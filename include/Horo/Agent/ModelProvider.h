@@ -89,7 +89,7 @@ namespace Horo::Agent {
     /** @brief One ordered event, valid only for the duration of its callback. */
     struct ModelEvent final {
         ModelEventKind kind{ModelEventKind::TextDelta};
-        std::string text;
+        std::string text; /**< TextDelta payload. Each delta contains complete UTF-8 scalar values without embedded NUL. */
         ModelToolIntent tool;
         ModelUsage usage;
     };
@@ -113,6 +113,7 @@ namespace Horo::Agent {
         ModelErrorCode code{ModelErrorCode::Protocol};
         std::string message;
         std::optional<long> httpStatus;
+        std::optional<std::chrono::seconds> retryAfter{}; /**< Bounded provider hint for an explicit future request after throttling. */
     };
 
     /** @brief Exact result of a synchronous stream or discovery operation. */

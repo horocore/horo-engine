@@ -58,4 +58,21 @@ namespace Horo::Prefab {
     [[nodiscard]] Result<PrefabValueOverrideResolution> PreparePrefabComponentEdit(
         const EffectivePrefabCandidate &source, const std::optional<PrefabValueOverrideSet> &current, const PrefabComponentEdit &edit,
         const PrefabValueSchemaSnapshot *schemas, const PrefabLimitProfile &limits, const CancellationToken &cancellation = {});
+
+    /**
+     * @brief Stages a set of component additions and removals against its actual immediate source.
+     * @param source Frozen immediate source of the owning authoring layer.
+     * @param current Existing combined overrides in that layer, if present.
+     * @param selected Unique occurrence-qualified operations expressed in the owning layer's local addresses.
+     * @param schemas Complete captured topology authority. No registry metadata is inferred.
+     * @param limits Canonical authoring and work bounds.
+     * @param cancellation Cancellation checked between staged operations.
+     * @return Fully validated complete candidate, or typed failure with both inputs unchanged.
+     * @details Removal preconditions are regenerated from the immediate source. Dependencies and cardinality
+     * are checked only against the final candidate, so a compound edit can replace linked components atomically.
+     */
+    [[nodiscard]] Result<PrefabValueOverrideResolution> PreparePrefabComponentPromotion(
+        const EffectivePrefabCandidate &source, const std::optional<PrefabValueOverrideSet> &current,
+        std::span<const PrefabComponentOverrideRecord> selected, const PrefabValueSchemaSnapshot *schemas, const PrefabLimitProfile &limits,
+        const CancellationToken &cancellation = {});
 }  // namespace Horo::Prefab

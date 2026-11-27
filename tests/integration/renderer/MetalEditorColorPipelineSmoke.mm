@@ -264,7 +264,8 @@ namespace Horo::Editor::Test {
                     const std::array updates{MetalViewportBufferUpdate{buffer, bytes, 0}};
                     return MetalViewportResourceBridge::UpdateBuffers(*self.frontend, self.bridge, updates);
                 }};
-                owner = std::make_unique<EditorViewportColorPipeline>(*frontend, port);
+                const auto slots = frontend->Capabilities().support.limits.maxFramesInFlight;
+                owner = std::make_unique<EditorViewportColorPipeline>(*frontend, port, slots);
                 const EditorViewportColorInputs inputs{.package = package,
                                                        .exposure = exposure,
                                                        .lookMode = ColorLookMode::Enabled,

@@ -1,6 +1,9 @@
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabSpawnTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+#include <stdexcept>
 #include <thread>
 
 namespace Horo::Prefab {
@@ -46,6 +49,120 @@ namespace Horo::Prefab {
         CHECK(operation.Spawned().HasError());
     }
 
+    TEST_CASE("Prefab retirement cancels unpublished inventory reservations while the operation is retained",
+              "[prefab][spawn][lifecycle]") {
+        struct Observation final {
+            unsigned cancelled{};
+            unsigned published{};
+            std::weak_ptr<IPrefabPersistencePublication> active;
+        };
+
+        class Publication final : public IPrefabPersistencePublication {
+        public:
+            Publication(Observation &evidence, Runtime::SavePrefabInstanceId identity) noexcept
+                : evidence_(evidence), identity_(identity) {}
+
+            Runtime::SavePrefabInstanceId InstanceIdentity() const noexcept override {
+                return identity_;
+            }
+
+            void PublishSpawn(std::span<const Runtime::EntityRef>) noexcept override {
+                ++evidence_.published;
+            }
+
+            void PublishDespawn() noexcept override {}
+
+            void Cancel() noexcept override {
+                ++evidence_.cancelled;
+            }
+
+        private:
+            Observation &evidence_;
+            Runtime::SavePrefabInstanceId identity_;
+        };
+
+        class Inventory final : public IPrefabPersistenceOwner {
+        public:
+            Observation evidence;
+            Runtime::SavePrefabInstanceId identity;
+
+            Result<std::shared_ptr<IPrefabPersistencePublication>> PrepareSpawn(const PreparedPrefabSpawn &, const PrefabSpawnRequest &,
+                                                                                std::span<const Runtime::RuntimeComponentSet>,
+                                                                                std::span<const Assets::AssetId>,
+                                                                                std::string_view) override {
+                auto publication = std::make_shared<Publication>(evidence, identity);
+                evidence.active = publication;
+                return Result<std::shared_ptr<IPrefabPersistencePublication>>::Success(std::move(publication));
+            }
+
+            Result<PrefabPersistentLookup> Lookup(Runtime::SavePrefabInstanceId, std::string_view) const override {
+                return Result<PrefabPersistentLookup>::Failure(MakeError(PrefabErrors::AdmissionRejected));
+            }
+        };
+
+        Fixture fixture;
+        const bool validIdentity = GENERATE(false, true);
+        CAPTURE(validIdentity);
+        const auto inventory = std::make_shared<Inventory>();
+        if (validIdentity) {
+            Runtime::SaveIdentityDetail::Bytes bytes{};
+            bytes.back() = 1;
+            inventory->identity = Runtime::SavePrefabInstanceId::FromBytes(bytes).Value();
+        }
+        REQUIRE(fixture.service->InstallPersistenceOwner(inventory).HasValue());
+        fixture.Warm();
+        auto pending = fixture.context->Spawn(fixture.Request());
+        REQUIRE(pending.HasValue());
+        fixture.Advance();
+        if (!validIdentity) {
+            CHECK(pending.Value().State() == PrefabSpawnState::Failed);
+            REQUIRE(pending.Value().Failure() != nullptr);
+            CHECK(pending.Value().Failure()->code.Value() == PrefabErrors::AdmissionRejected.code.Value());
+            CHECK(inventory->evidence.active.expired());
+            CHECK(inventory->evidence.cancelled == 1);
+            CHECK(inventory->evidence.published == 0);
+            fixture.Commit();
+            CHECK(fixture.Count() == 1);
+            return;
+        }
+        REQUIRE(pending.Value().State() == PrefabSpawnState::Pending);
+        REQUIRE_FALSE(inventory->evidence.active.expired());
+        CHECK(fixture.Count() == 1);
+
+        fixture.service->Shutdown();
+        CHECK(pending.Value().State() == PrefabSpawnState::Cancelled);
+        REQUIRE(pending.Value().Failure() != nullptr);
+        CHECK(pending.Value().Failure()->code.Value() == PrefabErrors::Cancelled.code.Value());
+        CHECK(inventory->evidence.active.expired());
+        CHECK(inventory->evidence.cancelled == 1);
+        CHECK(inventory->evidence.published == 0);
+        CHECK(fixture.context->Spawn(fixture.Request()).HasError());
+
+        fixture.Commit();
+        fixture.service->Shutdown();
+        CHECK(pending.Value().State() == PrefabSpawnState::Cancelled);
+        CHECK(inventory->evidence.cancelled == 1);
+        CHECK(inventory->evidence.published == 0);
+        CHECK(fixture.Count() == 1);
+        CHECK(fixture.trace.creates == 1);
+    }
+
+    TEST_CASE("Expired spawn work is cancelled before it reaches Scene admission", "[prefab][spawn][cancel]") {
+        Fixture fixture;
+        const auto request = fixture.Request();
+        auto pending = fixture.context->Spawn(request);
+        REQUIRE(pending.HasValue());
+        CHECK(pending.Value().State() == PrefabSpawnState::Pending);
+        fixture.tick = request.notBeforeTick + 65;
+        fixture.Advance();
+        CHECK(pending.Value().State() == PrefabSpawnState::Cancelled);
+        REQUIRE(pending.Value().Failure() != nullptr);
+        CHECK(pending.Value().Failure()->code.Value() == PrefabErrors::Cancelled.code.Value());
+        fixture.Commit();
+        CHECK(fixture.Count() == 1);
+        CHECK(fixture.trace.creates == 1);
+    }
+
     TEST_CASE("Queued prefab cancellation and module revocation preserve the original Scene", "[prefab][spawn][lifecycle]") {
         Fixture fixture;
         fixture.Warm();
@@ -56,6 +173,16 @@ namespace Horo::Prefab {
         CHECK(fixture.Count() == 1);
         CHECK(fixture.trace.creates == 1);
         SECTION("operation cancellation") {
+            operation.Value().Cancel();
+        }
+        SECTION("a foreign owner lane cannot retire the real queued receipt") {
+            bool rejected{};
+            std::jthread foreign{[&fixture, &rejected] {
+                rejected = fixture.service->Advance(fixture.tick).HasError();
+            }};
+            foreign.join();
+            CHECK(rejected);
+            CHECK(operation.Value().State() == PrefabSpawnState::Pending);
             operation.Value().Cancel();
         }
         SECTION("external ancestry") {
@@ -120,14 +247,29 @@ namespace Horo::Prefab {
         fixture.Warm();
         auto operation = fixture.context->Spawn(fixture.Request());
         REQUIRE(operation.HasValue());
-        fixture.trace.onCreate = [&fixture](Gameplay::BehaviorContext &) {
+        const auto shutdown = [&fixture](Gameplay::BehaviorContext &) {
             fixture.service->Shutdown();
         };
-        fixture.Advance();
-        fixture.Commit();
-        CHECK(fixture.Count() == 3);
-        CHECK(operation.Value().State() == PrefabSpawnState::Committed);
-        CHECK(operation.Value().Spawned().HasValue());
+        SECTION("spawn publishes before creation callbacks") {
+            fixture.trace.onCreate = shutdown;
+            fixture.Advance();
+            fixture.Commit();
+            CHECK(fixture.Count() == 3);
+            CHECK(operation.Value().State() == PrefabSpawnState::Committed);
+            CHECK(operation.Value().Spawned().HasValue());
+        }
+        SECTION("despawn publishes before destruction callbacks") {
+            fixture.Drain(operation.Value());
+            REQUIRE(operation.Value().Spawned().HasValue());
+            const auto despawn = fixture.context->Despawn(operation.Value().Spawned().Value(), fixture.tick);
+            REQUIRE(despawn.HasValue());
+            fixture.trace.onDestroy = shutdown;
+            fixture.Advance();
+            fixture.Commit();
+            CHECK(fixture.Count() == 1);
+            CHECK(fixture.trace.destroys == 2);
+            CHECK(despawn.Value().State() == PrefabSpawnState::Committed);
+        }
     }
 
     TEST_CASE("Retained spawned behavior clients preserve recursion lineage across later ticks", "[prefab][spawn][lifecycle]") {
@@ -164,6 +306,50 @@ namespace Horo::Prefab {
         CHECK(fixture.Count() == 1);
         CHECK(fixture.runner->InstanceCount() == 1);
         CHECK(fixture.trace.creates == 1);
+    }
+
+    TEST_CASE("A failed prefab activation discards only that group's deferred gameplay events", "[prefab][spawn][lifecycle]") {
+        const Gameplay::GameplayEventTypeId prior{"game.test.prior"};
+        const Gameplay::GameplayEventTypeId activation{"game.test.activation"};
+        const Gameplay::GameplayEventTypeId rollback{"game.test.rollback"};
+        Fixture fixture;
+        fixture.trace.onTick = [&prior](Gameplay::BehaviorContext &context) {
+            REQUIRE(context.Publish({.type = prior}).HasValue());
+        };
+        REQUIRE(fixture.runner->FixedUpdate({}, {0.01}).HasValue());
+        fixture.trace.onTick = {};
+        fixture.trace.onCreate = [&activation](Gameplay::BehaviorContext &context) {
+            REQUIRE(context.Publish({.type = activation}).HasValue());
+        };
+        fixture.trace.onEnable = [&fixture](Gameplay::BehaviorContext &) {
+            if (fixture.trace.creates == 3)
+                throw std::runtime_error("second prefab OnEnable failed");
+        };
+        fixture.trace.onDestroy = [&rollback](Gameplay::BehaviorContext &context) {
+            REQUIRE(context.Publish({.type = rollback}).HasValue());
+        };
+        const auto operation = fixture.context->Spawn(fixture.Request());
+        REQUIRE(operation.HasValue());
+        fixture.Drain(operation.Value());
+
+        CHECK(operation.Value().State() == PrefabSpawnState::Committed);
+        const auto failure = fixture.scenes.TakeOperationError();
+        REQUIRE(failure);
+        CHECK(failure->code.Value() == Gameplay::GameplayErrors::GameplayFactoryFailed.code.Value());
+        CHECK(fixture.Count() == 3);
+        CHECK(fixture.trace.creates == 3);
+        CHECK(fixture.trace.destroys == 2);
+        CHECK(fixture.runner->InstanceCount() == 1);
+        REQUIRE(fixture.runner->FixedUpdate({}, {0.01}).HasValue());
+        CHECK(fixture.trace.starts == 1);
+        CHECK(fixture.trace.deliveredEvents == std::vector{prior});
+
+        const auto retired = fixture.context->Despawn(operation.Value().Spawned().Value(), fixture.tick);
+        REQUIRE(retired.HasValue());
+        fixture.Drain(retired.Value());
+        CHECK(retired.Value().State() == PrefabSpawnState::Committed);
+        CHECK(fixture.trace.destroys == 2);
+        CHECK(fixture.Count() == 1);
     }
 
     TEST_CASE("Spawned provider schema mismatch rejects the full group before creation hooks", "[prefab][spawn][malformed]") {
@@ -280,10 +466,36 @@ namespace Horo::Prefab {
         const auto original = fixture.scenes.ActiveScene()->Find({1}).value();
         auto request = fixture.Request();
         request.bindings.emplace_back(Property(21), original);
+        fixture.Warm();
+        std::size_t completeCallbacks{};
+        fixture.trace.onCreate = [&fixture, &completeCallbacks](Gameplay::BehaviorContext &context) {
+            const auto scene = fixture.scenes.ActiveScene();
+            REQUIRE(scene);
+            CHECK(fixture.Count() == 3);
+            const auto self = scene->EntityAt(context.Entity().index);
+            REQUIRE(self);
+            if (self->groupReferences.empty())
+                return;
+            const auto owner = Runtime::RuntimeGroupMemberIdentity{Type(), self->components->behaviors.front().instanceId.value};
+            const auto member = fixture.context->Reference(self->entity, owner, Property(2));
+            REQUIRE(member.HasValue());
+            const auto target = std::get<Runtime::RuntimeGroupMemberReference>(member.Value().target);
+            const auto child = scene->Get(target.entity);
+            REQUIRE(child.HasValue());
+            CHECK(child.Value().parent == self->entity);
+            CHECK(target.member ==
+                  Runtime::RuntimeGroupMemberIdentity{Type(), child.Value().components->behaviors.front().instanceId.value});
+            ++completeCallbacks;
+        };
         auto operation = fixture.context->Spawn(request);
         REQUIRE(operation.HasValue());
+        fixture.Advance();
+        CHECK(operation.Value().State() == PrefabSpawnState::Pending);
+        CHECK(fixture.Count() == 1);
+        CHECK(completeCallbacks == 0);
         fixture.Drain(operation.Value());
         REQUIRE(operation.Value().State() == PrefabSpawnState::Committed);
+        CHECK(completeCallbacks == 1);
         const auto instance = operation.Value().Spawned().Value();
         const auto root = fixture.scenes.ActiveScene()->Get(instance.Root()).Value();
         const Runtime::RuntimeGroupMemberIdentity owner{Type(), root.components->behaviors.front().instanceId.value};
@@ -306,6 +518,34 @@ namespace Horo::Prefab {
         fixture.Commit();
         CHECK(fixture.context->Reference(instance.Root(), owner, Property(3)).HasError());
         CHECK(fixture.context->Reference(instance.Root(), owner, Property(1)).HasValue());
+    }
+
+    TEST_CASE("Prefab groups meet the captured capacity before any member is activated", "[prefab][spawn][bounds][lifecycle]") {
+        constexpr std::size_t objectCapacity = 2;
+        PrefabProjectPolicy policy;
+        policy.maximumObjectCount = objectCapacity;
+        Fixture fixture{2, policy};
+        auto data = fixture.Data();
+        const auto sourceObjects = data.entities.size();
+        REQUIRE(sourceObjects == objectCapacity);
+        bool rejected = false;
+        SECTION("exact capacity publishes the whole group") {}
+        SECTION("one over capacity preserves the original scene") {
+            auto extra = data.entities.back();
+            extra.provenance.sourceObject = PrefabObjectAddress::Create({}, {8}).Value();
+            std::get<Gameplay::BehaviorComponent>(extra.members.front()).instanceId.value = 11;
+            data.entities.push_back(std::move(extra));
+            fixture.Put(std::move(data));
+            rejected = true;
+        }
+        const auto operation = fixture.context->Spawn(fixture.Request());
+        REQUIRE(operation.HasValue());
+        fixture.Drain(operation.Value());
+        const auto expectedCount = rejected ? 1 : 1 + sourceObjects;
+        CHECK(operation.Value().State() == (rejected ? PrefabSpawnState::Failed : PrefabSpawnState::Committed));
+        CHECK(fixture.Count() == expectedCount);
+        CHECK(fixture.trace.creates == expectedCount);
+        CHECK(fixture.runner->InstanceCount() == expectedCount);
     }
 
     TEST_CASE("Missing required and invalid supplied optional prefab bindings reject complete creation", "[prefab][spawn][references]") {

@@ -5,6 +5,7 @@
  * @brief Persistent editor-owned UI Canvas document and workspace lifecycle contracts.
  */
 
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/Sha256.h"
@@ -15,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,6 +62,22 @@ namespace Horo::Editor {
 
         [[nodiscard]] constexpr auto operator<=>(const UiCanvasDocumentStateId &) const noexcept = default;
     };
+
+    /** @brief Detached recovery input that can be durably written on the I/O lane. */
+    struct UiCanvasRecoveryCheckpoint final {
+        UiCanvasDocumentStateId state;
+        DocumentRecoveryRecord record;
+        std::shared_ptr<const DocumentRecoveryRecord> accepted;
+    };
+
+    /** @brief Writes an exact detached checkpoint without borrowing the live document.
+     * @param checkpoint Same-session capture and any previously accepted record.
+     * @param recovery Shared filesystem and project mutation authority.
+     * @param cancellation Cooperative worker cancellation.
+     * @return Durable write or a typed failure.
+     */
+    [[nodiscard]] Result<void> WriteUiCanvasRecovery(const UiCanvasRecoveryCheckpoint &checkpoint, DocumentRecoveryService &recovery,
+                                                     CancellationToken cancellation = {});
 
     /** @brief Immutable document snapshot passed to persistence and derived-data boundaries. */
     struct UiCanvasDocumentSnapshot final {
@@ -274,6 +292,46 @@ namespace Horo::Editor {
                                                               const ProjectMutationCoordinator &mutations, DurableFileSystem &files,
                                                               bool overwriteConflict = false);
 
+        /** @brief Inspects the exact stable document's recovery slot without changing source or session state.
+         * @param recovery Shared project recovery owner. @return Validated candidate, absence, or typed failure.
+         */
+        [[nodiscard]] Result<std::optional<DocumentRecoveryRecord>> InspectRecovery(const DocumentRecoveryService &recovery) const;
+
+        /** @brief Makes a detached recovery input without filesystem access.
+         * @param sessionOwner Exact workspace incarnation. @return New checkpoint, absence, or typed failure.
+         */
+        [[nodiscard]] Result<std::optional<UiCanvasRecoveryCheckpoint>> CaptureRecovery(Assets::AssetId sessionOwner) const;
+
+        /** @brief Records a completed durable write without changing authored or saved state.
+         * @param checkpoint Exact owner-issued checkpoint that finished successfully.
+         */
+        void AcknowledgeRecovery(const UiCanvasRecoveryCheckpoint &checkpoint) noexcept;
+
+        /** @brief Reports whether this session owns or accepted a durable checkpoint. */
+        [[nodiscard]] bool HasRecoveryCheckpoint() const noexcept {
+            return recoveredState_.IsValid();
+        }
+
+        /** @brief Writes the current dirty state to the separate recovery namespace.
+         * @param sessionOwner Exact workspace incarnation. @param recovery Shared bounded recovery owner.
+         * @return Durable checkpoint or typed failure preserving source and prior recovery.
+         */
+        [[nodiscard]] Result<void> Autosave(Assets::AssetId sessionOwner, DocumentRecoveryService &recovery);
+
+        /** @brief Adopts an explicitly selected recovery candidate only into the same clean document and accepted source.
+         * @param expected Exact workspace document state. @param record Inspected candidate.
+         * @param recovery Shared recovery owner. @return New dirty state or typed failure without mutation.
+         */
+        [[nodiscard]] Result<void> Recover(UiCanvasDocumentStateId expected, const DocumentRecoveryRecord &record,
+                                           const DocumentRecoveryService &recovery);
+
+        /** @brief Discards only the supplied explicit candidate or recovery already owned by this workspace instance.
+         * @param sessionOwner Exact workspace incarnation. @param recovery Shared recovery owner.
+         * @param explicitRecord Optional exact candidate for an explicit discard. @return Success or typed failure.
+         */
+        [[nodiscard]] Result<void> DiscardRecovery(Assets::AssetId sessionOwner, DocumentRecoveryService &recovery,
+                                                   const DocumentRecoveryRecord *explicitRecord = nullptr);
+
         /**
          * @brief Reloads canonical bytes into the session.
          * @param policy Whether dirty authored state must be preserved or discarded.
@@ -322,6 +380,9 @@ namespace Horo::Editor {
         UiCanvasDocumentStateId savedState_{1};
         UiCanvasDocumentStateId contentState_{1};
         UiCanvasDocumentStateId savedContentState_{1};
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery_;
+        UiCanvasDocumentStateId recoveredState_;
+        bool persisting_{};
         bool closed_{false};
     };
 }  // namespace Horo::Editor

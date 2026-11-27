@@ -10,6 +10,8 @@
 #include <memory>
 
 namespace Horo::AI {
+    class DecisionNodeGeneration;
+
     namespace Detail {
         class AiTaskMailbox;
     }
@@ -49,6 +51,9 @@ namespace Horo::AI {
 
     private:
         friend class Detail::AiTaskMailbox;
+        friend class RegisteredDecisionNodeExecutor;
+        /** @brief Binds a registered provider's revocable authority before the callback can publish. */
+        [[nodiscard]] bool BindProvider(const std::shared_ptr<const DecisionNodeGeneration> &provider) const noexcept;
         /** @brief Captures one owner-issued mailbox slot and immutable execution fence. */
         AiTaskContinuation(std::shared_ptr<Detail::AiTaskMailbox> mailbox, std::size_t slot, AiTaskOperationContext operation);
         std::shared_ptr<Detail::AiTaskMailbox> mailbox_;

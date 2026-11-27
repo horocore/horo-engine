@@ -1,12 +1,46 @@
+#include "../../helpers/GameplayModuleTestSupport.h"
+#include "../runtime/ai/AiSceneTestSupport.h"
+#include "DecisionGraphCompilerTestSupport.h"
 #include "EditorPlayXrHost.h"
+#include "EditorProjectSceneHost.h"
+#include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
+#include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayAccessibility.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "Horo/Runtime/Ui/UiVisualAccessibility.h"
+#include "Horo/Scene/CookedSceneDefinition.h"
+#include "Horo/Scene/SceneRuntimeConversion.h"
+#include "PrefabSceneCookHostFixture.h"
+#include "assets/AssetCookOutputFixture.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
+#include "OwnedTestDirectory.h"
+#if HORO_TEST_NAVIGATION_NATIVE
+#include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "navigation/ProjectSceneNavigationFixture.h"
+#if HORO_TEST_PHYSICS_NATIVE
+#include "CharacterSceneProductFixture.h"
+#endif
+#endif
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <chrono>
+#include <fstream>
+#include <functional>
+#include <iterator>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -21,7 +55,8 @@ namespace {
             auto transform = context.LocalTransform();
             REQUIRE(transform.HasValue());
             Math::Transform moved = transform.Value();
-            moved.translation.x += 1.0F;
+            const auto assists = context.AssistPreferences();
+            moved.translation.x += assists ? 1.0F - assists->aggressionReduction : 1.0F;
             REQUIRE(context.SetLocalTransform(moved).HasValue());
         }
     };
@@ -35,6 +70,40 @@ namespace {
             moved.translation.x += 2.0F;
             REQUIRE(context.SetLocalTransform(moved).HasValue());
         }
+    };
+
+    struct ColorObservation final {
+        Accessibility::ColorblindMode mode;
+        float severity;
+        bool highContrast;
+        bool operator==(const ColorObservation &) const noexcept = default;
+    };
+
+    struct ColorDispatchProbe final {
+        std::optional<ColorObservation> fixed;
+        std::optional<ColorObservation> presentation;
+    };
+
+    class ColorCueBehavior final : public Gameplay::IBehaviorInstance {
+    public:
+        explicit ColorCueBehavior(ColorDispatchProbe &probe) : probe_(probe) {}
+
+        void OnFixedUpdate(Gameplay::BehaviorContext &context, Gameplay::FixedDeltaTime) override {
+            probe_.fixed = Observe(context);
+        }
+
+        void OnPresentationUpdate(Gameplay::BehaviorContext &context, Gameplay::FrameDeltaTime) override {
+            probe_.presentation = Observe(context);
+        }
+
+    private:
+        static std::optional<ColorObservation> Observe(const Gameplay::BehaviorContext &context) {
+            if (const auto *query = context.ColorAccessibility())
+                return ColorObservation{query->GetActiveColorblindMode(), query->GetColorblindSeverity(), query->IsHighContrastEnabled()};
+            return std::nullopt;
+        }
+
+        ColorDispatchProbe &probe_;
     };
 
     Gameplay::IBehaviorInstance *CreateBehavior(void *) {
@@ -59,13 +128,14 @@ namespace {
         return std::move(parsed).Value();
     }
 
-    Gameplay::BehaviorRegistry Registry() {
+    Gameplay::BehaviorRegistry Registry(Gameplay::BehaviorFactoryBinding factory = {nullptr, &CreateBehavior, &DestroyBehavior}) {
         Gameplay::BehaviorRegistry registry;
         Gameplay::BehaviorDescriptor descriptor;
         descriptor.typeId = BehaviorType();
         descriptor.displayName = "Play Mover";
         descriptor.phases.push_back({Gameplay::BehaviorPhase::Gameplay, "game.tests.play_mover", {}, {}, {}});
-        REQUIRE(registry.Register({std::move(descriptor), {nullptr, &CreateBehavior, &DestroyBehavior}}).HasValue());
+        const auto registered = registry.Register({std::move(descriptor), factory});
+        REQUIRE(registered.HasValue());
         REQUIRE(registry.Freeze().HasValue());
         return registry;
     }
@@ -201,7 +271,9 @@ namespace {
             CpuSelectedXrHost &host_;
         };
 
-        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override {
+        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant(Editor::EditorMountedXrGeometryCapture mounted) override {
+            if (mounted)
+                return {};
             return std::make_unique<Participant>(*this);
         }
 
@@ -211,6 +283,10 @@ namespace {
 
     struct PlayOwnerObservations final {
         std::vector<Runtime::SceneRuntimeId> admitted;
+        std::optional<Editor::EditorPlayDecisionProblem> decisionProblem;
+        std::uint64_t inspectionTick{};
+        std::uint32_t inspectionGeneration{1};
+        std::size_t inspectionReads{};
         std::size_t ticks{};
         std::size_t closed{};
         bool failTick{};
@@ -221,6 +297,7 @@ namespace {
         std::size_t prepares{}, publications{}, aborts{};
         Editor::EditorPlaySessionController *stopDuringUpdate{}, *stopDuringPrepare{};
         bool failPrepare{}, pending{}, stopRetainedOwner{};
+        std::function<void()> beforeGameplay;
     };
 
     /** @brief Exercises the injected owner protocol using an actual assetless Scene service; no native backend claim. */
@@ -241,10 +318,40 @@ namespace {
             return scenes_;
         }
 
+        Result<void> BeginFixedUpdate(Gameplay::FixedDeltaTime) override {
+            if (observations_->beforeGameplay)
+                observations_->beforeGameplay();
+            return Result<void>::Success();
+        }
+
         Result<void> FixedUpdate(Gameplay::FixedDeltaTime) override {
             ++observations_->ticks;
             return observations_->failTick ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable))
                                            : Result<void>::Success();
+        }
+
+        /** @brief Supplies an owned report for the session projection test. */
+        std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override {
+            return observations_->decisionProblem;
+        }
+
+        std::uint64_t AgentInspectionTick() const noexcept override {
+            return observations_->inspectionTick;
+        }
+
+        bool IsAgentInspectionCurrent(Runtime::EntityRef owner, AI::AgentHandle agent) const override {
+            return agent == InspectionAgent(owner);
+        }
+
+        AI::AgentHandle InspectionAgent(Runtime::EntityRef owner) const {
+            return {AI::AiRuntimeIncarnation::Create(owner.runtime.value).Value(),
+                    {owner.entity.index, observations_->inspectionGeneration}};
+        }
+
+        std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override {
+            ++observations_->inspectionReads;
+            return Editor::EditorPlayAgentInspection{owner, InspectionAgent(owner), observations_->inspectionTick,
+                                                     std::make_shared<const AI::AiAgentInspectionSnapshot>()};
         }
 
         Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -545,6 +652,89 @@ TEST_CASE("Play injects one Scene owner and steps it only at admitted fixed quan
     CHECK(observations->closed == 2);
 }
 
+TEST_CASE("Play exposes the owned Decision problem while playing and paused", "[editor][play][ai]") {
+    const auto observations = std::make_shared<PlayOwnerObservations>();
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    CHECK_FALSE(play.ReadDecisionProblem());
+
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    REQUIRE(play.SceneView());
+    CHECK_FALSE(play.ReadDecisionProblem());
+    const auto error = MakeError(Gameplay::GameplayErrors::PhysicsUnavailable);
+    const auto agent = AI::AgentId::Create(7).Value();
+    observations->decisionProblem = Editor::EditorPlayDecisionProblem{.scene = play.SceneView()->RuntimeId(),
+                                                                      .tick = 2,
+                                                                      .agent = agent,
+                                                                      .phase = Editor::EditorPlayDecisionPhase::Evaluate,
+                                                                      .error = error,
+                                                                      .entity = std::nullopt};
+
+    const auto captured = play.ReadDecisionProblem();
+    REQUIRE(captured);
+    CHECK(captured->tick == 2);
+    CHECK(captured->agent == agent);
+    REQUIRE(play.Pause().HasValue());
+    REQUIRE(play.ReadDecisionProblem());
+    play.Stop();
+    CHECK_FALSE(play.ReadDecisionProblem());
+    CHECK(captured->error.code.Value() == error.code.Value());
+}
+
+TEST_CASE("Play keeps bounded immutable agent inspection history for one live generation", "[editor][play][ai]") {
+    using Controller = Editor::EditorPlaySessionController;
+    const auto observations = std::make_shared<PlayOwnerObservations>();
+    auto registry = Registry();
+    Controller play;
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    const auto owner = play.SceneView()->Find({2});
+    REQUIRE(owner);
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+
+    constexpr auto spacing = Controller::AgentInspectionTickSpacing;
+    constexpr auto limit = Controller::AgentInspectionHistoryLimit;
+    for (std::uint64_t sample = 0; sample <= limit; ++sample) {
+        observations->inspectionTick = 1 + sample * spacing;
+        play.RefreshAgentInspection(owner);
+        play.RefreshAgentInspection(owner);
+        ++observations->inspectionTick;
+        play.RefreshAgentInspection(owner);
+    }
+    REQUIRE(play.AgentInspectionHistory().size() == limit);
+    CHECK(play.AgentInspectionHistory().front().tick == 1 + spacing);
+    CHECK(observations->inspectionReads == limit + 1);
+
+    REQUIRE(play.Pause().HasValue());
+    ++observations->inspectionGeneration;
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 1);
+
+    observations->inspectionTick = 1 + (limit + 1) * spacing;
+    play.RefreshAgentInspection(owner);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    CHECK(play.AgentInspectionHistory().front().agent.slot.generation == 2);
+
+    auto stale = *owner;
+    ++stale.entity.generation;
+    play.RefreshAgentInspection(stale);
+    CHECK(play.AgentInspectionHistory().empty());
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 2);
+
+    observations->inspectionTick += spacing;
+    play.RefreshAgentInspection(owner);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    observations->inspectionTick = 0;
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 3);
+    play.Stop();
+    CHECK(play.AgentInspectionHistory().empty());
+}
+
 TEST_CASE("Play injected-owner failure preserves cause and closes the single Scene service", "[editor][play][ownership]") {
     auto observations = std::make_shared<PlayOwnerObservations>();
     observations->failTick = true;
@@ -563,7 +753,9 @@ namespace {
     /** @brief Matches the real workspace boundary: Play errors stay local while the Editor host continues. */
     class PlayFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
     public:
-        explicit PlayFixedParticipant(Editor::EditorPlaySessionController &play) : play_(play) {}
+        explicit PlayFixedParticipant(Editor::EditorPlaySessionController &play,
+                                      std::span<const Gameplay::GameplayInputAction> presentation = {})
+            : play_(play), presentation_(presentation) {}
 
         Result<void> Startup(const CancellationToken &) override {
             return Result<void>::Success();
@@ -571,12 +763,14 @@ namespace {
 
         void Shutdown() noexcept override {}
 
-        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+        Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+            if (!presentation_.empty() && phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+                play_.OnRuntimeSceneCutoff(context);
             return Result<void>::Success();
         }
 
         Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-            localFailure = play_.OnRuntimeFixedUpdate({}, context).HasError();
+            localFailure = play_.OnRuntimeFixedUpdate(presentation_, context).HasError();
             return Result<void>::Success();
         }
 
@@ -597,6 +791,7 @@ namespace {
 
     private:
         Editor::EditorPlaySessionController &play_;
+        std::span<const Gameplay::GameplayInputAction> presentation_;
     };
 
     class PlayFixedGate final : public Runtime::RuntimeLifecycleParticipant {
@@ -625,8 +820,134 @@ namespace {
         bool fail{}, retire{};
     };
 
+    /** @brief Ready facades for the Scene and Physics already owned by the standalone Play fixture. */
+    class PlayHearingService final : public Network::INetworkModeService {
+    public:
+        Result<void> Prepare() override {
+            return Result<void>::Success();
+        }
+        Result<void> Activate() override {
+            return Result<void>::Success();
+        }
+        Result<void> RunPhase(Runtime::RuntimePhase) override {
+            return Result<void>::Success();
+        }
+        Result<void> RunFixedTick(const Runtime::FixedStepContext &) override {
+            return Result<void>::Success();
+        }
+        void Shutdown() noexcept override {}
+    };
+
+    /** @brief Opens a silent standalone role scoped to the actual Play Scene. */
+    Network::NetworkModeComposition MakePlayHearingAuthority(const Runtime::SceneRuntimeId scene) {
+        using namespace Network;
+        using AI::TestSupport::MakeIdentity;
+        NetworkModeFactories factories;
+        const auto ready = [](const NetworkModeServiceRequest &) {
+            return Result<std::unique_ptr<INetworkModeService>>::Success(std::make_unique<PlayHearingService>());
+        };
+        factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)] = ready;
+        factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Physics)] = ready;
+        auto authority = NetworkModeComposition::Create(
+            {.mode = NetworkProjectRole::Standalone,
+             .hostGeneration = 1,
+             .build = MakeIdentity<NetworkProductBuildId>(1),
+             .productRevision = MakeIdentity<NetworkProductCapabilityRevision>(1),
+             .hostRevision = MakeIdentity<NetworkHostCapabilityRevision>(1),
+             .projectRevision = MakeIdentity<NetworkProjectSettingsRevision>(1),
+             .worlds = {{{NetworkModeWorldKind::Standalone, scene}}},
+             .worldCount = 1},
+            std::move(factories));
+        REQUIRE(authority.HasValue());
+        auto owner = std::move(authority).Value();
+        REQUIRE(owner.Start().HasValue());
+        return owner;
+    }
+
+    /** @brief Publishes a single explicit Gameplay sound through the same scheduler as Editor Play. */
+    class PlayHearingProducer final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        PlayHearingProducer(AI::AgentId allowed, AI::AgentId denied, Runtime::SceneObjectId emitter)
+            : allowed_(allowed), denied_(denied), emitter_(emitter) {}
+
+        void Bind(const Runtime::RuntimeSceneView &scene, Runtime::RuntimeDispatchSource dispatch) {
+            authority_.emplace(MakePlayHearingAuthority(scene.RuntimeId()));
+            publisher_.emplace(std::move(dispatch), scene);
+        }
+
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            return Result<void>::Success();
+        }
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+            if (context.simulationTick != 1)
+                return Result<void>::Success();
+            REQUIRE(scene_);
+            return publisher_->PrepareForSceneTick(*scene_, context.dispatchEvidence, 1, deliveries_);
+        }
+        void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            if (context.simulationTick == 1)
+                committed = publisher_->Commit(context.dispatchEvidence);
+        }
+        void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            publisher_->Abort(context.dispatchEvidence);
+        }
+        void Shutdown() noexcept override {
+            authority_->Shutdown();
+        }
+
+        /** @brief Records the approved recipient decisions and captures only committed data. */
+        Result<std::optional<Gameplay::PerceptionEventSource>> Capture(
+            const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai, const AI::PerceptionDescriptorRegistry &registry,
+            const AI::PerceptionSpatialBroadphase &spatial, std::uint64_t tick, AI::PerceptionListenerTypeId listener) {
+            using Window = Result<std::optional<Gameplay::PerceptionEventSource>>;
+            if (tick == 1)
+                SelectDeliveries(scene, ai, listener);
+            const auto batch = publisher_->Read(scene, tick);
+            if (batch.HasError())
+                return Window::Failure(batch.ErrorValue());
+            if (batch.Value().empty())
+                return Window::Success(std::nullopt);
+            auto captured = Gameplay::PerceptionEventSource::Capture(scene, ai, *authority_, Network::NetworkModeWorldKind::Standalone,
+                                                                       registry, spatial, batch.Value());
+            if (captured.HasError())
+                return Window::Failure(captured.ErrorValue());
+            return Window::Success(std::move(captured).Value());
+        }
+
+        bool committed{};
+
+    private:
+        /** @brief Uses only Gameplay facts and live handles from this Scene generation. */
+        void SelectDeliveries(const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai, AI::PerceptionListenerTypeId listener) {
+            const auto source = scene.Find(emitter_);
+            REQUIRE(source);
+            const auto capability = ai.CapabilityAtSafePoint();
+            const auto allowed = capability.ResolveAgent(allowed_);
+            const auto denied = capability.ResolveAgent(denied_);
+            REQUIRE(allowed.HasValue());
+            REQUIRE(denied.HasValue());
+            const AI::HearingPerceptionEvent sound{AI::ProjectPerceptionSource(*source),
+                                                  Math::WorldCoordinate64::FromMillimeters(1000, 0, 0), 0.5, 4, 1, 0, 1};
+            using enum Gameplay::PerceptionFilterDecision;
+            deliveries_ = {{{allowed.Value(), listener, sound, Accept}, {denied.Value(), listener, sound, Reject}}};
+            scene_ = scene;
+        }
+
+        std::optional<Runtime::RuntimeSceneView> scene_;
+        std::optional<Network::NetworkModeComposition> authority_;
+        std::optional<Gameplay::GameplayHearingPublisher> publisher_;
+        std::array<Gameplay::GameplayHearingDelivery, 2> deliveries_{};
+        AI::AgentId allowed_;
+        AI::AgentId denied_;
+        Runtime::SceneObjectId emitter_;
+    };
+
     struct PlayFixedFixture final {
-        PlayFixedFixture() {
+        explicit PlayFixedFixture(const ConfigurationService *configuration = nullptr, Gameplay::BehaviorRegistry behaviors = Registry())
+            : registry(std::move(behaviors)), play(nullptr, configuration) {
             auto made = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
             REQUIRE(made.HasValue());
             scheduler = std::move(made).Value();
@@ -654,13 +975,1458 @@ namespace {
         CancellationToken token{cancellation.Token()};
         std::unique_ptr<Runtime::FrameScheduler> scheduler;
         std::shared_ptr<PlayOwnerObservations> observations{std::make_shared<PlayOwnerObservations>()};
-        Gameplay::BehaviorRegistry registry{Registry()};
+        Gameplay::BehaviorRegistry registry;
         Editor::EditorPlaySessionController play;
         Runtime::RuntimeLifecycle lifecycle;
         PlayFixedParticipant *session{};
         PlayFixedGate *gate{};
     };
+
+    /** @brief A real registered native executor with a typed failure in the reactive condition callback. */
+    class EditorDecisionFixtureExecutor final : public AI::IBehaviorTreeExecutor {
+    public:
+        enum class FailedCallback {
+            Condition,
+            Start,
+            Resume
+        };
+
+        struct State final {
+            std::atomic_bool admitted{true};
+            AI::AiTaskContinuation continuation;
+            std::uint64_t startTick{}, resumeTick{}, checkTick{};
+            unsigned factories{};
+            FailedCallback failure{FailedCallback::Condition};
+        };
+
+        explicit EditorDecisionFixtureExecutor(State &state) : state_(state) {}
+
+        Result<AI::AiTaskState> Start(const AI::BehaviorTreeEvaluationContext &context,
+                                      const AI::AiTaskOperationContext &) noexcept override {
+            state_.startTick = context.tick;
+            state_.continuation = context.continuation;
+            if (state_.failure == FailedCallback::Start)
+                return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
+            return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
+        }
+
+        Result<AI::AiTaskState> Resume(const AI::BehaviorTreeEvaluationContext &context,
+                                       const AI::AiTaskOperationContext &) noexcept override {
+            state_.resumeTick = context.tick;
+            if (state_.failure == FailedCallback::Resume)
+                return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
+            return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
+        }
+
+        void Abort(const AI::AiTaskOperationContext &, AI::AiTaskCancellationReason) noexcept override {}
+
+        void Cleanup(const AI::AiTaskOperationContext &, const AI::AiTaskTerminalResult &) noexcept override {}
+
+        Result<bool> Check(const AI::BehaviorTreeEvaluationContext &context) noexcept override {
+            state_.checkTick = context.tick;
+            if (state_.failure == FailedCallback::Condition && context.tick == 2)
+                return Result<bool>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
+            return Result<bool>::Success(true);
+        }
+
+        Result<void> Service(const AI::BehaviorTreeEvaluationContext &) noexcept override {
+            return Result<void>::Success();
+        }
+
+    private:
+        State &state_;
+    };
 }  // namespace
+
+namespace {
+    /** @brief Persists the actual opted-in project with an authored interaction and no remote disclosure. */
+    void WriteDialogueProject(const std::filesystem::path &root) {
+        REQUIRE(std::filesystem::create_directory(root / ".horo"));
+        REQUIRE(std::filesystem::create_directory(root / "assets"));
+        const auto version = Application::ParseHoroVersion("0.2.0").Value();
+        const auto &release = *Application::BuiltInReleaseCompatibilityRegistry().Find({version});
+        const auto contract = Application::FormatPersistentContractHash(release.persistentContract);
+        std::ofstream metadata{root / ".horo/project.json", std::ios::binary};
+        metadata << R"({"horoVersion":"0.2.0","persistentContract":")" << contract
+                 << R"(","projectId":"dialogue-play","name":"Play","projectVersion":"1.0.0","createdAt":"2026-10-04T00:00:00Z",)"
+                    R"("settings":{"renderBackend":"null","ai":{"schemaVersion":1,"npcDialogue":{"provider":1,"destination":2,)"
+                    R"("version":1,"fields":[],"triggers":[{"id":3,"agent":10,"facts":[]}],)"
+                    R"("presentation":{"trigger":3,"fallback":4,"deadlineTicks":10,"workerMilliseconds":100,)"
+                    R"("captions":[{"id":4,"namespace":"game.dialogue","key":"offline","text":"Come back later.","durationTicks":20,)"
+                    R"("speaker":{"namespace":"game.characters","key":"guide","text":"Guide"}}]}}}}})";
+        REQUIRE(metadata.good());
+    }
+
+    /** @brief Rejects the staged press and verifies that retrying the tick cannot replay it. */
+    template <typename FixedTick>
+    void VerifyAbortedDialoguePress(PlayFixedGate &gate, Gameplay::GameplayInputAction &input,
+                                    const Runtime::Ui::CaptionTimeline &timeline, const FixedTick &tick) {
+        input.pressed = true;
+        gate.fail = true;
+        REQUIRE(tick().HasError());
+        CHECK(timeline.Cues().empty());
+        gate.fail = false;
+        input.pressed = false;
+        REQUIRE(tick().HasValue());
+        REQUIRE(tick().HasValue());
+        CHECK(timeline.Cues().empty());
+    }
+}  // namespace
+
+TEST_CASE("Editor Play starts authored NPC dialogue only after the fixed commit", "[editor][play][ai][product][dialogue]") {
+    using namespace Application::Internal;
+    const Tests::OwnedTestDirectory project{"npc-dialogue-play"};
+    WriteDialogueProject(project.Path());
+    JobSystem jobs({.workerCount = 1});
+
+    const auto npc = AI::TestSupport::MakeFixture(10, 2, 7, 0);
+    auto authoring = AuthoringScene();
+    authoring.objects.back().components.aiAgent = npc.agent.agent;
+    authoring.objects.back().components.aiController = npc.agent.controller;
+    auto timeline = std::make_shared<Runtime::Ui::CaptionTimeline>();
+    Gameplay::GameplayInputAction input{Gameplay::GameplayActionId{"gameplay.interact"}, 1.0F};
+    const auto product = MakeEditorProjectSceneFactory(
+        jobs, {.aiControllers = {npc.descriptor}, .authoredNpcDialogue = EditorPlayAuthoredNpcDialogue{input.action, timeline}});
+    const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
+        return product(project.Path(), id, definition);
+    };
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto created = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+    REQUIRE(created.HasValue());
+    auto scheduler = std::move(created).Value();
+    REQUIRE(play.BindRuntimeDispatch(scheduler->DispatchSource()).HasValue());
+    const auto started = play.Start(authoring, registry, factory);
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+
+    Runtime::RuntimeLifecycle lifecycle;
+    REQUIRE(lifecycle.AddParticipant(std::make_unique<PlayFixedParticipant>(play, std::span{&input, 1})).HasValue());
+    auto gate = std::make_unique<PlayFixedGate>();
+    auto *gateView = gate.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(gate)).HasValue());
+    const CancellationSource cancellation;
+    const auto token = cancellation.Token();
+    REQUIRE(lifecycle.Startup(token).HasValue());
+    REQUIRE(scheduler->RunFrame(lifecycle, token, false).HasValue());
+    const auto tick = [&] {
+        clock.Advance(Duration::FromMilliseconds(10));
+        return scheduler->RunFrame(lifecycle, token, false);
+    };
+    VerifyAbortedDialoguePress(*gateView, input, *timeline, tick);
+
+    input.pressed = true;
+    REQUIRE(tick().HasValue());
+    input.pressed = false;
+    REQUIRE(tick().HasValue());
+    REQUIRE(timeline->Cues().size() == 1);
+    CHECK(timeline->Cues().front().cue.id.sequence == 1);
+    const auto &caption = timeline->Cues().front();
+    CHECK(caption.catalog->at(caption.cue.text).FallbackText() == "Come back later.");
+    REQUIRE(caption.cue.speaker > 0);
+    const auto &speaker = caption.catalog->at(caption.cue.speaker - 1);
+    CHECK(speaker.Key().namespaceId == "game.characters");
+    CHECK(speaker.Key().localKey == "guide");
+    CHECK(speaker.FallbackText() == "Guide");
+    play.Stop();
+    CHECK(timeline->Cues().empty());
+    lifecycle.Shutdown();
+}
+
+TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only committed live failures", "[editor][play][ai][product]") {
+    namespace Decisions = AI::DecisionGraphTestSupport;
+    namespace Cook = Application::PrefabCookTestSupport;
+    namespace Output = Assets::OutputTestSupport;
+    using namespace Application::Internal;
+    Cook::HostFixture project;
+    Decisions::Fixture inputs;
+    const auto providerState = std::make_shared<EditorDecisionFixtureExecutor::State>();
+    std::array registrations{Decisions::Registration(inputs.probe), Decisions::Registration(inputs.probe, 502)};
+    registrations[1].contract.role = AI::DecisionNodeRole::Condition;
+    for (auto &registration : registrations) {
+        registration.contract.memory.stateBytes = sizeof(EditorDecisionFixtureExecutor);
+        registration.factory.userData = providerState.get();
+        registration.factory.create = [](void *owner, std::span<const AI::BehaviorTreeProperty>) -> AI::IBehaviorTreeExecutor * {
+            auto &state = *static_cast<EditorDecisionFixtureExecutor::State *>(owner);
+            ++state.factories;
+            return new EditorDecisionFixtureExecutor(state);
+        };
+    }
+    auto providers = AI::DecisionNodeGeneration::Capture(registrations, {providerState, &providerState->admitted});
+    REQUIRE(providers.HasValue());
+    inputs.providers = std::move(providers).Value();
+    auto condition = Decisions::TreeNode(2, AI::DecisionControlKind::Condition);
+    condition.kind = AI::BehaviorTreeNodeKind::Decorator;
+    condition.type = Decisions::MakeIdentity<AI::BehaviorTreeNodeTypeId>(502);
+    condition.minimumChildren = 1;
+    condition.maximumChildren = 1;
+    condition.control.abortMode = AI::BehaviorTreeAbortMode::Self;
+    auto graph = Decisions::Tree(84,
+                                 {Decisions::TreeNode(1, AI::DecisionControlKind::Root), condition,
+                                  Decisions::TreeNode(3, AI::DecisionControlKind::Task)},
+                                 {Decisions::Edge(1, 1, 2), Decisions::Edge(2, 2, 3)});
+    graph.executionTask = Decisions::MakeIdentity<AI::TaskId>(401);
+    const auto decision = inputs.Compile(std::span{&graph, 1}, 84);
+    const auto controller = Decisions::MakeIdentity<AI::ControllerTypeId>(402);
+    const auto agent = Decisions::MakeIdentity<AI::AgentId>(403);
+    const auto peer = Decisions::MakeIdentity<AI::AgentId>(404);
+    constexpr Runtime::SceneObjectId peerObject{8};
+    const auto decisionId = Assets::AssetId::FromBytes({0x42});
+    const auto schemaId = Assets::AssetId::FromBytes({0x43});
+    constexpr auto sceneType = "core.scene";
+    constexpr auto treeType = "core.behavior_tree";
+    constexpr auto scenePath = "assets/level.horo";
+    constexpr auto perceptionPath = "play-perception.json";
+    bool livePerception = false;
+    bool hearingOnly = false;
+    constexpr auto listenerId = 91U;
+    std::optional<bool> admitCustomAffiliation;
+    std::optional<AI::AiSchedulingMode> watchedScheduler;
+    bool inferWatchedScheduler = false;
+    SECTION("Prepared native sensing reaches the selected agent's committed inspection memory") {
+        livePerception = true;
+        SECTION("Fixed scheduling retains the existing inspection contract") {}
+        SECTION("An exact authored custom affiliation reaches Play inspection") {
+            admitCustomAffiliation = true;
+        }
+        SECTION("A mismatched authored custom affiliation stays out of Play inspection") {
+            admitCustomAffiliation = false;
+        }
+        SECTION("Authored best-effort scheduling wakes only when a watched decision has work") {
+            watchedScheduler = AI::AiSchedulingMode::BestEffort;
+        }
+        SECTION("Authored scheduler limits can omit the mode when Perception watches select it") {
+            watchedScheduler = AI::AiSchedulingMode::BestEffort;
+            inferWatchedScheduler = true;
+        }
+        SECTION("An explicit deterministic scheduler rejects authored reactive watches") {
+            watchedScheduler = AI::AiSchedulingMode::Deterministic;
+        }
+    }
+    SECTION("A committed Gameplay sound reaches only its approved Play listener without Audio") {
+        livePerception = true;
+        hearingOnly = true;
+    }
+    SceneSource::SceneSourceDocument source;
+    source.objects.push_back({.id = {7},
+                              .name = "Owned AI and camera",
+                              .components = {.camera = Runtime::CameraComponent{},
+                                             .aiAgent = AI::AiAgentComponent{.agent = agent},
+                                             .aiController = AI::AiControllerComponent{.controller = controller,
+                                                                                       .decisionAsset = graph.asset,
+                                                                                       .blackboardSchema = inputs.schema->Identity()}}});
+    if (livePerception) {
+        auto *configured = &*source.objects.front().components.aiController;
+        configured->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
+        source.objects.push_back({.id = {peerObject.value},
+                                  .name = "Sensed peer",
+                                  .localTransform = {.translation = {1.0F, 0.0F, 0.0F}},
+                                  .components = {.aiAgent = AI::AiAgentComponent{.agent = peer},
+                                                 .aiController = *configured}});
+    }
+    const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
+    const auto runtime = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
+    REQUIRE(runtime.HasValue());
+    const auto scene = SceneCook::EncodeCookedSceneDefinition(runtime.Value());
+    const auto plan = AI::DecisionPlanCodec::EncodeCooked(*decision);
+    const auto schema = AI::BlackboardSchemaCodec::Encode(*inputs.schema);
+    const auto authored = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(scene.HasValue());
+    REQUIRE(plan.HasValue());
+    REQUIRE(schema.HasValue());
+    REQUIRE(authored.HasValue());
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / scenePath);
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo", project.project.dir.path / "assets/level.horo.horo");
+    project.WriteText(scenePath, SceneSource::EncodeSceneSource(view));
+    project.WriteText("assets/check.horo_bt", {reinterpret_cast<const char *>(authored.Value().data()), authored.Value().size()});
+    project.WriteText("assets/check.horo_bt.horo", Cook::SidecarJson(decisionId.ToString(), treeType));
+    const auto schemaPath = std::string{"assets/keys"} + std::string{AI::BlackboardSchemaSourceExtension};
+    project.WriteText(schemaPath, {reinterpret_cast<const char *>(schema.Value().data()), schema.Value().size()});
+    project.WriteText(schemaPath + ".horo", Cook::SidecarJson(schemaId.ToString(), AI::BlackboardSchemaAssetType));
+    const auto target = project.request.assets.target;
+    std::vector<Assets::AssetCookManifestEntry> entries;
+    std::vector<std::vector<std::uint8_t>> artifacts;
+    const auto add = [&](const Assets::AssetId id, std::string_view type, const std::vector<std::uint8_t> &bytes) {
+        const auto assetType = Cook::Type(type);
+        auto encoded = Assets::EncodeCookedArtifact(
+            {.id = id, .type = assetType, .target = target, .payloadDigest = Output::DigestOf(bytes), .payload = bytes});
+        REQUIRE(encoded.HasValue());
+        entries.push_back({id, assetType, id.ToString() + ".cooked", Output::DigestOf(encoded.Value())});
+        artifacts.push_back(std::move(encoded).Value());
+    };
+    add(project.sceneId, sceneType, scene.Value());
+    add(decisionId, treeType, plan.Value());
+    add(schemaId, AI::BlackboardSchemaAssetType, schema.Value());
+    REQUIRE(Output::PublishFixture(project.cooked.path, target, entries, artifacts).HasValue());
+
+    bool changed = false;
+    bool rejectFixed = false;
+    bool discloseKey = false;
+    bool authorizeForeignSchema = false;
+    bool decisionDebug = false;
+    bool projectDisallowsDebug = false;
+    using FailedCallback = EditorDecisionFixtureExecutor::FailedCallback;
+    SECTION("Committed pause and step retain a consecutive local Decision clock") {}
+    SECTION("Approved agent debugging steps one slice and releases the breakpoint on view closure") {
+        decisionDebug = true;
+    }
+    SECTION("Authored development permissions keep an explicitly requested debugger read-only") {
+        projectDisallowsDebug = true;
+    }
+    if (projectDisallowsDebug || watchedScheduler) {
+        std::ifstream input{project.project.dir.path / ".horo/project.json", std::ios::binary};
+        REQUIRE(input.is_open());
+        std::string metadata{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        input.close();
+        constexpr std::string_view backend = R"("renderBackend":"opengl")";
+        const auto insertion = metadata.find(backend);
+        REQUIRE(insertion != std::string::npos);
+        const auto mode = watchedScheduler == AI::AiSchedulingMode::BestEffort ? "bestEffort" : "deterministic";
+        const auto writtenMode = inferWatchedScheduler ? std::string{} : std::string{R"("mode":")"} + mode + "\",";
+        const auto evaluations = watchedScheduler ? 2 : 1;
+        metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + writtenMode +
+                                                        R"("evaluationsPerTick":)" + std::to_string(evaluations) +
+                                                        R"(},"query":{"maximumWorkUnitsPerTick":2048},)"
+                                                        R"("development":{"liveMutation":false}})");
+        project.WriteText(".horo/project.json", metadata);
+    }
+    SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
+        discloseKey = true;
+    }
+    SECTION("An inspector key from another schema leaves this Blackboard redacted") {
+        authorizeForeignSchema = true;
+    }
+    SECTION("Start errors reach Problems on the first committed tick") {
+        providerState->failure = FailedCallback::Start;
+    }
+    SECTION("Resume errors reach Problems after a paused step") {
+        providerState->failure = FailedCallback::Resume;
+    }
+    SECTION("An aborted step retires the evaluated owner before retry") {
+        rejectFixed = true;
+    }
+    SECTION("A changed live Scene cannot admit stale cooked controllers") {
+        changed = true;
+    }
+    if (changed)
+        source.objects.front().localTransform.translation.x = 3;
+
+    REQUIRE_FALSE(inputs.schema->Keys().empty());
+    const auto &disclosed = inputs.schema->Keys().front();
+    std::vector<EditorPlayInspectionKey> disclosure;
+    if (discloseKey)
+        disclosure.push_back({inputs.schema->Identity(), disclosed.key});
+    if (authorizeForeignSchema)
+        disclosure.push_back({Decisions::MakeIdentity<AI::BlackboardSchemaId>(inputs.schema->Identity().Value() + 1), disclosed.key});
+    std::unique_ptr<Gameplay::LoadedGameModule> senseModule;
+    std::shared_ptr<const AI::PerceptionSenseGeneration> senses;
+    if (hearingOnly) {
+        auto generation = AI::PerceptionSenseGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true));
+        REQUIRE(generation.HasValue());
+        senses = std::move(generation).Value();
+    } else if (livePerception) {
+        const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                           Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+        auto loaded = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
+        REQUIRE(loaded.HasValue());
+        REQUIRE_FALSE(loaded.Value().diagnostic);
+        senseModule = std::move(loaded).Value().owner;
+        auto generation = senseModule->AcquirePerceptionSenses();
+        REQUIRE(generation.HasValue());
+        senses = std::move(generation).Value();
+        REQUIRE(senses->Contracts().size() == 1);
+    }
+    if (livePerception) {
+        const auto sense = std::to_string(hearingOnly ? AI::SenseTypeIds::Hearing.Value() : senses->Contracts().front().sense.identity.Value());
+        const auto units = hearingOnly ? 1 : (senses->Contracts().front().workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+        const auto watches = watchedScheduler ? R"(,"decisionWatches":[{"node":3,"listener":91}])" : "";
+        const auto schema = admitCustomAffiliation ? "3" : "2";
+        const auto filter =
+            admitCustomAffiliation
+                ? std::string{R"(,"filter":{"team":4,"visibility":"teamOnly","affiliations":[],"teamFilter":"same","customAffiliations":[)"} +
+                      (*admitCustomAffiliation ? "42" : "41") + "]}"
+                : std::string{};
+        const auto relationships =
+            admitCustomAffiliation ? R"(,"relationships":[{"listenerTeam":4,"sourceTeam":4,"affiliation":"custom","customId":42}])" : "";
+        project.WriteText(perceptionPath,
+                          std::string{"{\"schema\":"} + schema + ",\"sceneAsset\":\"" + project.sceneId.ToString() +
+                              "\",\"sceneRevision\":1,\"worldOriginMillimeters\":[0,0,0],\"controllers\":[{\"controller\":" +
+                              std::to_string(controller.Value()) + ",\"listeners\":[91],\"sources\":[" + sense +
+                              "],\"layers\":1,\"mask\":1" + watches + filter + "}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" +
+                              sense + "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) +
+                              "}" + relationships + "}");
+    }
+    std::size_t hearingCaptures{};
+    std::unique_ptr<PlayHearingProducer> hearing;
+    PlayHearingProducer *hearingProbe{};
+    EditorPlayPerceptionEventFactory hearingProducer;
+    if (hearingOnly) {
+        hearing = std::make_unique<PlayHearingProducer>(agent, peer, peerObject);
+        hearingProbe = hearing.get();
+        hearingProducer = [&](const Runtime::RuntimeSceneView &scene, const AI::AiSceneRuntime &ai,
+                              const AI::PerceptionDescriptorRegistry &registry, const AI::PerceptionSpatialBroadphase &spatial,
+                              const std::uint64_t tick) {
+            REQUIRE(spatial.CurrentFor(scene));
+            const auto identity = Decisions::MakeIdentity<AI::PerceptionListenerTypeId>(listenerId);
+            const auto listener = registry.FindListener(identity);
+            REQUIRE(listener.HasValue());
+            CHECK(listener.Value().availability == AI::PerceptionListenerAvailability::Available);
+            CHECK(listener.Value().descriptor.sense == AI::SenseTypeIds::Hearing);
+            REQUIRE(listener.Value().descriptor.stimulusCount == 1);
+            CHECK(listener.Value().descriptor.stimuli.front().identity == AI::StimulusTypeIds::Sound);
+            CHECK(tick == ++hearingCaptures);
+            return hearingProbe->Capture(scene, ai, registry, spatial, tick, identity);
+        };
+    }
+    const auto projectFactory =
+        MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
+                                                     .decisions = EditorPlayDecisionSelection{project.project.dir.path,
+                                                                                              project.sceneId,
+                                                                                              {{controller, decisionId, {}}},
+                                                                                              std::move(disclosure),
+                                                                                              livePerception ? perceptionPath : "",
+                                                                                              Duration::FromMilliseconds(10),
+                                                                                              decisionDebug || projectDisallowsDebug},
+                                                     .perceptionEvents = std::move(hearingProducer)});
+    const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
+        return projectFactory(project.project.dir.path, id, definition);
+    };
+    Gameplay::BehaviorRegistry registry;
+    Gameplay::ComponentRegistry components;
+    REQUIRE(registry.Freeze().HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto scheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+    REQUIRE(scheduler.HasValue());
+    REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
+    const Editor::SceneDocumentSnapshot document{{1}, {1}, source.objects};
+    const auto started = play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {},
+                                    nullptr, {.decision = [&] {
+        return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Success(inputs.providers);
+    }, .perception = [&] {
+        return Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>::Success(senses);
+    }});
+    if (watchedScheduler == AI::AiSchedulingMode::Deterministic) {
+        REQUIRE(started.HasError());
+        const auto &failure = AI::AIErrors::SchedulerPolicyInvalid;
+        CHECK(ErrorChainContains(started.ErrorValue(), failure.domain, failure.code));
+        CHECK(providerState->factories == 0);
+        CHECK_FALSE(play.SceneView());
+        return;
+    }
+    if (changed) {
+        REQUIRE(started.HasError());
+        CHECK(providerState->factories == 0);
+        CHECK_FALSE(play.SceneView());
+        return;
+    }
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (play.State() == Editor::EditorPlaySessionState::Starting && std::chrono::steady_clock::now() < deadline) {
+        play.PresentationUpdate({0});
+        std::this_thread::yield();
+    }
+    if (play.LastError())
+        UNSCOPED_INFO(play.LastError()->message);
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+    REQUIRE(play.SceneView());
+    const auto entity = play.SceneView()->Find({7});
+    REQUIRE(entity);
+    play.RefreshAgentInspection(entity);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(play.QuiesceForReload().HasError());
+    Runtime::RuntimeLifecycle lifecycle;
+    REQUIRE(lifecycle.AddParticipant(std::make_unique<PlayFixedParticipant>(play)).HasValue());
+    if (hearing) {
+        hearing->Bind(*play.SceneView(), scheduler.Value()->DispatchSource());
+        REQUIRE(lifecycle.AddParticipant(std::move(hearing)).HasValue());
+    }
+    auto gate = std::make_unique<PlayFixedGate>();
+    auto *gateView = gate.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(gate)).HasValue());
+    const CancellationSource cancellation;
+    REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
+    REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+    const auto tick = [&] {
+        clock.Advance(Duration::FromMilliseconds(10));
+        return scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false);
+    };
+    const auto verifyProblem = [&](const std::uint64_t expectedTick) {
+        const auto problem = play.ReadDecisionProblem();
+        REQUIRE(problem);
+        CHECK(problem->tick == expectedTick);
+        CHECK(problem->agent == agent);
+        CHECK(problem->entity == entity);
+        const auto &failure = AI::AIErrors::TaskFailureInvalid;
+        CHECK(ErrorChainContains(problem->error, failure.domain, failure.code));
+        if (providerState->failure == FailedCallback::Condition) {
+            CHECK(problem->phase == Editor::EditorPlayDecisionPhase::Evaluate);
+        } else {
+            CHECK(problem->phase == Editor::EditorPlayDecisionPhase::TaskProvider);
+            CHECK(problem->graph == graph.asset);
+            CHECK(problem->node == Decisions::MakeIdentity<AI::DecisionNodeId>(3));
+            CHECK(play.SceneView());
+        }
+    };
+    REQUIRE(tick().HasValue());
+    CHECK(providerState->startTick == 1);
+    play.RefreshAgentInspection(entity);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    const auto &inspection = play.AgentInspectionHistory().front();
+    CHECK(inspection.owner == entity);
+    CHECK(inspection.tick == 1);
+    REQUIRE(inspection.policy);
+    const auto &activePolicy = *inspection.policy;
+    CHECK(activePolicy.scheduler.mode == watchedScheduler.value_or(AI::AiSchedulingMode::Deterministic));
+    if (projectDisallowsDebug || watchedScheduler) {
+        CHECK(activePolicy.scheduler.evaluationsPerTick == (watchedScheduler ? 2 : 1));
+        CHECK(activePolicy.queryLimit == 2048);
+    }
+    CHECK(activePolicy.scenePerceptionWork.has_value() == livePerception);
+    if (activePolicy.scenePerceptionWork)
+        CHECK(*activePolicy.scenePerceptionWork <= activePolicy.perceptionLimit);
+    CHECK_FALSE(activePolicy.queryCache);
+    REQUIRE(inspection.snapshot);
+    if (!watchedScheduler) {
+        REQUIRE(inspection.decisionTrace);
+        CHECK(inspection.decisionTrace->Header().tick == 1);
+        CHECK(inspection.decisionTrace->Header().root == graph.asset);
+        CHECK(inspection.decisionTrace->Header().blackboard.agent == inspection.agent);
+    }
+    CHECK(inspection.snapshot->agent == inspection.agent);
+    CHECK(inspection.snapshot->decisionTick == 1);
+    using enum Editor::EditorPlayDecisionDebugAction;
+    const auto selectedAgent = inspection.agent;
+    CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+    play.SetDecisionDebugView(selectedAgent);
+    if (decisionDebug) {
+        REQUIRE(play.ReadDecisionDebugState());
+        auto stale = selectedAgent;
+        ++stale.slot.generation;
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({stale, Pause}));
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Step}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 1);
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Step}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 3);
+        CHECK(play.ReadDecisionDebugState()->paused);
+        CHECK_FALSE(play.ReadDecisionDebugState()->stepPending);
+        REQUIRE(play.ReadDecisionDebugState()->trace);
+        CHECK(play.ReadDecisionDebugState()->trace->Header().tick == 3);
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 3);
+        const Editor::EditorPlayDecisionBreakpoint target{graph.asset, Decisions::MakeIdentity<AI::DecisionNodeId>(3), 0};
+        auto foreignOccurrence = target;
+        ++foreignOccurrence.occurrence;
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, SetBreakpoint, foreignOccurrence}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, SetBreakpoint, target}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Resume}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 5);
+        CHECK(play.ReadDecisionDebugState()->paused);
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 5);
+        play.SetDecisionDebugView(std::nullopt);
+        CHECK_FALSE(play.ReadDecisionDebugState());
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 7);
+        play.Stop();
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK_FALSE(play.ReadDecisionDebugState());
+    CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+    if (livePerception) {
+        CHECK_FALSE(inspection.snapshot->perceptionFailure);
+        if (hearingOnly) {
+            REQUIRE(hearingProbe->committed);
+            CHECK(hearingCaptures == 1);
+            CHECK(inspection.snapshot->stimuli.empty());
+            for (std::uint64_t step = 0; step < Editor::EditorPlayAgentInspectionTickSpacing; ++step)
+                REQUIRE(tick().HasValue());
+            const auto active = play.SceneView();
+            REQUIRE(active);
+            const auto peerEntity = active->Find(peerObject);
+            REQUIRE(peerEntity);
+            play.RefreshAgentInspection(entity);
+            REQUIRE(play.AgentInspectionHistory().size() == 2);
+            const auto &accepted = play.AgentInspectionHistory().back();
+            REQUIRE(accepted.snapshot);
+            REQUIRE(accepted.snapshot->stimuli.size() == 1);
+            const auto &stimulus = accepted.snapshot->stimuli.front();
+            CHECK(stimulus.key.sense == AI::SenseTypeIds::Hearing);
+            CHECK(stimulus.key.stimulus == AI::StimulusTypeIds::Sound);
+            CHECK(stimulus.key.source.slot == peerEntity->entity.index);
+            CHECK(stimulus.firstSensedTick == 2);
+            for (std::uint64_t step = 0; step < Editor::EditorPlayAgentInspectionTickSpacing; ++step)
+                REQUIRE(tick().HasValue());
+            play.RefreshAgentInspection(peerEntity);
+            REQUIRE(play.AgentInspectionHistory().size() == 1);
+            REQUIRE(play.AgentInspectionHistory().back().snapshot);
+            CHECK(play.AgentInspectionHistory().back().snapshot->stimuli.empty());
+            const auto capturesBeforeStop = hearingCaptures;
+            play.Stop();
+            REQUIRE(tick().HasValue());
+            CHECK(hearingCaptures == capturesBeforeStop);
+            lifecycle.Shutdown();
+            return;
+        }
+        if (admitCustomAffiliation == false) {
+            CHECK(inspection.snapshot->stimuli.empty());
+            for (std::uint64_t frame = 0; frame < Editor::EditorPlayAgentInspectionTickSpacing; ++frame)
+                REQUIRE(tick().HasValue());
+            play.RefreshAgentInspection(entity);
+            REQUIRE_FALSE(play.AgentInspectionHistory().empty());
+            REQUIRE(play.AgentInspectionHistory().back().snapshot);
+            CHECK(play.AgentInspectionHistory().back().snapshot->stimuli.empty());
+            play.Stop();
+            lifecycle.Shutdown();
+            return;
+        }
+        REQUIRE(inspection.snapshot->stimuli.size() == 1);
+        const auto &stimulus = inspection.snapshot->stimuli.front();
+        REQUIRE(play.SceneView()->Find({8}));
+        CHECK(stimulus.key.source.slot == play.SceneView()->Find({8})->entity.index);
+        CHECK(stimulus.key.sense == senses->Contracts().front().sense.identity);
+        CHECK(stimulus.firstSensedTick == 1);
+        CHECK(stimulus.lastSensedTick == 1);
+        CHECK(stimulus.ageSeconds == 0);
+        CHECK(stimulus.sensed);
+        if (watchedScheduler) {
+            REQUIRE(tick().HasValue());
+            CHECK(providerState->checkTick == 1);
+            CHECK(providerState->resumeTick == 0);
+            REQUIRE(providerState->continuation.NotifyEvent() == AI::AiTaskPublicationDisposition::Accepted);
+            REQUIRE(tick().HasValue());
+            CHECK(providerState->checkTick == 3);
+            CHECK(providerState->resumeTick == 3);
+        }
+        play.Stop();
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK(inspection.snapshot->omittedDecisionTasks == 0);
+    if (providerState->failure == FailedCallback::Start) {
+        CHECK(inspection.snapshot->decisionTasks.empty());
+    } else {
+        REQUIRE(inspection.snapshot->decisionTasks.size() == 1);
+        const auto &task = inspection.snapshot->decisionTasks.front();
+        CHECK(task.occurrence.graph == graph.asset);
+        CHECK(task.node == Decisions::MakeIdentity<AI::DecisionNodeId>(3));
+        CHECK(task.task.IsValid());
+        CHECK(task.execution.IsValid());
+    }
+    for (const auto &key : inspection.snapshot->keys) {
+        if (discloseKey && key.key == disclosed.key) {
+            CHECK(key.status == (disclosed.defaultValue ? AI::AiInspectionValueStatus::Present : AI::AiInspectionValueStatus::Unset));
+            CHECK(key.value == disclosed.defaultValue);
+        } else {
+            CHECK(key.status == AI::AiInspectionValueStatus::Redacted);
+            CHECK_FALSE(key.value);
+        }
+    }
+    if (providerState->failure == FailedCallback::Start) {
+        verifyProblem(1);
+        play.Stop();
+        CHECK_FALSE(play.ReadDecisionProblem());
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK_FALSE(play.ReadDecisionProblem());
+    REQUIRE(play.Pause().HasValue());
+    REQUIRE(tick().HasValue());
+    REQUIRE(tick().HasValue());
+    CHECK(providerState->checkTick == 1);
+    REQUIRE(play.Step().HasValue());
+    gateView->fail = rejectFixed;
+    if (rejectFixed) {
+        REQUIRE(tick().HasError());
+        CHECK(providerState->checkTick == 2);
+        CHECK_FALSE(play.SceneView());
+        CHECK_FALSE(play.ReadDecisionProblem());
+    } else {
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 2);
+        if (providerState->failure == FailedCallback::Resume)
+            CHECK(providerState->resumeTick == 2);
+        verifyProblem(2);
+    }
+    play.Stop();
+    CHECK_FALSE(play.ReadDecisionProblem());
+    lifecycle.Shutdown();
+}
+
+TEST_CASE("Editor Play applies the authored model from its committed Scene generation", "[editor][play][ai][product][local-policy]") {
+    using namespace Application::Internal;
+    using namespace AI;
+    namespace Decision = AI::DecisionGraphTestSupport;
+    namespace Cook = Application::PrefabCookTestSupport;
+    namespace Output = Assets::OutputTestSupport;
+    const bool profile = GENERATE(false, true);
+    bool outOfRange{};
+    SECTION("valid integer prefers the learned task") {}
+    SECTION("out of range leaves the authored task in charge") {
+        outOfRange = true;
+    }
+    const std::int64_t featureValue = outOfRange ? 32768 : 12;
+    Cook::HostFixture project;
+    Decision::Fixture ai;
+    const auto feature = Decision::MakeIdentity<BlackboardKeyId>(102);
+    const auto score = Decision::MakeIdentity<BlackboardKeyId>(101);
+    const std::array keys{BlackboardKeyDescriptor{.key = score,
+                                                  .kind = BlackboardValueKind::Scalar,
+                                                  .defaultValue = BlackboardValue{BlackboardScalarValue{0.5}}},
+                          BlackboardKeyDescriptor{.key = feature,
+                                                  .kind = BlackboardValueKind::SignedInteger,
+                                                  .defaultValue = BlackboardValue{BlackboardScalarValue{featureValue}}}};
+    auto schema = BlackboardSchema::Capture({.identity = Decision::SchemaId(), .keys = keys});
+    REQUIRE(schema.HasValue());
+    ai.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+    const auto schemaBytes = BlackboardSchemaCodec::Encode(*ai.schema);
+    REQUIRE(schemaBytes.HasValue());
+
+    const auto fallback = Decision::MakeIdentity<TaskId>(20);
+    const auto learned = Decision::MakeIdentity<TaskId>(21);
+    UtilityDecisionSource utility{.root = Decision::Node(1),
+                                  .requirements = {{.key = score, .kind = BlackboardValueKind::Scalar, .source = Decision::Location()}}};
+    const auto option = [&](const std::uint64_t node, const TaskId id, const double priority) {
+        return UtilityDecisionOption{.option = {Decision::Node(node), id, priority, 0, {{.key = score}}},
+                                     .provider = {.id = Decision::Node(node),
+                                                  .type = Decision::Type(501),
+                                                  .descriptorVersion = {1, 1},
+                                                  .source = Decision::Location()}};
+    };
+    utility.options = {option(2, fallback, 1), option(3, learned, 0.5)};
+    const DecisionGraphSource graph{Decision::Graph(1),    1,
+                                    ai.schema->Identity(), {1, 1},
+                                    Decision::Location(),  Decision::MakeIdentity<TaskId>(9000),
+                                    std::move(utility)};
+    const auto plan = ai.Compile(std::span{&graph, 1}, 1);
+    const auto graphBytes = DecisionPlanCodec::EncodeCooked(*plan);
+    const auto graphSource = DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(graphBytes.HasValue());
+    REQUIRE(graphSource.HasValue());
+    const auto controller = Decision::MakeIdentity<ControllerTypeId>(3);
+    SceneSource::SceneSourceDocument source;
+    source.objects.push_back({.id = {7},
+                              .name = "Guard and camera",
+                              .components = {.camera = Runtime::CameraComponent{},
+                                             .aiAgent = AiAgentComponent{.agent = Decision::MakeIdentity<AgentId>(50)},
+                                             .aiController = AiControllerComponent{.controller = controller,
+                                                                                   .decisionAsset = graph.asset,
+                                                                                   .blackboardSchema = ai.schema->Identity(),
+                                                                                   .decisionKind = DecisionPlanKind::Utility}}});
+    const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
+    const auto definition = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
+    REQUIRE(definition.HasValue());
+    const auto scene = SceneCook::EncodeCookedSceneDefinition(definition.Value());
+    REQUIRE(scene.HasValue());
+
+    const std::string_view simulation = profile
+                                            ? R"("scheduler":{"mode":"bestEffort","simulationProfile":{"fullDistanceMillimeters":10000,
+        "reducedDistanceMillimeters":20000,"suspensionDistanceMillimeters":30000,"reducedIntervalTicks":2,"demotionDelayTicks":1}},)"
+                                            : "";
+    project.WriteProjectMetadata(std::string{R"({"schemaVersion":1,)"} + std::string{simulation} +
+                                 R"("localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
+        "interpreterTarget":7,"maximumModelBytes":4096,"maximumWorkUnits":128,"blackboardSchema":100,"tasks":[21],
+        "controllers":[{"controller":3,"artifact":"00000000-0000-0000-0000-000000000042","featureKeys":[102]}]}})");
+    AiCapabilityDescriptorRegistry declarations;
+    REQUIRE(declarations.Register({learned, ai.schema->Identity()}).HasValue());
+    const auto interpreter = Decision::MakeIdentity<LocalPolicyTargetId>(7);
+    const std::array targets{interpreter};
+    const std::array features{Decision::MakeIdentity<LocalPolicyFeatureId>(1)};
+    const std::array<std::int16_t, 1> weights{1};
+    const std::array rows{LocalPolicyRowSource{learned, 0, weights}};
+    const auto model = LocalLearnedPolicy::Cook({Decision::MakeIdentity<LocalPolicyModelId>(1), 1, targets, features, rows},
+                                                {interpreter, true, 4096, 128}, declarations.Freeze(), ai.schema->Identity());
+    REQUIRE(model.HasValue());
+    const auto modelBytes = model.Value().EncodeCooked();
+    REQUIRE(modelBytes.HasValue());
+
+    const auto modelAsset = Output::Id("00000000-0000-0000-0000-000000000042");
+    const auto decisionAsset = Assets::AssetId::FromBytes({0x44});
+    const auto schemaAsset = Assets::AssetId::FromBytes({0x45});
+    const auto target = project.request.assets.target;
+    std::vector<Assets::AssetCookManifestEntry> manifest;
+    std::vector<std::vector<std::uint8_t>> artifacts;
+    const auto stage = [&](const Assets::AssetId asset, const std::string_view kind, const std::string_view path,
+                           const std::string_view authored, const std::vector<std::uint8_t> &payload) {
+        project.WriteText(path, authored);
+        project.WriteText(std::string{path} + ".horo", Cook::SidecarJson(asset.ToString(), kind));
+        const auto type = Cook::Type(kind);
+        auto envelope = Assets::EncodeCookedArtifact(
+            {.id = asset, .type = type, .target = target, .payloadDigest = Output::DigestOf(payload), .payload = payload});
+        REQUIRE(envelope.HasValue());
+        manifest.push_back({asset, type, asset.ToString() + ".cooked", Output::DigestOf(envelope.Value())});
+        artifacts.push_back(std::move(envelope).Value());
+    };
+    const auto bytes = [](const std::vector<std::uint8_t> &value) {
+        return std::string_view{reinterpret_cast<const char *>(value.data()), value.size()};
+    };
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / "assets/level.horo");
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo", project.project.dir.path / "assets/level.horo.horo");
+    stage(modelAsset, LocalPolicyAssetType, "assets/guard.horo_policy", bytes(modelBytes.Value()), modelBytes.Value());
+    stage(project.sceneId, "core.scene", "assets/level.horo", SceneSource::EncodeSceneSource(view), scene.Value());
+    stage(decisionAsset, DecisionAssetType(DecisionPlanKind::Utility), "assets/guard.horo_utility", bytes(graphSource.Value()),
+          graphBytes.Value());
+    stage(schemaAsset, BlackboardSchemaAssetType, "assets/keys.horo_bb", bytes(schemaBytes.Value()), schemaBytes.Value());
+    const auto published = Output::PublishFixture(project.cooked.path, target, manifest, artifacts);
+    if (published.HasError())
+        UNSCOPED_INFO(published.ErrorValue().message);
+    REQUIRE(published.HasValue());
+
+    const auto projectFactory =
+        MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
+                                                     .decisions = EditorPlayDecisionSelection{project.project.dir.path,
+                                                                                              project.sceneId,
+                                                                                              {{controller, decisionAsset}},
+                                                                                              {{ai.schema->Identity(), feature}},
+                                                                                              {},
+                                                                                              Duration::FromMilliseconds(10)}});
+    const Editor::EditorPlaySceneFactory factory = [&](const Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &view) {
+        return projectFactory(project.project.dir.path, id, view);
+    };
+    Gameplay::BehaviorRegistry behaviors;
+    Gameplay::ComponentRegistry components;
+    REQUIRE(behaviors.Freeze().HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto scheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+    REQUIRE(scheduler.HasValue());
+    REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
+    const auto started = play.Start({{1}, {1}, source.objects}, behaviors, components, factory, {},
+                                    Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {}, nullptr, {.decision = [&] {
+        return Result<std::shared_ptr<const DecisionNodeGeneration>>::Success(ai.providers);
+    }});
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (play.State() == Editor::EditorPlaySessionState::Starting && std::chrono::steady_clock::now() < deadline) {
+        play.PresentationUpdate({0});
+        std::this_thread::yield();
+    }
+    if (play.LastError())
+        UNSCOPED_INFO(play.LastError()->message);
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+    Runtime::RuntimeLifecycle lifecycle;
+    auto fixed = std::make_unique<PlayFixedParticipant>(play);
+    const auto *fixedOwner = fixed.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(fixed)).HasValue());
+    const CancellationSource stop;
+    REQUIRE(lifecycle.Startup(stop.Token()).HasValue());
+    REQUIRE(scheduler.Value()->RunFrame(lifecycle, stop.Token(), false).HasValue());
+    REQUIRE(play.SceneView());
+    const auto entity = play.SceneView()->Find({7});
+    REQUIRE(entity);
+    play.RefreshAgentInspection(entity);
+    const auto expected = outOfRange ? fallback : learned;
+    for (const auto frame : {1, 2}) {
+        CAPTURE(frame);
+        clock.Advance(Duration::FromMilliseconds(10));
+        REQUIRE(scheduler.Value()->RunFrame(lifecycle, stop.Token(), false).HasValue());
+        CHECK_FALSE(fixedOwner->localFailure);
+    }
+    REQUIRE_FALSE(ai.probe.calls.empty());
+    CHECK(ai.probe.calls.front() == "start:" + std::to_string(expected.Value()));
+    CHECK(ai.probe.starts == 1);
+    CHECK(ai.probe.resumes == 1);
+    CHECK_FALSE(play.ReadDecisionProblem());
+    play.RefreshAgentInspection(entity);
+    REQUIRE_FALSE(play.AgentInspectionHistory().empty());
+    const auto &latest = play.AgentInspectionHistory().back();
+    REQUIRE(latest.policy);
+    CHECK(latest.policy->scheduler.simulationProfile.has_value() == profile);
+    CHECK(latest.policy->scheduler.mode == (profile ? AiSchedulingMode::BestEffort : AiSchedulingMode::Deterministic));
+    if (profile) {
+        CHECK_FALSE(latest.decisionTrace);
+    } else {
+        REQUIRE(latest.decisionTrace);
+        CHECK(latest.decisionTrace->Header().tick == 1);
+        CHECK(latest.decisionTrace->Header().root == graph.asset);
+        CHECK(std::ranges::any_of(latest.decisionTrace->Records(), [expected](const DecisionStepRecord &record) {
+            return record.kind == DecisionStepRecordKind::BehaviorNode && record.task == expected;
+        }));
+    }
+    REQUIRE(latest.snapshot);
+    const auto observed = std::ranges::find(latest.snapshot->keys, feature, &AiInspectionBlackboardRow::key);
+    REQUIRE(observed != latest.snapshot->keys.end());
+    CHECK(observed->value == BlackboardValue{BlackboardScalarValue{featureValue}});
+    play.Stop();
+    lifecycle.Shutdown();
+}
+
+#if HORO_TEST_NAVIGATION_NATIVE
+TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting Play", "[editor][navigation][product][eqs]") {
+    using namespace Horo::Application::Internal;
+    using Fixture = Horo::Application::CharacterSceneProductTest::NavigationProductFixture;
+    Fixture fixture;
+    fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, {}, [](auto &source) {
+        source.objects.back().localTransform.translation = {1, 0, 1};
+    });
+    const auto root = fixture.project.project.dir.path;
+    auto prepared =
+        PrepareEditorProjectPreview(root, fixture.project.jobs,
+                                    {.cooked = SceneCookSelection{fixture.project.cooked.path, fixture.project.request.assets.target}});
+    REQUIRE(prepared.HasValue());
+    auto preview = std::move(prepared).Value();
+    const auto definition = SceneSource::ConvertSceneSourceToRuntime({fixture.source.objects, fixture.source.prefabInstances}, {1}, {1});
+    REQUIRE(definition.HasValue());
+    const CancellationToken cancellation;
+    REQUIRE(preview.scenes->Startup(cancellation).HasValue());
+    REQUIRE(preview.scenes->QueuePreparation(definition.Value()).HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    for (std::uint64_t frame = 1; !preview.scenes->ActiveScene() && std::chrono::steady_clock::now() < deadline; ++frame) {
+        REQUIRE(preview.scenes->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {frame, {}, 0.0, 0, {}, false, cancellation})
+                    .HasValue());
+        if (const auto error = preview.scenes->TakeOperationError())
+            FAIL(error->message);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const auto scene = preview.scenes->ActiveScene();
+    REQUIRE(scene);
+    const auto querier = scene->Find(Runtime::SceneObjectId{fixture.source.objects.back().id.value});
+    REQUIRE(querier);
+    const auto initial = scene->Get(*querier);
+    REQUIRE(initial.HasValue());
+    const auto localTransform = *initial.Value().localTransform;
+    const auto structure = scene->StructuralRevision();
+    const auto start = Math::WorldCoordinate64::FromMillimeters(1000, 0, 1000);
+    const auto stage = AI::QueryStageId::Create(1).Value();
+    const auto captured =
+        preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, definition.Value(), *scene, *querier, start, stage});
+    if (captured.HasError())
+        UNSCOPED_INFO(captured.ErrorValue().message);
+    REQUIRE(captured.HasValue());
+    const std::array points{Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000),
+                            Math::WorldCoordinate64::FromMillimeters(15000, 0, 1000)};
+    const auto results = captured.Value()(points, cancellation);
+    if (results.HasError())
+        UNSCOPED_INFO(results.ErrorValue().message);
+    REQUIRE(results.HasValue());
+    REQUIRE(results.Value().size() == points.size());
+    CHECK(results.Value()[0].stage == stage);
+    CHECK(results.Value()[0].filter == true);
+    REQUIRE(results.Value()[0].metric);
+    CHECK(*results.Value()[0].metric > 0.0);
+    CHECK(results.Value()[1].filter == false);
+    CHECK(scene->IsCurrent());
+    CHECK(scene->StructuralRevision() == structure);
+    const auto after = scene->Get(*querier);
+    REQUIRE(after.HasValue());
+    CHECK(after.Value().localTransform->translation == localTransform.translation);
+    CHECK_FALSE(preview.owners->ReadAgentInspection(*querier));
+
+    CancellationSource cancelled;
+    cancelled.RequestCancellation();
+    const auto stopped = captured.Value()(points, cancelled.Token());
+    REQUIRE(stopped.HasError());
+    CHECK(ErrorChainContains(stopped.ErrorValue(), Navigation::NavigationErrors::QueryCancelled.domain,
+                             Navigation::NavigationErrors::QueryCancelled.code));
+
+    auto edit = fixture.source.objects;
+    edit.back().localTransform.translation.x += 1.0F;
+    const auto stale = SceneSource::ConvertSceneSourceToRuntime({edit, fixture.source.prefabInstances}, {1}, {1});
+    REQUIRE(stale.HasValue());
+    CHECK(
+        preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, stale.Value(), *scene, *querier, start, stage}).HasError());
+    const std::array gameplaySource{SceneSource::SceneObjectSnapshot{.id = fixture.source.objects.back().id, .name = "Play actor"}};
+    const auto gameplayDefinition = SceneSource::ConvertSceneSourceToRuntime({gameplaySource, {}}, {1}, {1});
+    REQUIRE(gameplayDefinition.HasValue());
+    Runtime::RuntimeSceneService play{Editor::EditorFirstPlayScene};
+    REQUIRE(play.Startup(cancellation).HasValue());
+    REQUIRE(play.QueuePreparation(gameplayDefinition.Value()).HasValue());
+    REQUIRE(play.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {1, {}, 0.0, 0, {}, false, cancellation}).HasValue());
+    const auto gameplay = play.ActiveScene();
+    REQUIRE(gameplay);
+    REQUIRE(gameplay->RuntimeId() == Editor::EditorFirstPlayScene);
+    const auto playQuerier = gameplay->Find(Runtime::SceneObjectId{fixture.source.objects.back().id.value});
+    REQUIRE(playQuerier);
+    const auto foreign = preview.queryPreviewNavigation.capture(
+        {root, fixture.project.sceneId, gameplayDefinition.Value(), *gameplay, *playQuerier, start, stage});
+    REQUIRE(foreign.HasError());
+    CHECK(ErrorChainContains(foreign.ErrorValue(), Navigation::NavigationErrors::StaleSnapshot.domain,
+                             Navigation::NavigationErrors::StaleSnapshot.code));
+    CHECK(foreign.ErrorValue().message == "Navigation preview requires an ordinary Editor authoring Scene.");
+    play.Shutdown();
+    preview.scenes->Shutdown();
+}
+
+namespace {
+    using NavigationPlayFixture = Application::CharacterSceneProductTest::NavigationProductFixture;
+
+    void CookEditorPlayDecisionAssets(NavigationPlayFixture &fixture, std::span<NavigationPlayFixture::AddedAsset> assets,
+                                      const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
+                                      std::shared_ptr<const AI::QuerySchemaRegistry> querySchema) {
+        using namespace Assets;
+        AssetRegistry registry;
+        std::vector<AssetRecord> records;
+        for (const auto &asset : assets)
+            records.push_back(asset.record);
+        REQUIRE(registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
+
+        Application::PrefabCookTestSupport::TempDir decisionCook;
+        Application::DecisionAssetCookRequest request{.assets = fixture.project.request.assets,
+                                                      .environment = {.nodes = providers},
+                                                      .querySchema = std::move(querySchema)};
+        request.assets.cookedRoot = decisionCook.path;
+        request.assets.registry = registry.Snapshot();
+        request.assets.validateHostInputs = [&providers] {
+            return providers->CanUse() ? Result<void>::Success() : Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        };
+        auto captured =
+            AssetCookInputSnapshot::Capture(request.assets.sourceRoot, request.assets.registry, request.assets.limits, 1024U * 1024U);
+        REQUIRE(captured.HasValue());
+        request.assets.pinnedInputs = std::make_shared<const AssetCookInputSnapshot>(std::move(captured).Value());
+        const auto cooked = Application::DecisionAssetCookHost::Cook(fixture.project.jobs, request);
+        if (cooked.HasError())
+            UNSCOPED_INFO(cooked.ErrorValue().code.Value() << ": " << cooked.ErrorValue().message);
+        REQUIRE(cooked.HasValue());
+        auto contents = ReadCookGenerationContents(fixture.project.files, cooked.Value().generation, 1024U * 1024U);
+        REQUIRE(contents.HasValue());
+        REQUIRE(contents.Value().artifacts.size() == assets.size());
+        for (auto &envelope : contents.Value().artifacts) {
+            const auto artifact = DecodeCookedArtifact(envelope);
+            REQUIRE(artifact.HasValue());
+            const auto destination = std::ranges::find_if(assets, [&](const auto &asset) {
+                return asset.record.id == artifact.Value().id;
+            });
+            REQUIRE(destination != assets.end());
+            REQUIRE(destination->cookedEnvelope.empty());
+            destination->cookedEnvelope = std::move(envelope);
+        }
+    }
+}  // namespace
+
+TEST_CASE("Editor Play publishes cooked tactical path output through its admitted Navigation agent", "[editor][play][ai][product][eqs]") {
+    using namespace Horo::AI;
+    using namespace Horo::Application::Internal;
+    namespace Decisions = Horo::AI::DecisionGraphTestSupport;
+    namespace Cook = Horo::Application::PrefabCookTestSupport;
+    using Fixture = Horo::Application::CharacterSceneProductTest::NavigationProductFixture;
+    using Decisions::MakeIdentity;
+
+    Fixture fixture;
+    bool mixed = false;
+    bool allowInspection = true;
+    bool enablePerception = false;
+    bool nativeQuery = false;
+    SECTION("The selected game module filters cooked tactical points") {
+        nativeQuery = true;
+    }
+    SECTION("Navigation reachability alone publishes the first reachable candidate") {}
+    SECTION("Native Perception observes a peer while the same agent completes its Navigation query") {
+        enablePerception = true;
+    }
+    SECTION("The project can deny query inspection without disabling Perception or Navigation") {
+        enablePerception = true;
+        allowInspection = false;
+    }
+#if HORO_TEST_PHYSICS_NATIVE
+    SECTION("Real Physics visibility eliminates the first reachable candidate") {
+        mixed = true;
+    }
+    using CollisionFixture = Horo::Application::CharacterSceneProductTest::Fixture;
+    std::optional<CollisionFixture> collision;
+    if (mixed)
+        collision.emplace();
+#endif
+    const auto agent = MakeIdentity<AgentId>(403);
+    const auto controller = MakeIdentity<ControllerTypeId>(402);
+    const auto key = MakeIdentity<BlackboardKeyId>(4);
+    const std::array keys{
+        BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .presence = BlackboardKeyPresence::Optional}};
+    auto admitted = BlackboardSchema::Capture({.identity = Decisions::SchemaId(), .keys = keys});
+    REQUIRE(admitted.HasValue());
+    auto schema = std::make_shared<const BlackboardSchema>(std::move(admitted).Value());
+    auto schemaBytes = BlackboardSchemaCodec::Encode(*schema);
+    REQUIRE(schemaBytes.HasValue());
+
+    const std::array points{Math::WorldCoordinate64::FromMillimeters(1500, 0, 500), Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000),
+                            Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500),
+                            Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000)};
+    auto generator = nativeQuery ? CreateBuiltinAuthoredPointQuery(MakeIdentity<QueryId>(29), MakeIdentity<QueryStageId>(1),
+                                                                   MakeIdentity<QueryResultSchemaId>(30), "Editor Play tactics", points, 1)
+                                 : CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(29), MakeIdentity<QueryStageId>(1),
+                                                             MakeIdentity<QueryResultSchemaId>(30), "Editor Play path",
+                                                             {.stepMillimeters = 4'000, .outerSteps = 1, .innerSteps = 1}, 1);
+    REQUIRE(generator.HasValue());
+    auto query = AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2));
+    REQUIRE(query.HasValue());
+#if HORO_TEST_PHYSICS_NATIVE
+    if (collision)
+        query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(3), collision->channel.Bytes());
+    REQUIRE(query.HasValue());
+#endif
+    if (nativeQuery) {
+        QueryAssetSource source{.id = query.Value().Id(),
+                                .displayName = query.Value().DisplayName(),
+                                .result = query.Value().ResultSchema(),
+                                .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
+        source.stages.push_back({.id = MakeIdentity<QueryStageId>(92),
+                                 .kind = QueryStageKind::Test,
+                                 .executionOrder = 20,
+                                 .test = MakeIdentity<QueryTestId>(90),
+                                 .descriptorVersion = {1, 1},
+                                 .properties = {{MakeIdentity<QueryPropertyId>(93), std::uint64_t{500}}}});
+        query = EnvironmentQueryAsset::Capture(source);
+        REQUIRE(query.HasValue());
+    }
+    auto queryBytes = EnvironmentQuerySourceCodec::Encode(query.Value());
+    REQUIRE(queryBytes.HasValue());
+    const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                       Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+    auto image = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
+    REQUIRE(image.HasValue());
+    REQUIRE_FALSE(image.Value().diagnostic);
+    auto providers = image.Value().owner->AcquireDecisionNodes();
+    REQUIRE(providers.HasValue());
+    auto queryTests = image.Value().owner->AcquireGameplayQueryTests();
+    REQUIRE(queryTests.HasValue());
+    REQUIRE(queryTests.Value().schema);
+    auto task = Decisions::TreeNode(2, DecisionControlKind::Task);
+    task.type = MakeIdentity<BehaviorTreeNodeTypeId>(102);
+    task.requirements = {{.key = key,
+                          .kind = BlackboardValueKind::WorldCoordinate,
+                          .access = BlackboardKeyAccess::ReadWrite,
+                          .source = Decisions::Location()}};
+    const auto &result = query.Value().ResultSchema();
+    task.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(10), "output", BehaviorTreePropertyKind::QueryOutput,
+                                 BehaviorTreeQueryOutput{query.Value().Id(), result.id, result.version, result.itemType, key, 80});
+    auto graph = Decisions::Tree(19, {Decisions::TreeNode(1, DecisionControlKind::Root), std::move(task)}, {Decisions::Edge(1, 1, 2)});
+    graph.executionTask = MakeIdentity<TaskId>(401);
+    auto graphBytes = DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(graphBytes.HasValue());
+    const auto add = [&](std::uint8_t serial, std::string_view type, const std::string &path, std::span<const std::uint8_t> bytes) {
+        const auto id = Assets::AssetId::FromBytes({serial});
+        fixture.project.WriteText(path, {reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+        fixture.project.WriteText(path + ".horo", Cook::SidecarJson(id.ToString(), type));
+        return Fixture::AddedAsset{{id, Cook::Type(type), ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()}};
+    };
+    std::vector assets{add(121, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt", graphBytes.Value()),
+                       add(122, BlackboardSchemaAssetType, "assets/path.horo_bb", schemaBytes.Value()),
+                       add(123, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", queryBytes.Value())};
+    CookEditorPlayDecisionAssets(fixture, assets, providers.Value(), queryTests.Value().schema);
+    const auto committedQuery = Assets::DecodeCookedArtifact(assets.back().cookedEnvelope);
+    REQUIRE(committedQuery.HasValue());
+    const auto cookedDigest = committedQuery.Value().payloadDigest;
+    const auto root = fixture.project.project.dir.path;
+#if HORO_TEST_PHYSICS_NATIVE
+    if (collision) {
+        const auto collisionRoot = collision->project.project.dir.path;
+        for (const auto *relative :
+             {".horo/collision.json", ".horo/surfaces.json", "assets/controller.horoasset", "assets/controller.horoasset.horo"})
+            std::filesystem::copy_file(collisionRoot / relative, root / relative, std::filesystem::copy_options::overwrite_existing);
+        std::ifstream material{root / "assets/controller.horoasset", std::ios::binary};
+        REQUIRE(material.is_open());
+        assets.push_back({CollisionFixture::Record(collision->materialId, "core.physics_material", "assets/controller.horoasset"),
+                          {std::istreambuf_iterator<char>{material}, {}}});
+    }
+#endif
+    constexpr auto perceptionPath = "play-navigation-perception.json";
+    std::shared_ptr<const PerceptionSenseGeneration> senses;
+    if (enablePerception) {
+        auto registeredSenses = image.Value().owner->AcquirePerceptionSenses();
+        REQUIRE(registeredSenses.HasValue());
+        senses = std::move(registeredSenses).Value();
+        REQUIRE(senses->Contracts().size() == 1);
+        const auto &contract = senses->Contracts().front();
+        const auto sense = std::to_string(contract.sense.identity.Value());
+        const auto work = (contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+        fixture.project.WriteText(perceptionPath,
+                                  std::string{R"({"schema":2,"sceneAsset":")"} + fixture.project.sceneId.ToString() +
+                                      R"(","sceneRevision":1,"worldOriginMillimeters":[0,0,0],"controllers":[{"controller":)" +
+                                      std::to_string(controller.Value()) + R"(,"listeners":[91],"sources":[)" + sense +
+                                      R"(],"layers":1,"mask":1}],"native":{"listeners":[{"id":91,"sense":)" + sense +
+                                      R"(}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":)" + std::to_string(work) + "}}");
+    }
+    const auto tileBuilder = Navigation::CreateRecastDetourNavigationMeshBuilder();
+    REQUIRE(tileBuilder.HasValue());
+    fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, assets, [&](auto &scene) {
+        auto &actor = scene.objects.back();
+        actor.localTransform.translation = {1, 0, 1};
+        actor.components.aiAgent = AiAgentComponent{.agent = agent};
+        actor.components.aiController =
+            AiControllerComponent{.controller = controller, .decisionAsset = graph.asset, .blackboardSchema = schema->Identity()};
+        if (enablePerception) {
+            actor.components.aiController->requiredCapabilities = AiCapabilitySet::Of(AiCapability::Perception);
+            auto peer = actor;
+            peer.id = {6};
+            peer.name = "Sensed Navigation peer";
+            peer.localTransform.translation.z = 2;
+            peer.components.aiAgent->agent = MakeIdentity<AgentId>(404);
+            scene.objects.push_back(std::move(peer));
+        }
+#if HORO_TEST_PHYSICS_NATIVE
+        if (collision) {
+            auto blocker = collision->source.objects[1];
+            blocker.id = {4};
+            blocker.localTransform.translation = {3, 0, 1};
+            auto &collider = blocker.components.colliders.front();
+            collider.body.object = {4};
+            collider.source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.2F}};
+            scene.objects.push_back(std::move(blocker));
+
+            // The Character's default material declares the exact Scene dependency used by the collider.
+            auto materialOwner = collision->source.objects.front();
+            materialOwner.id = {5};
+            materialOwner.components.camera.reset();
+            materialOwner.localTransform.translation = {8, 0.5F, 8};
+            scene.objects.push_back(std::move(materialOwner));
+        }
+#endif
+    }, std::nullopt, tileBuilder.Value().get());
+    std::ifstream metadataSource{root / ".horo/project.json"};
+    REQUIRE(metadataSource.is_open());
+    std::string metadata{std::istreambuf_iterator<char>{metadataSource}, {}};
+    metadataSource.close();
+    constexpr std::string_view render = R"("renderBackend":"opengl")";
+    const auto insertion = metadata.find(render);
+    REQUIRE(insertion != std::string::npos);
+    const auto capture = allowInspection ? "true" : "false";
+    metadata.insert(insertion + render.size(),
+                    std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{"mode":"bestEffort"},"development":{"replayCapture":)"} + capture +
+                        "}}");
+    fixture.project.WriteText(".horo/project.json", metadata);
+
+    constexpr auto fixedStep = Duration::FromNanoseconds(16'666'667);
+    const auto projectFactory =
+        MakeEditorProjectSceneFactory(fixture.project.jobs,
+                                      {.physicsMode = mixed ? Physics::PhysicsRuntimeMode::Canonical : Physics::PhysicsRuntimeMode::Null,
+                                       .cooked = SceneCookSelection{fixture.project.cooked.path, fixture.project.request.assets.target},
+                                       .playNavigationScene = fixture.project.sceneId,
+                                       .decisions = EditorPlayDecisionSelection{root,
+                                                                                fixture.project.sceneId,
+                                                                                {{controller, assets.front().record.id}},
+                                                                                {{schema->Identity(), key}},
+                                                                                enablePerception ? perceptionPath : "",
+                                                                                fixedStep}});
+    const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
+        return projectFactory(root, id, definition);
+    };
+    Gameplay::BehaviorRegistry registry;
+    Gameplay::ComponentRegistry components;
+    REQUIRE(registry.Freeze().HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto scheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = fixedStep});
+    REQUIRE(scheduler.HasValue());
+    REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
+    const Editor::SceneDocumentSnapshot document{{1}, {1}, fixture.source.objects};
+    const auto started = play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {},
+                                    nullptr, {.decision = [&] {
+        return Result<std::shared_ptr<const DecisionNodeGeneration>>::Success(providers.Value());
+    }, .perception = [&] {
+        return Result<std::shared_ptr<const PerceptionSenseGeneration>>::Success(senses);
+    }, .queryTests = [&] {
+        if (!nativeQuery)
+            return Result<Gameplay::GameplayQueryTests>::Success({});
+        return image.Value().owner->AcquireGameplayQueryTests();
+    }});
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    const auto readinessDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (play.State() == Editor::EditorPlaySessionState::Starting && std::chrono::steady_clock::now() < readinessDeadline) {
+        play.PresentationUpdate({0});
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    if (play.LastError())
+        UNSCOPED_INFO(play.LastError()->message);
+    REQUIRE(play.SceneView());
+    const auto owner = play.SceneView()->Find({3});
+    REQUIRE(owner);
+    const auto resolved = play.ResolveQueryInspectionSource(query.Value());
+    CHECK(resolved == (allowInspection ? std::optional{cookedDigest} : std::nullopt));
+    if (nativeQuery) {
+        QueryAssetSource edited{.id = query.Value().Id(),
+                                .displayName = query.Value().DisplayName(),
+                                .result = query.Value().ResultSchema(),
+                                .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
+        edited.stages.back().properties.front().value = std::uint64_t{1000};
+        const auto draft = EnvironmentQueryAsset::Capture(edited);
+        REQUIRE(draft.HasValue());
+        CHECK_FALSE(play.ResolveQueryInspectionSource(draft.Value()));
+    }
+    const Editor::EditorPlayQueryInspectionSelection inspection{*owner, query.Value().Id(), resolved.value_or(cookedDigest)};
+    auto mismatch = inspection;
+    mismatch.cooked.bytes.front() ^= 1;
+    CHECK_FALSE(play.InspectQuery(mismatch).admitted);
+    CHECK(play.InspectQuery(inspection).admitted == allowInspection);
+    CHECK_FALSE(play.InspectQuery(inspection).snapshot);
+    Runtime::RuntimeLifecycle lifecycle;
+    auto fixed = std::make_unique<PlayFixedParticipant>(play);
+    const auto *fixedState = fixed.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(fixed)).HasValue());
+    const CancellationSource cancellation;
+    REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
+    REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+    std::optional<BlackboardValue> winner;
+    std::shared_ptr<const QueryDebugSnapshot> terminal;
+    for (std::size_t frame = 0; frame < 64 && !winner; ++frame) {
+        clock.Advance(fixedStep);
+        REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+        CAPTURE(mixed, frame);
+        if (play.LastError())
+            UNSCOPED_INFO(play.LastError()->code.Value() << ": " << play.LastError()->message);
+        REQUIRE_FALSE(fixedState->localFailure);
+        if (const auto problem = play.ReadDecisionProblem())
+            UNSCOPED_INFO(problem->error.code.Value() << ": " << problem->error.message);
+        REQUIRE_FALSE(play.ReadDecisionProblem());
+        const auto live = play.InspectQuery(inspection);
+        REQUIRE(live.admitted == allowInspection);
+        if (live.snapshot && live.snapshot->terminalStatus == QueryExecutionStatus::Completed)
+            terminal = live.snapshot;
+        if (!allowInspection)
+            CHECK_FALSE(live.snapshot);
+        play.RefreshAgentInspection(*owner);
+        REQUIRE_FALSE(play.AgentInspectionHistory().empty());
+        const auto &snapshot = play.AgentInspectionHistory().back().snapshot;
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->keys.size() == 1);
+        winner = snapshot->keys.front().value;
+        if (frame < 2)
+            CHECK_FALSE(winner);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    REQUIRE(winner);
+    if (enablePerception) {
+        const auto &snapshot = play.AgentInspectionHistory().back().snapshot;
+        CHECK_FALSE(snapshot->perceptionFailure);
+        REQUIRE(snapshot->stimuli.size() == 1);
+        const auto peer = play.SceneView()->Find({6});
+        REQUIRE(peer);
+        const auto &stimulus = snapshot->stimuli.front();
+        CHECK(stimulus.key.source.slot == peer->entity.index);
+        CHECK(stimulus.key.sense == senses->Contracts().front().sense.identity);
+        CHECK(stimulus.sensed);
+    }
+    auto expectedPoint =
+        mixed ? Math::WorldCoordinate64::FromMillimeters(1000, 0, 5000) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
+    if (nativeQuery)
+        expectedPoint = points.front();
+    CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner)) == expectedPoint);
+    if (allowInspection) {
+        REQUIRE(terminal);
+        CHECK_FALSE(terminal->stale);
+        CHECK(terminal->query == query.Value().Id());
+        REQUIRE(terminal->candidates.size() == 4);
+        const auto expectedStages = mixed || nativeQuery ? 8u : 4u;
+        REQUIRE(terminal->stages.size() == expectedStages);
+        REQUIRE(terminal->winners.size() == 1);
+        const auto index = terminal->winners.front().itemIndex;
+        REQUIRE(index < terminal->candidates.size());
+        CHECK(terminal->candidates[index].point == expectedPoint);
+        CHECK(terminal->winners.front().status == QueryScoreStatus::Eligible);
+        if (nativeQuery) {
+            const auto rejected = std::ranges::find(terminal->candidates, std::optional{points[1]}, &QueryDebugCandidate::point);
+            REQUIRE(rejected != terminal->candidates.end());
+            const auto test = std::ranges::find_if(terminal->stages, [&](const QueryDebugStage &stage) {
+                return stage.candidateIndex == rejected->index && stage.score.stage == MakeIdentity<QueryStageId>(92);
+            });
+            REQUIRE(test != terminal->stages.end());
+            CHECK(test->score.status == QueryScoreStatus::Filtered);
+        }
+        if (mixed) {
+            const auto firstReachable = Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
+            const auto blocked = std::ranges::find(terminal->candidates, std::optional{firstReachable}, &QueryDebugCandidate::point);
+            REQUIRE(blocked != terminal->candidates.end());
+            const auto visibility = std::ranges::find_if(terminal->stages, [&](const QueryDebugStage &stage) {
+                return stage.candidateIndex == blocked->index && stage.score.stage == MakeIdentity<QueryStageId>(3);
+            });
+            REQUIRE(visibility != terminal->stages.end());
+            CHECK(visibility->score.status == QueryScoreStatus::Filtered);
+        }
+    }
+    if (nativeQuery) {
+        const auto reload = play.QuiesceForReload();
+        REQUIRE(reload.HasError());
+        CHECK(play.State() == Editor::EditorPlaySessionState::Playing);
+        CHECK(play.ResolveQueryInspectionSource(query.Value()) == resolved);
+    }
+    CHECK_FALSE(play.InspectQuery(mismatch).snapshot);
+    CHECK_FALSE(play.InspectQuery(inspection).snapshot);
+    play.Stop();
+    CHECK_FALSE(play.ResolveQueryInspectionSource(query.Value()));
+    CHECK_FALSE(play.InspectQuery(inspection).snapshot);
+    lifecycle.Shutdown();
+}
+#endif
+
+TEST_CASE("Play holds committed gameplay assists through the fixed dispatch", "[editor][play][accessibility]") {
+    ConfigurationSchema schema;
+    for (const auto &setting : Gameplay::MakeGameplayAccessibilityContribution().settings)
+        REQUIRE(schema.Register(setting).HasValue());
+    REQUIRE(schema.Seal().HasValue());
+    ConfigurationService configuration{std::move(schema)};
+    PlayFixedFixture fixture{&configuration};
+    const auto actor = fixture.play.SceneView()->Find({2});
+    REQUIRE(actor);
+
+    const auto originalRevision = configuration.Snapshot().Revision();
+    const SettingKey aggression{"accessibility.gameplay.aggression_reduction"};
+    fixture.observations->beforeGameplay = [&configuration, &aggression, originalRevision] {
+        REQUIRE(configuration
+                    .Commit({.baseRevision = originalRevision,
+                             .proposedValues = {{aggression, std::int64_t{750}}},
+                             .source = ConfigurationSource::User})
+                    .HasValue());
+    };
+    REQUIRE(fixture.Tick().HasValue());
+    REQUIRE_FALSE(fixture.session->localFailure);
+    CHECK(fixture.play.SceneView()->Get(*actor).Value().localTransform->translation.x == 1.0F);
+
+    fixture.observations->beforeGameplay = {};
+    REQUIRE(fixture.Tick().HasValue());
+    REQUIRE_FALSE(fixture.session->localFailure);
+    CHECK(fixture.play.SceneView()->Get(*actor).Value().localTransform->translation.x == 1.25F);
+}
+
+TEST_CASE("Play exposes committed color preferences at gameplay dispatch boundaries", "[editor][play][accessibility]") {
+    using Accessibility::ColorblindMode;
+    ConfigurationSchema schema;
+    for (const auto &contribution : {Gameplay::MakeGameplayAccessibilityContribution(), Accessibility::MakeColorAccessibilityContribution(),
+                                     Runtime::Ui::MakeUiVisualAccessibilityContribution()})
+        for (const auto &setting : contribution.settings)
+            REQUIRE(schema.Register(setting).HasValue());
+    REQUIRE(schema.Seal().HasValue());
+    ConfigurationService configuration{std::move(schema)};
+    ColorDispatchProbe probe;
+    const Gameplay::BehaviorFactoryBinding factory{&probe, [](auto *state) -> Gameplay::IBehaviorInstance * {
+        return std::make_unique<ColorCueBehavior>(*static_cast<ColorDispatchProbe *>(state)).release();
+    }, &DestroyBehavior};
+    PlayFixedFixture fixture{&configuration, Registry(factory)};
+    const auto originalRevision = configuration.Snapshot().Revision();
+    fixture.observations->beforeGameplay = [&configuration, originalRevision] {
+        REQUIRE(configuration
+                    .Commit({.baseRevision = originalRevision,
+                             .proposedValues = {{SettingKey{"accessibility.colorblind.mode"}, std::int64_t{2}},
+                                                {SettingKey{"accessibility.colorblind.severity"}, std::int64_t{500}},
+                                                {SettingKey{"accessibility.visual.ui.high_contrast"}, true}},
+                             .source = ConfigurationSource::User})
+                    .HasValue());
+    };
+    REQUIRE(fixture.Tick().HasValue());
+    REQUIRE_FALSE(fixture.session->localFailure);
+    CHECK(probe.fixed == ColorObservation{ColorblindMode::None, 1.0F, false});
+
+    fixture.observations->beforeGameplay = {};
+    fixture.play.PresentationUpdate(Gameplay::FrameDeltaTime{0.01});
+    CHECK(probe.presentation == ColorObservation{ColorblindMode::Deuteranopia, 0.5F, true});
+    REQUIRE(fixture.Tick().HasValue());
+    CHECK(probe.fixed == probe.presentation);
+}
 
 TEST_CASE("Play typed fixed path publishes only after actual same-attempt commitment", "[editor][play][fixed-commit]") {
     PlayFixedFixture fixture;

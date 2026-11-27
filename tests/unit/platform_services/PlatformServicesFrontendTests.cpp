@@ -1,4 +1,5 @@
 #include "PlatformServicesFrontendTestSupport.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 
 namespace Horo::PlatformServices {
     namespace {
@@ -16,17 +17,6 @@ namespace Horo::PlatformServices {
                     .expectedDigest = ComputeSha256(bytes),
                     .precondition = CloudCreateIfAbsent{},
                     .mutation = mutation};
-        }
-
-        CloudMutationCapability MutationFacts() {
-            return {.atomicity = CloudMutationAtomicity::ConditionalAtomicObject,
-                    .createIfAbsent = true,
-                    .replaceIfRevision = true,
-                    .deleteIfRevision = true,
-                    .durableMutationDedupe = true,
-                    .maxNamespaceBytes = 32,
-                    .maxObjectCount = 4,
-                    .maxConcurrentMutations = 2};
         }
     }  // namespace
 
@@ -72,6 +62,31 @@ namespace Horo::PlatformServices {
         CHECK(backend->lastFriendsLeaderboardQuery->pageSize == 3);
     }
 
+    TEST_CASE("Cloud dispatch preserves provider category without exposing private diagnostics", "[platform-services][cloud][frontend]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        backend->snapshot = Capabilities();
+        backend->snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)].cloudMutation = MutationFacts();
+        auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
+        REQUIRE(created.HasValue());
+        auto frontend = std::move(created).Value();
+
+        auto cause = MakeError(PlatformServiceErrors::QuotaExceeded, "private cloud account limit");
+        cause.diagnostics.push_back({.code = DiagnosticCode{"private.object.key"}, .message = "private payload"});
+        backend->cloudWriteFailure = WithCause(MakeError(PlatformServiceErrors::ProviderFailed, "private provider object key"),
+                                              std::move(cause));
+        const auto result = frontend.WriteCloudObject(MutationWrite(*session.Subject()));
+        RequireError(result, PlatformServiceErrors::ProviderFailed);
+        const auto &error = result.ErrorValue();
+        CHECK(PlatformProviderCategory(error) == PlatformProviderFailureCategory::QuotaExceeded);
+        CHECK(error.message == PlatformServiceErrors::ProviderFailed.summary);
+        CHECK(error.diagnostics.empty());
+        REQUIRE(error.cause);
+        CHECK(error.cause.Get()->message == PlatformServiceErrors::QuotaExceeded.summary);
+        CHECK(error.cause.Get()->diagnostics.empty());
+        CHECK_FALSE(error.cause.Get()->cause);
+    }
+
     TEST_CASE("Platform Services frontend rejects malformed identities and bounds before dispatch",
               "[platform-services][frontend][validation]") {
         auto backend = std::make_shared<RoutingBackend>();
@@ -86,14 +101,16 @@ namespace Horo::PlatformServices {
         RequireError(frontend.QueryFriendsLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), CloudObjectErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), CloudObjectErrors::InvalidRequest);
         const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
         REQUIRE(key.HasValue());
-        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}),
+                     CloudObjectErrors::PayloadTooLarge);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriends({subject, 1, std::numeric_limits<std::uint32_t>::max()}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 5}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryRankedLeaderboard({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
@@ -301,6 +318,88 @@ namespace Horo::PlatformServices {
         CHECK(backend->requests.RecordCount() == 0);
     }
 
+    TEST_CASE("Cloud terminal observers follow the exact issuing frontend and store",
+              "[platform-services][frontend][cloud][completion]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        auto otherBackend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        auto frontend = Frontend(backend, session);
+        auto otherFrontend = Frontend(otherBackend, session);
+        const auto subject = *session.Subject();
+        const auto key = MutationWrite(subject).key;
+        auto request = frontend.ReadCloudObject({subject, key, 2});
+        const auto other = otherFrontend.ReadCloudObject({subject, key, 2});
+        REQUIRE(request.HasValue());
+        REQUIRE(other.HasValue());
+        CHECK(request.Value().Id() == other.Value().Id());
+        CHECK(request.Value().Generation() == other.Value().Generation());
+        auto observer = [](const PlatformRequestSnapshot<CloudBlobReadResult> &) {};
+        RequireError(frontend.OnCloudComplete(other.Value(), observer), RequestErrors::Stale);
+        auto backendOnly = backend->requests.Admit<CloudBlobReadResult>();
+        REQUIRE(backendOnly.HasValue());
+        RequireError(frontend.OnCloudComplete(backendOnly.Value(), observer), RequestErrors::Stale);
+
+        auto movedFrontend = std::move(frontend);
+        PlatformRequestHandle<CloudBlobReadResult> handle;
+        handle = std::move(request).Value();
+        unsigned deliveries{};
+        auto watched = movedFrontend.OnCloudComplete(handle, [&](const auto &snapshot) {
+            ++deliveries;
+            REQUIRE(snapshot.terminal);
+            const auto *failure = snapshot.terminal->ErrorValue();
+            REQUIRE(failure);
+            CHECK(failure->code.Value() == CloudObjectErrors::NotFound.code.Value());
+            CHECK(failure->message != "private provider path");
+        });
+        REQUIRE(watched.HasValue());
+        auto cancelled = movedFrontend.OnCloudComplete(handle, [&](const auto &) { FAIL("Suppressed observer called"); });
+        REQUIRE(cancelled.HasValue());
+        auto cancelledObserver = std::move(cancelled).Value();
+        cancelledObserver.Reset();
+        REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+        REQUIRE(backend->requests.CompleteFailure(handle, MakeError(CloudObjectErrors::NotFound, "private provider path")).HasValue());
+        CHECK(deliveries == 0);
+        CHECK(otherBackend->requests.DispatchCompletions() == 0);
+        CHECK(backend->requests.DispatchCompletions() == 1);
+        CHECK(deliveries == 1);
+        CHECK(backend->requests.DispatchCompletions() == 0);
+
+        auto pending = movedFrontend.OnCloudComplete(handle, [&](const auto &) { FAIL("Closed frontend observer called"); });
+        REQUIRE(pending.HasValue());
+        REQUIRE(movedFrontend.Close().HasValue());
+        CHECK(backend->requests.DispatchCompletions() == 0);
+        RequireError(movedFrontend.OnCloudComplete(handle, observer), FrontendErrors::Unavailable);
+    }
+
+    TEST_CASE("A retired frontend handle cannot cancel a new account request with reused numeric identity",
+              "[platform-services][frontend][session][cancellation]") {
+        auto oldBackend = std::make_shared<RoutingBackend>();
+        const auto oldSession = Session();
+        auto oldFrontend = Frontend(oldBackend, oldSession);
+        auto oldRequest = oldFrontend.UnlockAchievement({*oldSession.Subject(), {1}});
+        REQUIRE(oldRequest.HasValue());
+        REQUIRE(oldFrontend.Close().HasValue());
+        auto currentBackend = std::make_shared<RoutingBackend>();
+        const auto currentSession = Session({8}, {6});
+        auto currentFrontend = Frontend(currentBackend, currentSession);
+        auto currentRequest = currentFrontend.UnlockAchievement({*currentSession.Subject(), {1}});
+        REQUIRE(currentRequest.HasValue());
+        CHECK(oldRequest.Value().Id() == currentRequest.Value().Id());
+        CHECK(oldRequest.Value().Generation() == currentRequest.Value().Generation());
+        RequireError(currentFrontend.RequestCancel(oldRequest.Value()), RequestErrors::Stale);
+        CHECK(currentBackend->cancelCalls == 0);
+        CHECK_FALSE(currentBackend->requests.Query(currentRequest.Value()).Value().cancellationRequested);
+        auto movedFrontend = std::move(currentFrontend);
+        PlatformRequestHandle<void> movedRequest;
+        movedRequest = std::move(currentRequest).Value();
+        REQUIRE(movedFrontend.RequestCancel(movedRequest).HasValue());
+        CHECK(currentBackend->cancelCalls == 1);
+        auto backendOnly = currentBackend->requests.Admit<void>();
+        REQUIRE(backendOnly.HasValue());
+        RequireError(movedFrontend.RequestCancel(backendOnly.Value()), RequestErrors::Stale);
+        CHECK(currentBackend->cancelCalls == 1);
+    }
+
     TEST_CASE("Platform Services frontend exposes only bounded public service limits", "[platform-services][frontend][capability]") {
         auto backend = std::make_shared<RoutingBackend>();
         auto frontend = Frontend(backend, Session());
@@ -325,7 +424,11 @@ namespace Horo::PlatformServices {
         auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
         REQUIRE(created.HasValue());
         auto enabled = std::move(created).Value();
-        REQUIRE(enabled.WriteCloudObject(MutationWrite(subject)).HasValue());
+        auto submittedWrite = enabled.WriteCloudObject(MutationWrite(subject));
+        REQUIRE(submittedWrite.HasValue());
+        auto writeHandle = std::move(submittedWrite).Value();
+        REQUIRE(enabled.RequestCancel(writeHandle).HasValue());
+        CHECK(backend->requests.Query(writeHandle).Value().state == PlatformRequestState::Cancelling);
         auto write = MutationWrite(subject);
         const auto revision = ProviderObjectRevision::Copy(std::array{std::byte{5}});
         REQUIRE(revision.HasValue());
@@ -333,7 +436,12 @@ namespace Horo::PlatformServices {
                                       .key = write.key,
                                       .expectedRevision = revision.Value(),
                                       .mutation = write.mutation};
-        REQUIRE(enabled.DeleteCloudObject(remove).HasValue());
+        auto submittedDelete = enabled.DeleteCloudObject(remove);
+        REQUIRE(submittedDelete.HasValue());
+        auto deleteHandle = std::move(submittedDelete).Value();
+        REQUIRE(enabled.RequestCancel(deleteHandle).HasValue());
+        CHECK(backend->requests.Query(deleteHandle).Value().state == PlatformRequestState::Cancelling);
+        CHECK(backend->cancelCalls == 2);
         REQUIRE(enabled.QueryCloudQuota(subject).HasValue());
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
         write.mutation = {};

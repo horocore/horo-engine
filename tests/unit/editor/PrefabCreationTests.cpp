@@ -3,7 +3,7 @@
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "PrefabCreationTestSupport.h"
 #include "PrefabHierarchyTestSupport.h"
-#include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/assets/PrefabCreation.h"
 
 #include <array>
 #include <catch2/generators/catch_generators.hpp>
@@ -80,6 +80,52 @@ namespace Horo::Editor {
         REQUIRE(fixture.scene.Replay(fixture.Context(), true).HasValue());
         CHECK(fixture.document.PrefabInstances().size() == 1);
         CHECK(fixture.document.IsDirty());
+    }
+
+    TEST_CASE("Prefab Save As uses a new registered pair and rolls back only its own files", "[prefab][creation][native]") {
+        Creation fixture;
+        const auto originalPath = fixture.destination.parent_path() / "original.prefab";
+        const auto limits = Prefab::PrefabLimitProfile::Create({}).Value();
+        const auto original = Prefab::PrefabDocument::Create({.projectVersion = ScenePrefabVersion(),
+                                                              .assetId = PrefabAsset(91).Asset(),
+                                                              .objects = {{.localId = {0}, .name = "Retained draft"}}},
+                                                             limits);
+        REQUIRE(original.HasValue());
+        const auto bytes = original.Value().SerializeCanonical();
+        REQUIRE(bytes.HasValue());
+        {
+            std::ofstream file(originalPath, std::ios::binary);
+            file << bytes.Value();
+        }
+        const auto initial = fixture.document.Snapshot();
+        const auto registry = fixture.registry.Snapshot();
+
+        SECTION("Committed copy and identity sidecar are independent of the original asset") {
+            const auto receipt = CreatePrefabFork(original.Value(), fixture.root, fixture.destination, fixture.asset, registry,
+                                                  fixture.mutations, fixture.files);
+            REQUIRE(receipt.committed);
+            const auto copy = Prefab::PrefabDocument::Parse(fixture.Read(fixture.destination), limits);
+            REQUIRE(copy.HasValue());
+            CHECK(copy.Value().Data().assetId == fixture.asset);
+            CHECK(copy.Value().Data().objects == original.Value().Data().objects);
+            const auto sidecar = Assets::DecodeAssetIdentitySidecar("assets/prefab-copy.prefab", fixture.Read(receipt.files[1].path));
+            REQUIRE(sidecar.HasValue());
+            CHECK(sidecar.Value().id == fixture.asset);
+        }
+        SECTION("Same source identity is rejected and a sidecar error rolls back the new source") {
+            const auto duplicate = CreatePrefabFork(original.Value(), fixture.root, fixture.destination, original.Value().Data().assetId,
+                                                    registry, fixture.mutations, fixture.files);
+            CHECK_FALSE(duplicate.committed);
+            fixture.files.failAt = 2;
+            const auto failed = CreatePrefabFork(original.Value(), fixture.root, fixture.destination, fixture.asset, registry,
+                                                 fixture.mutations, fixture.files);
+            CHECK_FALSE(failed.committed);
+            CHECK(failed.files[0].removed);
+            CHECK_FALSE(std::filesystem::exists(fixture.destination));
+        }
+        CHECK(fixture.Read(originalPath) == bytes.Value());
+        CHECK(fixture.document.Snapshot().state == initial.state);
+        CHECK(fixture.document.Snapshot().revision == initial.revision);
     }
 
     TEST_CASE("Prefab exclusive publication failures preserve original dirty state history and authored subtree",

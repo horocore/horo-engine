@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiErrors.h"
 #include "Horo/Runtime/Ui/UiPointerInteraction.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -75,6 +76,8 @@ namespace Horo::Runtime::Ui {
         };
 
         struct PointerFixture {
+            UiRenderMode mode;
+
             static UiLayoutEngine CreateLayout(const UiLayoutEngineDescriptor &descriptor) {
                 auto created = UiLayoutEngine::Create(descriptor);
                 if (created.HasError()) {
@@ -106,14 +109,9 @@ namespace Horo::Runtime::Ui {
             UiLayoutSnapshot layout{std::move(layoutOwner.Update(tree, request)).Value()};
             UiElementHandle target{layout.Records().front().element};
             std::array<UiHitTestElement, 1> projection{{{target, {}, {}, {}, 0, false, true, true}}};
-            UiHitTestStore hitOwner{std::move(UiHitTestStore::Create({descriptor.instance,
-                                                                      descriptor.canvas,
-                                                                      descriptor.document,
-                                                                      UiRenderMode::ScreenSpaceOverlay,
-                                                                      {6400, 6400},
-                                                                      1,
-                                                                      2}))
-                                        .Value()};
+            UiHitTestStore hitOwner{
+                std::move(UiHitTestStore::Create({descriptor.instance, descriptor.canvas, descriptor.document, mode, {6400, 6400}, 1, 2}))
+                    .Value()};
             UiHitTestSnapshot hit{std::move(hitOwner.Publish(layout, projection)).Value()};
             UiRenderViewId view{ownership, 3, 1};
             RuntimeUiInputContextId context{ownership, 4, 1};
@@ -126,11 +124,17 @@ namespace Horo::Runtime::Ui {
             std::optional<UiPointerInteraction> interaction;
             std::uint64_t sequence{1};
 
-            explicit PointerFixture(const bool draggable = true) {
-                REQUIRE(presented
-                            .Apply({view, descriptor.canvas, layout.Descriptor().interaction, First<UiRenderSnapshotRevision>(),
-                                    UiPresentationOutcome::Presented, UiPresentationReason::None})
-                            .HasValue());
+            explicit PointerFixture(const bool draggable = true, const UiRenderMode renderMode = UiRenderMode::ScreenSpaceOverlay)
+                : mode(renderMode) {
+                UiPresentationReceipt receipt{view,
+                                              descriptor.canvas,
+                                              layout.Descriptor().interaction,
+                                              First<UiRenderSnapshotRevision>(),
+                                              UiPresentationOutcome::Presented,
+                                              UiPresentationReason::None};
+                if (mode == UiRenderMode::WorldSpace)
+                    receipt.worldProjection = UiWorldCanvasProjection{{}, {2, 0, 0}, {0, 2, 0}};
+                REQUIRE(presented.Apply(receipt).HasValue());
                 const UiPointerCaptureContext owner{context,
                                                     view,
                                                     descriptor.instance,
@@ -155,7 +159,147 @@ namespace Horo::Runtime::Ui {
             Result<UiPointerInteractionResult> Tick(const std::uint64_t time) {
                 return interaction->Pump({tree, hit, presented, captures, dispatcher, observer}, canvas, {}, time, sequence);
             }
+
+            Result<UiPointerInteractionResult> PumpWorld(std::span<const UiPointerSample> samples, const std::uint64_t time) {
+                return interaction->Pump({tree, hit, presented, captures, dispatcher, observer}, {}, samples, time, sequence);
+            }
         };
+
+        UiPointerSample WorldSample(const UiPointerEdge edge, const float x = 0.5F) {
+            return {.pointer = UiPointerId::Create(1).Value(),
+                    .edge = edge,
+                    .modality = UiPointerModality::WorldRay,
+                    .worldRay = Math::Ray{{x, 0.5F, 1}, {0, 0, -1}, 0, 2}};
+        }
+
+        TEST_CASE("World rays use the presented canvas for capture movement and activation", "[runtime_ui][pointer][world]") {
+            PointerFixture fixture{true, UiRenderMode::WorldSpace};
+            const std::array press{WorldSample(UiPointerEdge::Press)};
+            const auto held = fixture.PumpWorld(press, 1);
+            REQUIRE(held.HasValue());
+            CHECK(held.Value().activePointers == 1);
+
+            SECTION("a release on the same target activates it") {
+                const std::array release{WorldSample(UiPointerEdge::Release)};
+                REQUIRE(fixture.PumpWorld(release, 2).HasValue());
+                CHECK(fixture.observer.Count(UiGestureKind::Tap) == 1);
+            }
+            SECTION("a ray outside the canvas still moves the captured contact") {
+                const std::array move{WorldSample(UiPointerEdge::Move, 3)};
+                REQUIRE(fixture.PumpWorld(move, 2).HasValue());
+                CHECK(fixture.observer.Count(UiGestureKind::DragBegin) == 1);
+                const std::array release{WorldSample(UiPointerEdge::Release, 3)};
+                const auto ended = fixture.PumpWorld(release, 3);
+                REQUIRE(ended.HasValue());
+                CHECK(ended.Value().activePointers == 0);
+                CHECK(fixture.observer.Count(UiGestureKind::Tap) == 0);
+            }
+            SECTION("tracking loss cancels without requiring a ray") {
+                auto cancelled = WorldSample(UiPointerEdge::Cancel);
+                cancelled.worldRay.reset();
+                const auto ended = fixture.PumpWorld(std::span{&cancelled, 1}, 2);
+                REQUIRE(ended.HasValue());
+                CHECK(ended.Value().activePointers == 0);
+                CHECK(fixture.observer.Count(UiGestureKind::Cancel) == 1);
+                const std::array release{WorldSample(UiPointerEdge::Release)};
+                REQUIRE(fixture.PumpWorld(release, 3).HasValue());
+                CHECK(fixture.observer.Count(UiGestureKind::Tap) == 0);
+            }
+        }
+
+        TEST_CASE("An invalid ray rejects its whole batch before any pointer default", "[runtime_ui][pointer][world]") {
+            PointerFixture fixture{true, UiRenderMode::WorldSpace};
+            std::array samples{WorldSample(UiPointerEdge::Press), WorldSample(UiPointerEdge::Release)};
+            samples.back().worldRay->direction.z = -2;
+            const auto rejected = fixture.PumpWorld(samples, 1);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == UiErrors::HitTestInvalid.code.Value());
+            CHECK(fixture.observer.Count(UiGestureKind::Press) == 0);
+            CHECK(fixture.sequence == 1);
+        }
+
+        TEST_CASE("World presentation loss retires capture before physical or accessible defaults", "[runtime_ui][pointer][world]") {
+            PointerFixture fixture{true, UiRenderMode::WorldSpace};
+            const auto plane = *fixture.presented.WorldProjection();
+            const std::array press{WorldSample(UiPointerEdge::Press)};
+            REQUIRE(fixture.PumpWorld(press, 1).Value().activePointers == 1);
+
+            const bool skipped = GENERATE(false, true);
+            UiPresentationReceipt receipt{fixture.view,
+                                          fixture.descriptor.canvas,
+                                          fixture.layout.Descriptor().interaction,
+                                          UiRenderSnapshotRevision::Create(2).Value(),
+                                          skipped ? UiPresentationOutcome::Skipped : UiPresentationOutcome::Failed,
+                                          skipped ? UiPresentationReason::Suppressed : UiPresentationReason::ExecutionFailure};
+            REQUIRE(fixture.presented.Apply(receipt).HasValue());
+            const auto sequenceBeforeLoss = fixture.sequence;
+            SECTION("an empty tick cannot fire a pending long press") {
+                const auto rejected = fixture.PumpWorld({}, 600);
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == UiErrors::HitTestNotPresented.code.Value());
+                CHECK(fixture.observer.Count(UiGestureKind::LongPress) == 0);
+            }
+            SECTION("a retained focus target cannot activate through accessibility") {
+                const auto rejected =
+                    fixture.interaction->Accessible({fixture.tree, fixture.hit, fixture.presented, fixture.captures, fixture.dispatcher,
+                                                     fixture.observer},
+                                                    fixture.target, UiAccessibleGesture::Activate, fixture.sequence);
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == UiErrors::HitTestNotPresented.code.Value());
+            }
+            CHECK(fixture.captures.IsDrained());
+            CHECK(fixture.sequence == sequenceBeforeLoss);
+
+            receipt.snapshotRevision = UiRenderSnapshotRevision::Create(3).Value();
+            receipt.outcome = UiPresentationOutcome::Presented;
+            receipt.reason = UiPresentationReason::None;
+            receipt.worldProjection = plane;
+            REQUIRE(fixture.presented.Apply(receipt).HasValue());
+            const std::array release{WorldSample(UiPointerEdge::Release)};
+            REQUIRE(fixture.PumpWorld(release, 601).HasValue());
+            CHECK(fixture.observer.Count(UiGestureKind::Tap) == 0);
+            REQUIRE(fixture.PumpWorld(press, 602).HasValue());
+            REQUIRE(fixture.PumpWorld(release, 603).HasValue());
+            CHECK(fixture.observer.Count(UiGestureKind::Tap) == 1);
+        }
+
+        TEST_CASE("A world ray cannot apply a default after its presented plane is replaced", "[runtime_ui][pointer][world]") {
+            PointerFixture fixture{true, UiRenderMode::WorldSpace};
+
+            struct ReplaceWorldPlane final : UiEventHandler {
+                UiPresentedInteractionState &presented;
+                UiPresentationReceipt receipt;
+                bool applied{};
+
+                ReplaceWorldPlane(UiPresentedInteractionState &tracker, const UiPresentationReceipt &replacement)
+                    : presented(tracker), receipt(replacement) {}
+
+                Result<UiEventResponse> Handle(UiElementHandle, const UiEventPhase phase, const UiRoutedEvent &) override {
+                    if (phase == UiEventPhase::Target)
+                        REQUIRE(presented.Apply(receipt).HasValue());
+                    return Result<UiEventResponse>::Success({});
+                }
+
+                Result<void> ApplyDefault(UiElementHandle, const UiRoutedEvent &) override {
+                    applied = true;
+                    return Result<void>::Success();
+                }
+            };
+
+            ReplaceWorldPlane route{fixture.presented,
+                                    {fixture.view, fixture.descriptor.canvas, fixture.layout.Descriptor().interaction,
+                                     UiRenderSnapshotRevision::Create(2).Value(), UiPresentationOutcome::Presented,
+                                     UiPresentationReason::None, UiWorldCanvasProjection{{10, 0, 0}, {2, 0, 0}, {0, 2, 0}}}};
+
+            const std::array press{WorldSample(UiPointerEdge::Press)};
+            const auto rejected =
+                fixture.interaction->Pump({fixture.tree, fixture.hit, fixture.presented, fixture.captures, fixture.dispatcher, route}, {},
+                                          press, 1, fixture.sequence);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == UiErrors::HitTestSourceStale.code.Value());
+            CHECK_FALSE(route.applied);
+            CHECK(fixture.Tick(2).Value().activePointers == 0);
+        }
 
         TEST_CASE("Prevented gesture begin retries without update or drop", "[runtime_ui][pointer][prevention]") {
             const bool draggable = GENERATE(false, true);

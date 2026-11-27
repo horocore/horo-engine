@@ -103,6 +103,12 @@ namespace Horo::Extensions {
         Result<std::uint64_t> IssueGeneration() const;
         Result<ExtensionCapabilityAdmission> AdmitReference(std::string moduleId, std::uint64_t generation) const;
         Result<ModuleScriptSourceLease> Source(std::string_view package, std::string_view moduleId) const;
+        /** @brief Copies the declaration of the exact currently admitted module. */
+        [[nodiscard]] Result<ExtensionModuleManifest> ActiveDeclaration(std::string_view package, std::string_view moduleId) const;
+        /** @brief Returns the native and builtin schema publication revision. Zero denotes a closed host. */
+        [[nodiscard]] std::uint64_t AuthoringApiRevision() const noexcept;
+        /** @brief Invalidates authoring results after the owner publishes a replacement builtin schema. */
+        void PublishBuiltinAuthoringChange() const noexcept;
         Result<ModuleScriptResolvedImport> Resolve(std::string_view package, std::string_view moduleId, std::string_view id) const;
         Result<void> ValidateActiveArtifacts(const ExtensionManifest &, std::span<const ModuleScriptArtifactEvidence>) const;
 

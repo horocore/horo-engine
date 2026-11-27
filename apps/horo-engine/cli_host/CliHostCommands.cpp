@@ -5,12 +5,16 @@
 #include "Horo/Cli/NavigationCommands.h"
 #include "Horo/Cli/PackageCommands.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "McpServe.h"
 #include "NavigationCliHost.h"
 #include "PackageCliHost.h"
+#include "PlatformServicesCliHost.h"
+#include "PrefabCliHost.h"
 
 #include <algorithm>
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -19,6 +23,17 @@ namespace Horo::Application::Internal {
         std::string Utf8Path(const std::filesystem::path &path) {
             const auto spelling = path.generic_u8string();
             return {spelling.begin(), spelling.end()};
+        }
+
+        /** @brief Formats closed Save category names for the existing scalar CLI result schema. */
+        std::string JoinCategoryNames(const std::span<const std::string_view> categories) {
+            std::string joined;
+            for (const auto category : categories) {
+                if (!joined.empty())
+                    joined += ", ";
+                joined += category;
+            }
+            return joined;
         }
         /** @brief Existing production operation selected by accepted inert metadata. */
         enum class HostCommand {
@@ -143,23 +158,28 @@ namespace Horo::Application::Internal {
             /** @brief Calls the same diagnostic bundle service used by other application hosts. */
             Result<Cli::CliCommandResult> BundleResult(const Cli::CliCommandRequest &request, Cli::CliExecutionContext &context) const {
                 const auto option = std::ranges::find(request.options, "output-path", &Cli::CliParsedOption::name);
-                if (option == request.options.end() || option->values.empty())
+                if (option == request.options.end() || option->values.size() != 1 ||
+                    option->values.front().source != Cli::CliValueSource::Invocation)
                     return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::ParseFailed));
                 const auto *path = std::get_if<Cli::CliPathValue>(&option->values.front().value);
                 if (path == nullptr)
                     return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::ParseFailed));
+                const auto outputPath = std::filesystem::path{std::u8string{path->value.begin(), path->value.end()}};
+                if (const auto destination = Diagnostics::ValidateDiagnosticBundleDestination(outputPath); destination.HasError())
+                    return Result<Cli::CliCommandResult>::Failure(destination.ErrorValue());
                 if (const auto progress =
                         context.ReportProgress({.phase = "bundle", .completion = 0.0F, .message = "Collecting diagnostics"});
                     progress.HasError())
                     return Result<Cli::CliCommandResult>::Failure(progress.ErrorValue());
-                const auto result = session_->GenerateDiagnosticBundle(
-                    {.outputPath = std::filesystem::path{std::u8string{path->value.begin(), path->value.end()}}});
+                const auto result = session_->GenerateDiagnosticBundle({.outputPath = outputPath});
                 if (result.HasError())
                     return Result<Cli::CliCommandResult>::Failure(result.ErrorValue());
                 return Result<Cli::CliCommandResult>::Success(
                     {.fields = {{"outputPath", Utf8Path(result.Value().outputPath)},
                                 {"fileCount", static_cast<std::int64_t>(result.Value().fileCount)},
-                                {"missingOptionalCount", static_cast<std::int64_t>(result.Value().missingOptionalCount)}}});
+                                {"missingOptionalCount", static_cast<std::int64_t>(result.Value().missingOptionalCount)},
+                                {"saveIncludedCategories", JoinCategoryNames(Runtime::SaveBundleIncludedCategories)},
+                                {"saveExcludedCategories", JoinCategoryNames(Runtime::SaveBundleExcludedCategories)}}});
             }
 
             PackageCliHost *packages_{};
@@ -222,6 +242,7 @@ namespace Horo::Application::Internal {
             descriptor.contractVersion = {1, 0, 0};
             descriptor.ownerId = "horo.host.cli";
             descriptor.cancellation = CliCancellationPolicy::Cooperative;
+            descriptor.timeout.maximumMilliseconds = 86'400'000;
             descriptor.interactive = CliInteractivePolicy::Forbidden;
             descriptor.sideEffects = CliSideEffectPolicy::ReadsState;
             if (SelectCommand(path) == HostCommand::Smoke)
@@ -242,7 +263,17 @@ namespace Horo::Application::Internal {
         descriptors.push_back(DescribeModuleScriptCommand());
         auto packages = Cli::DescribePackageCommands();
         descriptors.insert(descriptors.end(), std::make_move_iterator(packages.begin()), std::make_move_iterator(packages.end()));
+        descriptors.push_back(DescribePackageUpdatePreviewCommand());
+        descriptors.push_back(DescribePackageApplyUpdateCommand());
+        descriptors.push_back(DescribePackageRollbackPreviewCommand());
+        descriptors.push_back(DescribePackageRollbackUpdateCommand());
+        descriptors.push_back(DescribePackageRemovalPreviewCommand());
+        descriptors.push_back(DescribePackageApplyRemovalCommand());
         descriptors.push_back(Cli::DescribeNavigationBakeCommand());
+        descriptors.push_back(DescribePlatformServicesValidationCommand());
+        descriptors.push_back(DescribePlatformServicesCookCommand());
+        descriptors.push_back(DescribePrefabCookCommand());
+        descriptors.push_back(DescribePrefabMigrationPlanCommand());
         return descriptors;
     }
 

@@ -1,0 +1,272 @@
+#include "SceneAiNavigationMotion.h"
+
+#include "ScenePhysicsHost.h"
+
+#include <algorithm>
+#include <chrono>
+#include <new>
+#include <utility>
+
+namespace Horo::Application::Internal {
+    namespace Nav = Navigation;
+
+    /** @copydoc SceneAiNavigationMotion::SceneAiNavigationMotion */
+    SceneAiNavigationMotion::SceneAiNavigationMotion(AI::AiNavigationMovementTask task, Nav::NavigationVelocityPipeline &velocity,
+                                                     Nav::NavigationCharacterAdapter &character) noexcept
+        : task_(std::move(task)), velocity_(velocity), character_(character) {}
+
+    SceneAiNavigationMotion::~SceneAiNavigationMotion() {
+        DiscardPrepared();
+        DiscardFeedback();
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Submit */
+    Result<std::optional<Nav::NavigationVelocityPublication>> SceneAiNavigationMotion::Submit(
+        const Nav::NavigationMovementObservation &current, const Nav::NavigationCrowdSnapshot &capture,
+        const Nav::NavigationAvoidanceRequest &request, Nav::INavigationCrowdBackend &solver, std::uint64_t *longestSolveNanoseconds) {
+        using Publication = Result<std::optional<Nav::NavigationVelocityPublication>>;
+        auto work = Prepare(current, capture, request);
+        if (work.HasError())
+            return Publication::Failure(std::move(work).ErrorValue());
+        if (!work.Value())
+            return Publication::Success(std::nullopt);
+        const auto &prepared = *work.Value();
+        using Clock = std::chrono::steady_clock;
+        const auto start = longestSolveNanoseconds ? Clock::now() : Clock::time_point{};
+        auto outcome = solver.Solve(capture, prepared.request);
+        if (longestSolveNanoseconds) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+            if (elapsed > 0)
+                *longestSolveNanoseconds = std::max(*longestSolveNanoseconds, static_cast<std::uint64_t>(elapsed));
+        }
+        auto submitted = Complete(prepared, std::move(outcome), current, capture);
+        if (submitted.HasError())
+            return Publication::Failure(std::move(submitted).ErrorValue());
+        return Publication::Success(std::move(submitted).Value());
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Prepare */
+    Result<std::optional<Nav::NavigationVelocityWork>> SceneAiNavigationMotion::Prepare(const Nav::NavigationMovementObservation &current,
+                                                                                        const Nav::NavigationCrowdSnapshot &capture,
+                                                                                        const Nav::NavigationAvoidanceRequest &request) {
+        using Work = Result<std::optional<Nav::NavigationVelocityWork>>;
+        if (prepared_ || pendingTick_ != 0 || !character_.UsesPipeline(velocity_))
+            return Work::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        auto selected = task_.PrepareSafeMotion(velocity_, current, capture, request);
+        if (selected.HasValue())
+            prepared_ = selected.Value();
+        return selected;
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Complete */
+    Result<Nav::NavigationVelocityPublication> SceneAiNavigationMotion::Complete(const Nav::NavigationVelocityWork &work,
+                                                                                 Result<Nav::NavigationAvoidanceOutcome> solved,
+                                                                                 const Nav::NavigationMovementObservation &current,
+                                                                                 const Nav::NavigationCrowdSnapshot &capture) {
+        using Publication = Result<Nav::NavigationVelocityPublication>;
+        if (!prepared_ || work.sequence != prepared_->sequence || work.binding != prepared_->binding ||
+            work.preferred.operation != prepared_->preferred.operation || work.preferred.tick != prepared_->preferred.tick ||
+            work.characterRevision != prepared_->characterRevision)
+            return Publication::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        if (auto authority = task_.ValidateSafeMotionAuthority(*prepared_); authority.HasError()) {
+            DiscardPrepared();
+            return Publication::Failure(std::move(authority).ErrorValue());
+        }
+        auto submitted = solved.HasError() ? Publication::Failure(std::move(solved).ErrorValue())
+                                           : Publish(*prepared_, solved.Value(), current, capture);
+        if (submitted.HasError()) {
+            DiscardPrepared();
+            return Publication::Failure(task_.FailMotion(std::move(submitted).ErrorValue()));
+        }
+        prepared_.reset();
+        pendingTick_ = current.path.tick;
+        return submitted;
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Publish */
+    Result<Nav::NavigationVelocityPublication> SceneAiNavigationMotion::Publish(const Nav::NavigationVelocityWork &work,
+                                                                                const Nav::NavigationAvoidanceOutcome &solved,
+                                                                                const Nav::NavigationMovementObservation &current,
+                                                                                const Nav::NavigationCrowdSnapshot &capture) {
+        using Publication = Result<Nav::NavigationVelocityPublication>;
+        auto safe = velocity_.Commit(work, solved, capture, current);
+        if (safe.HasError())
+            return safe;
+        auto motion = character_.Prepare(safe.Value(), current, current.path.tick);
+        if (motion.HasError())
+            return Publication::Failure(std::move(motion).ErrorValue());
+        auto admitted = character_.Submit(motion.Value(), current);
+        if (admitted.HasError())
+            return Publication::Failure(std::move(admitted).ErrorValue());
+        if (admitted.Value().absent || admitted.Value().admission.status != Character::CharacterCommandAdmissionStatus::Deferred)
+            return Publication::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
+        return safe;
+    }
+
+    /** @copydoc SceneAiNavigationMotion::DiscardPrepared */
+    void SceneAiNavigationMotion::DiscardPrepared() noexcept {
+        if (prepared_) {
+            (void)velocity_.CancelPending(*prepared_);
+            prepared_.reset();
+        }
+    }
+
+    /** @copydoc SceneAiNavigationMotion::SuspendAtSafePoint */
+    void SceneAiNavigationMotion::SuspendAtSafePoint(const Nav::NavigationMovementObservation &current) {
+        DiscardPrepared();
+        DiscardFeedback();
+        if (auto suspended = velocity_.SuspendAtSafePoint(current); suspended.HasError())
+            Reject(std::move(suspended).ErrorValue());
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Observe */
+    Result<void> SceneAiNavigationMotion::Observe(const std::uint64_t tick) {
+        if (pendingTick_ == 0)
+            return Result<void>::Success();
+        if (pendingTick_ != tick)
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        auto observed = character_.ObserveFeedback();
+        if (observed.HasError())
+            return Result<void>::Failure(std::move(observed).ErrorValue());
+        pendingTick_ = 0;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneAiNavigationMotion::DiscardFeedback */
+    void SceneAiNavigationMotion::DiscardFeedback() noexcept {
+        if (pendingTick_ != 0) {
+            character_.DiscardFeedback();
+            pendingTick_ = 0;
+        }
+    }
+
+    /** @copydoc SceneAiNavigationMotion::Reject */
+    void SceneAiNavigationMotion::Reject(Error error) {
+        DiscardPrepared();
+        DiscardFeedback();
+        (void)task_.FailMotion(std::move(error));
+    }
+
+    SceneAiNavigationActor::SceneAiNavigationActor(std::unique_ptr<Nav::NavigationMovementController> movement,
+                                                   std::unique_ptr<Nav::NavigationVelocityPipeline> velocity,
+                                                   Nav::NavigationCharacterAdapter bridge, Character::CharacterCapability character,
+                                                   Nav::NavigationCharacterBinding binding, Nav::CrowdAgentHandle agent) noexcept
+        : movement_(std::move(movement)), velocity_(std::move(velocity)), bridge_(std::move(bridge)), character_(std::move(character)),
+          binding_(binding), agent_(agent) {}
+
+    /** @copydoc SceneAiNavigationActor::CreateForScene */
+    Result<std::unique_ptr<SceneAiNavigationActor>> SceneAiNavigationActor::CreateForScene(
+        Nav::NavigationAgentRegistry &registry, Nav::NavigationWorldLifecycle &world, Nav::NavigationCoordinator &coordinator,
+        const Nav::NavigationPathCaller caller, ScenePhysicsHost &physics, const Runtime::RuntimeSceneView &scene,
+        const Runtime::EntityRef entity, const CharacterInput::DesiredMotionPrincipal principal) {
+        using Actor = Result<std::unique_ptr<SceneAiNavigationActor>>;
+        const auto controller = physics.ResolveCharacterController(scene, entity);
+        if (controller.HasError())
+            return Actor::Failure(controller.ErrorValue());
+        const auto binding = registry.ActiveBinding();
+        if (binding.HasError())
+            return Actor::Failure(binding.ErrorValue());
+        if (binding.Value().scene.Value() != entity.runtime.value)
+            return Actor::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        const auto agent = registry.FindOwner({binding.Value().scene, entity.entity.index, entity.entity.generation});
+        if (!agent)
+            return Actor::Failure(MakeError(Nav::NavigationErrors::AgentRegistryStale));
+        const auto native = physics.Borrow();
+        if (native.HasError())
+            return Actor::Failure(native.ErrorValue());
+        const auto grant = native.Value().character.IssueCapability();
+        if (grant.HasError())
+            return Actor::Failure(grant.ErrorValue());
+        try {
+            auto actor = Create(registry, world, coordinator, caller, *agent, grant.Value(),
+                                {principal, controller.Value(), binding.Value(), controller.Value().slot.generation});
+            if (actor.HasError())
+                grant.Value().Revoke();
+            return actor;
+        } catch (const std::bad_alloc &) {
+            grant.Value().Revoke();
+            return Actor::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+        }
+    }
+
+    /** @copydoc SceneAiNavigationActor::Create */
+    Result<std::unique_ptr<SceneAiNavigationActor>> SceneAiNavigationActor::Create(
+        Nav::NavigationAgentRegistry &registry, Nav::NavigationWorldLifecycle &world, Nav::NavigationCoordinator &coordinator,
+        const Nav::NavigationPathCaller caller, const Nav::CrowdAgentHandle agent, Character::CharacterCapability character,
+        const Nav::NavigationCharacterBinding &binding) {
+        using Actor = Result<std::unique_ptr<SceneAiNavigationActor>>;
+        auto movement = Nav::NavigationMovementController::Create(registry, world, coordinator, agent, caller);
+        if (movement.HasError())
+            return Actor::Failure(std::move(movement).ErrorValue());
+        auto velocity = Nav::NavigationVelocityPipeline::Create(*movement.Value(), binding.navigation, agent, binding.characterRevision);
+        if (velocity.HasError())
+            return Actor::Failure(std::move(velocity).ErrorValue());
+        auto bridge = Nav::NavigationCharacterAdapter::Create(*velocity.Value(), character, binding);
+        if (bridge.HasError())
+            return Actor::Failure(std::move(bridge).ErrorValue());
+        return Actor::Success(std::unique_ptr<SceneAiNavigationActor>{
+            new SceneAiNavigationActor{std::move(movement).Value(), std::move(velocity).Value(), std::move(bridge).Value(),
+                                       std::move(character), binding, agent}});
+    }
+
+    /** @copydoc SceneAiNavigationActor::Admit */
+    Result<void> SceneAiNavigationActor::Admit(AI::AiRuntimeCapability ai, AI::AiTaskContinuation task,
+                                               Nav::NavigationMovementRequest request, const Nav::NavigationMovementObservation &current) {
+        if (task_.IsCurrent())
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
+        const auto observed = Capture(current);
+        if (observed.HasError())
+            return Result<void>::Failure(observed.ErrorValue());
+        motion_.reset();
+        auto selected = AI::AiNavigationMovementTask::Start(std::move(ai), task, *movement_, std::move(request), observed.Value());
+        if (selected.HasError())
+            return Result<void>::Failure(std::move(selected).ErrorValue());
+        motion_.emplace(std::move(selected).Value(), *velocity_, bridge_);
+        task_ = std::move(task);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneAiNavigationActor::Motion */
+    SceneAiNavigationMotion *SceneAiNavigationActor::Motion() noexcept {
+        if (motion_ && !task_.IsCurrent())
+            motion_.reset();
+        return motion_ ? &*motion_ : nullptr;
+    }
+
+    /** @copydoc SceneAiNavigationActor::Capture */
+    Result<Nav::NavigationMovementObservation> SceneAiNavigationActor::Capture(Nav::NavigationMovementObservation current) const {
+        using Observation = Result<Nav::NavigationMovementObservation>;
+        if (current.binding != binding_.navigation)
+            return Observation::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        const auto root = character_.ControllerTransform(binding_.controller);
+        if (root.HasError())
+            return Observation::Failure(root.ErrorValue());
+        current.position = root.Value().position;
+        return Observation::Success(current);
+    }
+
+    /** @copydoc SceneAiNavigationActor::Sample */
+    Result<Nav::NavigationCrowdMotionSample> SceneAiNavigationActor::Sample(const std::uint64_t tick) const {
+        using Sample = Result<Nav::NavigationCrowdMotionSample>;
+        const auto root = character_.ControllerTransform(binding_.controller);
+        if (root.HasError())
+            return Sample::Failure(root.ErrorValue());
+        if (tick == 0 || root.Value().sourceTick >= tick)
+            return Sample::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        Nav::NavigationCrowdMotionSample sample{.handle = agent_, .position = root.Value().position};
+        if (root.Value().sourceTick == 0 || root.Value().sourceTick < tick - 1)
+            return Sample::Success(sample);
+        const auto actual = character_.ControllerLocomotionSnapshot(binding_.controller);
+        if (actual.HasError())
+            return Sample::Failure(actual.ErrorValue());
+        if (actual.Value().tick != root.Value().sourceTick)
+            return Sample::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        sample.velocity = actual.Value().movement.achievedVelocityMetersPerSecond;
+        return Sample::Success(sample);
+    }
+
+    /** @copydoc SceneAiNavigationActor::Agent */
+    Nav::CrowdAgentHandle SceneAiNavigationActor::Agent() const noexcept {
+        return agent_;
+    }
+}  // namespace Horo::Application::Internal

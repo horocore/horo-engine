@@ -34,6 +34,9 @@ namespace Horo::Editor {
         Sequence,
         PCGGraph,
         Prefab,
+        BlackboardSchema,
+        EnvironmentQuery,
+        DecisionGraph,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -72,11 +75,14 @@ namespace Horo::Editor {
         std::vector<std::string> pcgGraphExtensions;     /**< Binary PCG source suffixes; bypass text admission. */
         std::vector<std::string> sequenceExtensions;     /**< Versioned cinematic sequence source suffixes. */
 
-        std::vector<std::string> prefabExtensions; /**< Canonical prefab authored sources. */
+        std::vector<std::string> prefabExtensions;           /**< Canonical prefab authored sources. */
+        std::vector<std::string> blackboardSchemaExtensions; /**< Binary Blackboard schema source suffixes. */
+        std::vector<std::string> environmentQueryExtensions; /**< Typed Environment Query source suffixes. */
+        std::vector<std::string> decisionGraphExtensions;    /**< Registered semantic Decision graph source suffixes. */
 
         /**
          * @brief Returns the default source and authored-document opening policy.
-         * @return A value containing native source, Horo Script, project-text, UI Canvas, cinematic sequence and binary PCG extensions.
+         * @return Enabled source and authored-document extensions.
          */
         [[nodiscard]] static SourceFilePolicy Default();
     };
@@ -131,6 +137,20 @@ namespace Horo::Editor {
         Discard
     };
 
+    /** @brief One approved draft, borrowed only during owner-lane application. */
+    struct SourceReviewDraft final {
+        SourceDocumentId path;
+        std::string_view text;
+    };
+
+    /** @brief One approved physical rename with borrowed text and disk evidence. */
+    struct SourceReviewRename final {
+        SourceDocumentSnapshot source;
+        SourceDocumentId destination;
+        std::string_view text;
+        const SourceBatchDiskEvidence &disk;
+    };
+
     /**
      * @brief Classifies and routes project source files through one containment boundary.
      * @details The service resolves relative and absolute inputs to a canonical project
@@ -139,6 +159,12 @@ namespace Horo::Editor {
      */
     class SourceFileOpenService final {
     public:
+        /** @brief Reserves and opens one unsaved source at the proposed destination.
+         * @param path Admitted project-relative source key. @param text Complete draft text.
+         * @param cancellation Cooperative observer. @return New source snapshot or failure leaving the workspace intact.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> StageNew(const SourceDocumentId &path, std::string text,
+                                                              CancellationToken cancellation = {});
         /**
          * @brief Creates a source-open service for one project root.
          * @param projectRoot Project root containing the source files.
@@ -222,6 +248,41 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceSaveResult> SaveAs(const SourceSaveRequest &request, const std::filesystem::path &destination,
                                                       DurableFileSystem &files, CancellationToken cancellation = {});
+        /** @brief Confirms one reviewed file move and retargets the same open document instance.
+         * @param source Exact current snapshot. @param destination Approved project-relative path.
+         * @param text Reviewed buffer after the move. @param evidence Worker-observed saved bytes.
+         * @param files Native filesystem authority. @param cancellation Cooperative observer.
+         * @return Rekeyed snapshot or failure preserving the current registry.
+         * @pre The caller holds project mutation authority and the registry is quiescent.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> RenameReviewed(const SourceDocumentSnapshot &source,
+                                                                    const SourceDocumentId &destination, std::string text,
+                                                                    const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                    CancellationToken cancellation = {});
+        /** @brief Publishes reviewed text, drafts and renames under one source and registry transaction.
+         * @param edits Exact current source edits. @param drafts Unique project-relative draft destinations.
+         * @param renames Admitted physical moves with unique source and destination paths.
+         * @param deletions Exact clean sources with reserved project Trash destinations.
+         * @param evidence Worker-observed edit bases. @param files Filesystem authority used to observe the bases.
+         * @param cancellation Cooperative observer. @return Complete group receipt or typed refusal.
+         * @pre The caller holds project mutation authority for all physical moves.
+         */
+        [[nodiscard]] Result<SourceFileReviewBatch> PublishReviewedGroup(std::span<const SourceBatchEdit> edits,
+                                                                         std::span<const SourceReviewDraft> drafts,
+                                                                         std::span<const SourceReviewRename> renames,
+                                                                         std::span<const SourceReviewDeletion> deletions,
+                                                                         const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                         CancellationToken cancellation = {});
+        /** @brief Replays edits, closes unchanged drafts and restores renamed sources together.
+         * @param receipt Exact live group. @param cancellation Cooperative observer.
+         * @param disk New worker observations in rename order. @param files Filesystem authority for physical restoration.
+         * @param restores Original sources and witnessed project Trash payloads.
+         * @return Success or a refusal preserving document and registry state.
+         * @pre The caller holds project mutation authority for all reverse moves.
+         */
+        [[nodiscard]] Result<void> UndoReviewedFiles(const SourceFileReviewBatch &receipt, CancellationToken cancellation = {},
+                                                     std::span<const SourceBatchDiskEvidence> disk = {}, DurableFileSystem *files = nullptr,
+                                                     std::span<const SourceReviewTrashRestore> restores = {});
         /** @brief Applies the explicit close choice; a failed or unconfirmed save keeps the session open.
          * @param request Exact source revision and optional save overwrite consent. @param decision Explicit host choice.
          * @param files Host filesystem. @return True only after text and routing ownership close together; false for Cancel.

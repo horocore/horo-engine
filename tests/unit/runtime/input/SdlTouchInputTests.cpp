@@ -1,4 +1,4 @@
-#include "SdlInputBackend.h"
+#include "SdlInputTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -7,8 +7,19 @@
 namespace {
     using namespace Horo::Input;
 
+    TEST_CASE("SDL committed input carries a monotonic host sample boundary", "[unit][input][sdl][accessibility][time]") {
+        SdlInputBackend backend;
+        backend.BeginFrame(1);
+        const auto first = backend.Commit().sampleTime;
+        REQUIRE(first.has_value());
+        backend.BeginFrame(2);
+        const auto second = backend.Commit().sampleTime;
+        REQUIRE(second.has_value());
+        REQUIRE(second->microseconds >= first->microseconds);
+    }
+
     void BindSurface(SdlInputBackend &backend) {
-        backend.BindWindow(7);
+        Horo::Tests::BindFocusedSdlTestWindow(backend, 7);
         backend.BeginFrame(1);
         SDL_Event resize{};
         resize.type = SDL_EVENT_WINDOW_RESIZED;
@@ -131,6 +142,8 @@ namespace {
             backend.ProcessEvent(Finger(SDL_EVENT_FINGER_MOTION, 1, 101, 0.9F));
             backend.ProcessEvent(Finger(SDL_EVENT_FINGER_DOWN, 2, 102));
             const auto &cancelled = backend.Commit();
+            CHECK_FALSE(cancelled.window.focused);
+            CHECK(cancelled.window.pointerInside == !unbind);
             CHECK(cancelled.touches[0].cancelled);
             CHECK_FALSE(cancelled.touches[0].contact.down);
             CHECK(cancelled.touches[0].id == retained.touches[0].id);

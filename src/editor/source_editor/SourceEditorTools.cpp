@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <imgui_internal.h>
 #include <utility>
 
 namespace Horo::Editor {
@@ -20,13 +21,20 @@ namespace Horo::Editor {
         bool Button(const EditorGuiContext &context, const char *key, const bool enabled = true) {
             const auto &label = Text(context, key);
             const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
-            if (const float width = [&context, &metrics, &label] {
+            const float width = [&context, &metrics, &label] {
                 const Theme::ScopedTextStyle style{context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans};
                 return ImGui::CalcTextSize(label.c_str()).x + metrics.paddingX * 2;
-            }(); ImGui::GetContentRegionAvail().x < width)
+            }();
+            if (ImGui::GetContentRegionAvail().x < width && ImGui::GetCursorPosX() > ImGui::GetCursorStartPos().x)
                 ImGui::NewLine();
-            const bool clicked = Ui::Button(
-                {.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .enabled = enabled, .font = context.theme.fonts.sans});
+            const bool clipped = ImGui::GetContentRegionAvail().x < width;
+            const bool clicked = Ui::Button({.label = label.c_str(),
+                                             .variant = Ui::ButtonVariant::Secondary,
+                                             .enabled = enabled,
+                                             .font = context.theme.fonts.sans,
+                                             .style = {.width = clipped ? Ui::StyleWidth::FillAvailable : Ui::StyleWidth::FitContent}});
+            if (clipped && (ImGui::IsItemFocused() || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)))
+                Ui::ShowTooltip(label.c_str(), &context.theme.fonts);
             ImGui::SameLine();
             return clicked;
         }
@@ -151,6 +159,30 @@ namespace Horo::Editor {
             Ui::ErrorText(Text(context, "workspace.source_edit.invalid").c_str(), context.theme.fonts);
     }
 
+    /** @copydoc SourceEditorTools::Review */
+    void SourceEditorTools::Review(SourceEditorWidget &widget, const EditorGuiContext &context) {
+        const auto status = widget.ReviewStatus();
+        if (status == SourceReviewStatus::None)
+            return;
+        if (status == SourceReviewStatus::Ready) {
+            const auto step = [&](const char *key, const bool forward) {
+                if (!Button(context, key) || !widget.NavigateReview(forward))
+                    return;
+                // Keep keyboard navigation on the review action so Enter cannot reach the source editor.
+                if (ImGui::GetCurrentContext()->NavActivateDownId != ImGui::GetItemID())
+                    focusSource_ = true;
+            };
+            step("workspace.source_review.previous", false);
+            step("workspace.source_review.next", true);
+        } else {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, "workspace.source_review.conflict"), Theme::ConsoleWarning(),
+                            context.theme.fonts);
+        }
+        if (Button(context, "workspace.source_review.dismiss"))
+            widget.ClearReview();
+        ImGui::NewLine();
+    }
+
     /** @copydoc SourceEditorTools::Draw */
     std::optional<SourceEditingCommand> SourceEditorTools::Draw(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,
                                                                 const SourceHistoryState &history,
@@ -162,7 +194,7 @@ namespace Horo::Editor {
         ImGui::PushID(static_cast<int>(identity >> 32));
         ImGui::PushID(static_cast<int>(identity & 0xffffffffU));
         std::optional<SourceEditingCommand> intent;
-        const auto &profile = context.settings.settings.keymap.profile;
+        const auto &profile = context.inputRouter ? context.inputRouter->Profile() : context.settings.settings.keymap.profile;
         const bool acceptsShortcuts = widget.OwnsInput() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
                                       !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         const auto pressed = [&](const char *action, const bool repeat = false) {
@@ -205,6 +237,7 @@ namespace Horo::Editor {
             focusLine_ = lineOpen_;
         }
         ImGui::NewLine();
+        Review(widget, context);
         if (auto search = Search(widget, source, context))
             intent = std::move(search);
         Navigate(widget, source, context);

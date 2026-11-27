@@ -10,7 +10,14 @@
 
 #include <openxr/openxr.h>
 
+#if defined(__ANDROID__)
+#include "OpenXRAndroidDiscovery.h"
+#endif
+
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Validates the native same-eye pose and field-of-view containment for an inset view. */
+    [[nodiscard]] bool ContainsNativeInset(const XrView &peripheral, const XrView &inset, XrViewStateFlags flags) noexcept;
+
     /** @brief Synchronous official-ABI resolver borrowed from the same retained native loader/instance.
      * @details This value owns no native object or authority. The existing loader/session owner outlives
      * every binding; null is rejected before mutation. No type-erased callable, allocation or alternate resolver is added.

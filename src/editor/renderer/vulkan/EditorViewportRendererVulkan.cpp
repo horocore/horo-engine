@@ -1,11 +1,13 @@
 #include "EditorViewportRendererVulkan.h"
 
+#include "EditorViewportColorPipeline.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <algorithm>
 #include <limits>
+#include <new>
 
 namespace Horo::Editor {
     namespace {
@@ -53,35 +55,190 @@ namespace Horo::Editor {
         explicit ProgramGeneration(EditorViewportRendererVulkan &target) noexcept : owner(target) {}
 
         ~ProgramGeneration() {
+            if (crossFadeSlots)
+                owner.RetireCameraCrossFadeSlots(*crossFadeSlots, 0, owner.crossFadeDrawCount_);
             owner.RetireProgram(program, slots);
             owner.RetireProgram(shadowProgram, {});
+            owner.RetireProgram(sceneLinearProgram, {});
         }
 
         EditorViewportRendererVulkan &owner;
         Render::ShaderHotReloadTargetState expected;
         ShaderResources program;
         ShaderResources shadowProgram;
+        ShaderResources sceneLinearProgram;
         std::array<FrameSlot, 8> slots;
+        std::unique_ptr<FrameSlots> crossFadeSlots;
     };
 
     Result<void> EditorViewportRendererVulkan::PrepareProgram(ProgramGeneration &candidate) {
-        if (const auto pipeline = ProgramResources::CreatePipeline(frontend_, candidate.program, device_.frames); pipeline.HasError())
+        const bool displayLinear = !candidate.sceneLinearProgram.payload.empty();
+        if (const auto pipeline = ProgramResources::CreatePipeline(frontend_, candidate.program, device_.frames, displayLinear);
+            pipeline.HasError())
             return pipeline;
-        if (const auto slots = ProgramResources::CreateDrawSlots(frontend_, candidate.program, candidate.slots, device_.frames,
-                                                                 resources_.ShadowTextureView());
+        if (displayLinear)
+            if (const auto scene = ProgramResources::CreateSceneLinearPipeline(frontend_, candidate.sceneLinearProgram, device_.frames);
+                scene.HasError())
+                return scene;
+        const auto &sceneProgram = displayLinear ? candidate.sceneLinearProgram : candidate.program;
+        if (const auto slots =
+                ProgramResources::CreateDrawSlots(frontend_, sceneProgram, candidate.slots, device_.frames, resources_.ShadowTextureView());
             slots.HasError())
             return slots;
         if (auto overlay = CreateOverlaySlots(candidate.program, candidate.slots); overlay.HasError())
             return overlay;
-        return PrepareShadowProgram(candidate.shadowProgram, candidate.slots);
+        if (auto shadow = PrepareShadowProgram(candidate.shadowProgram, candidate.slots); shadow.HasError())
+            return shadow;
+        if (crossFadeSourceSlots_) {
+            candidate.crossFadeSlots = std::make_unique<FrameSlots>();
+            return PrepareCameraCrossFadeSlots(*candidate.crossFadeSlots, sceneProgram, candidate.shadowProgram, 0, crossFadeDrawCount_);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareManualColor */
+    Result<void> EditorViewportRendererVulkan::PrepareManualColor(EditorVulkanSceneLinearCook scene,
+                                                                  const EditorViewportColorInputs &inputs,
+                                                                  const Render::ExposureSettings &settings,
+                                                                  const Render::CookedNativeReconstructionKernel *spatial) {
+        auto nativeSpatial = PrepareReconstructionKernel(spatial, Render::NativeReconstructionEntry::Spatial);
+        if (nativeSpatial.HasError())
+            return Result<void>::Failure(nativeSpatial.ErrorValue());
+        using enum EditorViewportResources::ColorReconstruction;
+        return PrepareColorRecipe(std::move(scene), inputs, settings, spatial ? Spatial : None, std::move(nativeSpatial).Value());
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareColorRecipe */
+    Result<void> EditorViewportRendererVulkan::PrepareColorRecipe(EditorVulkanSceneLinearCook scene,
+                                                                  const EditorViewportColorInputs &inputs,
+                                                                  const Render::ExposureSettings &settings,
+                                                                  const EditorViewportResources::ColorReconstruction reconstruction,
+                                                                  std::shared_ptr<Render::IResidentNativeReconstructionKernel> spatial) {
+        if (!initialized_ || recordedEver_ || color_ || resources_.ColorTexture().IsValid() ||
+            !frontend_.Capabilities().supportsMaterialRasterGraph || scene.payload.empty() || settings.mode != Render::ExposureMode::Manual)
+            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
+        auto color = MakeViewportColor(inputs, settings);
+        if (color.HasError())
+            return Result<void>::Failure(color.ErrorValue());
+        auto candidate = std::make_unique<ProgramGeneration>(*this);
+        candidate->program.payload = shader_.payload;
+        candidate->program.metadata = shader_.metadata;
+        candidate->shadowProgram.payload = shadowShader_.payload;
+        candidate->shadowProgram.metadata = shadowShader_.metadata;
+        candidate->sceneLinearProgram.payload = std::move(scene.payload);
+        candidate->sceneLinearProgram.metadata = std::move(scene.metadata);
+        if (const auto prepared = PrepareProgram(*candidate); prepared.HasError())
+            return prepared;
+        if (const auto enabled = resources_.EnableColorPipeline(reconstruction); enabled.HasError())
+            return enabled;
+        AdoptProgram(*candidate);
+        color_ = std::move(color).Value();
+        spatial_ = std::move(spatial);
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportRendererVulkan::AdoptProgram */
     void EditorViewportRendererVulkan::AdoptProgram(ProgramGeneration &candidate) noexcept {
+        viewportCanvasGraph_.reset();
+        viewportRasterGraphs_.reset();
         std::swap(shader_, candidate.program);
         std::swap(shadowShader_, candidate.shadowProgram);
+        std::swap(sceneLinearShader_, candidate.sceneLinearProgram);
         std::swap(slots_, candidate.slots);
+        std::swap(crossFadeSourceSlots_, candidate.crossFadeSlots);
         boundShadowAtlas_ = resources_.ShadowTextureView();
+    }
+
+    EditorViewportRendererVulkan::TemporalGuidePrograms::TemporalGuidePrograms(EditorViewportRendererVulkan &viewport,
+                                                                               Render::RenderMotionHistoryTracker history) noexcept
+        : owner(viewport), history_(std::move(history)) {}
+
+    EditorViewportRendererVulkan::TemporalGuidePrograms::~TemporalGuidePrograms() {
+        RetireDrawsAfter(0);
+        owner.RetireProgram(motion, {});
+        owner.RetireProgram(linearDepth, {});
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalGuidePrograms */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalGuidePrograms(
+        const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+        const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
+        auto candidate = MakeTemporalGuidePrograms(linearDepth, motion, kernels);
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        if (const auto enabled = resources_.EnableTemporalGuideTargets(); enabled.HasError())
+            return enabled;
+        temporalGuides_ = std::move(candidate).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalColor */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalColor(EditorVulkanSceneLinearCook scene,
+                                                                    const EditorViewportColorInputs &inputs,
+                                                                    const Render::ExposureSettings &settings,
+                                                                    const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+                                                                    const std::span<const Render::CookedNativeReconstructionKernel> kernels,
+                                                                    const Render::CookedNativeReconstructionKernel *upscaleFallback) {
+        if (kernels.empty())
+            return Result<void>::Failure(MakeError(Render::NativeReconstructionErrors::InvalidArtifact));
+        auto candidate = MakeTemporalGuidePrograms(linearDepth, motion, kernels);
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        auto fallback = PrepareReconstructionKernel(upscaleFallback, Render::NativeReconstructionEntry::Spatial);
+        if (fallback.HasError())
+            return Result<void>::Failure(fallback.ErrorValue());
+        candidate.Value()->prepareDisplayDepth = upscaleFallback != nullptr;
+        using enum EditorViewportResources::ColorReconstruction;
+        try {
+            const auto prepared = PrepareColorRecipe(std::move(scene), inputs, settings, upscaleFallback ? TemporalUpscale : Temporal,
+                                                     std::move(fallback).Value());
+            if (prepared.HasError())
+                return prepared;
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportGeometryCreationFailed));
+        }
+        temporalGuides_ = std::move(candidate).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::MakeTemporalGuidePrograms */
+    Result<std::unique_ptr<EditorViewportRendererVulkan::TemporalGuidePrograms>> EditorViewportRendererVulkan::MakeTemporalGuidePrograms(
+        const TemporalGuideCook &linearDepth, const TemporalGuideCook &motion,
+        const std::span<const Render::CookedNativeReconstructionKernel> kernels) {
+        using namespace Render;
+        using Outcome = Result<std::unique_ptr<TemporalGuidePrograms>>;
+        if (const auto boundary = Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
+            return Outcome::Failure(boundary.ErrorValue());
+        if (!initialized_ || recordedEver_ || resources_.ColorTexture().IsValid() ||
+            !frontend_.Capabilities().support.features.Supports(RenderCapability::NativeReconstruction))
+            return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        auto history = RenderMotionHistoryTracker::Create({RenderMaterialPass::MaximumDraws});
+        if (history.HasError())
+            return Outcome::Failure(history.ErrorValue());
+        try {
+            auto candidate = std::make_unique<TemporalGuidePrograms>(*this, std::move(history).Value());
+            if (const auto compute = PrepareTemporalKernels(*candidate, kernels); compute.HasError())
+                return Outcome::Failure(compute.ErrorValue());
+            if (const auto depth =
+                    ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->linearDepth, EditorVulkanTemporalInput::LinearDepth,
+                                                                  linearDepth, device_.frames);
+                depth.HasError())
+                return Outcome::Failure(depth.ErrorValue());
+            if (const auto vectors =
+                    ProgramResources::CreateTemporalGuidePipeline(frontend_, candidate->motion, EditorVulkanTemporalInput::Motion, motion,
+                                                                  device_.frames);
+                vectors.HasError())
+                return Outcome::Failure(vectors.ErrorValue());
+            return Outcome::Success(std::move(candidate));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(
+                MakeError(RendererErrors::ViewportGeometryCreationFailed, "Unable to allocate the viewport temporal guide programs."));
+        }
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareTemporalMotion */
+    Result<void> EditorViewportRendererVulkan::PrepareTemporalMotion(const EditorViewportMotionSource source) {
+        return temporalGuides_ ? temporalGuides_->PrepareSource(source) : Result<void>::Success();
     }
 
     void EditorViewportRendererVulkan::RetireDraw(DrawSlot &draw) noexcept {
@@ -131,9 +288,11 @@ namespace Horo::Editor {
                                                                Render::Detail::VulkanEditorGraphicsBridge &bridge,
                                                                EditorVulkanViewportCook cooked) noexcept
         : frontend_(frontend), bridge_(bridge), shader_{.payload = std::move(cooked.payload), .metadata = std::move(cooked.metadata)},
+          crossFadeCook_(std::move(cooked.cameraCrossFade)),
           resources_(frontend, {.resolveImage = &ViewportImage,
                                 .meshBufferAccess = Render::RenderBufferAccess::HostVisible,
-                                .prepareDirectionalShadow = true}) {
+                                .prepareDirectionalShadow = true,
+                                .colorReadback = true}) {
         if (cooked.shadow) {
             shadowShader_.payload = std::move(cooked.shadow->payload);
             shadowShader_.metadata = std::move(cooked.shadow->metadata);
@@ -179,6 +338,8 @@ namespace Horo::Editor {
         const auto boundary = Render::Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_);
         if (boundary.HasError())
             return Outcome::Failure(boundary.ErrorValue());
+        if (color_)
+            return Outcome::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
         if (!initialized_ || !childAttached_ || !shader_.pipeline.IsValid())
             return Outcome::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         return Outcome::Success({Render::ShaderTargetBackend::Vulkan, boundary.Value().value, liveGeneration_});
@@ -246,27 +407,59 @@ namespace Horo::Editor {
     void EditorViewportRendererVulkan::ReleaseNative() noexcept {
         if (owner_ != std::this_thread::get_id())
             std::terminate();
+        viewportCanvasGraph_.reset();
+        viewportRasterGraphs_.reset();
+        imageCapture_.Shutdown(frontend_);
+        preparedCrossFade_.reset();
+        if (crossFadeSourceSlots_)
+            ProgramResources::ReleaseMaterials(*crossFadeSourceSlots_);
+        for (auto &draw : crossFadeProgram_.draws)
+            draw.material.reset();
+        if (crossFadeProgram_.shader.materials)
+            static_cast<void>(crossFadeProgram_.shader.materials->Shutdown());
+        crossFadeProgram_.shader.materials.reset();
         for (auto &draw : preparedDraws_)
             draw = {};
         for (auto &cascade : preparedShadowDraws_)
             for (auto &draw : cascade)
                 draw = {};
-        ProgramResources::ReleaseMaterials(slots_);
-        if (shader_.materials)
-            static_cast<void>(shader_.materials->Shutdown());
-        shader_.materials.reset();
-        if (shadowShader_.materials)
-            static_cast<void>(shadowShader_.materials->Shutdown());
-        shadowShader_.materials.reset();
+        ReleaseDesktopPrograms();
         for (auto &slot : xrDrawSlots_)
             for (auto &draw : slot)
                 draw.material.reset();
         if (xrShader_.materials)
             static_cast<void>(xrShader_.materials->Shutdown());
         xrShader_.materials.reset();
+        for (auto &draw : xrMotionDrawSlots_)
+            draw.material.reset();
+        if (xrMotionShader_.materials)
+            static_cast<void>(xrMotionShader_.materials->Shutdown());
+        xrMotionShader_.materials.reset();
+        for (auto &eye : xrComfort_.eyes)
+            eye.material.reset();
+        if (xrComfort_.shader.materials)
+            static_cast<void>(xrComfort_.shader.materials->Shutdown());
+        xrComfort_.shader.materials.reset();
+        ReleaseXrCoverageMaterials();
         initialized_ = false;
         childAttached_ = false;
         recordedEver_ = false;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ReleaseDesktopPrograms */
+    void EditorViewportRendererVulkan::ReleaseDesktopPrograms() noexcept {
+        FinishColorFrame(false);
+        dynamicResolution_.reset();
+        color_.reset();
+        spatial_.reset();
+        temporalGuides_.reset();
+        acceptedColorView_ = {};
+        ProgramResources::ReleaseMaterials(slots_);
+        for (auto *shader : {&sceneLinearShader_, &shader_, &shadowShader_}) {
+            if (shader->materials)
+                static_cast<void>(shader->materials->Shutdown());
+            shader->materials.reset();
+        }
     }
 
     /** @copydoc EditorViewportRendererVulkan::Shutdown */
@@ -280,13 +473,33 @@ namespace Horo::Editor {
         emptyGraph_.reset();
         emptyGraphTexture_ = {};
         resources_.Shutdown();
+        RetireCameraCrossFadeProgram(crossFadeProgram_);
+        if (crossFadeSourceSlots_) {
+            RetireCameraCrossFadeSlots(*crossFadeSourceSlots_, 0, crossFadeDrawCount_);
+            crossFadeSourceSlots_.reset();
+        }
+        crossFadeDrawCount_ = 0;
+        crossFadeShadowBudget_ = 0;
+        declinedCrossFadeDrawCount_.reset();
+        crossFadeSceneReady_ = false;
         auto source = std::move(shader_.payload);
         auto metadata = std::move(shader_.metadata);
         RetireProgram(shader_, slots_);
         RetireProgram(shadowShader_, {});
+        RetireProgram(sceneLinearShader_, {});
         shader_.payload = std::move(source);
         shader_.metadata = std::move(metadata);
         RetireXrProgram();
+        RetireXrComfortProgram(xrComfort_);
+        for (auto &draw : xrMotionDrawSlots_)
+            RetireDraw(draw);
+        RetireProgram(xrMotionShader_, {});
+        RetireProgram(xrCoverageShader_, {});
+        xrMotionFormats_.reset();
+        xrMotionCook_.reset();
+        xrCoverageCook_.reset();
+        xrCoverageReductionArtifact_.clear();
+        xrCoverageProbe_.reset();
     }
 
     void EditorViewportRendererVulkan::RetireXrProgram() noexcept {
@@ -310,18 +523,63 @@ namespace Horo::Editor {
                                                                                                      const Render::RenderSceneView &scene) {
         if (&frontend != &frontend_ || owner_ != std::this_thread::get_id() || !initialized_)
             return Result<std::optional<Render::RenderTargetHandle>>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
-        const auto prepared = resources_.Prepare(scene, requestedExtent_);
-        if (prepared.HasError())
+        const auto prepared = dynamicResolution_ ? PrepareDynamicResources(scene) : resources_.Prepare(scene, requestedExtent_);
+        if (prepared.HasError()) {
+            imageCapture_.Fail();
             return prepared;
-        if (prepared.Value() && resources_.ColorTexture() != emptyGraphTexture_) {
-            if (const auto clear = CreateEmptyGraph(); clear.HasError())
-                return Result<std::optional<Render::RenderTargetHandle>>::Failure(clear.ErrorValue());
         }
-        if (prepared.Value()) {
-            if (auto bound = BindShadowAtlas(); bound.HasError())
-                return Result<std::optional<Render::RenderTargetHandle>>::Failure(bound.ErrorValue());
-        }
+        if (auto *port = bridge_.Port())
+            imageCapture_.Prepare(frontend_, ImageSource(),
+                                  {port, [](void *owner, std::uint64_t instance, Render::RenderTimelinePoint signal,
+                                            std::span<std::byte> destination) {
+                return static_cast<Render::Detail::IVulkanEditorGraphicsPort *>(owner)->ReadCompletedColor(instance, signal, destination);
+            }});
+        if (prepared.Value())
+            if (const auto ready = PrepareReadyViewport(scene.instances.size()); ready.HasError())
+                return Result<std::optional<Render::RenderTargetHandle>>::Failure(ready.ErrorValue());
         return prepared;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareReadyViewport */
+    Result<void> EditorViewportRendererVulkan::PrepareReadyViewport(const std::size_t draws) {
+        if (!color_ && resources_.ColorTexture() != emptyGraphTexture_)
+            if (const auto clear = CreateEmptyGraph(); clear.HasError())
+                return clear;
+        if (temporalGuides_)
+            if (const auto guides = temporalGuides_->PrepareDraws(draws); guides.HasError())
+                return guides;
+        if (const auto bound = BindShadowAtlas(); bound.HasError())
+            return bound;
+        if (const auto bound = BindCameraCrossFadeSource(); bound.HasError())
+            return bound;
+        return PrepareCameraCrossFadeScene(draws);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ImageSource */
+    EditorGraphViewportImageCapture::Source EditorViewportRendererVulkan::ImageSource() const noexcept {
+        if (!requestedExtent_.IsValid())
+            return {};
+        const auto extent = resources_.AllocatedExtent();
+        return {resources_.Target(), resources_.PresentationTexture(), {extent.width, extent.height}};
+    }
+
+    /** @copydoc IEditorViewportRenderer::RequestImageCapture */
+    Result<std::uint64_t> EditorViewportRendererVulkan::RequestImageCapture(EditorViewportImageRegion region,
+                                                                            std::function<bool()> authorized) {
+        if (owner_ != std::this_thread::get_id() || !initialized_ || !bridge_.Port() || !bridge_.Port()->SupportsColorReadback() ||
+            !frontend_.Capabilities().supportsMaterialRasterGraph)
+            return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
+        return imageCapture_.Request(ImageSource(), region, std::move(authorized));
+    }
+
+    /** @copydoc IEditorViewportRenderer::ReadImageCapture */
+    std::optional<EditorViewportImageSnapshot> EditorViewportRendererVulkan::ReadImageCapture(std::uint64_t id) {
+        return owner_ == std::this_thread::get_id() ? imageCapture_.Read(id, ImageSource()) : std::nullopt;
+    }
+
+    /** @copydoc IEditorViewportRenderer::CancelImageCapture */
+    bool EditorViewportRendererVulkan::CancelImageCapture(std::uint64_t id) noexcept {
+        return owner_ == std::this_thread::get_id() && imageCapture_.Cancel(id);
     }
 
     void EditorViewportRendererVulkan::RequestExtent(EditorViewportExtent extent) noexcept {
@@ -349,9 +607,10 @@ namespace Horo::Editor {
     EditorViewportTextureView EditorViewportRendererVulkan::TextureView() const noexcept {
         if (const auto projection = XrLogicalProjection(); projection.IsValid())
             return projection;
-        return resources_.IsReady()
-                   ? EditorViewportTextureView{.textureId = resources_.ImageIdentity(), .sampledView = resources_.ColorTextureView()}
-                   : EditorViewportTextureView{};
+        const auto view = resources_.PresentationTextureView();
+        if (!resources_.IsReady() || (color_ && view != pendingColorSubmission_.output && view != acceptedColorView_))
+            return {};
+        return {.textureId = resources_.ImageIdentity(), .sampledView = view};
     }
 
     bool EditorViewportRendererVulkan::IsReady() const noexcept {

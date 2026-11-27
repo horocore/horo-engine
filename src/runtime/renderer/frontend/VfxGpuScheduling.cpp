@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphErrors.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/RenderWorldSnapshot.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrontendErrors.h"
 #include "RenderResourceRegistry.h"
@@ -234,14 +235,19 @@ namespace Horo::Render {
         struct AppendBudget final {
             std::uint32_t passes{};
             std::uint32_t usages{};
+            std::uint32_t draws{};
         };
 
         AppendBudget RequiredBudget(const VfxGpuAppendPlan &plan) noexcept {
-            return {plan.dispatch ? 2U : 1U, (plan.dispatch ? 4U : 0U) + 2U + (plan.request.depth.IsValid() ? 1U : 0U)};
+            const AppendBudget compute = plan.dispatch ? AppendBudget{1, 4, 0} : AppendBudget{};
+            if (plan.request.suppressDraw)
+                return compute;
+            return {compute.passes + 1, compute.usages + 2 + (plan.request.depth.IsValid() ? 1U : 0U), 1};
         }
 
         bool FitsBudget(const VfxGpuGraphRequest &request, const AppendBudget budget) noexcept {
-            return request.remainingDrawCalls > 0 && request.remainingPasses >= budget.passes && request.remainingUsages >= budget.usages;
+            return request.remainingDrawCalls >= budget.draws && request.remainingPasses >= budget.passes &&
+                   request.remainingUsages >= budget.usages;
         }
 
         Result<void> ComputePass(RenderGraphBuilder &builder, VfxGpuAppendPlan &plan) {
@@ -263,6 +269,8 @@ namespace Horo::Render {
         }
 
         Result<void> DrawPass(RenderGraphBuilder &builder, VfxGpuAppendPlan &plan) {
+            if (plan.request.suppressDraw)
+                return Result<void>::Success();
             const auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
             if (pass.HasError())
                 return Result<void>::Failure(pass.ErrorValue());
@@ -292,6 +300,16 @@ namespace Horo::Render {
         }
     }  // namespace
 
+    /** @copydoc VfxGpuGraphRequest::UseBatch */
+    void VfxGpuGraphRequest::UseBatch(const GpuVfxRenderBatch &batch, bool advance) noexcept {
+        preparation = batch.preparation;
+        generation = batch.generation;
+        pending = advance ? batch.pending : std::nullopt;
+        lifetimeCancellation = batch.lifetimeCancellation;
+        view.originDelta = batch.originDelta;
+        suppressDraw = batch.suppressDraw;
+    }
+
     /** @copydoc RenderFrameScope::ScheduleVfxGpu */
     VfxGpuGraphSchedulingOutcome RenderFrameScope::ScheduleVfxGpu(RenderGraphBuilder &builder, const VfxGpuGraphRequest &request) {
         if (!owner_ || !backend_ || executed_)
@@ -303,6 +321,8 @@ namespace Horo::Render {
     VfxGpuGraphSchedulingOutcome RenderFrontend::ValidateVfxGpuGraphRequest(const RenderGraphBuilder &builder,
                                                                             const VfxGpuGraphRequest &request,
                                                                             const Detail::VfxGpuRecord &record) const {
+        if (request.suppressDraw)
+            return SnapshotAuthority(request, record);
         if (!builder.FindPass(request.lightingComplete) || !builder.FindPass(request.outputTransform) ||
             !builder.FindResource(request.color))
             return VfxGpuGraphSchedulingOutcome::Failure(RenderGraphExecutionErrors::InvalidGraph);
@@ -375,6 +395,8 @@ namespace Horo::Render {
         Detail::VfxGpuAppendPlan plan{*record, request};
         if (const auto *failure = Detail::PlanVfxGpu(plan, builder.Owner()))
             return VfxGpuGraphSchedulingOutcome::Failure(*failure);
+        if (request.suppressDraw && !plan.dispatch)
+            return VfxGpuGraphSchedulingOutcome::Success({});
         return AppendVfxGpuPlan(builder, plan, frame);
     }
 
@@ -403,7 +425,7 @@ namespace Horo::Render {
             return VfxGpuGraphSchedulingOutcome::Failure(draw.ErrorValue());
         if (const auto *observation = PrepareObservation(*vfxGpuStorage_, plan))
             return VfxGpuGraphSchedulingOutcome::Failure(*observation);
-        plan.schedule.drawCalls = 1;
+        plan.schedule.drawCalls = budget.draws;
         plan.schedule.usages = budget.usages;
         plan.schedule.dispatched = plan.dispatch;
         if (plan.record.acceptedPoint.IsValid())

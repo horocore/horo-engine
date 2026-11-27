@@ -10,6 +10,7 @@
 #include <fstream>
 #include <map>
 #include <stdexcept>
+#include <utility>
 
 namespace Horo::Packages::Detail {
     namespace {
@@ -35,14 +36,43 @@ namespace Horo::Packages::Detail {
             std::map<std::filesystem::path, Sha256Digest> artifacts_;
         };
 
+        /** @brief Intersects native provider permissions with exact package approval before application publication. */
+        [[nodiscard]] Extensions::ExtensionPlatformProviderCommit BindProviderCommit(
+            const std::span<const PackageActivationCandidate> candidates, Extensions::ExtensionPlatformProviderCommit commit,
+            const std::uint64_t generation) {
+            if (!commit)
+                return {};
+            std::map<std::pair<std::string, std::string>, Extensions::ExtensionAdmissionPolicy> policies;
+            for (const auto &candidate : candidates)
+                for (const auto &module : candidate.plan.moduleIds)
+                    policies.emplace(std::make_pair(candidate.manifest.id, module), candidate.trust.policy);
+            return [policies = std::move(policies), commit = std::move(commit),
+                    generation](Extensions::ExtensionPlatformProviderCandidate provider) {
+                const auto policy = policies.find({provider.extensionId, provider.moduleId});
+                if (policy == policies.end())
+                    return Result<Extensions::ExtensionPlatformProviderPublication>::Failure(
+                        MakeError(PackageLifecycleErrors::TrustRequired));
+                Extensions::ExtensionAdmissionRequest request{provider.extensionId, provider.moduleId, generation, {}};
+                Extensions::ExtensionCapabilityRequest capability{{"platform.services.provider"}, {}};
+                for (const auto &permission : provider.permissions)
+                    capability.requiredPermissions.emplace_back(permission);
+                request.capabilities.push_back(std::move(capability));
+                auto admitted = Extensions::ExtensionCapabilityAdmission::Evaluate(request, policy->second);
+                if (admitted.HasError())
+                    return Result<Extensions::ExtensionPlatformProviderPublication>::Failure(admitted.ErrorValue());
+                return commit(std::move(provider));
+            };
+        }
+
     }  // namespace
 
     /** @copydoc PackageActivationComposition::PackageActivationComposition */
     PackageActivationComposition::PackageActivationComposition(const PackageLifecycleConfiguration &configuration,
                                                                std::shared_ptr<const VerifiedPackageInstallRecord> install,
-                                                               const std::uint64_t generation) {
+                                                               const std::uint64_t generation)
+        : install_(std::move(install)) {
         (void)configuration;
-        snapshot_->install = std::move(install);
+        snapshot_->install = install_;
         snapshot_->generation = generation;
     }
 
@@ -114,13 +144,17 @@ namespace Horo::Packages::Detail {
         auto gate = std::make_shared<BoundArtifactGate>(configuration.artifactGate, std::move(artifacts));
         manager_ = std::make_unique<Extensions::ExtensionManager>(catalog_.get(), configuration.profile, configuration.capabilities,
                                                                   std::move(gate), configuration.libraryLoader,
-                                                                  Extensions::ExtensionPlatformProviderCommit{}, configuration.editorHosts);
+                                                                  BindProviderCommit(candidates, configuration.platformProviderCommit,
+                                                                                     snapshot_->generation),
+                                                                  configuration.editorHosts);
         retirements_.reserve(candidates.size());
+        retainedPackages_.reserve(candidates.size());
         for (const auto &candidate : candidates) {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             const auto packageRoot = root_ / std::to_string(candidate.packageIndex);
             const auto descriptor = packageRoot / candidate.descriptor.Value();
+            retainedPackages_.push_back(install_->Graph()->packages[candidate.packageIndex].lock.package);
             auto loaded = manager_->LoadExtension(descriptor.parent_path().string(), candidate.providers, candidate.selectedModules);
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
@@ -171,5 +205,10 @@ namespace Horo::Packages::Detail {
     /** @copydoc PackageActivationComposition::Snapshot */
     std::shared_ptr<const PackageActivationSnapshot> PackageActivationComposition::Snapshot() const noexcept {
         return snapshot_;
+    }
+
+    /** @copydoc PackageComposition::AppendRetainedPackages */
+    void PackageActivationComposition::AppendRetainedPackages(std::vector<HoroPackageId> &packages) const {
+        packages.insert(packages.end(), retainedPackages_.begin(), retainedPackages_.end());
     }
 }  // namespace Horo::Packages::Detail

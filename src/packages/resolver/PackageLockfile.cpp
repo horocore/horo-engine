@@ -172,7 +172,7 @@ namespace Horo::Packages {
 
         [[nodiscard]] Result<void> ValidateGraph(const std::vector<LockedPackageReference> &roots,
                                                  const std::vector<LockedPackage> &packages) {
-            if (roots.empty() || packages.empty() || !StrictlySorted(roots, ReferenceLess) || !StrictlySorted(packages, PackageLess))
+            if (roots.empty() != packages.empty() || !StrictlySorted(roots, ReferenceLess) || !StrictlySorted(packages, PackageLess))
                 return Result<void>::Failure(MakeError(InvalidLock));
             std::map<std::string_view, std::size_t, std::less<>> indices;
             for (std::size_t index = 0; index < packages.size(); ++index)
@@ -344,7 +344,7 @@ namespace Horo::Packages {
                                                                             const Sha256Digest &requestHash,
                                                                             const std::span<const PackageLockArtifact> artifacts,
                                                                             const PackageLockfileLimits &limits) {
-        if (plan.packages.empty() || roots.empty() || artifacts.size() != plan.packages.size())
+        if (artifacts.size() != plan.packages.size())
             return Result<ValidatedPackageLockfileV1>::Failure(MakeError(InvalidLock));
         if (plan.packages.size() > limits.packages || roots.size() > limits.roots)
             return Result<ValidatedPackageLockfileV1>::Failure(MakeError(ResourceLimit));
@@ -380,8 +380,7 @@ namespace Horo::Packages {
                 !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1U || !root.at("requestHash").is_string() ||
                 !root.at("roots").is_array() || !root.at("packages").is_array())
                 return Result<ValidatedPackageLockfileV1>::Failure(MakeError(InvalidLock));
-            if (root.at("roots").empty() || root.at("roots").size() > limits.roots || root.at("packages").empty() ||
-                root.at("packages").size() > limits.packages)
+            if (root.at("roots").size() > limits.roots || root.at("packages").size() > limits.packages)
                 return Result<ValidatedPackageLockfileV1>::Failure(MakeError(ResourceLimit));
             auto requestHash = ParseSha256(root.at("requestHash").get_ref<const std::string &>());
             if (requestHash.HasError())
@@ -457,6 +456,61 @@ namespace Horo::Packages {
     /** @copydoc ValidatedPackageLockfileV1::Packages */
     std::span<const LockedPackage> ValidatedPackageLockfileV1::Packages() const noexcept {
         return m_packages;
+    }
+
+    /** @copydoc ValidatedPackageLockfileV1::PreviewRemoval */
+    Result<PackageRemovalGraphPreview> ValidatedPackageLockfileV1::PreviewRemoval(const HoroPackageId &package) const {
+        using Output = Result<PackageRemovalGraphPreview>;
+        std::map<std::string_view, std::size_t, std::less<>> indices;
+        for (std::size_t index = 0; index < m_packages.size(); ++index)
+            indices.try_emplace(m_packages[index].package.Value(), index);
+        if (!indices.contains(package.Value()))
+            return Output::Failure(MakeError(InvalidLock, "The package is absent from the locked graph."));
+
+        PackageRemovalGraphPreview preview;
+        preview.directRoot = std::ranges::find(m_roots, package, &LockedPackageReference::package) != m_roots.end();
+        std::vector<bool> retained(m_packages.size());
+        std::vector<std::size_t> pending;
+        pending.reserve(m_packages.size());
+        const auto retain = [&](const HoroPackageId &id) {
+            const auto index = indices.at(id.Value());
+            if (!retained[index]) {
+                retained[index] = true;
+                pending.push_back(index);
+            }
+        };
+        for (const auto &root : m_roots)
+            if (root.package != package)
+                retain(root.package);
+        while (!pending.empty()) {
+            const auto index = pending.back();
+            pending.pop_back();
+            for (const auto &dependency : m_packages[index].dependencies)
+                retain(dependency.package);
+        }
+        for (std::size_t index = 0; index < m_packages.size(); ++index) {
+            const auto &entry = m_packages[index];
+            if (!retained[index])
+                preview.removed.emplace_back(entry.package, entry.version);
+            else if (std::ranges::find(entry.dependencies, package, &LockedPackageReference::package) != entry.dependencies.end())
+                preview.requiredBy.emplace_back(entry.package, entry.version);
+        }
+        return Output::Success(std::move(preview));
+    }
+
+    /** @copydoc ValidatedPackageLockfileV1::WithRootWithdrawn */
+    ValidatedPackageLockfileV1 ValidatedPackageLockfileV1::WithRootWithdrawn(const HoroPackageId &package, const Sha256Digest &requestHash,
+                                                                             std::span<const LockedPackageReference> removed) const {
+        auto roots = m_roots;
+        std::erase_if(roots, [&package](const auto &root) {
+            return root.package == package;
+        });
+        std::vector<LockedPackage> retained;
+        retained.reserve(m_packages.size() - removed.size());
+        for (const auto &entry : m_packages)
+            if (!std::ranges::binary_search(removed, entry.package, {}, &LockedPackageReference::package))
+                retained.push_back(entry);
+        return {requestHash, std::move(roots), std::move(retained)};
     }
 
     /** @copydoc ValidatedPackageLockfileV1::ValidatedPackageLockfileV1 */

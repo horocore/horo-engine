@@ -198,6 +198,51 @@ namespace Horo::AI {
             CHECK(memory.Find(observation.key, 0, Live()).Value()->provenance == observation.provenance);
         }
 
+        TEST_CASE("perception structural retirement releases exact subjects and emitters before a read", "[unit][ai][perception][memory]") {
+            auto memory = Memory();
+            auto relayed = Observation(Key(3));
+            relayed.provenance = Key(2).source;
+            REQUIRE(memory.Observe(Observation(Key(1)), 0).HasValue());
+            REQUIRE(memory.Observe(relayed, 0).HasValue());
+            REQUIRE(memory.Observe(Observation(Key(1, 2)), 0).HasValue());
+            REQUIRE(memory.Observe(Observation(Key(4)), 0).HasValue());
+
+            const std::array retired{Key(1).source, Key(2).source};
+            memory.ForgetRetiredSources(retired);
+            CHECK(memory.StoredCount() == 2);
+            memory.ForgetRetiredSources(retired);
+            REQUIRE(memory.StoredCount() == 2);
+            const auto snapshot = memory.Snapshot(0, Live());
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().count == 2);
+            CHECK(snapshot.Value().entries[0].key == Key(1, 2));
+            CHECK(snapshot.Value().entries[1].key == Key(4));
+        }
+
+        TEST_CASE("ordinary Scene AI data stays inert when no AI structural owner is composed", "[unit][ai][scene]") {
+            Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            auto scene = Runtime::RuntimeScene::Create(definition.Value(), {77});
+            REQUIRE(scene.HasValue());
+            constexpr Runtime::SceneObjectId object{1};
+            const auto agent = MakeIdentity<AgentId>(7);
+            Runtime::SceneCommandBuffer create;
+            (void)create.Create({.authoredObject = object, .components = {.aiAgent = AiAgentComponent{.agent = agent}}});
+            REQUIRE(scene.Value()->Commit(create).HasValue());
+            const auto entity = scene.Value()->View().Find(object);
+            REQUIRE(entity);
+            const auto resident = scene.Value()->View().Get(*entity);
+            REQUIRE(resident.HasValue());
+            REQUIRE(resident.Value().components->aiAgent);
+            CHECK(resident.Value().components->aiAgent->agent == agent);
+
+            Runtime::SceneCommandBuffer retire;
+            retire.Destroy(*entity);
+            REQUIRE(scene.Value()->Commit(retire).HasValue());
+            CHECK(scene.Value()->View().Get(*entity).HasError());
+        }
+
         TEST_CASE("scene source adapter removes destroyed generations before perception reads", "[unit][ai][perception][memory][scene]") {
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
             Runtime::RuntimeEntityDefinition entity;

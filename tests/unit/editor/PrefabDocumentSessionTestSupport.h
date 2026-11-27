@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PrefabHierarchyTestSupport.h"
-#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
+#include "editor/screens/workspace/prefab/document/PrefabDocumentSession.h"
 
 #include <array>
 #include <filesystem>

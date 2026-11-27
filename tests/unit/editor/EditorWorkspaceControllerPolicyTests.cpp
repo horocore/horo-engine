@@ -1,5 +1,5 @@
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>

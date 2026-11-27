@@ -2,7 +2,10 @@
 
 #include "Horo/Editor/EditorUiComponents.h"
 
+#include "EditorControlMetadata.h"
+#include "EditorUiLabelWrap.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Runtime/Input.h"
 
 #include <algorithm>
@@ -19,6 +22,22 @@
 #include <vector>
 
 namespace Horo::Editor::Ui {
+    using Runtime::Ui::UiAccessibilityRole;
+    using Runtime::Ui::UiAccessibilityState;
+    using Runtime::Ui::UiAccessibilityStateFlag;
+    using Runtime::Ui::UiAccessibilityValueInput;
+    using Runtime::Ui::UiAccessibilityValueKind;
+
+    namespace {
+        /** @brief Sends call-duration facts to the actual host's context-bound metadata owner, including during live reload. */
+        void RecordControlMetadata(
+            const UiAccessibilityRole role, const char *label, const UiAccessibilityState state = {},
+            const UiAccessibilityValueInput value = {}, const bool redacted = false,
+            const Detail::EditorControlLabelKind labelKind = Detail::EditorControlLabelKind::FrameworkLabel) noexcept {
+            GuiLive::HostSymbol<&Detail::ObserveEditorControl>()(role, label, state, value, redacted, labelKind);
+        }
+    }  // namespace
+
     /** @copydoc ActivityButton */
     bool ActivityButton(const ActivityButtonProps &props, const Theme::Fonts &fonts) {
         ImGui::BeginDisabled(!props.enabled);
@@ -26,6 +45,9 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::Hover());
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::AccentSoft());
         const bool pressed = ImGui::Button(props.id, props.size);
+        RecordControlMetadata(UiAccessibilityRole::TabItem, props.tooltip,
+                              props.active ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         // Own the identity: Badge/tooltip submission overwrites the mutable global LastItemData.
         const ImGuiLastItemData buttonItem{GImGui->LastItemData};
         ImGui::PopStyleColor(3);
@@ -177,7 +199,7 @@ namespace Horo::Editor::Ui {
         };
 
         /** @brief Resolves editable-title geometry from the current content region and theme scale. */
-        [[nodiscard]] EditableTitleLayout ResolveEditableTitleLayout(const EditableTitleProps &props, const Theme::Fonts &fonts) {
+        [[nodiscard]] EditableTitleLayout ResolveEditableTitleLayout(const EditableTitleProps &props) {
             const ImVec2 position = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
             const float uiScale = Theme::GetActiveTokens().sizes.uiScale;
@@ -185,10 +207,7 @@ namespace Horo::Editor::Ui {
             const float iconSize = 22.0F * uiScale;
             const float controlX = position.x + iconSize + 7.0F * uiScale;
             const float controlWidth = std::max(1.0F, position.x + width - props.trailingWidth - 6.0F * uiScale - controlX);
-            const float titleFontSize = InspectorTypography::ObjectTitle();
-            const float effectiveFontHeight = fonts.sansEmphasis != nullptr
-                                                  ? fonts.sansEmphasis->FontSize * Theme::Scale(titleFontSize, Theme::FontPx::SansEmphasis)
-                                                  : titleFontSize;
+            const float effectiveFontHeight = InspectorTypography::ObjectTitle();
             const float controlHeight = 30.0F * uiScale;
             return {
                 .position = position,
@@ -246,9 +265,8 @@ namespace Horo::Editor::Ui {
             float controlWidth{0.0F};
         };
 
-        [[nodiscard]] float InspectorControlHeight(const Theme::Fonts &fonts) {
-            const float baseFontSize = fonts.sans != nullptr ? fonts.sans->FontSize : ImGui::GetFontSize();
-            const float renderedFontSize = baseFontSize * Theme::Scale(InspectorTypography::Field(), Theme::FontPx::Sans);
+        [[nodiscard]] float InspectorControlHeight() {
+            const float renderedFontSize = InspectorTypography::Field();
             const float verticalPadding = ScaledLayoutValue(7.0F);
             return renderedFontSize + verticalPadding * 2.0F;
         }
@@ -257,7 +275,7 @@ namespace Horo::Editor::Ui {
             const ImVec2 position = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
             const auto &tokens = Theme::GetActiveTokens();
-            const float controlHeight = InspectorControlHeight(fonts);
+            const float controlHeight = InspectorControlHeight();
             const float height = controlHeight + tokens.spacing.propertyRowGap;
             if (label[0] == '\0') {
                 return {.position = position,
@@ -498,22 +516,17 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
         ImGui::BeginTooltip();
 
-        if (fonts != nullptr) {
-            if (fonts->sansCompact != nullptr) {
-                font_ = fonts->sansCompact;
-                fontScale_ = Theme::Scale(Theme::TextPx::Label(), Theme::FontPx::SansCompact);
-            } else if (fonts->sans != nullptr) {
-                font_ = fonts->sans;
-                fontScale_ = Theme::Scale(Theme::TextPx::Label(), Theme::FontPx::Sans);
-            }
-        }
+        if (fonts)
+            font_ = fonts->sansCompact ? fonts->sansCompact : fonts->sans;
         Theme::PushFont(font_);
-        ImGui::SetWindowFontScale(fontScale_);
+        fontScale_ = ImGui::GetCurrentWindowRead()->FontWindowScale;
+        if (font_)
+            ImGui::SetWindowFontScale(fontScale_ * Theme::Scale(Theme::TextPx::Label(), ImGui::GetFontSize()));
     }
 
     /** @copydoc ScopedTooltip::~ScopedTooltip */
     ScopedTooltip::~ScopedTooltip() {
-        ImGui::SetWindowFontScale(1.0F);
+        ImGui::SetWindowFontScale(fontScale_);
         Theme::PopFont(font_);
         ImGui::EndTooltip();
         ImGui::PopStyleColor(3);
@@ -566,6 +579,7 @@ namespace Horo::Editor::Ui {
         {
             ScopedTextStyle textStyle(props.font, resolvedStyle.metrics.fontSize, props.baseFontSize);
             clicked = ImGui::Button(props.label, actualSize);
+            RecordControlMetadata(UiAccessibilityRole::Button, props.label);
         }
 
         ImGui::PopStyleColor(4);
@@ -720,6 +734,9 @@ namespace Horo::Editor::Ui {
         const ImVec2 position = ImGui::GetCursorScreenPos();
         ImGui::BeginDisabled(!props.enabled);
         const bool clicked = ImGui::InvisibleButton("##icon-button", size, ImGuiButtonFlags_EnableNav);
+        RecordControlMetadata(UiAccessibilityRole::Button, props.tooltip,
+                              props.selected ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         const bool hovered = props.enabled && ImGui::IsItemHovered();
         const bool active = props.enabled && ImGui::IsItemActive();
         const bool focused = props.enabled && ImGui::IsItemFocused();
@@ -1007,7 +1024,10 @@ namespace Horo::Editor::Ui {
         const ImVec2 position = ImGui::GetCursorScreenPos();
         const ImVec2 textSize = resolvedFont->CalcTextSizeA(fontSize, FLT_MAX, 0.0F, label);
         const ImVec2 hitSize{textSize.x, std::max(textSize.y, 20.0F)};
-        const bool activated = ImGui::InvisibleButton(id, hitSize);
+        const bool activated = ImGui::InvisibleButton(id, hitSize, ImGuiButtonFlags_EnableNav);
+        RecordControlMetadata(UiAccessibilityRole::Link, label,
+                              current ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
         const bool hovered = ImGui::IsItemHovered();
         const bool focused = ImGui::IsItemFocused();
         if (hovered)
@@ -1163,31 +1183,54 @@ namespace Horo::Editor::Ui {
 
     // ── ComboControl ─────────────────────────────────────────────────────
 
-    bool DrawComboRow(const int index, int *value, const ComboItemSource &source, const Theme::Fonts &fonts) {
-        ImGui::PushID(index);
+    /** @brief Draws one wrapped option, admitting mouse or navigation activation only when enabled. */
+    static bool DrawComboRow(const int index, int *value, const ComboItemSource &source, const Theme::Fonts &fonts,
+                             const std::function<std::string(int)> &stableIdentity) {
+        if (stableIdentity) {
+            const auto identity = stableIdentity(index);
+            ImGui::PushID(identity.c_str());
+        } else {
+            ImGui::PushID(index);
+        }
         const bool isSelected = (*value == index);
         const bool isEnabled = !source.enabled || source.enabled(index);
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-        const float rowH = ScaledLayoutValue(28.0F);
         const float rowW = ImGui::GetContentRegionAvail().x;
-        const std::string rowId = std::format("{}###combo_option_{}", source.label(index), index);
-        ImGui::InvisibleButton(rowId.c_str(), {rowW, rowH});
-        const bool rowHovered = ImGui::IsItemHovered();
-        const bool clicked = isEnabled && ImGui::IsItemClicked();
+        ImFont *const font = fonts.sansCompact ? fonts.sansCompact : ImGui::GetFont();
+        const float rowFontSize = Theme::TextPx::Label();
+        const float paddingX = ScaledLayoutValue(14.0F);
+        const float paddingY = ScaledLayoutValue(5.0F);
+        const float textWidth = std::max(1.0F, rowW - 2 * paddingX);
+        const char *const label = source.label(index);
+        const float textHeight = font->CalcTextSizeA(rowFontSize, FLT_MAX, textWidth, label).y;
+        const float rowH = std::max(ScaledLayoutValue(28.0F), textHeight + 2 * paddingY);
+        const std::string rowId = stableIdentity ? "##combo_option" : std::format("{}###combo_option_{}", label, index);
+        ImGui::BeginDisabled(!isEnabled);
+        const bool clicked =
+            ImGui::InvisibleButton(rowId.c_str(), {rowW, rowH}, ImGuiButtonFlags_EnableNav | ImGuiButtonFlags_PressedOnClick);
+        const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        const bool rowFocused = ImGui::IsItemFocused();
+        RecordControlMetadata(UiAccessibilityRole::ListItem, label,
+                              isSelected ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None, {}, false,
+                              Detail::EditorControlLabelKind::ResolvedText);
+        if (isSelected && (GImGui->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) == 0)
+            ImGui::SetItemDefaultFocus();
+        ImGui::EndDisabled();
+        const bool changed = clicked && !isSelected;
         if (clicked) {
             *value = index;
             ImGui::CloseCurrentPopup();
         }
         auto *drawList = ImGui::GetWindowDrawList();
-        if (rowHovered || isSelected)
+        if (rowHovered || rowFocused || isSelected)
             drawList->AddRectFilled(rowMin, {rowMin.x + rowW, rowMin.y + rowH}, Theme::U32(Theme::Hover()));
-        const float rowFontSize = Theme::TextPx::Label();
+        if (rowFocused)
+            drawList->AddRect(rowMin, {rowMin.x + rowW, rowMin.y + rowH}, Theme::U32(Theme::Accent()), 0, 0, 1.5F);
         ImVec4 rowTextColor = Theme::Dim();
         if (isEnabled)
             rowTextColor = isSelected ? Theme::Text() : Theme::Muted();
-        drawList->AddText(fonts.sansCompact ? fonts.sansCompact : ImGui::GetFont(), rowFontSize,
-                          {rowMin.x + ScaledLayoutValue(14.0F), rowMin.y + (rowH - rowFontSize) * 0.5F}, Theme::U32(rowTextColor),
-                          source.label(index));
+        drawList->AddText(font, rowFontSize, {rowMin.x + paddingX, rowMin.y + (rowH - textHeight) * 0.5F}, Theme::U32(rowTextColor), label,
+                          nullptr, textWidth);
         if (!isEnabled && rowHovered && source.disabledTooltip) {
             const char *const tooltip = source.disabledTooltip(index);
             if (tooltip != nullptr && tooltip[0] != '\0') {
@@ -1195,9 +1238,10 @@ namespace Horo::Editor::Ui {
             }
         }
         ImGui::PopID();
-        return clicked;
+        return changed;
     }
 
+    /** @copydoc ComboControl(const char*,int*,const char* const*,int,const Theme::Fonts&,ComboControlOptions) */
     bool ComboControl(const char *id, int *value, const char *const *items, const int itemCount, const Theme::Fonts &fonts,
                       const ComboControlOptions options) {
         const ComboItemSource source{.label = [items](const int index) {
@@ -1206,8 +1250,16 @@ namespace Horo::Editor::Ui {
         return ComboControl(id, value, itemCount, source, fonts, options);
     }
 
-    bool ComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
-                      const ComboControlOptions options) {
+    /** @brief Identifies a dropdown's name and the label protocol used to render it. */
+    struct ComboMetadataName final {
+        const char *label;
+        Detail::EditorControlLabelKind kind;
+    };
+
+    /** @brief Draws the shared dropdown and records the name provided by its caller. */
+    static bool DrawComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
+                                 const ComboControlOptions options, const ComboMetadataName name,
+                                 const std::function<std::string(int)> &stableIdentity = {}) {
         IM_ASSERT(source.label);
         bool changed = false;
         ImGui::PushID(id);
@@ -1221,12 +1273,18 @@ namespace Horo::Editor::Ui {
 
         const ImVec2 fieldPos = ImGui::GetCursorScreenPos();
         const std::string fieldId = std::string("Combo###") + id;
-        ImGui::InvisibleButton(fieldId.c_str(), ImVec2{fieldW, fieldH});
+        const bool fieldActivated =
+            ImGui::InvisibleButton(fieldId.c_str(), ImVec2{fieldW, fieldH}, ImGuiButtonFlags_EnableNav | ImGuiButtonFlags_PressedOnClick);
         const bool fieldHovered = ImGui::IsItemHovered();
-        const bool fieldClicked = ImGui::IsItemClicked();
+        const bool fieldFocused = ImGui::IsItemFocused();
 
         const std::string popupId = std::string("##popup_") + id;
         const bool popupOpen = ImGui::IsPopupOpen(popupId.c_str());
+        const auto popupState = popupOpen || fieldActivated
+                                    ? UiAccessibilityStateFlag::HasPopup | UiAccessibilityStateFlag::Expanded
+                                    : static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::HasPopup);
+        RecordControlMetadata(UiAccessibilityRole::List, name.label, UiAccessibilityState{popupState},
+                              {.kind = UiAccessibilityValueKind::Integer, .integer = *value}, false, name.kind);
 
         auto *dl = ImGui::GetWindowDrawList();
         const ImVec4 controlSurface =
@@ -1237,13 +1295,21 @@ namespace Horo::Editor::Ui {
         const ImVec4 popupBorderColor = popupOpen ? Theme::Accent() : borderColor;
         dl->AddRect(fieldPos, {fieldPos.x + fieldW, fieldPos.y + fieldH}, Theme::U32(popupBorderColor),
                     Theme::GetActiveTokens().radii.control, 0, popupOpen ? 1.5F : 1.0F);
+        if (fieldFocused) {
+            const float inset = 2.0F * scale;
+            dl->AddRect({fieldPos.x - inset, fieldPos.y - inset}, {fieldPos.x + fieldW + inset, fieldPos.y + fieldH + inset},
+                        Theme::U32(Theme::Accent()), Theme::GetActiveTokens().radii.control + inset, 0, 1.5F);
+        }
 
         // Selected value label
         {
             ImFont *font = fonts.sansCompact ? fonts.sansCompact : ImGui::GetFont();
             const char *label = (*value >= 0 && *value < itemCount) ? source.label(*value) : "";
+            const float textLeft = fieldPos.x + metrics.paddingX;
+            const float textRight = std::max(textLeft, fieldPos.x + fieldW - ScaledLayoutValue(32.0F));
+            const ImVec4 clip{textLeft, fieldPos.y, textRight, fieldPos.y + fieldH};
             dl->AddText(font, metrics.fontSize, {fieldPos.x + metrics.paddingX, fieldPos.y + (fieldH - metrics.fontSize) * 0.5F},
-                        Theme::U32(Theme::Text()), label);
+                        Theme::U32(Theme::Text()), label, nullptr, 0, &clip);
         }
 
         // Right-side arrow
@@ -1254,7 +1320,7 @@ namespace Horo::Editor::Ui {
             dl->AddTriangleFilled({cx - 4.0F, cy - 2.0F}, {cx + 4.0F, cy - 2.0F}, {cx, cy + 3.0F}, arrowCol);
         }
 
-        if (fieldClicked)
+        if (fieldActivated)
             ImGui::OpenPopup(popupId.c_str());
 
         ImGui::SetNextWindowPos({fieldPos.x, fieldPos.y + fieldH + 4.0F});
@@ -1282,7 +1348,7 @@ namespace Horo::Editor::Ui {
             }
 
             for (int i = 0; i < itemCount; ++i)
-                changed = DrawComboRow(i, value, source, fonts) || changed;
+                changed = DrawComboRow(i, value, source, fonts, stableIdentity) || changed;
             ImGui::EndPopup();
         }
 
@@ -1290,6 +1356,12 @@ namespace Horo::Editor::Ui {
         ImGui::PopStyleVar(4);
         ImGui::PopID();
         return changed;
+    }
+
+    /** @copydoc ComboControl(const char*,int*,int,const ComboItemSource&,const Theme::Fonts&,ComboControlOptions) */
+    bool ComboControl(const char *id, int *value, const int itemCount, const ComboItemSource &source, const Theme::Fonts &fonts,
+                      const ComboControlOptions options) {
+        return DrawComboControl(id, value, itemCount, source, fonts, options, {id, Detail::EditorControlLabelKind::FrameworkLabel});
     }
 
     /** @copydoc WrappedText */
@@ -1304,13 +1376,30 @@ namespace Horo::Editor::Ui {
 
     // ── InputTextControl ─────────────────────────────────────────────────
 
+    namespace {
+        /** @brief Applies synchronous typed line navigation inside native editing so active text is never overwritten next frame. */
+        int NavigateTextInput(ImGuiInputTextCallbackData *data) {
+            const auto &navigation = *static_cast<const InputTextNavigation *>(data->UserData);
+            InputTextNavigationAction action = InputTextNavigationAction::Complete;
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory)
+                action = data->EventKey == ImGuiKey_UpArrow ? InputTextNavigationAction::Previous : InputTextNavigationAction::Next;
+            const auto replacement = navigation.replace(navigation.context, action, {data->Buf, static_cast<std::size_t>(data->BufTextLen)},
+                                                        static_cast<std::size_t>(data->CursorPos));
+            if (!replacement || data->BufSize <= 0 || replacement->size() >= static_cast<std::size_t>(data->BufSize))
+                return 0;
+            const std::string owned(*replacement);
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, owned.data(), owned.data() + owned.size());
+            return 0;
+        }
+    }  // namespace
+
     /** @copydoc InputTextControl(const char *, char *, size_t, const Theme::Fonts &, const InputTextOptions &) */
     bool InputTextControl(const char *id, char *buffer, const size_t bufferSize, const Theme::Fonts &fonts,
                           const InputTextOptions &options) {
         const auto &tokens = Theme::GetActiveTokens();
         const auto &metrics = DesignSystem::MetricsFor(tokens, options.componentSize);
-        const float renderedTextHeight =
-            fonts.sansCompact != nullptr ? fonts.sansCompact->FontSize * metrics.fontSize / Theme::FontPx::SansCompact : metrics.fontSize;
+        const float renderedTextHeight = metrics.fontSize;
         ImVec2 framePadding = DefaultFramePadding(metrics, renderedTextHeight);
         if (options.height > 0.0F)
             framePadding.y = std::max(framePadding.y, (ScaledLayoutValue(options.height) - renderedTextHeight) * 0.5F);
@@ -1326,13 +1415,22 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
 
         bool changed = false;
+        ImGuiInputTextFlags flags = options.submitOnEnter ? ImGuiInputTextFlags_EnterReturnsTrue : ImGuiInputTextFlags_None;
+        const bool navigate = options.navigation != nullptr && options.navigation->replace != nullptr;
+        if (navigate)
+            flags |= ImGuiInputTextFlags_CallbackCompletion | ImGuiInputTextFlags_CallbackHistory;
+        const ImGuiInputTextCallback callback = navigate ? NavigateTextInput : nullptr;
         ImGui::PushItemWidth(options.width > 0.0F ? ScaledLayoutValue(options.width) : options.width);
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, metrics.fontSize, Theme::FontPx::SansCompact);
             if (options.hint != nullptr)
-                changed = ImGui::InputTextWithHint(id, options.hint, buffer, bufferSize);
+                changed = ImGui::InputTextWithHint(id, options.hint, buffer, bufferSize, flags, callback, options.navigation);
             else
-                changed = ImGui::InputText(id, buffer, bufferSize);
+                changed = ImGui::InputText(id, buffer, bufferSize, flags, callback, options.navigation);
+            auto metadataFlags = static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::Editable);
+            if (options.error)
+                metadataFlags |= static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::Invalid);
+            RecordControlMetadata(UiAccessibilityRole::TextField, id, UiAccessibilityState{metadataFlags}, {}, true);
         }
         ImGui::PopItemWidth();
 
@@ -1686,6 +1784,8 @@ namespace Horo::Editor::Ui {
         if (clicked) {
             *value = !*value;
         }
+        RecordControlMetadata(UiAccessibilityRole::Toggle, id, *value ? UiAccessibilityStateFlag::Checked : UiAccessibilityStateFlag::None,
+                              {.kind = UiAccessibilityValueKind::Boolean, .boolean = *value});
 
         const bool hovered = ImGui::IsItemHovered();
         auto *dl = ImGui::GetWindowDrawList();
@@ -1723,8 +1823,7 @@ namespace Horo::Editor::Ui {
 
         const auto &tokens = Theme::GetActiveTokens();
         const auto &metrics = DesignSystem::MetricsFor(tokens, componentSize);
-        const float renderedTextHeight =
-            fonts.sansCompact != nullptr ? fonts.sansCompact->FontSize * metrics.fontSize / Theme::FontPx::SansCompact : metrics.fontSize;
+        const float renderedTextHeight = metrics.fontSize;
         const ImVec2 framePadding = DefaultFramePadding(metrics, renderedTextHeight);
         const float labelWidth = ImGui::CalcTextSize(label).x + framePadding.x * 2.0F + metrics.iconSize;
         const float resolvedWidth = width > 0.0F ? ScaledLayoutValue(width) : labelWidth;
@@ -1766,7 +1865,7 @@ namespace Horo::Editor::Ui {
                                        const CheckboxTextTone textTone) {
         const float padding = std::max(0.0F, (minimumBoxSize - Theme::TextPx::Label()) * 0.5F);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{padding, padding});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2{8.0F, 0.0F});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2{CheckboxLabelGap, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, Theme::GetActiveTokens().radii.control);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);
         PushControlColors(Theme::Bg3(), Theme::Border(), textTone == CheckboxTextTone::Primary ? Theme::Text() : Theme::Muted());
@@ -1776,6 +1875,9 @@ namespace Horo::Editor::Ui {
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Label(), Theme::FontPx::SansCompact);
             clicked = ImGui::Checkbox(label, value);
+            RecordControlMetadata(UiAccessibilityRole::Checkbox, label,
+                                  *value ? UiAccessibilityStateFlag::Checked : UiAccessibilityStateFlag::None,
+                                  {.kind = UiAccessibilityValueKind::Boolean, .boolean = *value});
         }
 
         ImGui::PopStyleColor(6);
@@ -2012,6 +2114,8 @@ namespace Horo::Editor::Ui {
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Label(), Theme::FontPx::SansCompact);
             clicked = ImGui::Button(label, ImVec2{82.0F, 32.0F});
+            RecordControlMetadata(UiAccessibilityRole::Button, label,
+                                  active ? UiAccessibilityStateFlag::Selected : UiAccessibilityStateFlag::None);
         }
         const ImVec2 min = ImGui::GetItemRectMin();
         ImGui::GetWindowDrawList()->AddCircleFilled({min.x + 12.0F, min.y + 16.0F}, 5.0F, Theme::U32(swatch), 16);
@@ -2367,7 +2471,7 @@ namespace Horo::Editor::Ui {
         if (maximumBytes == 0)
             return {};
 
-        const EditableTitleLayout layout = ResolveEditableTitleLayout(props, fonts);
+        const EditableTitleLayout layout = ResolveEditableTitleLayout(props);
         DrawEditorIcon(ImGui::GetWindowDrawList(), props.leadingIcon,
                        {layout.position.x, layout.position.y + (layout.height - layout.iconSize) * 0.5F},
                        {layout.iconSize, layout.iconSize}, Theme::U32(Theme::Accent()), fonts.icon);
@@ -2702,14 +2806,24 @@ namespace Horo::Editor::Ui {
         ImGui::Dummy({0.0F, height * scale});
     }
 
-    /** @copydoc DrawComboPropRow */
+    /** @copydoc DrawComboPropRow(const char*,const char*,int&,std::span<const char* const>,const Theme::Fonts&) */
     bool DrawComboPropRow(const char *label, const char *id, int &value, const std::span<const char *const> entries,
                           const Theme::Fonts &fonts) {
+        const ComboItemSource source{.label = [entries](const int index) {
+            return entries[index];
+        }};
+        return DrawComboPropRow(label, id, value, static_cast<int>(entries.size()), source, fonts);
+    }
+
+    /** @copydoc DrawComboPropRow(const char*,const char*,int&,int,const ComboItemSource&,const Theme::Fonts&,const std::function<std::string(int)>&) */
+    bool DrawComboPropRow(const char *label, const char *id, int &value, const int itemCount, const ComboItemSource &source,
+                          const Theme::Fonts &fonts, const std::function<std::string(int)> &stableIdentity) {
         const PropertyRowLayout layout = BeginPropertyRow(label, fonts);
         ImGui::SetCursorScreenPos({layout.controlX, layout.controlY});
         ImGui::PushItemWidth(layout.controlWidth);
-        const bool changed = ComboControl(id, &value, entries.data(), static_cast<int>(entries.size()), fonts,
-                                          ComboControlOptions{.height = 27.0F, .componentSize = ComponentSize::Medium});
+        const bool changed = DrawComboControl(id, &value, itemCount, source, fonts,
+                                              {.height = 27.0F, .componentSize = ComponentSize::Medium},
+                                              {label, Detail::EditorControlLabelKind::ResolvedText}, stableIdentity);
         ImGui::PopItemWidth();
         EndPropertyRow(layout);
         return changed;
@@ -2767,6 +2881,13 @@ namespace Horo::Editor::Ui {
             Theme::ScopedTextStyle ts(fonts.sans, InspectorTypography::Field(), Theme::FontPx::Sans);
             result.changed = ImGui::DragFloat("##value", &value, options.speed, options.minimum, options.maximum, options.format);
             result.committed = ImGui::IsItemDeactivatedAfterEdit();
+            const auto state = options.error ? UiAccessibilityStateFlag::Editable | UiAccessibilityStateFlag::Invalid
+                                             : static_cast<Runtime::Ui::UiAccessibilityStateMask>(UiAccessibilityStateFlag::Editable);
+            const auto metadata = std::isfinite(value)
+                                      ? UiAccessibilityValueInput{.kind = UiAccessibilityValueKind::Number, .number = value}
+                                      : UiAccessibilityValueInput{};
+            RecordControlMetadata(UiAccessibilityRole::TextField, label, UiAccessibilityState{state}, metadata, false,
+                                  Detail::EditorControlLabelKind::ResolvedText);
         }
         if (options.error)
             ImGui::PopStyleColor(4);

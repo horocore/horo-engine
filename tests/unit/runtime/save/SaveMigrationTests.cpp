@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "Horo/Runtime/Save/SaveMigration.h"
 #include "SaveTestUtils.h"
@@ -282,6 +283,7 @@ namespace {
         bool sawBudgetContext = false;
         auto first = ArchiveStep("archive.1_to_2", 1, 2);
         first.migrate = [&sawBudgetContext](SaveMigrationCandidate candidate, const SaveMigrationStepContext &context) {
+            CHECK(Log::DiagnosticsSuppressed());
             sawBudgetContext = context.remainingWorkBytes != 0 && context.maximumArchiveBytes != 0 &&
                                context.maximumParticipantPayloadBytes != 0 && context.maximumTotalPayloadBytes != 0;
             return BumpArchive(2, "archive.1_to_2")(std::move(candidate), context);

@@ -211,6 +211,8 @@ namespace Horo::AI {
             reasons = {};
         }
         pending_ = false;
+        if (admitted_.empty())
+            return Result<std::span<const DecisionWakeRequest>>::Success({});
         evaluating_ = true;
         ++evaluations_;
         return Result<std::span<const DecisionWakeRequest>>::Success(admitted_);
@@ -262,7 +264,11 @@ namespace Horo::AI {
             for (std::size_t other = 0; other < nodes_.size(); ++other)
                 if (other != index && nodes_[other].task == task)
                     return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
-        nodes_[index].task = task;
+        auto &state = nodes_[index];
+        if (state.task != task) {
+            state.task = task;
+            state.pending.task = false;
+        }
         return Result<void>::Success();
     }
 

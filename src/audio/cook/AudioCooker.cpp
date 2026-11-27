@@ -157,6 +157,12 @@ namespace Horo::Audio {
             Append32(bytes, static_cast<std::uint32_t>(analysis.size()));
             AppendDigest(bytes, ComputeSha256(std::as_bytes(std::span{analysis})));
             bytes.insert(bytes.end(), analysis.begin(), analysis.end());
+            Append32(bytes, static_cast<std::uint32_t>(manifest.loops.size()));
+            for (const auto &loop : manifest.loops) {
+                Append32(bytes, loop.id.value);
+                Append64(bytes, loop.startFrame);
+                Append64(bytes, loop.endFrame);
+            }
             const auto channels = manifest.format.layout.orderedChannels.size();
             const std::uint64_t bytesPerFrame = channels * sizeof(AudioSample);
             for (std::uint32_t index = 0; index < manifest.chunkCount; ++index) {
@@ -277,6 +283,7 @@ namespace Horo::Audio {
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::CookBudgetExceeded));
         auto manifest = MakeManifest(resolved, toolchain, source, sink.payload, chunkFrames, static_cast<std::uint32_t>(chunks),
                                      imported.Value().analysis);
+        manifest.loops = imported.Value().loops;
         auto bytes = EncodeHeader(manifest);
         if (bytes.size() > MaximumCookedAudioPayloadBytes - sink.payload.size())
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::CookBudgetExceeded));

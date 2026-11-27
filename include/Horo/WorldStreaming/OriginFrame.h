@@ -137,6 +137,11 @@ namespace Horo::WorldStreaming {
     /** @brief Immutable frame observation invalidated by replacement or owner shutdown. */
     class OriginFrameLease final {
     public:
+        /** @brief Reports whether the observed generation remains active without copying its frame or allocating an error. */
+        [[nodiscard]] bool IsCurrent() const noexcept {
+            return active_ && active_->load();
+        }
+
         /** @brief Returns the observed frame while its generation is active. @return Frame or typed stale failure. */
         [[nodiscard]] Result<OriginFrame> Get() const;
 
@@ -177,6 +182,13 @@ namespace Horo::WorldStreaming {
         void Shutdown() noexcept;
         /** @brief Expires retained generation leases before releasing owner state. */
         ~OriginFrameOwner() noexcept;
+
+        /** @brief Compares exact active authority without creating a lease, allocating or invoking callbacks.
+         * @param frame Full immutable binding and global origin to compare. @return True on the owner lane only for that publication.
+         */
+        [[nodiscard]] bool Publishes(const OriginFrame &frame) const noexcept {
+            return active_ && activeFrame_ == frame;
+        }
 
         /** @brief Checks lifecycle state. @return Whether the owner can stage and publish. */
         [[nodiscard]] bool IsActive() const noexcept {

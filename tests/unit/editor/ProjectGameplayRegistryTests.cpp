@@ -1,6 +1,10 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRetirementTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
+#include "Horo/AI/BlackboardUsageInspection.h"
+#include "Horo/AI/DecisionGraphInstance.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
@@ -8,6 +12,9 @@
 #include "ProjectReplicationTestSupport.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -15,6 +22,7 @@
 #include <future>
 #include <iterator>
 #include <memory>
+#include <ranges>
 #include <string_view>
 
 namespace {
@@ -80,6 +88,40 @@ namespace {
         REQUIRE_FALSE(registry.HasBlockingDiagnostics());
     }
 
+    /** @brief Reads a checked-in guard example asset from the copied project. */
+    std::vector<std::uint8_t> ReadGuardAsset(const std::filesystem::path &path) {
+        std::ifstream stream{path, std::ios::binary};
+        REQUIRE(stream.is_open());
+        return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+    }
+
+    /** @brief Installs the sample in a fresh project using its real source assets and sidecars. */
+    std::filesystem::path CopyGuardRecovery(const TemporaryProject &project) {
+        const auto sample = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "examples/gameplay-ai/Assets";
+        const auto assets = project.root / "assets";
+        for (const auto *name : {"RecoverTarget.horo_script", "RecoverTarget.horo_script.meta"}) {
+            REQUIRE(std::filesystem::copy_file(sample / "Scripts" / name, assets / "scripts" / name));
+        }
+        for (const auto *name : {"Guard.horo_bb", "Guard.horo_bb.horo", "RecoverTarget.horo_bt", "RecoverTarget.horo_bt.horo"}) {
+            REQUIRE(std::filesystem::copy_file(sample / name, assets / name));
+        }
+        return assets;
+    }
+
+    /** @brief Admits the authored recovery graph against the discovered Project provider generation. */
+    std::shared_ptr<const AI::CookedDecisionPlan> CompileGuardRecovery(const std::filesystem::path &asset,
+                                                                       const AI::DecisionCompilationEnvironment &environment) {
+        AI::DecisionGraphAssetId root;
+        const auto source = AI::DecisionPlanCodec::DecodeSource(ReadGuardAsset(asset), root);
+        REQUIRE(source.HasValue());
+        const auto compiled = AI::DecisionGraphCompiler::Compile(root, source.Value(), environment);
+        REQUIRE(compiled.HasValue());
+        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
+            UNSCOPED_INFO(diagnostic.message);
+        REQUIRE(compiled.Value().plan);
+        return compiled.Value().plan;
+    }
+
     Network::ReplicationSchemaDescriptor ScriptSchema() {
         using namespace Network;
         return {.id = ReplicationSchemaId::Create(42).Value(),
@@ -105,6 +147,52 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("project gameplay discovers and executes the guard recovery example", "[editor][decision][lua][example]") {
+    using namespace Horo::AI;
+    TemporaryProject project;
+    const auto assets = CopyGuardRecovery(project);
+
+    const auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto providers = registry->AcquireDecisionAuthoringGeneration();
+    REQUIRE(providers.HasValue());
+    REQUIRE(providers.Value()->HasImplementation(DecisionNodeTypeId::Create(83013).Value()));
+    auto decoded = BlackboardSchemaSourceCodec::Decode(ReadGuardAsset(assets / "Guard.horo_bb"));
+    REQUIRE(decoded.HasValue());
+    const auto schema = std::make_shared<const BlackboardSchema>(std::move(decoded).Value().schema);
+    const auto plan = CompileGuardRecovery(assets / "RecoverTarget.horo_bt", {.nodes = providers.Value(), .schemas = {schema}});
+
+    const AgentHandle agent{AiRuntimeIncarnation::Create(1).Value(), {0, 1}};
+    const BlackboardInstanceBinding boardBinding{agent, schema->Identity(), schema->Version(), 1, 1};
+    auto board = BlackboardInstance::Create(boardBinding, schema);
+    REQUIRE(board.HasValue());
+    CancellationSource cancellation;
+    const AiTaskOperationContext operation{TaskId::Create(1).Value(), {agent.incarnation, {0, 1}}, agent, cancellation.Token()};
+    auto graph = DecisionGraphInstance::Create(plan, providers.Value(), {boardBinding, operation, 1, plan->Storage().taskSlots});
+    REQUIRE(graph.HasValue());
+    const auto step = [&](const std::uint64_t tick) {
+        const auto snapshot = board.Value()->Snapshot();
+        REQUIRE(snapshot.HasValue());
+        const auto evaluated = graph.Value()->Step({tick, boardBinding, snapshot.Value(), {}});
+        REQUIRE(evaluated.HasValue());
+        return evaluated.Value();
+    };
+    REQUIRE(step(1) == AiTaskState::Running);
+    SECTION("the guard returns to its routine after three recovery ticks") {
+        CHECK(step(2) == AiTaskState::Running);
+        CHECK(step(3) == AiTaskState::Running);
+        CHECK(step(4) == AiTaskState::Succeeded);
+    }
+    SECTION("a committed reacquisition releases recovery so chase can take priority") {
+        auto write = board.Value()->BeginWriteBatch();
+        REQUIRE(write.HasValue());
+        auto batch = std::move(write).Value();
+        REQUIRE(batch.Stage({BlackboardKeyId::Create(1).Value(), BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
+        REQUIRE(board.Value()->CommitAtBlackboardSync(std::move(batch)).HasValue());
+        CHECK(step(2) == AiTaskState::Failed);
+    }
+}
+
 TEST_CASE("project gameplay registry discovers and safely reloads compatible Lua source") {
     TemporaryProject project;
     const std::filesystem::path source = project.root / "assets" / "scripts" / "Watched.horo_script";
@@ -125,6 +213,138 @@ TEST_CASE("project gameplay registry discovers and safely reloads compatible Lua
     REQUIRE_FALSE(timeError);
     REQUIRE(registry->ReloadChangedLuaSources().empty());
     REQUIRE(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{1}).x == 4.0F);
+}
+
+TEST_CASE("project gameplay registry contributes Lua Decision scripts and safely reloads the same identity", "[editor][decision][lua]") {
+    TemporaryProject project;
+    const auto source = project.root / "assets/scripts/Patrol.horo_script";
+    const auto metadata = project.root / "assets/scripts/Patrol.horo_script.meta";
+    const auto type = AI::DecisionNodeTypeId::Create(701).Value();
+    constexpr auto task = R"(return {
+        role = "task",
+        start = function(self, context) return 2 end,
+        resume = function(self, context) return 2 end,
+        abort = function(self, context) end,
+        cleanup = function(self, context) end
+    })";
+    constexpr auto firstSidecar =
+        R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"701","providerId":"702","descriptorVersion":1}})";
+    Write(source, task);
+    Write(metadata, firstSidecar);
+    PrepareNativeLuaProject(project);
+
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto original = registry->DecisionUsageMetadata();
+    REQUIRE(original);
+    const auto first = registry->AcquireDecisionAuthoringGeneration();
+    REQUIRE(first.HasValue());
+    const auto exact = std::ranges::find(original->Descriptors(), type, &AI::DecisionNodeDescriptor::type);
+    REQUIRE(exact != original->Descriptors().end());
+    CHECK(exact->origin.kind == AI::DecisionDescriptorSourceKind::Script);
+    CHECK(exact->origin.version == 1);
+    CHECK(exact->source.source == "assets/scripts/Patrol.horo_script");
+    CHECK(first.Value()->HasImplementation(type));
+    CHECK(registry->AcquireDecisionAuthoringGeneration().Value() == first.Value());
+
+    SECTION("runtime behavior and Decision source discovery remain distinct") {
+        CHECK(registry->Registry().Registrations().size() >= 2);
+        const auto cloned = registry->CaptureLuaGeneration();
+        REQUIRE(cloned.HasValue());
+        REQUIRE(cloned.Value().decisions.size() == 1);
+        REQUIRE(cloned.Value().programs.size() == 1);
+    }
+    SECTION("successful reload replaces the actual VM authority and refreshes the metadata") {
+        Write(metadata, R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"701","providerId":"702","descriptorVersion":2}})");
+        Tests::AdvanceLastWriteTime(metadata);
+        CHECK(registry->ReloadChangedLuaSources().empty());
+        REQUIRE(registry->DecisionUsageMetadata());
+        CHECK(registry->DecisionUsageMetadata() != original);
+        CHECK_FALSE(first.Value()->CanUse());
+        const auto admitted = registry->AcquireDecisionAuthoringGeneration();
+        REQUIRE(admitted.HasValue());
+        const auto contracts = admitted.Value()->Contracts();
+        const auto replacement = std::ranges::find_if(contracts, [type](const auto &contract) {
+            return contract.descriptor.type == type;
+        });
+        REQUIRE(replacement != contracts.end());
+        CHECK(replacement->descriptor.origin.version == 2);
+    }
+    SECTION("a malformed replacement preserves the last working provider generation") {
+        Write(source, "return nil");
+        Tests::AdvanceLastWriteTime(source);
+        REQUIRE(registry->ReloadChangedLuaSources().size() == 1);
+        CHECK(registry->DecisionUsageMetadata() == original);
+        CHECK(first.Value()->CanUse());
+        CHECK(registry->AcquireDecisionAuthoringGeneration().Value() == first.Value());
+    }
+    SECTION("changing persistent identity requires rediscovery through an explicit migration") {
+        Write(metadata, R"({"schemaVersion":1,"runtime":"lua","decisionNode":{"typeId":"704","providerId":"702","descriptorVersion":1}})");
+        Tests::AdvanceLastWriteTime(metadata);
+        REQUIRE(registry->ReloadChangedLuaSources().size() == 1);
+        CHECK(registry->DecisionUsageMetadata() == original);
+        CHECK(first.Value()->CanUse());
+    }
+}
+
+TEST_CASE("project Decision catalog admits and withdraws the exact package leaves at the owner boundary", "[editor][decision][packages]") {
+    TemporaryProject project;
+    PrepareNativeLuaProject(project);
+    auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto original = registry->DecisionUsageMetadata();
+    REQUIRE(original);
+
+    const auto type = AI::DecisionNodeTypeId::Create(903).Value();
+    AI::DecisionNodeContract contract;
+    contract.role = AI::DecisionNodeRole::Task;
+    contract.descriptor = {type,
+                           {AI::DecisionDescriptorSourceKind::Package, AI::DecisionProviderId::Create(904).Value(), 1},
+                           {},
+                           {"extensions/native/fixture", 0, 0}};
+    auto granted = std::make_shared<std::atomic_bool>(true);
+    using Leaves = std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+    const auto source = [node = AI::DecisionNodeRegistration{std::move(contract), {}}, granted] {
+        auto captured = AI::DecisionNodeGeneration::Capture(std::array{node}, granted);
+        if (captured.HasError())
+            return Result<Leaves>::Failure(captured.ErrorValue());
+        return Result<Leaves>::Success({std::move(captured).Value()});
+    };
+    const auto boundSource = std::make_shared<const Editor::ProjectPackageDecisionNodeSource>(source);
+    REQUIRE(registry->ReplacePackageDecisionNodeSource(boundSource).HasValue());
+    const auto merged = registry->DecisionUsageMetadata();
+    REQUIRE(merged);
+    REQUIRE(registry->ReplacePackageDecisionNodeSource(boundSource).HasValue());
+    CHECK(registry->DecisionUsageMetadata() == merged);
+    CHECK(merged->Descriptors().size() == original->Descriptors().size() + 1);
+    CHECK(std::ranges::find(merged->Descriptors(), type, &AI::DecisionNodeDescriptor::type) != merged->Descriptors().end());
+    const auto generation = registry->AcquireDecisionAuthoringGeneration();
+    REQUIRE(generation.HasValue());
+    CHECK(generation.Value()->CanAdmit());
+
+    const auto conflicting =
+        registry->ReplacePackageDecisionNodeSource(std::make_shared<const Editor::ProjectPackageDecisionNodeSource>([&source] {
+        auto acquired = source();
+        if (acquired.HasError())
+            return acquired;
+        auto leaves = std::move(acquired).Value();
+        const auto duplicate = leaves.front();
+        leaves.push_back(duplicate);
+        return Result<Leaves>::Success(std::move(leaves));
+    }));
+    REQUIRE(conflicting.HasError());
+    CHECK(conflicting.ErrorValue().code.Value() == AI::AIErrors::DecisionAssetDescriptorAmbiguous.code.Value());
+    CHECK(registry->DecisionUsageMetadata() == merged);
+
+    granted->store(false);
+    CHECK_FALSE(generation.Value()->CanAdmit());
+    CHECK(registry->AcquireDecisionAuthoringGeneration().HasError());
+    REQUIRE(registry->ReplacePackageDecisionNodeSource({}).HasValue());
+    const auto withdrawn = registry->DecisionUsageMetadata();
+    REQUIRE(withdrawn);
+    CHECK(withdrawn->Descriptors().size() == original->Descriptors().size());
+    CHECK(std::ranges::find(withdrawn->Descriptors(), type, &AI::DecisionNodeDescriptor::type) == withdrawn->Descriptors().end());
+    REQUIRE(registry->AcquireDecisionAuthoringGeneration().HasValue());
 }
 
 TEST_CASE("project gameplay registry merges a fingerprinted native module with Lua behaviors") {

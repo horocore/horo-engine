@@ -128,6 +128,11 @@ namespace Horo::Navigation {
         return snapshot;
     }
 
+    /** @copydoc NavigationCharacterAdapter::UsesPipeline */
+    bool NavigationCharacterAdapter::UsesPipeline(const NavigationVelocityPipeline &pipeline) const noexcept {
+        return state_ && state_->pipeline == &pipeline;
+    }
+
     /** @copydoc NavigationCharacterAdapter::DiscardFeedback */
     void NavigationCharacterAdapter::DiscardFeedback() noexcept {
         if (state_)

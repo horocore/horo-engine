@@ -43,6 +43,7 @@ namespace Horo::Log {
             false
 #endif
         }; /**< Whether persisted log records are mirrored to standard error. */
+        bool captureProcessFaults{}; /**< Opt-in for process owners. Uses session markers and a native hook where supported. */
     };
 
     /** @brief Monotonic counters describing asynchronous logger health. */

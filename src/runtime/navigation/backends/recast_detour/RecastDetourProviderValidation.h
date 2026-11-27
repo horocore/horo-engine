@@ -4,10 +4,12 @@
 #include "runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h"
 
 #include <DetourNavMesh.h>
+#include <DetourNode.h>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 
 namespace Horo::Navigation::Detail {
     [[nodiscard]] inline bool IsPositiveFinite(const float value) noexcept {
@@ -36,33 +38,37 @@ namespace Horo::Navigation::Detail {
         return true;
     }
 
-    [[nodiscard]] inline bool FitsOwnedBudget(const RecastDetourProviderCreateInfo &info) noexcept {
+    /** @brief Bound the owned preparation and query storage after query dimensions pass the hard limits. */
+    [[nodiscard]] inline std::optional<std::size_t> OwnedStorageReservation(const RecastDetourProviderCreateInfo &info) noexcept {
         std::size_t bytes{};
         const auto addBytes = [&bytes](const std::size_t count, const std::size_t elementSize) noexcept {
             std::size_t value{};
             return CheckedProduct(count, elementSize, value) && CheckedAdd(bytes, value);
         };
-        if (!addBytes(info.vertices.size(), 64U) || !addBytes(info.polygons.size(), 256U) ||
+        if (!addBytes(1U, sizeof(dtNavMesh) + sizeof(dtMeshTile) + sizeof(dtMeshTile *) + sizeof(RecastDetourQueryBackendData)) ||
+            !addBytes(info.vertices.size(), 64U) || !addBytes(info.polygons.size(), 256U) ||
             !addBytes(info.areas.size(), sizeof(NavigationAreaDescriptor)) ||
             !addBytes(info.filters.size(), sizeof(NavigationQueryFilterDescriptor)))
-            return false;
+            return std::nullopt;
         for (const NavigationQueryFilterDescriptor &filter : info.filters) {
             if (!addBytes(filter.costOverrides.size(), sizeof(NavigationAreaCostOverride)))
-                return false;
+                return std::nullopt;
         }
 
-        if (std::size_t querySlotBytes{};
-            !CheckedProduct(static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)), sizeof(dtPolyRef),
-                            querySlotBytes) ||
-            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) *
-                                            ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))) ||
-            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumQueryNodes) *
-                                            (sizeof(NavigationAStarNode) + sizeof(std::uint32_t) + sizeof(std::uint32_t))) ||
-            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumQueryNodes) * sizeof(NavigationPathPortal)) ||
-            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) * sizeof(NavigationPathWaypoint)) ||
-            !CheckedProduct(info.maximumConcurrentQueries, querySlotBytes, querySlotBytes) || !CheckedAdd(bytes, querySlotBytes))
-            return false;
-        return bytes <= info.maximumOwnedBytes;
+        // Detour allocates a query object, two node pools and one queue per slot. A normal pool's hash table
+        // uses at most one index per node and the tiny pool uses 64 nodes and 32 hash indices.
+        constexpr std::size_t FixedQueryBytes = sizeof(QuerySlot) + sizeof(dtNavMeshQuery) + 2U * sizeof(dtNodePool) + sizeof(dtNodeQueue) +
+                                                sizeof(dtNode *) + 64U * (sizeof(dtNode) + sizeof(dtNodeIndex)) + 32U * sizeof(dtNodeIndex);
+        constexpr std::size_t NativeBytesPerNode = sizeof(dtNode) + 2U * sizeof(dtNodeIndex) + sizeof(dtNode *);
+        constexpr std::size_t BytesPerNode =
+            NativeBytesPerNode + sizeof(NavigationAStarNode) + 2U * sizeof(std::uint32_t) + sizeof(NavigationPathPortal);
+        constexpr std::size_t BytesPerPoint =
+            3U * sizeof(float) + sizeof(unsigned char) + sizeof(dtPolyRef) + sizeof(NavigationPathWaypoint);
+        const auto querySlotBytes = FixedQueryBytes + std::max(info.maximumQueryNodes, info.maximumResultPoints) * sizeof(dtPolyRef) +
+                                    info.maximumQueryNodes * BytesPerNode + info.maximumResultPoints * BytesPerPoint;
+        if (!addBytes(info.maximumConcurrentQueries, querySlotBytes))
+            return std::nullopt;
+        return bytes;
     }
 
     [[nodiscard]] inline bool HasValidIdentityAndTopologyBounds(const RecastDetourProviderCreateInfo &info) noexcept {
@@ -87,7 +93,4 @@ namespace Horo::Navigation::Detail {
                IsPositiveFinite(info.maximumSearchDistanceMeters) && info.capabilityRevision != 0;
     }
 
-    [[nodiscard]] inline bool HasValidMemoryBudget(const RecastDetourProviderCreateInfo &info) noexcept {
-        return info.maximumOwnedBytes > 0 && info.maximumOwnedBytes <= RecastDetourProviderHardLimits::OwnedBytes && FitsOwnedBudget(info);
-    }
 }  // namespace Horo::Navigation::Detail

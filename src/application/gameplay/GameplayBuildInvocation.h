@@ -8,6 +8,9 @@
 #include <vector>
 
 namespace Horo::Application::Detail {
+    /** @brief Returns the one project lock protecting configured gameplay artifacts from simultaneous build and test use. */
+    [[nodiscard]] std::filesystem::path GameplayBuildLockPath(const std::filesystem::path &projectRoot);
+
     /** @brief Sanitizes ambient toolchain selectors for a gameplay build process. */
     [[nodiscard]] ProcessEnvironment BuildEnvironment();
 

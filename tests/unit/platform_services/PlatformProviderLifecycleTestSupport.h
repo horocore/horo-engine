@@ -29,6 +29,7 @@ unsigned horo_test_provider_destroyed(const FixtureAudit *);
 unsigned horo_test_provider_post_destroy_callbacks(const FixtureAudit *);
 HoroExtensionStatus horo_test_provider_session_changed(FixtureAudit *, std::uint64_t, std::uint32_t);
 HoroExtensionStatus horo_test_provider_emit(FixtureAudit *, std::uint64_t, std::uint64_t);
+HoroExtensionStatus horo_test_provider_emit_revision(FixtureAudit *, std::uint64_t, std::uint64_t, std::uint64_t);
 HoroExtensionStatus horo_test_provider_emit_failure(FixtureAudit *, std::uint64_t, std::uint64_t, std::uint32_t);
 HoroExtensionStatus horo_test_provider_emit_held(FixtureAudit *, std::uint64_t, std::uint64_t);
 unsigned horo_test_provider_held_ready(const FixtureAudit *);
@@ -111,6 +112,18 @@ namespace Horo::PlatformServices::Tests {
             return events;
         }
 
+        /** @brief Verifies the retained terminal error without depending on withdrawn observer delivery. */
+        inline void CheckTerminalFailure(const PlatformProviderLifecycleHost &host,
+                                         const PlatformProviderLifecycleHost::RequestHandle &request,
+                                         const PlatformRequestState expectedState, const ErrorCodeDescriptor &expectedError) {
+            const auto result = host.Query(request);
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().state == expectedState);
+            REQUIRE(result.Value().terminal);
+            REQUIRE(result.Value().terminal->HasError());
+            CHECK(result.Value().terminal->ErrorValue()->code.Value() == expectedError.code.Value());
+        }
+
         struct Rig final {
             Extensions::ApplicationCapabilityRegistry capabilities;
             Extensions::BackendServiceRegistry services;
@@ -140,3 +153,4 @@ namespace Horo::PlatformServices::Tests {
             }
         };
     }  // namespace
+}  // namespace Horo::PlatformServices::Tests

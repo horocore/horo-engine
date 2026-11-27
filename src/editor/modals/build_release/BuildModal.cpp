@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/design_system/components/EditorUiLabelWrap.h"
 #include "editor/modals/build_release/BuildActivity.h"
 
 #include <algorithm>
@@ -11,6 +12,14 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Fits a localized checkbox label beside its native square without changing the control ID. */
+        std::string FormCheckboxLabel(const std::string &label, const char *id, const Theme::Fonts &fonts) {
+            Theme::ScopedTextStyle style{fonts.sansCompact, Theme::TextPx::Label(), Theme::FontPx::SansCompact};
+            const float available = std::max(1.0F, ImGui::GetContentRegionAvail().x - ImGui::GetFontSize() - Ui::CheckboxLabelGap);
+            auto visible = ImGui::CalcTextSize(label.c_str()).x <= available ? label : Ui::WrapVisibleLabel(label, available);
+            return visible.append("###").append(id);
+        }
+
         /** @brief Maps build lifecycle states to the three visible pipeline stages. */
         int BuildStageIndex(const Application::GameplayBuildState state) {
             using enum Application::GameplayBuildState;
@@ -237,8 +246,8 @@ namespace Horo::Editor {
         const auto checkboxSpacing = ImGui::GetStyle().ItemSpacing;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             ImVec2{checkboxSpacing.x, checkboxSpacing.y + 4 * Theme::GetActiveTokens().sizes.uiScale});
-        (void)Ui::CheckboxControl(Text("build.test_after").c_str(), &testAfter_, fonts);
-        (void)Ui::CheckboxControl(Text("build.run_after").c_str(), &runAfter_, fonts);
+        (void)Ui::CheckboxControl(FormCheckboxLabel(Text("build.test_after"), "test_after", fonts).c_str(), &testAfter_, fonts);
+        (void)Ui::CheckboxControl(FormCheckboxLabel(Text("build.run_after"), "run_after", fonts).c_str(), &runAfter_, fonts);
         ImGui::PopStyleVar();
         Ui::Card advanced({.id = "##BuildAdvanced", .defaultExpanded = false});
         advanced.DrawTitleBar({.id = "##title", .title = Text("build.advanced").c_str(), .fonts = fonts});

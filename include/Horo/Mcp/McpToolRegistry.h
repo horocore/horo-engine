@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -38,6 +39,20 @@ namespace Horo::Mcp {
         Query,
         PresentationSideEffect,
         Mutation
+    };
+
+    /** @brief Optional revision-bound object scope derived from a tool's validated input for review. */
+    struct McpToolDraftScope final {
+        static constexpr std::size_t MaximumObjects = 64;
+        std::uint64_t opening{};
+        std::uint64_t revision{};
+        std::vector<std::uint64_t> objects;
+    };
+
+    /** @brief Inert review metadata. A missing scope means the tool supplies no object projection. */
+    struct McpToolDraftInspection final {
+        McpToolEffect effect;
+        std::optional<McpToolDraftScope> scope;
     };
 
     /** @brief Finite per-tool budgets within the enclosing MCP session limits. */
@@ -95,6 +110,8 @@ namespace Horo::Mcp {
         McpToolDescriptor descriptor;
         std::shared_ptr<IMcpToolAdapter> adapter;
         McpOwnerContext owner{McpOwnerContext::Unspecified};
+        /** @brief Optional stateless projection. Called on already validated input and may reject semantic errors. */
+        Result<McpToolDraftScope> (*inspectDraft)(const nlohmann::json &){};
     };
 
     /** @brief Immutable published registry generation retained by active readers. */
@@ -139,6 +156,13 @@ namespace Horo::Mcp {
         /** @brief Resolves effect only after checking capability grants. @param id Tool identity.
          * @param capabilities Host-approved grants. @return Exact immutable effect or typed denial. */
         [[nodiscard]] Result<McpToolEffect> Effect(const McpToolId &id, std::span<const std::string> capabilities) const;
+        /** @brief Validates a proposed input against this registry generation without granting or consuming execution authority.
+         * @param id Proposed registered tool. @param arguments Decoded, inert input.
+         * @param capabilities Host-approved capability identities.
+         * @return Registered effect and optional projected scope, or a typed rejection.
+         */
+        [[nodiscard]] Result<McpToolDraftInspection> InspectDraft(const McpToolId &id, const nlohmann::json &arguments,
+                                                                  std::span<const std::string> capabilities) const;
 
     private:
         friend class McpToolRegistry;

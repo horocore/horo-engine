@@ -457,7 +457,7 @@ namespace Horo::Packages {
 
         Result<void> RunRestoreJob(const RestoreContext &context, const PackageRestoreRequest &request,
                                    const PackageRestoreOperationId operation, const CancellationToken &cancellation,
-                                   const std::shared_ptr<Completion> &completion) {
+                                   const std::shared_ptr<Completion> &completion, const bool staging) {
             auto result = ExecuteRestore(context, request, operation, cancellation, completion);
             if (result.HasError()) {
                 std::lock_guard lock(completion->Mutex());
@@ -467,9 +467,11 @@ namespace Horo::Packages {
                     return JobCancelled(std::move(result).ErrorValue());
                 return Result<void>::Failure(std::move(result).ErrorValue());
             }
+            const auto lockDigest = staging ? std::optional{ComputeSha256(std::as_bytes(std::span{request.lockfileJson}))} : std::nullopt;
             {
                 std::lock_guard lock(completion->Mutex());
                 completion->candidate = std::move(result).Value();
+                completion->stagedLockDigest = lockDigest;
                 completion->phase = PackageRestorePhase::Committing;
                 completion->progress = std::max(completion->progress, 0.96F);
                 ++completion->revision;

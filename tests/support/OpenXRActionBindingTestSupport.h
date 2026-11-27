@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <format>
+#include <functional>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -19,6 +20,7 @@ namespace Horo::Tests::OpenXRAction {
         std::vector<std::pair<std::string, XrPath>> paths;
         std::vector<std::string> actionNames;
         std::array<XrPath, 2> currentProfiles{};
+        XrResult profileResult{XR_SUCCESS};
         unsigned liveSets{};
         unsigned liveActions{};
         unsigned suggestions{};
@@ -37,15 +39,54 @@ namespace Horo::Tests::OpenXRAction {
             bool closeRejected{};
         } sample;
 
+        struct HapticState final {
+            XrAction action{XR_NULL_HANDLE};
+            XrPath hand{XR_NULL_PATH};
+            XrPath source{XR_NULL_PATH};
+            XrPath suggestedProfile{XR_NULL_PATH};
+            XrHapticVibration vibration{};
+            XrResult applyResult{XR_SUCCESS};
+            OpenXRActionBindings *revokeOnApply{};
+            std::function<void()> onApply;
+            XrResult stopResult{XR_SUCCESS};
+            XrResult boundResult{XR_SUCCESS};
+            std::uint32_t boundCount{};
+            unsigned applies{};
+            unsigned stops{};
+        } haptic;
+
         struct TrackingState final {
             unsigned spaces{};
             std::vector<XrReferenceSpaceCreateInfo> references;
+            XrExtent2Df bounds{3.0F, 4.0F};
+            XrResult boundsResult{XR_SUCCESS};
+            unsigned boundsReads{};
+            std::optional<std::size_t> loseOnReferenceCall;
             bool enabled{};
+            unsigned suggestedPoseBindings{1};
+            std::optional<XrBool32> poseActive;
             XrTime locatedTime{};
+            XrSpace locatedBase{XR_NULL_HANDLE};
+            XrVector3f locatedPosition{1.0F, 2.0F, 3.0F};
+            std::optional<XrVector3f> headPosition;
+            XrSpace viewSpace{XR_NULL_HANDLE};
+            std::optional<std::array<XrVector3f, 2>> pairedGripPositions;
+            std::array<XrSpace, 2> gripSpaces{};
             XrSpaceLocationFlags flags{XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                        XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT};
             XrSpaceVelocityFlags velocityFlags{XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT};
         } tracking;
+
+        struct GazeState final {
+            XrAction action{XR_NULL_HANDLE};
+            XrSpace space{XR_NULL_HANDLE};
+            XrTime sampleTime{};
+            XrBool32 active{XR_TRUE};
+            XrResult poseResult{XR_SUCCESS};
+            std::function<void()> onActivity;
+            std::function<void()> onLocation;
+            unsigned locationReads{};
+        } gaze;
 
         bool throwFormat{};
         bool throwRuntime{};
@@ -96,19 +137,35 @@ namespace Horo::Tests::OpenXRAction {
 
         static XRAPI_ATTR XrResult XRAPI_CALL CreateAction(XrActionSet, const XrActionCreateInfo *info, XrAction *action) {
             REQUIRE(info->type == XR_TYPE_ACTION_CREATE_INFO);
-            REQUIRE(info->countSubactionPaths == 1);
-            REQUIRE(info->subactionPaths[0] != XR_NULL_PATH);
-            if (info->actionType == XR_ACTION_TYPE_POSE_INPUT) {
-                REQUIRE(active->tracking.enabled);
-                REQUIRE(std::string_view{info->localizedActionName} == "Grip");
+            const bool gaze = std::string_view{info->actionName} == "horo_eye_gaze";
+            if (gaze) {
+                REQUIRE(info->actionType == XR_ACTION_TYPE_POSE_INPUT);
+                REQUIRE(info->countSubactionPaths == 0);
+                REQUIRE(info->subactionPaths == nullptr);
             } else {
+                REQUIRE(info->countSubactionPaths == 1);
+                REQUIRE(info->subactionPaths[0] != XR_NULL_PATH);
+            }
+            if (info->actionType == XR_ACTION_TYPE_POSE_INPUT && !gaze) {
+                REQUIRE(active->tracking.enabled);
+                const std::string_view label{info->localizedActionName};
+                REQUIRE((label == "Grip" || label == "Aim"));
+            } else if (info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT) {
+                REQUIRE(std::string_view{info->localizedActionName} == "Vibration");
+                active->haptic.hand = info->subactionPaths[0];
+            } else if (!gaze) {
                 REQUIRE(info->actionType == active->sample.expectedType);
                 REQUIRE(std::string_view{info->localizedActionName} == "Select");
             }
             active->actionNames.emplace_back(info->actionName);
             const auto result = Script::Record("create-action");
-            if (XR_SUCCEEDED(result))
+            if (XR_SUCCEEDED(result)) {
                 *action = NativeHandle<XrAction>(200 + ++active->liveActions);
+                if (info->actionType == XR_ACTION_TYPE_VIBRATION_OUTPUT)
+                    active->haptic.action = *action;
+                if (gaze)
+                    active->gaze.action = *action;
+            }
             if (active->throwFormat)
                 throw std::format_error("scripted action formatting exception");
             if (active->throwRuntime)
@@ -133,7 +190,19 @@ namespace Horo::Tests::OpenXRAction {
         static XRAPI_ATTR XrResult XRAPI_CALL Suggest(XrInstance, const XrInteractionProfileSuggestedBinding *info) {
             REQUIRE(info->type == XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING);
             REQUIRE(info->interactionProfile != XR_NULL_PATH);
-            REQUIRE(info->countSuggestedBindings == (active->tracking.enabled ? 2 : 1));
+            const auto suggestions = std::span{info->suggestedBindings, info->countSuggestedBindings};
+            if (suggestions.size() == 1 && active->gaze.action != XR_NULL_HANDLE && suggestions.front().action == active->gaze.action) {
+                REQUIRE(info->interactionProfile == active->Find("/interaction_profiles/ext/eye_gaze_interaction"));
+                REQUIRE(suggestions.front().binding == active->Find("/user/eyes_ext/input/gaze_ext/pose"));
+                return Script::Record("suggest-gaze");
+            }
+            const auto vibration = std::ranges::find(suggestions, active->haptic.action, &XrActionSuggestedBinding::action);
+            if (vibration != suggestions.end()) {
+                active->haptic.source = vibration->binding;
+                active->haptic.suggestedProfile = info->interactionProfile;
+            }
+            const auto expectedPoses = active->tracking.enabled ? active->tracking.suggestedPoseBindings : 0U;
+            REQUIRE(info->countSuggestedBindings == 1U + expectedPoses + (vibration != suggestions.end() ? 1U : 0U));
             REQUIRE(info->suggestedBindings[0].action != XR_NULL_HANDLE);
             ++active->suggestions;
             return Script::Record("suggest");
@@ -152,7 +221,43 @@ namespace Horo::Tests::OpenXRAction {
                 return XR_ERROR_ACTIONSET_NOT_ATTACHED;
             const auto left = std::ranges::find(active->paths, std::string{"/user/hand/left"}, &std::pair<std::string, XrPath>::first);
             state->interactionProfile = active->currentProfiles[left->second == hand ? 0 : 1];
-            return Script::Record("profile");
+            const auto result = Script::Record("profile");
+            return XR_FAILED(result) ? result : active->profileResult;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL BoundHaptics(XrSession, const XrBoundSourcesForActionEnumerateInfo *info, uint32_t capacity,
+                                                           uint32_t *count, XrPath *sources) {
+            REQUIRE(info->type == XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO);
+            REQUIRE(info->action == active->haptic.action);
+            REQUIRE(capacity == 1);
+            *count = active->haptic.boundCount;
+            if (*count == 1)
+                sources[0] = active->haptic.source;
+            return active->haptic.boundResult;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL ApplyHaptic(XrSession, const XrHapticActionInfo *info, const XrHapticBaseHeader *effect) {
+            REQUIRE(info->type == XR_TYPE_HAPTIC_ACTION_INFO);
+            REQUIRE(info->action == active->haptic.action);
+            REQUIRE(info->subactionPath == active->haptic.hand);
+            REQUIRE(effect->type == XR_TYPE_HAPTIC_VIBRATION);
+            ++active->haptic.applies;
+            active->haptic.vibration = *reinterpret_cast<const XrHapticVibration *>(effect);
+            (void)Script::Record("apply-vibration");
+            if (auto *owner = active->haptic.revokeOnApply)
+                owner->RequestHapticCancellation();
+            if (active->haptic.onApply)
+                active->haptic.onApply();
+            return active->haptic.applyResult;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL StopHaptic(XrSession, const XrHapticActionInfo *info) {
+            REQUIRE(info->type == XR_TYPE_HAPTIC_ACTION_INFO);
+            REQUIRE(info->action == active->haptic.action);
+            REQUIRE(info->subactionPath == active->haptic.hand);
+            ++active->haptic.stops;
+            (void)Script::Record("stop-vibration");
+            return active->haptic.stopResult;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Sync(XrSession, const XrActionsSyncInfo *info) {
@@ -200,9 +305,17 @@ namespace Horo::Tests::OpenXRAction {
 
         static XRAPI_ATTR XrResult XRAPI_CALL PoseState(XrSession, const XrActionStateGetInfo *info, XrActionStatePose *state) {
             REQUIRE(info->action != XR_NULL_HANDLE);
+            if (info->action == active->gaze.action) {
+                REQUIRE(info->subactionPath == XR_NULL_PATH);
+                state->isActive = active->gaze.active;
+                const auto result = Script::Record("sample-gaze");
+                if (active->gaze.onActivity)
+                    active->gaze.onActivity();
+                return result == XR_SUCCESS ? active->gaze.poseResult : result;
+            }
             REQUIRE(info->subactionPath != XR_NULL_PATH);
             const auto result = Script::Record("sample-pose");
-            state->isActive = active->sample.active;
+            state->isActive = active->tracking.poseActive.value_or(active->sample.active);
             return result;
         }
 
@@ -215,19 +328,40 @@ namespace Horo::Tests::OpenXRAction {
                 REQUIRE(info->poseInReferenceSpace.position.z == 0.0F);
             }
             active->tracking.references.push_back(*info);
-            const auto result = Script::Record("create-reference");
-            if (XR_SUCCEEDED(result))
+            const auto recorded = Script::Record("create-reference");
+            const auto result =
+                active->tracking.loseOnReferenceCall == active->tracking.references.size() ? XR_SESSION_LOSS_PENDING : recorded;
+            if (XR_SUCCEEDED(result)) {
                 *space = NativeHandle<XrSpace>(300 + ++active->tracking.spaces);
+                if (info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW)
+                    active->tracking.viewSpace = *space;
+            }
             return result;
+        }
+
+        static XRAPI_ATTR XrResult XRAPI_CALL Bounds(XrSession, XrReferenceSpaceType type, XrExtent2Df *extent) {
+            REQUIRE(type == XR_REFERENCE_SPACE_TYPE_STAGE);
+            auto &tracking = active->tracking;
+            ++tracking.boundsReads;
+            *extent = tracking.bounds;
+            return tracking.boundsResult;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL ActionSpace(XrSession, const XrActionSpaceCreateInfo *info, XrSpace *space) {
             REQUIRE(info->action != XR_NULL_HANDLE);
-            REQUIRE(info->subactionPath != XR_NULL_PATH);
+            const bool gaze = info->action == active->gaze.action;
+            REQUIRE((info->subactionPath == XR_NULL_PATH) == gaze);
             REQUIRE(info->poseInActionSpace.orientation.w == 1.0F);
             const auto result = Script::Record("create-action-space");
-            if (XR_SUCCEEDED(result))
+            if (XR_SUCCEEDED(result)) {
                 *space = NativeHandle<XrSpace>(300 + ++active->tracking.spaces);
+                if (gaze) {
+                    active->gaze.space = *space;
+                } else if (active->tracking.pairedGripPositions) {
+                    const auto side = info->subactionPath == active->Find("/user/hand/left") ? 0U : 1U;
+                    active->tracking.gripSpaces[side] = *space;
+                }
+            }
             return result;
         }
 
@@ -241,14 +375,33 @@ namespace Horo::Tests::OpenXRAction {
         static XRAPI_ATTR XrResult XRAPI_CALL LocateSpace(XrSpace source, XrSpace base, XrTime time, XrSpaceLocation *location) {
             REQUIRE(source != base);
             active->tracking.locatedTime = time;
+            active->tracking.locatedBase = base;
             location->locationFlags = active->tracking.flags;
             const float invalid = std::numeric_limits<float>::quiet_NaN();
             location->pose.position = {invalid, invalid, invalid};
             location->pose.orientation = {invalid, invalid, invalid, invalid};
-            if ((location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0)
-                location->pose.position = {1.0F, 2.0F, 3.0F};
+            if ((location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0) {
+                auto &tracking = active->tracking;
+                location->pose.position =
+                    source == tracking.viewSpace && tracking.headPosition ? *tracking.headPosition : tracking.locatedPosition;
+                if (tracking.pairedGripPositions) {
+                    const auto grip = std::ranges::find(tracking.gripSpaces, source);
+                    if (grip != tracking.gripSpaces.end())
+                        location->pose.position = (*tracking.pairedGripPositions)[grip - tracking.gripSpaces.begin()];
+                }
+            }
             if ((location->locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
                 location->pose.orientation = {0.0F, 0.0F, 0.0F, 1.0F};
+            if (source == active->gaze.space) {
+                auto *sampleTime = static_cast<XrEyeGazeSampleTimeEXT *>(location->next);
+                REQUIRE(sampleTime->type == XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT);
+                REQUIRE(sampleTime->next == nullptr);
+                ++active->gaze.locationReads;
+                sampleTime->time = active->gaze.sampleTime;
+                if (active->gaze.onLocation)
+                    active->gaze.onLocation();
+                return Script::Record("locate-gaze");
+            }
             auto *velocity = static_cast<XrSpaceVelocity *>(location->next);
             velocity->velocityFlags = active->tracking.velocityFlags;
             velocity->linearVelocity = {4.0F, 0.0F, 0.0F};
@@ -284,8 +437,12 @@ namespace Horo::Tests::OpenXRAction {
                                      Entry{"xrGetActionStatePose", std::bit_cast<PFN_xrVoidFunction>(&PoseState)},
                                      Entry{"xrCreateReferenceSpace", std::bit_cast<PFN_xrVoidFunction>(&ReferenceSpace)},
                                      Entry{"xrCreateActionSpace", std::bit_cast<PFN_xrVoidFunction>(&ActionSpace)},
+                                     Entry{"xrGetReferenceSpaceBoundsRect", std::bit_cast<PFN_xrVoidFunction>(&Bounds)},
                                      Entry{"xrDestroySpace", std::bit_cast<PFN_xrVoidFunction>(&DestroySpace)},
-                                     Entry{"xrLocateSpace", std::bit_cast<PFN_xrVoidFunction>(&LocateSpace)}};
+                                     Entry{"xrLocateSpace", std::bit_cast<PFN_xrVoidFunction>(&LocateSpace)},
+                                     Entry{"xrEnumerateBoundSourcesForAction", std::bit_cast<PFN_xrVoidFunction>(&BoundHaptics)},
+                                     Entry{"xrApplyHapticFeedback", std::bit_cast<PFN_xrVoidFunction>(&ApplyHaptic)},
+                                     Entry{"xrStopHapticFeedback", std::bit_cast<PFN_xrVoidFunction>(&StopHaptic)}};
             const auto found = std::ranges::find(entries, std::string_view{name}, &Entry::name);
             if (found == entries.end())
                 return Script::GetProc(instance, name, function);
@@ -362,7 +519,7 @@ namespace Horo::Tests::OpenXRAction {
             return record;
         }
 
-        Result<void> Create() {
+        Result<void> Create(std::span<const NativeHapticActionPath> haptics = {}) {
             const std::array labels{NativeActionLabel{Input::ActionId{"select"}, "Select"}};
             const std::array setLabels{NativeActionSetLabel{{1}, "Gameplay"}};
             return owner.Create(session.Request().candidate, {&ActionScript::GetProc,
@@ -371,7 +528,10 @@ namespace Horo::Tests::OpenXRAction {
                                                               {},
                                                               profilePaths,
                                                               controlPaths,
-                                                              {labels, setLabels}});
+                                                              {labels, setLabels},
+                                                              {},
+                                                              {},
+                                                              haptics});
         }
 
         Result<void> Prepare(const std::uint32_t maximumActions = 1) {

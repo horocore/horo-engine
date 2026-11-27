@@ -16,6 +16,10 @@ namespace Horo::Gameplay {
 }
 
 namespace Horo::AI {
+    class AiSceneRuntime;
+    class PerceptionSpatialBroadphase;
+    struct AiControllerPerceptionEndpoints;
+
     /** @brief Gameplay-owned damage fact; the instigator is a weak, generation-fenced scene reference. */
     struct DamagePerceptionEvent final {
         PerceptionSourceRef instigator;
@@ -40,8 +44,20 @@ namespace Horo::AI {
         Math::WorldCoordinate64 lastKnownPosition;
     };
 
+    /** @brief Simulation-owned sound committed for a specific recipient independently of audio presentation. */
+    struct HearingPerceptionEvent final {
+        PerceptionSourceRef source;
+        Math::WorldCoordinate64 location;
+        double intensity{};            /**< Finite normalized intensity in (0, 1]. */
+        double radiusMeters{};         /**< Finite positive maximum distance from the event location. */
+        std::uint64_t tags{};          /**< Producer-defined gameplay tag mask; never projected into listener memory. */
+        std::uint64_t emittedTick{};   /**< First simulation tick eligible for delivery. */
+        std::uint64_t lifetimeTicks{}; /**< Positive delivery lifetime; elapsed ticks must be strictly smaller. */
+    };
+
     /** @brief Typed payload supplied by an authoritative, read-only Gameplay event producer. */
-    using GameplayPerceptionEvent = std::variant<DamagePerceptionEvent, ProximityPerceptionEvent, TeamMessagePerceptionEvent>;
+    using GameplayPerceptionEvent =
+        std::variant<DamagePerceptionEvent, ProximityPerceptionEvent, TeamMessagePerceptionEvent, HearingPerceptionEvent>;
 
     /** @brief One explicit recipient delivery; never implies fan-out to another agent. */
     struct PerceptionEventDelivery final {
@@ -63,6 +79,27 @@ namespace Horo::AI {
 
         const PerceptionEventDelivery *delivery_;
         const AIPerceptionMemory *memory_;
+    };
+
+    /** @brief A synchronous feed issued by the authoritative Gameplay source for one Scene sensing window. */
+    class PerceptionEventFeed final {
+    private:
+        friend class AiSceneRuntime;
+        friend class Horo::Gameplay::PerceptionEventSource;
+
+        using Validate = Result<void> (*)(const void *owner);
+        using Deliver = Result<void> (*)(const void *owner, std::uint64_t tick, const AiControllerPerceptionEndpoints &endpoints,
+                                         AIPerceptionMemory &memory);
+
+        PerceptionEventFeed(const void *owner, const AiSceneRuntime &runtime, const PerceptionSpatialBroadphase &spatial,
+                            Validate validate, Deliver deliver) noexcept
+            : owner_(owner), runtime_(&runtime), spatial_(&spatial), validate_(validate), deliver_(deliver) {}
+
+        const void *owner_;
+        const AiSceneRuntime *runtime_;
+        const PerceptionSpatialBroadphase *spatial_;
+        Validate validate_;
+        Deliver deliver_;
     };
 
     /**

@@ -1,13 +1,13 @@
-#include "CanonicalPhysicsRuntime.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
-#include "PhysicsEventProjection.h"
 #include "PhysicsTestUtils.h"
+#include "canonical/runtime/CanonicalPhysicsRuntime.h"
+#include "events/PhysicsEventProjection.h"
 
 #include <Jolt/Jolt.h>
 
 // Jolt subsidiary headers require its root definitions first.
-#include "CanonicalPhysicsRuntimeInternal.h"
+#include "canonical/runtime/CanonicalPhysicsRuntimeInternal.h"
 
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Memory.h>

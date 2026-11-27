@@ -22,6 +22,19 @@ static_assert(std::is_same_v<decltype(&Horo::Runtime::FindRuntimeSceneCellAttach
                              std::optional<Horo::Runtime::SceneBaselineAttachmentView> (*)(Horo::Runtime::RuntimeSceneView,
                                                                                            const Horo::Runtime::SceneCellPayloadIdentity &,
                                                                                            Horo::WorldStreaming::PartitionEpoch) noexcept>);
+static_assert(
+    std::is_same_v<decltype(&Horo::Runtime::QueueStreamedSceneInstance),
+                   Horo::Result<Horo::Runtime::SceneInstanceOperation> (*)(
+                       Horo::Runtime::RuntimeSceneService &, const Horo::Runtime::SceneInstanceAddress &,
+                       const Horo::Runtime::RuntimeSceneCellPayload &, const Horo::Runtime::SceneCellAttachmentRequest &,
+                       std::vector<Horo::Runtime::RuntimeGroupAssetLease>, std::shared_ptr<const Horo::Runtime::SceneCellPayloadAuthority>,
+                       const Horo::Runtime::SceneInstanceOperation *)>);
+static_assert(std::is_same_v<decltype(&Horo::Runtime::QueuePreparationWithInitialStreamedScene),
+                             Horo::Result<Horo::Runtime::ScenePublicationReceipt> (*)(
+                                 Horo::Runtime::RuntimeSceneService &, const Horo::Runtime::RuntimeSceneDefinition &,
+                                 const Horo::Runtime::SceneInstanceAddress &, const Horo::Runtime::RuntimeSceneCellPayload &,
+                                 const Horo::Runtime::SceneCellAttachmentRequest &,
+                                 std::shared_ptr<const Horo::Runtime::SceneCellPayloadAuthority>)>);
 static_assert(!std::is_copy_constructible_v<Horo::Runtime::IncrementalSceneCellCook>);
 static_assert(std::is_base_of_v<Horo::Runtime::SceneActivationParticipant, Horo::Runtime::SceneCellAttachmentParticipant>);
 
@@ -57,13 +70,15 @@ static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCoo
 static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Adopt), const Horo::Runtime::PreparedSceneCellCook &>);
 
 static_assert(Horo::Runtime::SceneCellPayloadCodecVersion == 3);
-static_assert(Horo::Runtime::SceneStructuralParticipantContractVersion == 4);
+static_assert(Horo::Runtime::SceneStructuralParticipantContractVersion == 6);
 static_assert(
     std::is_same_v<decltype(&Horo::Runtime::SceneStructuralParticipant::ValidateBaselines),
                    Horo::Result<void> (Horo::Runtime::SceneStructuralParticipant::*)(
                        const Horo::Runtime::RuntimeSceneView &, std::span<const Horo::Runtime::SceneBaselinePreparationView>) const>);
 
 static_assert(std::is_default_constructible_v<Horo::Runtime::RuntimeSceneService>);
+static_assert(std::is_same_v<decltype(&Horo::Runtime::RuntimeSceneService::IsInitialStreamedCandidate),
+                             bool (Horo::Runtime::RuntimeSceneService::*)(const Horo::Runtime::RuntimeSceneView &) const noexcept>);
 static_assert(std::is_constructible_v<Horo::Runtime::RuntimeSceneService, Horo::Runtime::SceneRuntimeId>);
 static_assert(!std::is_convertible_v<Horo::Runtime::SceneRuntimeId, Horo::Runtime::RuntimeSceneService>);
 static_assert(std::is_constructible_v<Horo::Runtime::RuntimeSceneService, Horo::Assets::AssetRegistry &, Horo::Assets::AssetLoadService &,

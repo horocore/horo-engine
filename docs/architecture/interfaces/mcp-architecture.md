@@ -200,9 +200,8 @@ Editor, Runtime, Background, or Build execution. Publication rejects an omitted
 owner instead of silently routing work to a frame-sensitive context. This is a
 deliberate registration migration: the registry test authoring helper and every
 host composition that publishes MCP tools must set the owner explicitly. The
-current repository has no host-published MCP tool pack; existing session and
-transport callers are unaffected. Active operations retain their snapshot and
-adapter lease across registry replacement until their owner invocation starts.
+registry retains the snapshot and adapter lease for each active operation
+across publication changes until its owner invocation starts.
 
 The registry admits a deliberately closed, non-referencing JSON Schema subset:
 `type`, `properties`, `required`, boolean `additionalProperties`, `items`, `enum`,
@@ -396,6 +395,12 @@ cancellation; on a drain timeout, host composition must keep that owner alive
 until its jobs/processes have stopped and callbacks have completed. Controller
 destruction cannot forcibly terminate an application-owned job or process.
 
+An owner may lease a sensitive result to the controller for a single
+`operations/get` delivery. The lease binds a monotonic deadline and weak source
+lifetime without calling the owner from the transport thread. A lease applies
+only to that running operation. Revoked, expired, and already received
+payloads return operation-unavailable.
+
 ## Error Handling
 
 MCP errors are translated into JSON-RPC error objects:
@@ -459,23 +464,91 @@ Tools must not return unbounded scene graphs, logs, profiler data, or asset
 lists in one response. Streaming JSONL tools declare a per-record schema and
 bounded chunk size.
 
+The embedded editor's scene inspection grant exposes `inspect.transforms`
+as an owner-lane query. It returns authored local translations, quaternions
+and scales, local and committed world matrices in row-major order, and the
+world-space pivot for explicitly supplied visible object IDs. The
+request is bounded to 16 IDs and continuations repeat the exact Scene epoch
+and revision from the previous result. Play copies, retired workspaces and
+missing or hidden objects fail closed.
+The same grant exposes `inspect.bounds`, which applies committed authored
+world transforms to matching published mesh bounds. It reports the axis-aligned
+minimum and maximum and both boxes' centers, half-extents, and volumes. The
+oriented box includes three orthonormal world-space axes aligned to the object's
+affine frame. The enclosure remains conservative under non-uniform scale,
+reflection, and shear. Missing or stale geometry produces an explicit
+unavailable result. Gizmo previews are excluded.
+The same object and page contract applies to `inspect.components` and
+`inspect.rendering`. Component inspection reports authored presence and counts
+without component payloads. Rendering inspection reports per-object committed
+instance, vertex and triangle counts from retained geometry, with an explicit
+unavailable result when no matching geometry is published.
+`inspect.distances` measures each requested target against an explicit
+visible reference object. It returns the world AABB gap, per-axis overlap
+depths, a deterministic nearest-point pair and the angle between the two
+committed transformed local forward axes.
+`inspect.grid_offsets` uses the same committed world pivot and an explicit
+positive step on a zero-origin world grid. It reports the nearest aligned
+position and the signed correction on each axis without editing the Scene.
+Midpoints round away from zero.
+`inspect.surfaces` takes a world-space ray origin, direction, and positive
+maximum distance. It returns the closest triangle hit per requested object
+from the committed viewport mesh. A hit carries its distance, world position,
+geometric normal in triangle winding order, and slope relative to world up.
+A valid miss omits the sample. Missing mesh data and requests exceeding the
+65,536-triangle page budget produce explicit errors.
+`inspect.collisions` pages through the authored colliders contributed by one
+visible object. Each row identifies the visible body and collider slots and
+reports the body-local pose, scale, flags, and analytic shape dimensions.
+Asset-backed shapes expose their kind. A reference to an unavailable body
+fails explicitly. Continuations use the same Scene fence as the other tools.
+`inspect.penetrations` takes an ordered pair of visible body owners and an
+explicit project Physics query-channel UUID. It reads the source body's
+published shape and pose, excludes self-hits, and reports the deepest
+positive overlap against the second body. Contact position is measured in
+the current Physics origin frame. The sample is absent for an admitted pair
+with no positive contact. Disabled or unavailable Physics and capacity
+failures propagate as explicit errors.
+`inspect.visual_issues` samples up to 16 specified objects with one editor
+camera observation. The request supplies a viewport aspect ratio and a
+top-left-origin normalized rectangle. Each row describes the intersection
+of the projected world bounds with that region and whether clipping occurred.
+It also reports the largest projected overlap with another requested object
+using normalized viewport area. These diagnostics describe bounding geometry.
+
 ## MCP History Retention And Redaction
 
 `McpHistoryStore` stores bounded request summaries, not arbitrary full payloads.
 
 The store records:
 
-- request ID
+- host-generated request and operation correlation
 - tool name
 - timing
 - status
-- operation ID
 - safe diagnostics summary
 
 Tool arguments and results are redacted according to the tool descriptor.
 Secrets, credentials, raw file contents, and large payloads are never retained
 in history by default. History retention is policy-bounded by count, age, and
 storage budget.
+
+Session, approval, and dispatch owners publish schema-versioned `mcp.audit`
+records to the process's bounded asynchronous JSONL log. Numeric principal,
+session, approval, and operation identities correlate related records without
+retaining caller-supplied request IDs or names. Operation records identify
+registered tools and include status and elapsed time. Arguments, application
+results and messages, credentials, and ambient context stay outside the audit
+projection. A full or disabled log queue never gates command execution.
+
+The editor's bottom-dock MCP tab displays the most recent 256 matching typed
+records retained by the live process log. Its search, approval and error filters
+apply to both the displayed rows and the explicit CSV copy action. The export
+uses only the validated audit schema and host-generated correlations.
+Active controls query the authenticated owner directly and remain available while
+history is paused or unavailable. An operator can read the current grants,
+cancel a queued or executing MCP request, or revoke the entire session and its
+native workspace leases. Actions reject a retired session generation.
 
 ## Save Tool Boundary
 
@@ -661,6 +734,103 @@ prevents old registrations from publishing results. The host closes admission
 and drains calls before releasing source/provider owners. Responses own their
 bytes and rows after publication. See the
 [composition and migration guide](../../guides/project-code-query-migration.md).
+
+## Editor source presentation
+
+An authenticated editor host can publish `editor.source.open` and
+`editor.source.navigate` against a borrowed active-workspace endpoint.
+Both use the `horo.editor.source.present` grant,
+run on the editor owner, and require exact single-use approval as
+presentation side effects. They accept portable project-relative text
+sources. Navigation addresses one-based lines and UTF-16 columns.
+
+The workspace validates the position against the current source snapshot
+before adding the tab. It uses the same document owner and byte-range
+projection as embedded language navigation. Already open dirty sources
+retain their current buffers. Cancellation, closed workspaces, and
+project or authorization replacement prevent the old registration from
+opening a source.
+
+The internal editor command session publishes source, build and test packs in one
+immutable registry for the host-admitted workspace. The host supplies the
+client identity, applicable grants and already-trusted project revision. The
+embedded client can submit protocol requests. Only the local owner can request
+or decide a short-lived approval for an exact presentation or mutation call.
+The host pumps accepted calls on the editor lane and closes admission before
+releasing the borrowed workspace endpoints.
+
+The graphical host attaches the command owner only after the project route
+commits. Attachment prepares a revocable binding without granting a client
+access. Explicit local admission creates a new trust revision for the current
+project, and leaving the workspace retires the embedded session before
+withdrawing its application callbacks. A replacement workspace requires its
+own admission.
+
+Open **MCP Commands** in the editor workspace and enable source navigation,
+build commands, or CTest commands. Select an advertised tool and supply its
+arguments as a JSON object. For example, `editor.source.open` accepts
+`{"path":"gameplay/main.cpp"}`. `editor.test.start` takes an empty object and
+returns the test ID used by `editor.test.status` and `editor.test.cancel`.
+The approval view displays the exact immutable request before an effectful
+command can be queued. Hiding the panel withdraws an unanswered approval.
+Read-only status commands run with the selected session's observation grant.
+
+The Play debug capture pack admits `debug.capture_telemetry` after exact
+approval. Movement traces sample one visible authored object's committed Play
+transform up to 16 times at intervals of 100 to 1,000 milliseconds. Results
+contain elapsed time and world position. `debug.get_capture` reports progress
+and copied samples. `debug.cancel_capture` requires exact approval and cancels
+a sampling trace or withdraws a ready result, including queued deliveries.
+The workspace retains one trace for up to 30 seconds and
+stops sampling when the Play generation or target changes. Leaving active Play
+withdraws the trace and its queued deliveries.
+
+The same pack offers an approved `viewport.capture_image` crop on the OpenGL
+and Vulkan authored desktop viewports and both Metal viewport paths while
+Play is idle. Vulkan copies the
+resolved presentation attachment after the scene and its color work, or after
+compositing its Camera or World canvas. Coordinates use a top-left pixel origin,
+with at most 256 pixels per axis. `debug.get_image` reports capture status and
+returns ready RGBA8 pixels as hexadecimal in chunks of up to 2,048 bytes. Start
+at offset zero and use `nextOffset` until the result omits it. Reads belong to the
+same authenticated session and source revision. A prepared pixel chunk can be
+collected once through `operations/get` while the source still owns it. To retry
+a lost delivery, request the same byte offset again while the capture is live.
+`debug.cancel_image` requires exact approval and withdraws pending or ready
+images. Workspace retirement also revokes chunks already prepared for delivery
+without waiting for another render frame. A source change or loss of authority
+withdraws the image.
+
+Call `viewport.image_source` with an empty argument object before requesting a
+crop. Pass its result as the `source` field of `viewport.capture_image` along
+with the existing crop coordinates. The approval binds the Scene, viewport
+camera, projection publication, and physical extent. A change before dispatch
+requires a fresh observation and approval. Camera, projection, and Play
+transitions revoke queued pixels at the workspace owner. The renderer also
+withdraws pending captures and their pixels when the native target changes.
+
+## Editor gameplay build commands
+
+The editor command pack offers `editor.build.start`, `editor.build.status`,
+and `editor.build.cancel` over the existing Gameplay Build service. Start
+and cancel require the execution grant and exact approval. Status has a
+separate observation grant and only reads the last build started by the
+same authenticated session. The host fixes the project, SDK, generator,
+and configuration. An approval cannot supply a command or native path.
+
+An approved build uses the same operation and output stores as an ordinary
+editor build. The status response carries the native operation identity
+and bounded error identities for correlation. The build cannot coalesce
+with a different caller's ordinary Play or editor build. Workspace
+retirement cancels only the isolated build it admitted.
+
+The same command pack can publish `editor.test.start`, `editor.test.status`,
+and `editor.test.cancel` against the active workspace's native configured test
+service. Test execution and observation grants are independent of the build
+grants. Start and cancel use exact single-use approval, and status reads only
+the starting session's operation. The test identity correlates with the
+native operation and Build Output stores. The workspace owns cancellation
+when its endpoint is withdrawn.
 
 ## Related Documents
 

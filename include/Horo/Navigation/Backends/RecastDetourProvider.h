@@ -7,6 +7,7 @@
 
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationBackend.h"
+#include "Horo/Navigation/NavigationBakeScopeId.h"
 #include "Horo/Navigation/NavigationMeshBuilder.h"
 
 #include <array>
@@ -16,6 +17,9 @@
 #include <span>
 
 namespace Horo::Navigation {
+    class NavigationCookedTile;
+    class NavigationDefinition;
+
     /** @brief One validated convex grounded polygon in provider-neutral vertex-index form. */
     struct GroundedNavigationPolygon final {
         std::array<std::uint32_t, 6> vertexIndices{}; /**< Counter-clockwise canonical-space indices; unused entries are zero. */
@@ -66,6 +70,44 @@ namespace Horo::Navigation {
      */
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourNavigationQueryBackend(
         const RecastDetourProviderCreateInfo &info);
+
+    /** @brief Exact admitted inputs for a bounded grounded tile closure in one authored partition. */
+    struct RecastDetourCookedProviderCreateInfo final {
+        NavigationWorldId world;
+        NavigationGeneration topology;
+        NavigationBakeSurfaceKey surface;                                   /**< Exact scope and surface from host admission. */
+        NavigationAgentProfileId profile;                                   /**< Exact authored profile served by this provider. */
+        const NavigationDefinition &definition;                             /**< Validated authority for geometry, areas, and filters. */
+        std::span<const std::shared_ptr<const NavigationCookedTile>> tiles; /**< Complete selected runtime closure in key order. */
+        Math::Vec3 nearestPointHalfExtents;
+        NavigationQueryLimits queryLimits;
+        std::uint32_t maximumConcurrentQueries{};
+        std::size_t maximumOwnedBytes{};
+        std::uint64_t capabilityRevision{};
+        bool allowAuthoredTraversal{}; /**< Enables authored tile-local links in the admitted closure for traversal-aware consumers. */
+    };
+
+    /** @brief Prepared native query owner and the bounded storage reservation used to admit it. */
+    struct RecastDetourPreparedQueryBackend final {
+        std::unique_ptr<INavigationQueryBackend> backend; /**< Fully initialized immutable query provider. */
+        std::size_t reservedBytes{};                      /**< Provider budget retained until this backend is destroyed. */
+    };
+
+    /** @brief Prepare a provider and report its reservation independently of the caller's budget ceiling.
+     * @param info Exact admitted portable closure and native resource limits.
+     * @return Prepared backend with its positive reservation, or a typed error before publication.
+     * @see CreateRecastDetourCookedNavigationQueryBackend
+     */
+    [[nodiscard]] Result<RecastDetourPreparedQueryBackend> PrepareRecastDetourCookedNavigationQueryBackend(
+        const RecastDetourCookedProviderCreateInfo &info);
+
+    /** @brief Creates a Detour query owner from an exact supported portable NavMesh closure.
+     * @param info Exact already-admitted closure and native resource limits, borrowed during this call only.
+     * @return Owned provider, or a typed error before publication. Cross-tile links require exact opposed grid edges.
+     * @details Off-mesh corridors require explicit traversal-aware opt-in and stable authored link identities.
+     * Empty coverage, incompatible geometry and unrepresentable connectivity return typed failures. */
+    [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourCookedNavigationQueryBackend(
+        const RecastDetourCookedProviderCreateInfo &info);
 
     /**
      * @brief Creates the pinned Recast grounded tile builder.

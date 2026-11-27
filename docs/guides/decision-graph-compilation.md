@@ -24,6 +24,32 @@ BT calls use the existing BT traversal. HSM calls follow the existing hierarchy 
 
 HSM actions are synchronous one-shot intents. Their actual task lifecycles must terminate and clean up in that invocation; `Running` is rejected and cancelled rather than leaving unowned work. BT task leaves retain the existing cooperative task/continuation lifecycle. Failed actions terminate the logical runner; the runner does not claim to undo already emitted gameplay intents.
 
+## Decision step evidence
+
+Use `DecisionGraphInstance::StepWithTrace` to collect one version-four frame in
+caller-owned `DecisionStepTrace` storage. The frame carries the cooked digest,
+root graph, fixed tick, and the exact frozen blackboard binding and revision. Behavior tree
+records describe the non-idle node state observed after evaluation. State
+machine records include the committed transition sequence and the active state
+summary. Utility records carry normalized score evidence keyed by stable option
+and consideration IDs. Reused graphs have distinct occurrence addresses under
+the same digest. Task handles correlate within the captured runtime incarnation.
+
+The trace retains up to 128 records and reports how many were omitted. Tracing
+does not invoke providers or change the evaluation order, and the ordinary
+`Step` call leaves trace capture disabled. Values, raw provider diagnostics,
+and external subsystem state stay outside the record format. A local replay
+must supply the same admitted plan, frozen inputs, and deterministic provider
+behavior. An evidence frame alone cannot reconstruct those inputs.
+
+Replay and inspection consumers can call `DecisionTraceHeader::MatchesObservation`
+with the expected cooked digest, tick, blackboard binding and revision. The
+binding distinguishes schema publication and instance generations even when a
+replacement board reuses a revision number. Metadata comparison grants no
+authority to read or execute against retired input. Version-three consumers
+access the agent through `Header().blackboard.agent` and rebuild with the matching
+graph instance and trace headers. `Step` callers continue using the same inputs.
+
 ## Storage and limits
 
 Hard ceilings are 128 graph assets, 4,096 source nodes across the closure (1,024 per graph including action uses), 16 call levels, 256 call occurrences, 16,384 combined kernel-depth units and 1,048,576 reserved task slots. Product limits may lower these values. Core storage is bounded at 64 MiB; declared provider/quota storage at 256 MiB. Source and cooked transports are limited to 16 MiB, diagnostics to 4,096, and the cook adapter's retained prepared payloads to 64 MiB.

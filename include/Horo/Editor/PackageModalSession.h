@@ -32,6 +32,10 @@ namespace Horo::Editor {
          * @param generation Expected opening. @param enabled Typed selection. @return Operation or typed failure. */
         [[nodiscard]] Result<Application::PackageOperationId> Activate(PackageModalGeneration generation,
                                                                        std::span<const Packages::EnabledPackageExtension> enabled);
+        /** @brief Forwards explicit module-role selections through the same opening fence and application authority.
+         * @param generation Expected opening. @param enabled Exact selected module roles. @return Operation or typed failure. */
+        [[nodiscard]] Result<Application::PackageOperationId> ActivateModules(PackageModalGeneration generation,
+                                                                              std::span<const Packages::EnabledPackageModule> enabled);
         /** @brief Cancels the exact projected operation; does not destroy application work.
          * @param generation Expected opening. @return Typed outcome. */
         [[nodiscard]] Result<void> Cancel(PackageModalGeneration generation);
@@ -42,6 +46,20 @@ namespace Horo::Editor {
         [[nodiscard]] const std::optional<Application::PackageOperationSnapshot> &Operation() const noexcept;
         /** @brief Returns the last immutable plan, absent when evidence is unavailable. @return Owning read-only evidence. */
         [[nodiscard]] std::shared_ptr<const Application::PackagePlanSnapshot> Plan() const noexcept;
+        /** @brief Reads graph-only removal effects for the current opening.
+         * @param generation Expected opening. @param package Exact selected package. @return Preview or typed rejection. */
+        [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(PackageModalGeneration generation,
+                                                                                   const Packages::HoroPackageId &package) const;
+        /** @brief Reads graph effects and native lifetime blockers for the current opening.
+         * @param generation Expected opening. @param package Exact selected package. @return Preview or typed rejection. */
+        [[nodiscard]] Result<Application::PackageRemovalPreview> InspectRemoval(PackageModalGeneration generation,
+                                                                               const Packages::HoroPackageId &package) const;
+        /** @brief Confirms removal against the plan shown in this opening.
+         * @param generation Expected opening. @param package Selected direct dependency.
+         * @param reviewed Snapshot shown at preview. @return Operation ID or typed rejection. */
+        [[nodiscard]] Result<Application::PackageOperationId> Remove(PackageModalGeneration generation,
+                                                                     const Packages::HoroPackageId &package,
+                                                                     const std::shared_ptr<const Application::PackagePlanSnapshot> &reviewed);
 
     private:
         /** @brief Rejects controls from a closed or replaced modal opening before application access. */

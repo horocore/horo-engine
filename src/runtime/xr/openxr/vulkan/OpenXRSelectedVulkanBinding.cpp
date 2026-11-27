@@ -83,6 +83,16 @@ namespace Horo::XR::OpenXRInternal {
         return Result<const XrGraphicsBindingVulkanKHR *>::Success(&binding_);
     }
 
+    /** @copydoc OpenXRSelectedVulkanBinding::BorrowPreparedBinding */
+    Result<const XrGraphicsBindingVulkanKHR *> OpenXRSelectedVulkanBinding::BorrowPreparedBinding() const {
+        using Output = Result<const XrGraphicsBindingVulkanKHR *>;
+        if (auto current = ValidatePreparation(); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        if (!bound_)
+            return Output::Failure(MakeError(XRErrors::OperationUnavailable));
+        return Output::Success(&binding_);
+    }
+
     /** @copydoc OpenXRSelectedVulkanBinding::Preflight */
     Result<void> OpenXRSelectedVulkanBinding::Preflight(const NativeDiscoveryBorrow &owner) {
         if (const auto lane = CheckLane(); lane.HasError())
@@ -197,6 +207,51 @@ namespace Horo::XR::OpenXRInternal {
             return;
         binding_ = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
         bound_ = false;
+    }
+
+    /** @copydoc OpenXRSelectedVulkanBinding::CaptureCompatibilityDevice */
+    Result<Render::VulkanApiVersion> OpenXRSelectedVulkanBinding::CaptureCompatibilityDevice() {
+        using Outcome = Result<Render::VulkanApiVersion>;
+        if (auto lane = CheckLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (!bound_)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        const auto device = ObserveCompatibilityDevice();
+        if (device.HasError())
+            return Outcome::Failure(device.ErrorValue());
+        if (device.Value().instance != binding_.instance || device.Value().physical != binding_.physicalDevice ||
+            device.Value().device != binding_.device || device.Value().family != binding_.queueFamilyIndex)
+            return Outcome::Failure(MakeError(XRErrors::CapabilityStale));
+        compatibilityDevice_ = device.Value();
+        return Outcome::Success(device.Value().api);
+    }
+
+    /** @copydoc OpenXRSelectedVulkanBinding::ValidateCompatibilityDevice */
+    Result<void> OpenXRSelectedVulkanBinding::ValidateCompatibilityDevice() const {
+        const auto current = ObserveCompatibilityDevice();
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        if (compatibilityDevice_ != current.Value())
+            return Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRSelectedVulkanBinding::ObserveCompatibilityDevice */
+    Result<OpenXRSelectedVulkanBinding::CompatibilityDevice> OpenXRSelectedVulkanBinding::ObserveCompatibilityDevice() const {
+        using Outcome = Result<CompatibilityDevice>;
+        if (auto lane = CheckLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        auto *port = graphics_ ? graphics_->Port() : nullptr;
+        if (!port)
+            return Outcome::Failure(MakeError(XRErrors::CapabilityStale));
+        const auto queried = port->QueryDevice();
+        if (queried.HasError())
+            return Outcome::Failure(queried.ErrorValue());
+        const auto &device = queried.Value();
+        if (graphics_->Port() != port || !device.instance || !device.physical || !device.device || !device.graphicsQueue)
+            return Outcome::Failure(MakeError(XRErrors::CapabilityStale));
+        return Outcome::Success(
+            {port, device.instance, device.physical, device.device, device.graphicsQueue, device.graphicsFamily, device.enabled.api});
     }
 
     /** @copydoc OpenXRSelectedVulkanBinding::AcquireLoader */

@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveArchiveProtection.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
@@ -57,7 +58,10 @@ namespace Horo::Runtime {
         if (!ValidCapabilities(capabilities, limits))
             return Result<SaveProtectedArchive>::Failure(MakeError(SaveErrors::ProtectionUnsupported));
 
-        auto sealed = provider->Seal(identity.keyReference, associatedData, plaintext);
+        auto sealed = [&] {
+            const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
+            return provider->Seal(identity.keyReference, associatedData, plaintext);
+        }();
         if (sealed.HasError())
             return Result<SaveProtectedArchive>::Failure(MakeError(SafeProviderError(sealed.ErrorValue())));
         auto result = std::move(sealed).Value();
@@ -93,7 +97,10 @@ namespace Horo::Runtime {
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::ProtectionInvalid));
 
         // Open is the only producer of plaintext. Its contract requires full tag/AAD verification first.
-        auto plaintext = provider->Open(archive, associatedData);
+        auto plaintext = [&] {
+            const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
+            return provider->Open(archive, associatedData);
+        }();
         if (plaintext.HasError())
             return Result<ValidatedSaveArchive>::Failure(MakeError(SafeProviderError(plaintext.ErrorValue())));
         if (plaintext.Value().empty() || plaintext.Value().size() > limits.maximumArchiveBytes)

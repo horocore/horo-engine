@@ -1,4 +1,4 @@
-#include "CanonicalSolver.h"
+#include "canonical/solver/CanonicalSolver.h"
 
 #include <Jolt/Jolt.h>
 

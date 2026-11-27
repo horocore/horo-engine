@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <ranges>
 
 namespace Horo::Animation {
@@ -319,7 +320,12 @@ namespace Horo::Animation {
             return Result<SkeletonAsset>::Failure(validation.ErrorValue());
         if (auto validation = ValidateSockets(candidate.sockets, candidate.joints, context.limits); validation.HasError())
             return Result<SkeletonAsset>::Failure(validation.ErrorValue());
-        return Result<SkeletonAsset>::Success(SkeletonAsset{std::move(candidate), std::move(roots)});
+        std::vector<std::size_t> jointsById(candidate.joints.size());
+        std::iota(jointsById.begin(), jointsById.end(), std::size_t{0});
+        std::ranges::sort(jointsById, {}, [&candidate](const std::size_t index) {
+            return candidate.joints[index].id;
+        });
+        return Result<SkeletonAsset>::Success(SkeletonAsset{std::move(candidate), std::move(roots), std::move(jointsById)});
     }
 
     /** @copydoc SkeletonAsset::Data */
@@ -330,5 +336,21 @@ namespace Horo::Animation {
     /** @copydoc SkeletonAsset::RootJoints */
     std::span<const JointId> SkeletonAsset::RootJoints() const noexcept {
         return roots_;
+    }
+
+    /** @copydoc SkeletonAsset::FindJointIndex */
+    std::optional<std::size_t> SkeletonAsset::FindJointIndex(const JointId joint) const noexcept {
+        const auto found = std::ranges::lower_bound(jointsById_, joint, {}, [this](const std::size_t index) {
+            return data_.joints[index].id;
+        });
+        if (found == jointsById_.end() || data_.joints[*found].id != joint)
+            return std::nullopt;
+        return *found;
+    }
+
+    /** @copydoc SkeletonAsset::FindSocket */
+    const SkeletonSocket *SkeletonAsset::FindSocket(const SkeletonSocketId socket) const noexcept {
+        const auto found = std::ranges::lower_bound(data_.sockets, socket, {}, &SkeletonSocket::id);
+        return found != data_.sockets.end() && found->id == socket ? &*found : nullptr;
     }
 }  // namespace Horo::Animation

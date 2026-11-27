@@ -1,4 +1,5 @@
 #include "PlatformRequestState.h"
+#include "PlatformCloudFailurePrivacy.h"
 
 namespace Horo::PlatformServices {
     /** @brief Validates and copies one SDK outcome under the request lifecycle lock without invoking user code. */
@@ -17,6 +18,8 @@ namespace Horo::PlatformServices {
         if (evidence.size() >= config.completionCapacity)
             return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::CapacityExceeded));
         try {
+            if (completion.error && Detail::IsCloudResult(completion.type))
+                completion.error = Detail::RedactCloudProviderFailure(*completion.error);
             completion.context = record->context;
             evidence.push_back(std::move(completion));
         } catch (const std::bad_alloc &) {
@@ -73,8 +76,8 @@ namespace Horo::PlatformServices {
                 state_->evidence.pop_front();
             }
             const Log::ScopedLogContext context(completion.context);
-            const auto published = CompleteErased(completion.id, completion.generation, completion.type, completion.terminalState,
-                                                  std::move(completion.value), std::move(completion.error));
+            const auto published = PublishCompletion(completion.id, completion.generation, completion.type, completion.terminalState,
+                                                     std::move(completion.value), std::move(completion.error));
             ++report.processed;
             if (published.HasValue() && published.Value() == PlatformRequestMutation::Applied)
                 ++report.applied;

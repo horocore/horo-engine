@@ -127,6 +127,25 @@ namespace Horo::Prefab {
         return state_ && !state_->entities.empty() ? state_->entities.front() : Runtime::EntityRef{};
     }
 
+    /** @copydoc PrefabInstance::ResolveMember */
+    Result<PrefabSpawnedMember> PrefabInstance::ResolveMember(const PrefabObjectAddress &address,
+                                                              const Runtime::RuntimeSceneView &scene) const {
+        using Return = Result<PrefabSpawnedMember>;
+        const auto root = Root();
+        if (!state_ || !scene.IsCurrent() || scene.RuntimeId() != root.runtime || !scene.SameIncarnation(state_->ownerScene))
+            return Return::Failure(MakeError(PrefabErrors::SceneUnavailable));
+        if (const auto valid = scene.Get(root); valid.HasError())
+            return Return::Failure(valid.ErrorValue());
+        const auto member = std::ranges::lower_bound(state_->members, address, {}, &Detail::PrefabInstanceState::SourceMember::Address);
+        if (member == state_->members.end() || member->provenance.sourceObject != address)
+            return Return::Failure(MakeError(PrefabErrors::AddressInvalid));
+        const auto entity = state_->entities[member->entitySlot];
+        if (entity != root)
+            if (const auto valid = scene.Get(entity); valid.HasError())
+                return Return::Failure(valid.ErrorValue());
+        return Return::Success({entity, member->provenance});
+    }
+
     /** @copydoc PrefabInstance::PersistentId */
     std::optional<Runtime::SavePrefabInstanceId> PrefabInstance::PersistentId() const noexcept {
         if (!state_ || !state_->persistence)
@@ -241,6 +260,17 @@ namespace Horo::Prefab {
         return Result<void>::Success();
     }
 
+    /** @copydoc PrefabSpawnService::InstallGroupPublicationOwner */
+    Result<void> PrefabSpawnService::InstallGroupPublicationOwner(std::shared_ptr<const IPrefabGroupPublicationOwner> owner) {
+        if (auto current = state_->Check(); current.HasError())
+            return current;
+        if (!owner || state_->hasQueuedStructure || state_->groupPublicationOwner)
+            return Result<void>::Failure(
+                MakeError(PrefabErrors::AdmissionRejected, "A Prefab group publication owner must be installed before Scene submission."));
+        state_->groupPublicationOwner = std::move(owner);
+        return Result<void>::Success();
+    }
+
     /** @copydoc PrefabSpawnService::Acquire */
     Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabSpawnService::Acquire(GameplayPrefabBinding binding) const {
         using Context = std::shared_ptr<Gameplay::GameplayPrefabContext>;
@@ -260,10 +290,31 @@ namespace Horo::Prefab {
         return Result<Context>::Success(std::move(context));
     }
 
+    /** @copydoc PrefabSpawnService::SpawnReplica */
+    Result<PrefabOperation> PrefabSpawnService::SpawnReplica(PrefabSpawnRequest request,
+                                                             std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+                                                             const CancellationToken &cancellation) const {
+        if (auto valid = state_->Check(); valid.HasError())
+            return Result<PrefabOperation>::Failure(valid.ErrorValue());
+        if (!publication)
+            return Result<PrefabOperation>::Failure(MakeError(PrefabErrors::AdmissionRejected));
+        request.notBeforeTick = state_->tick;
+        return state_->Spawn(request, 0, {}, cancellation, {}, {}, std::move(publication));
+    }
+
+    /** @copydoc PrefabSpawnService::DespawnReplica */
+    Result<PrefabOperation> PrefabSpawnService::DespawnReplica(const PrefabInstance &instance,
+                                                               const CancellationToken &cancellation) const {
+        if (auto valid = state_->Check(); valid.HasError())
+            return Result<PrefabOperation>::Failure(valid.ErrorValue());
+        return state_->Despawn(instance, state_->tick, 0, {}, cancellation);
+    }
+
     /** @copydoc PrefabSpawnService::Advance */
     Result<void> PrefabSpawnService::Advance(const std::uint64_t tick) const {
         if (auto valid = state_->Check(); valid.HasError()) {
-            state_->RetireUnavailable(valid.ErrorValue());
+            if (state_->owner == std::this_thread::get_id())
+                state_->RetireUnavailable(valid.ErrorValue());
             return valid;
         }
         if (tick < state_->tick)
@@ -283,7 +334,7 @@ namespace Horo::Prefab {
             }
             if (operation->cancellation.Token().IsCancellationRequested() || operation->scopeCancellation.IsCancellationRequested() ||
                 tick > operation->due + 64) {
-                operation->Fail(MakeError(PrefabErrors::Cancelled));
+                operation->CancelUnpublished();
                 continue;
             }
             if (!state_->TakeLoadResult(*operation))
@@ -334,15 +385,14 @@ namespace Horo::Prefab {
         for (const auto &operation : state_->pending) {
             if (operation->receipt && operation->receipt->ResultValue())
                 state_->Observe(*operation);
-            else {
-                operation->cancellation.RequestCancellation();
-                operation->load.reset();
-                operation->lease.reset();
-                operation->measurement.Complete(PrefabMetricOutcome::Cancelled);
-                operation->status = PrefabSpawnState::Cancelled;
-            }
+            else
+                operation->CancelUnpublished();
         }
         state_->pending.clear();
+        state_->retained.clear();
+        state_->scopes.clear();
+        state_->persistence.reset();
+        state_->schemas.reset();
         state_->provider = nullptr;
         state_->scenes = nullptr;
         state_->preparedScene = nullptr;

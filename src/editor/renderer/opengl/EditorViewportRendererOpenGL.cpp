@@ -5,6 +5,7 @@
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "OpenGLProgramValidation.h"
 #include "OpenGLStateSnapshot.h"
+#include "OpenGLViewportImageCapture.h"
 #include "OpenGLViewportResourceBridge.h"
 #include "OpenGLViewportShaders.h"
 #include "RenderFrontendResourceAccess.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <glad/gl.h>
 #include <limits>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +50,75 @@ namespace Horo::Editor {
             return Result<std::uint32_t>::Failure(MakeViewportError(RendererErrors::ViewportShaderCompileFailed,
                                                                     "Viewport shader compilation failed: " + std::string{log.data()}));
         }
+
+        /** @brief Links the fixed viewport compositor in the current context. No mesh or texture is owned here. */
+        [[nodiscard]] Result<std::uint32_t> CreateCrossFadeProgram() {
+            constexpr char vertex[] = R"(#version 410 core
+                void main() {
+                    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+                    gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
+                })";
+            constexpr char fragment[] = R"(#version 410 core
+                uniform sampler2D sourceColor;
+                out vec4 color;
+                void main() { color = texelFetch(sourceColor, ivec2(gl_FragCoord.xy), 0); })";
+            const auto vert = CompileShader(GL_VERTEX_SHADER, vertex);
+            if (vert.HasError())
+                return vert;
+            const auto frag = CompileShader(GL_FRAGMENT_SHADER, fragment);
+            if (frag.HasError()) {
+                glDeleteShader(vert.Value());
+                return frag;
+            }
+            const auto program = glCreateProgram();
+            glAttachShader(program, vert.Value());
+            glAttachShader(program, frag.Value());
+            glLinkProgram(program);
+            glDeleteShader(vert.Value());
+            glDeleteShader(frag.Value());
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            const GLint sampler = linked == GL_TRUE ? glGetUniformLocation(program, "sourceColor") : -1;
+            if (sampler < 0) {
+                glDeleteProgram(program);
+                return Result<std::uint32_t>::Failure(MakeError(RendererErrors::ViewportShaderCompileFailed));
+            }
+            glProgramUniform1i(program, sampler, 0);
+            return Result<std::uint32_t>::Success(program);
+        }
+
+        /** @brief Restores the additional GL state used only by the opt-in compositor. */
+        struct CrossFadeState final {
+            CrossFadeState() noexcept {
+                glActiveTexture(GL_TEXTURE0);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+                glGetIntegeri_v(GL_SAMPLER_BINDING, 0, &sampler);
+                glGetFloatv(GL_BLEND_COLOR, blendColor.data());
+                glGetIntegeri_v(GL_BLEND_SRC_RGB, 0, &sourceRgb);
+                glGetIntegeri_v(GL_BLEND_DST_RGB, 0, &destinationRgb);
+                glGetIntegeri_v(GL_BLEND_SRC_ALPHA, 0, &sourceAlpha);
+                glGetIntegeri_v(GL_BLEND_DST_ALPHA, 0, &destinationAlpha);
+                glGetIntegeri_v(GL_BLEND_EQUATION_RGB, 0, &rgbEquation);
+                glGetIntegeri_v(GL_BLEND_EQUATION_ALPHA, 0, &alphaEquation);
+                glGetIntegerv(GL_POLYGON_MODE, polygonMode.data());
+            }
+
+            ~CrossFadeState() {
+                glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(texture));
+                glBindSampler(0, static_cast<GLuint>(sampler));
+                glBlendColor(blendColor[0], blendColor[1], blendColor[2], blendColor[3]);
+                glBlendFuncSeparatei(0, static_cast<GLenum>(sourceRgb), static_cast<GLenum>(destinationRgb),
+                                     static_cast<GLenum>(sourceAlpha), static_cast<GLenum>(destinationAlpha));
+                glBlendEquationSeparatei(0, static_cast<GLenum>(rgbEquation), static_cast<GLenum>(alphaEquation));
+                glPolygonMode(GL_FRONT_AND_BACK, static_cast<GLenum>(polygonMode.front()));
+            }
+
+            CrossFadeState(const CrossFadeState &) = delete;
+            CrossFadeState &operator=(const CrossFadeState &) = delete;
+            GLint texture{}, sampler{}, sourceRgb{}, destinationRgb{}, sourceAlpha{}, destinationAlpha{}, rgbEquation{}, alphaEquation{};
+            std::array<GLint, 2> polygonMode{};
+            std::array<GLfloat, 4> blendColor{};
+        };
 
     }  // namespace
 
@@ -119,6 +190,12 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportAlreadyInitialized, "Editor viewport renderer is already initialized."));
         }
+        if (!imageCapture_) {
+            imageCapture_.reset(new (std::nothrow) OpenGLViewportImageCapture{});
+            if (!imageCapture_)
+                return Result<void>::Failure(
+                    MakeViewportError(RendererErrors::ViewportCapabilityUnavailable, "Could not allocate viewport image capture state."));
+        }
         ProgramGeneration candidate;
         if (const Result<void> program = CreateProgram(candidate); program.HasError()) {
             Shutdown();
@@ -181,6 +258,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererOpenGL::Shutdown */
     void EditorViewportRendererOpenGL::Shutdown() noexcept {
+        if (imageCapture_)
+            imageCapture_->Shutdown();
+        preparedCrossFade_.reset();
+        if (crossFadeProgram_)
+            glDeleteProgram(std::exchange(crossFadeProgram_, 0));
         if (gridProgram_)
             glDeleteProgram(std::exchange(gridProgram_, 0));
         for (const auto buffer : reloadBuffers_)
@@ -218,6 +300,47 @@ namespace Horo::Editor {
         return resources_.RequestDirectionalShadowProfile(profile);
     }
 
+    /** @copydoc IEditorViewportRenderer::EnableCameraCrossFade */
+    Result<void> EditorViewportRendererOpenGL::EnableCameraCrossFade() {
+        if (!initialized_ || crossFadeGeneration_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        if (crossFadeProgram_)
+            return Result<void>::Success();
+        const auto program = CreateCrossFadeProgram();
+        if (program.HasError())
+            return Result<void>::Failure(program.ErrorValue());
+        if (const auto reserved = resources_.EnableCameraCrossFade(); reserved.HasError()) {
+            glDeleteProgram(program.Value());
+            return reserved;
+        }
+        crossFadeProgram_ = program.Value();
+        ++crossFadeGeneration_;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc IEditorViewportRenderer::CameraCrossFadeCapacity */
+    EditorViewportCrossFadeCapacity EditorViewportRendererOpenGL::CameraCrossFadeCapacity() const noexcept {
+        if (!crossFadeProgram_)
+            return {};
+        const std::uint8_t views = resources_.CameraCrossFadeTarget().IsValid() ? 2 : resources_.Target().IsValid() ? 1 : 0;
+        return {crossFadeGeneration_, views};
+    }
+
+    /** @copydoc IEditorViewportRenderer::PrepareCameraCrossFadeFrame */
+    Result<void> EditorViewportRendererOpenGL::PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) {
+        preparedCrossFade_.reset();
+        if (!crossFade)
+            return Result<void>::Success();
+        if (!crossFadeProgram_)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        if (crossFade->admissionGeneration != crossFadeGeneration_ || !resources_.CameraCrossFadeTarget().IsValid() ||
+            !crossFade->source.IsValid() || !std::isfinite(crossFade->destinationWeight) || crossFade->destinationWeight < 0.0F ||
+            crossFade->destinationWeight > 1.0F)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
+        preparedCrossFade_.emplace(*crossFade, resources_.Target());
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportRendererOpenGL::RequestExtent */
     void EditorViewportRendererOpenGL::RequestExtent(const EditorViewportExtent extent) noexcept {
         requestedExtent_.width = std::min(extent.width, maxViewportDimension);
@@ -251,6 +374,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportRendererOpenGL::ExecuteStaticMeshPass */
     Result<void> EditorViewportRendererOpenGL::ExecuteStaticMeshPass(const Render::StaticMeshPassDescriptor &descriptor) {
+        const auto crossFade = std::exchange(preparedCrossFade_, std::nullopt);
         if (!initialized_) {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportNotInitialized, "Viewport renderer is not initialized."));
@@ -265,6 +389,8 @@ namespace Horo::Editor {
         const EditorViewportExtent renderExtent = allocatedExtent.IsValid() ? allocatedExtent : extentRequest;
         if (const Result<void> valid = ValidatePassRequest(descriptor, renderExtent); valid.HasError())
             return valid;
+        if (crossFade && crossFade->target != descriptor.target)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeStale));
         if (const auto lights = forwardLighting_.Prepare(descriptor.scene); lights.HasError())
             return lights;
         const float aspect = static_cast<float>(allocatedExtent.width) / static_cast<float>(allocatedExtent.height);
@@ -273,7 +399,14 @@ namespace Horo::Editor {
         if (shadow.HasError())
             return Result<void>::Failure(shadow.ErrorValue());
         const OpenGLStateSnapshot stateSnapshot(reloadTextureUnit_, reloadBufferSlots_);
-        return RenderViewportPass(descriptor, shadow.Value(), aspect);
+        if (crossFade) {
+            if (const auto source = RenderCameraCrossFadeSource(descriptor, crossFade->camera, aspect); source.HasError())
+                return source;
+        }
+        const auto destination = RenderViewportPass(descriptor, shadow.Value(), aspect, resources_.Target());
+        if (destination.HasError() || !crossFade)
+            return destination;
+        return CompositeCameraCrossFade(crossFade->camera.destinationWeight);
     }
 
     Result<void> EditorViewportRendererOpenGL::ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
@@ -294,13 +427,14 @@ namespace Horo::Editor {
 
     Result<void> EditorViewportRendererOpenGL::RenderViewportPass(const Render::StaticMeshPassDescriptor &descriptor,
                                                                   const std::optional<EditorViewportDirectionalShadowView> &shadow,
-                                                                  const float aspect) {
+                                                                  const float aspect, const Render::RenderTargetHandle target,
+                                                                  const bool overlays) {
         if (shadow.has_value()) {
             if (const Result<void> renderedShadow = DrawDirectionalShadowMap(descriptor.scene, *shadow); renderedShadow.HasError()) {
                 return renderedShadow;
             }
         }
-        if (const Result<void> bound = OpenGLViewportResourceBridge::BindRenderTarget(*frontend_, resources_.Target()); bound.HasError())
+        if (const Result<void> bound = OpenGLViewportResourceBridge::BindRenderTarget(*frontend_, target); bound.HasError())
             return bound;
         const EditorViewportExtent allocatedExtent = resources_.AllocatedExtent();
         glViewport(0, 0, static_cast<GLsizei>(allocatedExtent.width), static_cast<GLsizei>(allocatedExtent.height));
@@ -322,16 +456,48 @@ namespace Horo::Editor {
         // Grid uses the bootstrap material's complete selection color; no global light truncation is uploaded.
         if (!reflectedProgram_)
             glUniform1i(uniforms_.lightCount, 0);
-        if (const Result<void> grid = DrawGrid(descriptor.scene.camera, aspect, static_cast<float>(allocatedExtent.height));
-            grid.HasError()) {
-            return grid;
+        if (overlays) {
+            if (const Result<void> grid = DrawGrid(descriptor.scene.camera, aspect, static_cast<float>(allocatedExtent.height));
+                grid.HasError())
+                return grid;
         }
         if (reflectedProgram_)
             glUseProgram(program_);
         if (const Result<void> meshes = DrawSceneMeshes(descriptor.scene, aspect); meshes.HasError())
             return meshes;
-        if (const Result<void> visualizer = DrawLightVisualizer(descriptor.scene.camera, aspect); visualizer.HasError())
-            return visualizer;
+        return overlays ? DrawLightVisualizer(descriptor.scene.camera, aspect) : Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererOpenGL::RenderCameraCrossFadeSource */
+    Result<void> EditorViewportRendererOpenGL::RenderCameraCrossFadeSource(const Render::StaticMeshPassDescriptor &descriptor,
+                                                                           const EditorViewportCameraCrossFade &crossFade,
+                                                                           const float aspect) {
+        auto source = descriptor;
+        source.scene.camera = crossFade.source;
+        const auto shadow = Render::BuildDirectionalShadowFrame(source.scene, aspect, Math::ClipDepthRange::NegativeOneToOne,
+                                                                resources_.ActiveDirectionalShadowProfile());
+        if (shadow.HasError())
+            return Result<void>::Failure(shadow.ErrorValue());
+        return RenderViewportPass(source, shadow.Value(), aspect, resources_.CameraCrossFadeTarget(), false);
+    }
+
+    /** @copydoc EditorViewportRendererOpenGL::CompositeCameraCrossFade */
+    Result<void> EditorViewportRendererOpenGL::CompositeCameraCrossFade(const float destinationWeight) const {
+        const CrossFadeState state;
+        const auto bound = OpenGLViewportResourceBridge::BindTexture(*frontend_, resources_.CameraCrossFadeColorView(), 0);
+        if (bound.HasError())
+            return bound;
+        glBindSampler(0, 0);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnablei(GL_BLEND, 0);
+        glBlendEquationSeparatei(0, GL_FUNC_ADD, GL_FUNC_ADD);
+        glBlendColor(0.0F, 0.0F, 0.0F, destinationWeight);
+        glBlendFuncSeparatei(0, GL_ONE_MINUS_CONSTANT_ALPHA, GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA, GL_CONSTANT_ALPHA);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glUseProgram(crossFadeProgram_);
+        glBindVertexArray(gridVertexArray_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
         return Result<void>::Success();
     }
 

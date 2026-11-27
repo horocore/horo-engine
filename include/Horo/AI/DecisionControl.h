@@ -7,6 +7,13 @@
 #include <cstddef>
 
 namespace Horo::AI {
+    /** @brief Original provider callback error, located in an exact cooked graph and semantic node. */
+    struct DecisionProviderFailure final {
+        DecisionGraphAssetId asset;
+        DecisionNodeId node;
+        Error error;
+    };
+
     /** @brief Authored semantics, separate from display names and provider type identity.
      * Unspecified preserves legacy inspectable source but is never compiler executable.
      * Intrinsics require no invented NodeTypeId; provider operations require the actual generated descriptor.

@@ -104,6 +104,13 @@ namespace Horo::Render {
         ProviderRequested,
     };
 
+    /** @brief Tests whether a reset cause is declared in the portable contract.
+     * @param cause Candidate cause. @return True when the cause can be admitted.
+     */
+    [[nodiscard]] constexpr bool IsKnownTemporalHistoryResetCause(TemporalHistoryResetCause cause) noexcept {
+        return static_cast<std::uint8_t>(cause) <= static_cast<std::uint8_t>(TemporalHistoryResetCause::ProviderRequested);
+    }
+
     /** @brief Generation-complete compatibility identity for one temporal history. */
     struct TemporalHistoryCompatibility {
         RenderViewId view;
@@ -159,6 +166,30 @@ namespace Horo::Render {
         }
     };
 
+    /** @brief Owning bounded copy of the exact resident textures; iteration borrows the frame snapshot. */
+    class TemporalHistoryResourceSnapshot final {
+    public:
+        /** @brief Begins iteration over the exact captured generations. @return First element or end. */
+        [[nodiscard]] const RenderTextureHandle *begin() const noexcept {
+            return resources_.data();
+        }
+
+        /** @brief Ends iteration over the active bounded range. @return Position following the final captured element. */
+        [[nodiscard]] const RenderTextureHandle *end() const noexcept {
+            return resources_.data() + size_;
+        }
+
+        /** @brief Counts captured resident records. @return Active texture count. */
+        [[nodiscard]] std::size_t size() const noexcept {
+            return size_;
+        }
+
+    private:
+        friend class TemporalHistoryStore;
+        std::array<RenderTextureHandle, TemporalHistoryLimits::HardMaxResourcesPerHistory> resources_{};
+        std::size_t size_{};
+    };
+
     /**
      * @brief Owning resource and validity snapshot for one attempted real frame.
      *
@@ -172,7 +203,17 @@ namespace Horo::Render {
         std::uint64_t attempt{0};
         bool canReadPrevious{false};
         std::optional<TemporalHistoryResetCause> resetCause;
-        std::vector<RenderTextureHandle> resources;
+        TemporalHistoryResourceSnapshot resources;
+    };
+
+    /** @brief Exact compatibility and optional invalidation supplied by a real-frame consumer. */
+    struct TemporalHistoryFrameRequest final {
+        TemporalHistoryHandle history;
+        TemporalHistoryCompatibility compatibility;
+        RenderResourceOwnerId resourceOwner; /**< Exact resident texture owner expected by the real frame. */
+        std::uint64_t frameId{};
+        std::uint64_t predecessorFrameId{};
+        std::optional<TemporalHistoryResetCause> reset;
     };
 
     /**
@@ -215,6 +256,19 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<TemporalHistoryFrame> BeginFrame(TemporalHistoryHandle history, std::uint64_t frameId,
                                                               std::uint64_t predecessorFrameId);
+
+        /** @brief Begins an attempt only when the retained history matches the consumer's complete compatibility.
+         * @param request Exact history and resource owners, frame sequence and optional current-frame invalidation.
+         * @return Owning frame attempt or typed reset/sequence/lifecycle failure. Rejection leaves no attempt.
+         * @details An explicit reset disables prior reads until successful publication. Abandon does not publish a new generation.
+         */
+        [[nodiscard]] Result<TemporalHistoryFrame> BeginFrame(const TemporalHistoryFrameRequest &request);
+
+        /** @brief Checks a borrowed pending frame before a consumer records native work.
+         * @param frame Exact snapshot returned by BeginFrame.
+         * @return Success for the current owner-thread attempt or the typed stale/foreign/lifecycle error.
+         */
+        [[nodiscard]] Result<void> CheckPending(const TemporalHistoryFrame &frame);
 
         /**
          * @brief Publishes a successfully completed real frame as the next history generation.
@@ -271,6 +325,9 @@ namespace Horo::Render {
         [[nodiscard]] Result<Record *> Resolve(TemporalHistoryHandle history);
         [[nodiscard]] Result<Record *> ResolveIdle(TemporalHistoryHandle history);
         [[nodiscard]] Result<Record *> ResolvePending(const TemporalHistoryFrame &frame);
+        /** @brief Opens one owner-thread attempt with optional exact consumer evidence. */
+        [[nodiscard]] Result<TemporalHistoryFrame> Begin(TemporalHistoryHandle history, std::uint64_t frameId,
+                                                         std::uint64_t predecessorFrameId, const TemporalHistoryFrameRequest *expected);
         [[nodiscard]] Result<void> CompletePending(const TemporalHistoryFrame &frame, PendingCompletion completion);
         [[nodiscard]] Result<void> ValidateFrameRequest(const Record &record, std::uint64_t frameId) const;
         [[nodiscard]] Result<void> ValidatePendingFrame(const TemporalHistoryFrame &frame, const Record &record) const;

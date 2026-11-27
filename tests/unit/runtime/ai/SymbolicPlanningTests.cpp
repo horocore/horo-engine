@@ -1,0 +1,562 @@
+#include "BehaviorTreeAsyncTestSupport.h"
+#include "Horo/AI/SymbolicPlanning.h"
+
+#include <algorithm>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+namespace Horo::AI {
+    namespace {
+        template <typename Identity> Identity Id(const std::uint64_t value) {
+            return Identity::Create(value).Value();
+        }
+
+        struct DomainFixture final {
+            SymbolicFactId key{Id<SymbolicFactId>(1)};
+            SymbolicFactId door{Id<SymbolicFactId>(2)};
+            std::array<SymbolicFactId, 2> facts{door, key};
+            std::array<SymbolicLiteral, 1> picked{{{key, true}}};
+            std::array<SymbolicLiteral, 1> goal{{{door, true}}};
+            std::array<SymbolicLiteral, 1> unopened{{{door, false}}};
+            TaskId openTask{Id<TaskId>(21)};
+            TaskId pickTask{Id<TaskId>(22)};
+            TaskId forceTask{Id<TaskId>(23)};
+            std::array<SymbolicActionSource, 3> actions{
+                SymbolicActionSource{Id<SymbolicActionId>(30), forceTask, 10, unopened, goal},
+                SymbolicActionSource{Id<SymbolicActionId>(20), openTask, 2, picked, goal},
+                SymbolicActionSource{Id<SymbolicActionId>(10), pickTask, 1, {}, picked},
+            };
+
+            AiCapabilityDescriptorSet Registry() const {
+                AiCapabilityDescriptorRegistry registry;
+                for (const auto task : {openTask, pickTask, forceTask})
+                    REQUIRE(registry.Register({task}).HasValue());
+                return registry.Freeze();
+            }
+
+            SymbolicDomain Capture() const {
+                auto domain = SymbolicDomain::Capture(facts, actions, Registry());
+                REQUIRE(domain.HasValue());
+                return std::move(domain).Value();
+            }
+        };
+
+        /** @brief Compiles the exact typed root and leaf metadata used by the symbolic projection. */
+        std::shared_ptr<const DecisionAssetPlan> SequenceBindings(const BehaviorTreeTestSupport::Fixture &scene,
+                                                                  DecisionControlKind root = DecisionControlKind::Sequence,
+                                                                  DecisionControlKind second = DecisionControlKind::Unspecified) {
+            const auto source = BehaviorTreeTestSupport::Source();
+            const auto providerType = Id<DecisionNodeTypeId>(101);
+            DecisionAssetDescriptor asset{.asset = Id<DecisionGraphAssetId>(100),
+                                          .kind = DecisionPlanKind::BehaviorTree,
+                                          .blackboardSchema = scene.schema->Identity(),
+                                          .nodes = {{.id = Id<DecisionNodeId>(1), .source = source, .intrinsic = root},
+                                                    {.id = Id<DecisionNodeId>(2), .type = providerType, .source = source},
+                                                    {.id = Id<DecisionNodeId>(3),
+                                                     .type = second == DecisionControlKind::Unspecified ? providerType : DecisionNodeTypeId{},
+                                                     .source = source,
+                                                     .intrinsic = second}},
+                                          .source = source};
+            const std::array descriptors{DecisionNodeDescriptor{.type = providerType,
+                                                                .origin = {DecisionDescriptorSourceKind::Native, Id<DecisionProviderId>(501), 1},
+                                                                .source = source}};
+            auto compiled = DecisionAssetCompiler::Compile(asset, {}, descriptors, std::array{scene.schema});
+            REQUIRE(compiled.HasValue());
+            REQUIRE(compiled.Value().IsValid());
+            return compiled.Value().plan;
+        }
+
+        TEST_CASE("Symbolic planning returns the lowest-cost sequence of registered tasks", "[ai][planning]") {
+            DomainFixture input;
+            const auto domain = input.Capture();
+            input.actions.back().cost = 200;
+            const auto plan = domain.Search({}, input.goal, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(plan.Steps().size() == 2);
+            CHECK(plan.Cost() == 3);
+            CHECK(plan.Steps()[0].action == Id<SymbolicActionId>(10));
+            CHECK(plan.Steps()[0].task == input.pickTask);
+            CHECK(plan.Steps()[1].task == input.openTask);
+            const auto alreadyOpen = domain.Search(input.goal, input.goal, 1);
+            CHECK(alreadyOpen.Status() == SymbolicPlanStatus::Solved);
+            CHECK(alreadyOpen.Steps().empty());
+        }
+
+        TEST_CASE("Symbolic planning refuses contradictory facts and unknown task identities", "[ai][planning]") {
+            DomainFixture input;
+            const auto tasks = input.Registry();
+            SECTION("duplicate facts") {
+                input.facts[0] = input.facts[1];
+            }
+            SECTION("unregistered task") {
+                input.actions[0].task = Id<TaskId>(90);
+            }
+            SECTION("duplicate transition identity") {
+                input.actions[0].action = input.actions[1].action;
+            }
+            SECTION("zero cost") {
+                input.actions[0].cost = 0;
+            }
+            SECTION("unknown effects") {
+                input.picked.front().fact = Id<SymbolicFactId>(99);
+            }
+            CHECK(SymbolicDomain::Capture(input.facts, input.actions, tasks).HasError());
+        }
+
+        TEST_CASE("Symbolic search accounts for reconstruction and ordering within its work budget", "[ai][planning]") {
+            const DomainFixture input;
+            const auto actions = std::span{input.actions}.subspan(1);
+            const auto captured = SymbolicDomain::Capture(input.facts, actions, input.Registry());
+            REQUIRE(captured.HasValue());
+            const auto &domain = captured.Value();
+            constexpr std::size_t frontierWork = 1 + 2 + 1 + 2 + 2 + 2 + 3;
+            constexpr std::size_t sequenceWork = 2 + 1;
+
+            for (std::size_t extra = 0; extra < sequenceWork; ++extra) {
+                const auto exhausted = domain.Search({}, input.goal, frontierWork + extra);
+                CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+                CHECK(exhausted.Steps().empty());
+                CHECK(exhausted.Cost() == 0);
+            }
+
+            const auto plan = domain.Search({}, input.goal, frontierWork + sequenceWork);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(plan.Steps().size() == 2);
+            CHECK(plan.Steps().front().task == input.pickTask);
+            CHECK(plan.Steps().back().task == input.openTask);
+            CHECK(plan.Cost() == 3);
+        }
+
+        TEST_CASE("A full GOAP frontier still admits a provably cheaper queued goal", "[ai][planning]") {
+            const DomainFixture input;
+            std::array<SymbolicFactId, 9> facts;
+            std::array<SymbolicLiteral, facts.size()> effects;
+            std::array<SymbolicActionSource, facts.size()> actions;
+            for (std::size_t index = 0; index < facts.size(); ++index) {
+                facts[index] = Id<SymbolicFactId>(index + 1);
+                effects[index] = {facts[index], true};
+                actions[index] = {.action = Id<SymbolicActionId>(index + 1),
+                                  .task = input.pickTask,
+                                  .cost = 1,
+                                  .effects = std::span{&effects[index], 1}};
+            }
+            const auto captured = SymbolicDomain::Capture(facts, actions, input.Registry());
+            REQUIRE(captured.HasValue());
+            const auto &domain = captured.Value();
+            // The initial state and the first four layers fill the table. Expanding the first
+            // four-action state omits a five-action state before this queued goal.
+            const auto plan = domain.Search({}, std::span{effects}.last(4), SymbolicDomain::MaximumWork);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            CHECK(plan.Cost() == 4);
+            REQUIRE(plan.Steps().size() == 4);
+            for (std::size_t index = 0; index < plan.Steps().size(); ++index)
+                CHECK(plan.Steps()[index].action == actions[actions.size() - plan.Steps().size() + index].action);
+
+            std::array<SymbolicActionSource, actions.size() + 1> withShortcut;
+            std::ranges::copy(actions, withShortcut.begin());
+            withShortcut.back() = {.action = Id<SymbolicActionId>(10), .task = input.openTask, .cost = 10, .effects = effects};
+            const auto shortcutDomain = SymbolicDomain::Capture(facts, withShortcut, input.Registry());
+            REQUIRE(shortcutDomain.HasValue());
+            const auto exhausted = shortcutDomain.Value().Search({}, effects, SymbolicDomain::MaximumWork);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            CHECK(exhausted.Cost() == 0);
+        }
+
+        TEST_CASE("Symbolic searches distinguish cancellation, no plan and work exhaustion", "[ai][planning]") {
+            DomainFixture input;
+            const auto domain = input.Capture();
+            const auto exhausted = domain.Search({}, input.goal, 1);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            const auto empty = SymbolicDomain::Capture(input.facts, {}, input.Registry());
+            REQUIRE(empty.HasValue());
+            const auto unreachable = empty.Value().Search({}, input.goal, 1024);
+            CHECK(unreachable.Status() == SymbolicPlanStatus::NoPlan);
+            CHECK(unreachable.Steps().empty());
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            const auto revoked = domain.Search({}, input.goal, 1024, cancelled.Token());
+            CHECK(revoked.Status() == SymbolicPlanStatus::Cancelled);
+            CHECK(revoked.Steps().empty());
+        }
+
+        TEST_CASE("Symbolic jobs own their inputs and observe task ancestor cancellation", "[ai][planning]") {
+            DomainFixture input;
+            auto domain = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto captured = SymbolicPlanningJob::Create(domain, {}, input.goal, 1024);
+            REQUIRE(captured.HasValue());
+            const auto job = captured.Value();
+            input.goal.front().value = false;
+            const auto incarnation = Id<AiRuntimeIncarnation>(1);
+            AiTaskOperationContext operation{.taskDefinition = input.openTask,
+                                             .task = {incarnation, {2, 1}},
+                                             .agent = {incarnation, {1, 1}}};
+            CHECK(job->Read() == nullptr);
+            SECTION("the worker produces one immutable result") {
+                REQUIRE(job->Run(operation, {}).HasValue());
+                REQUIRE(job->Read());
+                CHECK(job->Read()->Status() == SymbolicPlanStatus::Solved);
+                CHECK(job->Read()->Steps().size() == 2);
+                CHECK(job->Run(operation, {}).HasError());
+            }
+            SECTION("revoked capability never exposes a task sequence") {
+                CancellationSource owner;
+                owner.RequestCancellation();
+                operation.capabilityCancellation = owner.Token();
+                const auto result = job->Run(operation, {});
+                REQUIRE(result.HasError());
+                CHECK(IsJobCancelled(result.ErrorValue()));
+                REQUIRE(job->Read());
+                CHECK(job->Read()->Status() == SymbolicPlanStatus::Cancelled);
+                CHECK(job->Read()->Steps().empty());
+            }
+        }
+
+        TEST_CASE("Completed symbolic jobs withdraw decisions after cancellation", "[ai][planning][jobs]") {
+            DomainFixture input;
+            using enum SymbolicPlanStatus;
+            const auto expected = GENERATE(Solved, NoPlan, BudgetExhausted);
+            const auto actions = expected == NoPlan ? std::span<const SymbolicActionSource>{} : std::span<const SymbolicActionSource>{input.actions};
+            auto domain = SymbolicDomain::Capture(input.facts, actions, input.Registry());
+            REQUIRE(domain.HasValue());
+            const auto job = SymbolicPlanningJob::Create(std::make_shared<const SymbolicDomain>(std::move(domain).Value()), {}, input.goal,
+                                                        expected == BudgetExhausted ? 1 : 1024);
+            REQUIRE(job.HasValue());
+            const auto incarnation = Id<AiRuntimeIncarnation>(1);
+            AiTaskOperationContext operation{.taskDefinition = input.openTask, .task = {incarnation, {2, 1}}, .agent = {incarnation, {1, 1}}};
+            CancellationToken worker;
+            const auto scope = GENERATE(&AiTaskOperationContext::cancellation, &AiTaskOperationContext::capabilityCancellation,
+                                        &AiTaskOperationContext::ownerCancellation,
+                                        static_cast<CancellationToken AiTaskOperationContext::*>(nullptr));
+            CancellationSource owner;
+            (scope ? operation.*scope : worker) = owner.Token();
+            REQUIRE(job.Value()->Run(operation, worker).HasValue());
+            REQUIRE(job.Value()->Read());
+            REQUIRE(job.Value()->Read()->Status() == expected);
+            owner.RequestCancellation();
+            CHECK(job.Value()->Read() == nullptr);
+        }
+
+        TEST_CASE("The AI task job service delivers symbolic planning completion", "[ai][planning][jobs]") {
+            DomainFixture input;
+            auto domain = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto capture = SymbolicPlanningJob::Create(std::move(domain), {}, input.goal, 1024);
+            REQUIRE(capture.HasValue());
+            const auto job = capture.Value();
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            BehaviorTreeAsyncTestSupport::StartedTask caller;
+            auto service = AiTaskJobService::Create(jobs, 1);
+            REQUIRE(service.HasValue());
+            REQUIRE(service.Value()->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job}).HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            service.Value()->Pump();
+            CHECK(service.Value()->PendingCount() == 0);
+            CHECK(caller.fixture.Evaluate(*caller.instance, 2) == AiTaskState::Succeeded);
+            REQUIRE(job->Read());
+            CHECK(job->Read()->Status() == SymbolicPlanStatus::Solved);
+            CHECK(job->Read()->Cost() == 3);
+        }
+
+        TEST_CASE("HTN backtracks without carrying primitive effects or task steps into another method", "[ai][planning][htn]") {
+            DomainFixture input;
+            auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto nested = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicLiteral, 1> withoutKey{{{input.key, false}}};
+            const std::array<SymbolicSubtask, 2> rejected{Id<SymbolicActionId>(10), nested};
+            const std::array<SymbolicSubtask, 1> fallback{Id<SymbolicActionId>(30)};
+            const std::array methods{
+                SymbolicMethodSource{Id<SymbolicMethodId>(2), root, withoutKey, fallback},
+                SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, rejected},
+                SymbolicMethodSource{Id<SymbolicMethodId>(3), nested, withoutKey, {}},
+            };
+            const auto hierarchy = SymbolicHierarchy::Capture(std::move(primitives), methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto result = hierarchy.Value().Search({}, root, 1024);
+            REQUIRE(result.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(result.Steps().size() == 1);
+            CHECK(result.Steps().front().task == input.forceTask);
+            CHECK(result.Cost() == 10);
+            const auto blocked = hierarchy.Value().Search(input.picked, root, 1024);
+            CHECK(blocked.Status() == SymbolicPlanStatus::NoPlan);
+            CHECK(blocked.Steps().empty());
+        }
+
+        TEST_CASE("HTN retains explicit tasks that leave symbolic facts unchanged", "[ai][planning][htn]") {
+            DomainFixture input;
+            auto &authoredOnly = input.actions.front();
+            authoredOnly.effects = {};
+            auto captured = SymbolicDomain::Capture(input.facts, input.actions, input.Registry());
+            REQUIRE(captured.HasValue());
+            const auto primitives = std::make_shared<const SymbolicDomain>(std::move(captured).Value());
+            const auto goalPlan = primitives->Search({}, input.goal, 1024);
+            REQUIRE(goalPlan.Status() == SymbolicPlanStatus::Solved);
+            CHECK(goalPlan.Steps().size() == 2);
+            CHECK(goalPlan.Cost() == 3);
+
+            const auto root = Id<SymbolicCompoundId>(1);
+            const std::array<SymbolicSubtask, 3> ordered{authoredOnly.action, Id<SymbolicActionId>(10), Id<SymbolicActionId>(20)};
+            const std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, ordered}};
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto plan = hierarchy.Value().Search({}, root, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(plan.Steps().size() == ordered.size());
+            CHECK(plan.Steps()[0].task == authoredOnly.task);
+            CHECK(plan.Steps()[1].task == input.pickTask);
+            CHECK(plan.Steps()[2].task == input.openTask);
+            CHECK(plan.Cost() == authoredOnly.cost + goalPlan.Cost());
+
+            const auto blocked = hierarchy.Value().Search(input.goal, root, 1024);
+            CHECK(blocked.Status() == SymbolicPlanStatus::NoPlan);
+            CHECK(blocked.Steps().empty());
+        }
+
+        TEST_CASE("HTN empty methods use only the work of admitting the compound and its method", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, {}}};
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto exhausted = hierarchy.Value().Search({}, root, 1);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            const auto solved = hierarchy.Value().Search({}, root, 2);
+            CHECK(solved.Status() == SymbolicPlanStatus::Solved);
+            CHECK(solved.Steps().empty());
+            CHECK(solved.Cost() == 0);
+        }
+
+        TEST_CASE("HTN continues an ordered plan after an empty nested method", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto optional = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicSubtask, 2> children{optional, Id<SymbolicActionId>(30)};
+            const std::array methods{
+                SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, children},
+                SymbolicMethodSource{Id<SymbolicMethodId>(2), optional, {}, {}},
+            };
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto exhausted = hierarchy.Value().Search({}, root, 6);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+            const auto solved = hierarchy.Value().Search({}, root, 7);
+            CHECK(solved.Status() == SymbolicPlanStatus::Solved);
+            REQUIRE(solved.Steps().size() == 1);
+            CHECK(solved.Steps().front().task == input.forceTask);
+            CHECK(solved.Cost() == 10);
+        }
+
+        TEST_CASE("HTN validates references and caps recursive decomposition", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const std::array<SymbolicSubtask, 1> recursive{root};
+            const std::array<SymbolicSubtask, 1> unknown{Id<SymbolicActionId>(99)};
+            std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, unknown}};
+            CHECK(SymbolicHierarchy::Capture(primitives, methods).HasError());
+            methods.front().children = recursive;
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto result = hierarchy.Value().Search({}, root, SymbolicDomain::MaximumWork);
+            CHECK(result.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(result.Steps().empty());
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            const auto revoked = hierarchy.Value().Search({}, root, 1024, cancelled.Token());
+            CHECK(revoked.Status() == SymbolicPlanStatus::Cancelled);
+            CHECK(revoked.Steps().empty());
+        }
+
+        TEST_CASE("HTN tries a later method when an earlier branch reaches a structural limit", "[ai][planning][htn]") {
+            DomainFixture input;
+            const auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto nested = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicSubtask, 1> first{nested};
+            const std::array<SymbolicSubtask, 1> fallback{Id<SymbolicActionId>(30)};
+            const std::array<SymbolicLiteral, 1> withoutKey{{{input.key, false}}};
+            std::array<SymbolicSubtask, SymbolicHierarchy::MaximumChildren> recursive;
+            recursive.fill(nested);
+            auto children = std::span<const SymbolicSubtask>{recursive};
+            SECTION("recursion exhausts depth") {
+                children = children.first(1);
+            }
+            SECTION("recursion fills the pending task stack") {}
+            const std::array methods{
+                SymbolicMethodSource{Id<SymbolicMethodId>(2), root, withoutKey, fallback},
+                SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, first},
+                SymbolicMethodSource{Id<SymbolicMethodId>(3), nested, {}, children},
+            };
+            const auto hierarchy = SymbolicHierarchy::Capture(primitives, methods);
+            REQUIRE(hierarchy.HasValue());
+            const auto solved = hierarchy.Value().Search({}, root, 1024);
+            CHECK(solved.Status() == SymbolicPlanStatus::Solved);
+            CHECK(solved.Cost() == 10);
+            CHECK(solved.Steps().size() == 1);
+            if (!solved.Steps().empty())
+                CHECK(solved.Steps().front().task == input.forceTask);
+            const auto capped = hierarchy.Value().Search(input.picked, root, 1024);
+            CHECK(capped.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(capped.Steps().empty());
+            const auto exhausted = hierarchy.Value().Search({}, root, 3);
+            CHECK(exhausted.Status() == SymbolicPlanStatus::BudgetExhausted);
+            CHECK(exhausted.Steps().empty());
+        }
+
+        TEST_CASE("HTN jobs retain a nested method and publish ordered registered primitives", "[ai][planning][htn][jobs]") {
+            DomainFixture input;
+            auto primitives = std::make_shared<const SymbolicDomain>(input.Capture());
+            const auto root = Id<SymbolicCompoundId>(1);
+            const auto nested = Id<SymbolicCompoundId>(2);
+            const std::array<SymbolicSubtask, 2> sequence{Id<SymbolicActionId>(10), nested};
+            std::array<SymbolicSubtask, 1> unlock{Id<SymbolicActionId>(20)};
+            const std::array methods{SymbolicMethodSource{Id<SymbolicMethodId>(1), root, {}, sequence},
+                                     SymbolicMethodSource{Id<SymbolicMethodId>(2), nested, input.picked, unlock}};
+            auto captured = SymbolicHierarchy::Capture(std::move(primitives), methods);
+            REQUIRE(captured.HasValue());
+            auto hierarchy = std::make_shared<const SymbolicHierarchy>(std::move(captured).Value());
+            const auto job = SymbolicPlanningJob::Create(std::move(hierarchy), {}, root, 1024);
+            REQUIRE(job.HasValue());
+            unlock.front() = Id<SymbolicActionId>(99);
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            BehaviorTreeAsyncTestSupport::StartedTask caller;
+            auto service = AiTaskJobService::Create(jobs, 1);
+            REQUIRE(service.HasValue());
+            REQUIRE(
+                service.Value()->Start(caller.async->continuations[1], AiTaskJobLease{std::make_shared<int>(1), job.Value()}).HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            service.Value()->Pump();
+            CHECK(caller.fixture.Evaluate(*caller.instance, 2) == AiTaskState::Succeeded);
+            const auto *result = job.Value()->Read();
+            REQUIRE(result);
+            REQUIRE(result->Steps().size() == 2);
+            CHECK(result->Steps()[0].task == input.pickTask);
+            CHECK(result->Steps()[1].task == input.openTask);
+            CHECK(result->Cost() == 3);
+        }
+
+        TEST_CASE("An admitted symbolic plan runs through the standard Behavior Tree task sequence", "[ai][planning][execution]") {
+            using enum BehaviorTreeOperation;
+            using BehaviorTreeTestSupport::Node;
+            DomainFixture input;
+            const auto plan = input.Capture().Search({}, input.goal, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            BehaviorTreeTestSupport::Fixture scene{{Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)}};
+            const std::array occurrences{
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(10), input.pickTask, Id<DecisionNodeId>(2)},
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
+            };
+            const auto compiled =
+                CompileSymbolicTaskSequence(plan, {SequenceBindings(scene), Id<DecisionNodeId>(1), occurrences}, input.Registry());
+            REQUIRE(compiled.HasValue());
+            REQUIRE(compiled.Value());
+            REQUIRE(compiled.Value()->Nodes().size() == 3);
+            CHECK(compiled.Value()->Nodes()[1].execution.task == input.pickTask);
+            CHECK(compiled.Value()->Nodes()[2].execution.task == input.openTask);
+            CHECK(scene.probe->orderCount == 0);
+
+            CancellationSource lifetime;
+            const BehaviorTreeInstanceBinding binding{scene.agent,
+                                                      lifetime.Token(),
+                                                      100,
+                                                      1,
+                                                      {scene.agent, scene.schema->Identity(), scene.schema->Version(), 1, 1}};
+            auto instance =
+                BehaviorTreeInstance::Create(compiled.Value(), binding, std::make_unique<BehaviorTreeTestSupport::Executor>(scene.probe));
+            REQUIRE(instance.HasValue());
+            scene.probe->outcome[2] = AiTaskState::Running;
+            CHECK(scene.Evaluate(*instance.Value(), 1) == AiTaskState::Running);
+            CHECK(scene.probe->starts[2] == 1);
+            CHECK(scene.probe->starts[3] == 0);
+            SECTION("the next task starts only after the first settles successfully") {
+                scene.probe->outcome[2] = AiTaskState::Succeeded;
+                CHECK(scene.Evaluate(*instance.Value(), 2) == AiTaskState::Succeeded);
+                CHECK(scene.probe->resumes[2] == 1);
+                CHECK(scene.probe->starts[3] == 1);
+                CHECK(scene.probe->cleanups[input.openTask.Value()] == 1);
+            }
+            SECTION("owner cancellation retires the live task without executing the remainder") {
+                lifetime.RequestCancellation();
+                CHECK(scene.Evaluate(*instance.Value(), 2) == AiTaskState::Cancelled);
+                CHECK(scene.probe->aborts[input.pickTask.Value()] == 1);
+                CHECK(scene.probe->starts[3] == 0);
+            }
+            CHECK(scene.probe->cleanups[input.pickTask.Value()] == 1);
+        }
+
+        TEST_CASE("Symbolic sequence admission rejects stale or mismatched task bindings", "[ai][planning][execution]") {
+            using enum BehaviorTreeOperation;
+            using BehaviorTreeTestSupport::Node;
+            DomainFixture input;
+            const auto domain = input.Capture();
+            const auto plan = domain.Search({}, input.goal, 1024);
+            REQUIRE(plan.Status() == SymbolicPlanStatus::Solved);
+            BehaviorTreeTestSupport::Fixture scene{{Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)}};
+            std::array occurrences{
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(10), input.pickTask, Id<DecisionNodeId>(2)},
+                SymbolicTaskOccurrence{Id<SymbolicActionId>(20), input.openTask, Id<DecisionNodeId>(3)},
+            };
+            SymbolicExecutionBindings bindings{SequenceBindings(scene), Id<DecisionNodeId>(1), occurrences};
+            SECTION("the admitted root is another intrinsic control") {
+                bindings.asset = SequenceBindings(scene, DecisionControlKind::Selector);
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("an intrinsic control cannot stand in for a provider-bound task") {
+                bindings.asset = SequenceBindings(scene, DecisionControlKind::Sequence, DecisionControlKind::Inverter);
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("task declaration was withdrawn") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
+            }
+            SECTION("task now requires another schema") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                REQUIRE(current.Register({input.openTask, Id<BlackboardSchemaId>(51)}).HasValue());
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
+            }
+            SECTION("task acquired a schema even though the execution asset matches it") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                REQUIRE(current.Register({input.openTask, scene.schema->Identity()}).HasValue());
+                REQUIRE(current.Register({input.forceTask}).HasValue());
+                const auto declarations = current.Freeze();
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, declarations).HasError());
+                const auto fresh = SymbolicDomain::Capture(input.facts, input.actions, declarations, scene.schema->Identity());
+                REQUIRE(fresh.HasValue());
+                CHECK(CompileSymbolicTaskSequence(fresh.Value().Search({}, input.goal, 1024), bindings, declarations).HasValue());
+            }
+            SECTION("task switched its authoring origin without changing its identity") {
+                AiCapabilityDescriptorRegistry current;
+                REQUIRE(current.Register({input.pickTask}).HasValue());
+                REQUIRE(current.Register({input.openTask, {}, AiTaskAuthoring::Script}).HasValue());
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, current.Freeze()).HasError());
+            }
+            SECTION("owner supplies another task for a planned action") {
+                occurrences[1].task = input.forceTask;
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("node occurrences are not distinct") {
+                occurrences[1].node = occurrences[0].node;
+                CHECK(CompileSymbolicTaskSequence(plan, bindings, input.Registry()).HasError());
+            }
+            SECTION("budget exhaustion supplies no executable plan") {
+                const auto exhausted = domain.Search({}, input.goal, 1);
+                CHECK(CompileSymbolicTaskSequence(exhausted, {}, input.Registry()).HasError());
+            }
+            SECTION("an already satisfied goal needs no executor") {
+                const auto ready = domain.Search(input.goal, input.goal, 1);
+                const auto empty = CompileSymbolicTaskSequence(ready, {}, input.Registry());
+                REQUIRE(empty.HasValue());
+                CHECK_FALSE(empty.Value());
+            }
+            CHECK(scene.probe->orderCount == 0);
+        }
+    }  // namespace
+}  // namespace Horo::AI

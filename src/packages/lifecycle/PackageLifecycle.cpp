@@ -1,16 +1,82 @@
 #include "Horo/Packages/PackageLifecycle.h"
 
 #include "Horo/Packages/PackageLifecycleErrors.h"
+#include "Horo/Packages/NativePackageModuleHost.h"
 #include "PackageActivationComposition.h"
 #include "PackageModuleComposition.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <limits>
+#include <map>
+#include <set>
 #include <thread>
 #include <utility>
 
 namespace Horo::Packages {
+    struct PackageRemovalLease::State final {
+        enum class Status : std::uint8_t { Reserved, Released, Published };
+        std::filesystem::path projectRoot;
+        std::vector<LockedPackageReference> departing;
+        std::shared_ptr<const VerifiedPackageInstallRecord> install;
+        CancellationSource lifetime;
+        bool nativeImporterOwner{};
+        std::optional<std::vector<NativePackageImporterBinding>> importerBindings;
+        std::atomic<Status> status{Status::Reserved}; /**< Only lease abandonment and durable publication change admission. */
+    };
+
+    /** @copydoc PackageRemovalLease::PackageRemovalLease */
+    PackageRemovalLease::PackageRemovalLease(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    PackageRemovalLease::~PackageRemovalLease() noexcept {
+        auto expected = State::Status::Reserved;
+        state_->status.compare_exchange_strong(expected, State::Status::Released);
+    }
+
+    /** @copydoc PackageRemovalLease::Matches */
+    bool PackageRemovalLease::Matches(const std::filesystem::path &projectRoot,
+                                      const std::span<const LockedPackageReference> departing) const {
+        return state_->status.load() == State::Status::Reserved && !Lifetime().IsCancellationRequested() &&
+               projectRoot == state_->projectRoot && std::ranges::equal(departing, state_->departing);
+    }
+
+    /** @copydoc PackageRemovalLease::InstalledRecord */
+    std::shared_ptr<const VerifiedPackageInstallRecord> PackageRemovalLease::InstalledRecord() const noexcept {
+        return state_->install;
+    }
+
+    /** @copydoc PackageRemovalLease::Lifetime */
+    CancellationToken PackageRemovalLease::Lifetime() const noexcept {
+        return state_->lifetime.Token();
+    }
+
+    /** @copydoc PackageRemovalLease::AllowsNativeImporterReview */
+    bool PackageRemovalLease::AllowsNativeImporterReview(const PackageRestorePackage &package) const {
+        return AllowsNativeImporterReview(package, {});
+    }
+
+    /** @copydoc PackageRemovalLease::AllowsNativeImporterReview */
+    bool PackageRemovalLease::AllowsNativeImporterReview(const PackageRestorePackage &package, const std::string_view module) const {
+        if (!state_->nativeImporterOwner || state_->status.load() != State::Status::Reserved || !package.archive ||
+            Lifetime().IsCancellationRequested())
+            return false;
+        if (std::ranges::find(state_->departing, LockedPackageReference{package.lock.package, package.lock.version}) ==
+            state_->departing.end())
+            return false;
+        const auto sealed = std::ranges::any_of(state_->install->Graph()->packages, [&](const auto &installed) {
+            return installed.archive == package.archive && installed.lock == package.lock;
+        });
+        return sealed && (!state_->importerBindings || std::ranges::any_of(*state_->importerBindings, [&](const auto &binding) {
+            return binding.Matches(package, module);
+        }));
+    }
+
+    /** @copydoc PackageRemovalLease::MarkPublished */
+    void PackageRemovalLease::MarkPublished() const noexcept {
+        state_->status.store(State::Status::Published);
+    }
+
     namespace {
         /** @brief Validates the same absolute, canonical existing directory before lifecycle configuration is admitted. */
         bool IsPrivateTemporaryRoot(const std::filesystem::path &root) {
@@ -30,11 +96,50 @@ namespace Horo::Packages {
                 return first.Supports(role) && second.Supports(role);
             });
         }
+
+        /** @brief Checks each withdrawal against one sealed install and consumes each identity once. */
+        Result<void> VerifyRemovalMembership(const PackageRestoreGraph &graph, std::span<const LockedPackageReference> departing) {
+            std::map<std::string_view, const PackageVersion *, std::less<>> installed;
+            for (const auto &package : graph.packages)
+                installed.emplace(package.lock.package.Value(), &package.lock.version);
+            for (const auto &reference : departing) {
+                const auto member = installed.find(reference.package.Value());
+                if (member == installed.end())
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::StaleInstall, reference.package.Value()));
+                if (!member->second)
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate, reference.package.Value()));
+                if (*member->second != reference.version)
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::StaleInstall, reference.package.Value()));
+                member->second = nullptr;
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     struct PackageLifecycleService::Impl final {
         Impl(PackageInstallService &installation, const IPackageExtensionTrust &approval, PackageLifecycleConfiguration policy)
             : install(installation), trust(approval), configuration(std::move(policy)) {}
+
+        /** @brief Collects exact package names from all native lifetime owners on the composition lane. */
+        Result<std::vector<HoroPackageId>> RetainedPackages() const {
+            using Output = Result<std::vector<HoroPackageId>>;
+            if (std::this_thread::get_id() != owner || preparing)
+                return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+            std::vector<HoroPackageId> retained;
+            if (current)
+                current->AppendRetainedPackages(retained);
+            for (const auto &composition : retired)
+                if (composition)
+                    composition->AppendRetainedPackages(retained);
+            if (const auto &queue = configuration.moduleRetirements) {
+                if (const auto read = queue->AppendRetainedPackages(retained); read.HasError())
+                    return Output::Failure(read.ErrorValue());
+            }
+            std::ranges::sort(retained);
+            const auto duplicates = std::ranges::unique(retained);
+            retained.erase(duplicates.begin(), duplicates.end());
+            return Output::Success(std::move(retained));
+        }
 
         /** @brief Keeps the primary typed error and the previous published graph when preparation fails. */
         Result<void> Fail(Error error) {
@@ -84,6 +189,21 @@ namespace Horo::Packages {
         /** @brief Reads live shutdown state after host callbacks can reenter the lifecycle service. */
         bool StopRequested() const noexcept {
             return shutdownRequested;
+        }
+
+        /** @brief Old native admission stays revoked after the withdrawal commit. */
+        bool RemovalReserved() const noexcept {
+            return removal && removal->status.load() != PackageRemovalLease::State::Status::Released;
+        }
+
+        /** @brief Applies common owner, transaction, and safe-point rules to both native activation paths. */
+        Result<void> CheckActivationBoundary(const PackageActivationBoundary boundary) const {
+            if (std::this_thread::get_id() != owner || closed || StopRequested() || preparing ||
+                (boundary != PackageActivationBoundary::Startup && boundary != PackageActivationBoundary::Quiescent))
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+            if (RemovalReserved())
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::RemovalReserved));
+            return Result<void>::Success();
         }
 
         /** @brief Stages validated native owners and checks cancellation, install identity and leases before publication. */
@@ -148,6 +268,7 @@ namespace Horo::Packages {
         std::unique_ptr<Detail::PackageComposition> current;
         std::shared_ptr<const PackageActivationSnapshot> active;
         std::vector<std::unique_ptr<Detail::PackageComposition>> retired;
+        std::shared_ptr<PackageRemovalLease::State> removal;
     };
 
     /** @copydoc PackageLifecycleService::Create */
@@ -194,9 +315,8 @@ namespace Horo::Packages {
     /** @copydoc PackageLifecycleService::Activate */
     Result<void> PackageLifecycleService::Activate(const std::span<const EnabledPackageExtension> enabled,
                                                    const PackageActivationBoundary boundary, const CancellationToken &cancellation) {
-        if (std::this_thread::get_id() != impl_->owner || impl_->closed || impl_->shutdownRequested || impl_->preparing ||
-            (boundary != PackageActivationBoundary::Startup && boundary != PackageActivationBoundary::Quiescent))
-            return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        if (auto admitted = impl_->CheckActivationBoundary(boundary); admitted.HasError())
+            return admitted;
         FinalizeRetirements();
         if (enabled.size() > impl_->configuration.maximumExtensions ||
             impl_->retired.size() >= impl_->configuration.maximumRetiredCompositions ||
@@ -242,10 +362,10 @@ namespace Horo::Packages {
     /** @copydoc PackageLifecycleService::ActivateModules */
     Result<void> PackageLifecycleService::ActivateModules(const std::span<const EnabledPackageModule> enabled,
                                                           const PackageActivationBoundary boundary, const CancellationToken &cancellation) {
-        if (std::this_thread::get_id() != impl_->owner || impl_->closed || impl_->shutdownRequested || impl_->preparing ||
-            !impl_->configuration.moduleRetirements ||
-            (boundary != PackageActivationBoundary::Startup && boundary != PackageActivationBoundary::Quiescent))
+        if (!impl_->configuration.moduleRetirements)
             return Result<void>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        if (auto admitted = impl_->CheckActivationBoundary(boundary); admitted.HasError())
+            return admitted;
         FinalizeRetirements();
         if (enabled.size() > impl_->configuration.maximumExtensions || impl_->generation == std::numeric_limits<std::uint64_t>::max())
             return impl_->Fail(MakeError(PackageLifecycleErrors::InvalidLifecycle));
@@ -287,7 +407,80 @@ namespace Horo::Packages {
 
     /** @copydoc PackageLifecycleService::Active */
     std::shared_ptr<const PackageActivationSnapshot> PackageLifecycleService::Active() const {
-        return impl_->active;
+        return std::this_thread::get_id() == impl_->owner ? impl_->active : nullptr;
+    }
+
+    /** @copydoc PackageLifecycleService::MissingRetainedPackages */
+    Result<std::vector<HoroPackageId>> PackageLifecycleService::MissingRetainedPackages(const PackageRestoreGraph &replacement) const {
+        auto retained = impl_->RetainedPackages();
+        if (retained.HasError() || retained.Value().empty())
+            return retained;
+        std::set<std::string_view, std::less<>> available;
+        for (const auto &package : replacement.packages)
+            available.insert(package.lock.package.Value());
+        auto packages = std::move(retained).Value();
+        std::erase_if(packages, [&available](const auto &package) {
+            return available.contains(package.Value());
+        });
+        return Result<std::vector<HoroPackageId>>::Success(std::move(packages));
+    }
+
+    /** @copydoc PackageLifecycleService::RetainedRemovalPackages */
+    Result<std::vector<HoroPackageId>> PackageLifecycleService::RetainedRemovalPackages(
+        const std::span<const LockedPackageReference> departing) const {
+        auto retained = impl_->RetainedPackages();
+        if (retained.HasError())
+            return retained;
+        std::set<std::string_view, std::less<>> removed;
+        for (const auto &package : departing)
+            removed.insert(package.package.Value());
+        auto packages = std::move(retained).Value();
+        std::erase_if(packages, [&removed](const auto &package) {
+            return !removed.contains(package.Value());
+        });
+        return Result<std::vector<HoroPackageId>>::Success(std::move(packages));
+    }
+
+    /** @copydoc PackageLifecycleService::ReserveRemoval */
+    Result<std::shared_ptr<const PackageRemovalLease>> PackageLifecycleService::ReserveRemoval(
+        const std::span<const LockedPackageReference> departing) {
+        using Output = Result<std::shared_ptr<const PackageRemovalLease>>;
+        if (std::this_thread::get_id() != impl_->owner || impl_->closed || impl_->StopRequested() || impl_->preparing || departing.empty())
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        if (impl_->RemovalReserved())
+            return Output::Failure(MakeError(PackageLifecycleErrors::RemovalReserved));
+        const auto installed = impl_->install.InstalledRecord();
+        if (!installed)
+            return Output::Failure(MakeError(PackageLifecycleErrors::StaleInstall));
+        if (const auto membership = VerifyRemovalMembership(*installed->Graph(), departing); membership.HasError())
+            return Output::Failure(membership.ErrorValue());
+        const auto retained = RetainedRemovalPackages(departing);
+        if (retained.HasError())
+            return Output::Failure(retained.ErrorValue());
+        if (!retained.Value().empty()) {
+            auto error = MakeError(PackageLifecycleErrors::PackageInUse);
+            for (const auto &package : retained.Value())
+                error.diagnostics.emplace_back(DiagnosticCode{error.code.Value()}, DiagnosticSeverity::Error, package.Value(),
+                                               SourceLocation{"packages.activation"}, package.Value());
+            return Output::Failure(std::move(error));
+        }
+        auto state = std::make_shared<PackageRemovalLease::State>();
+        state->projectRoot = impl_->install.ProjectRoot();
+        state->departing.assign(departing.begin(), departing.end());
+        state->install = installed;
+        const auto &hosts = impl_->configuration.moduleHosts;
+        const auto backend = std::ranges::find_if(hosts, [](const auto &host) {
+            return host && host->Supports(Extensions::ExtensionModuleRole::BackendCapability);
+        });
+        if (backend != hosts.end()) {
+            if (const auto *native = dynamic_cast<const NativePackageModuleHost *>(backend->get())) {
+                state->nativeImporterOwner = true;
+                state->importerBindings = native->ImporterBindings();
+            }
+        }
+        auto lease = std::shared_ptr<const PackageRemovalLease>{new PackageRemovalLease{state}};
+        impl_->removal = std::move(state);
+        return Output::Success(std::move(lease));
     }
 
     /** @copydoc PackageLifecycleService::State */
@@ -313,6 +506,8 @@ namespace Horo::Packages {
     /** @copydoc PackageLifecycleService::Shutdown */
     void PackageLifecycleService::Shutdown() noexcept {
         impl_->shutdownRequested = true;
+        if (impl_->removal)
+            impl_->removal->lifetime.RequestCancellation();
         if (impl_->closed || impl_->preparing)
             return;
         impl_->closed = true;

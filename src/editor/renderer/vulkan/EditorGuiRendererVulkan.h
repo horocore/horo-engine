@@ -69,7 +69,6 @@ namespace Horo::Editor {
         Render::RenderSamplerHandle sampler_;
         PFN_vkUpdateDescriptorSets updateDescriptors_{};
         std::uintptr_t nextIdentity_{1};
-        std::uintptr_t fontIdentity_{};
         std::uint32_t recordingSlot_{};
         bool platformInitialized_{};
         bool nativeInitialized_{};

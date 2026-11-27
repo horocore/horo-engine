@@ -1,11 +1,13 @@
 #include "Horo/Application/CompilerDiagnosticParser.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/GameplayTestService.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 
 #include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -75,6 +77,13 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
             std::filesystem::remove_all(root / ".horo/local/build/gameplay-debug", error);
         }
 
+        /** @brief Adds a real native test inventory to the fixture's configured project. */
+        void EnableTests() const {
+            std::ofstream build{root / "CMakeLists.txt", std::ios::app};
+            build << "\nenable_testing()\nadd_test(NAME approved COMMAND \"${CMAKE_COMMAND}\" -E echo approved-source)\n";
+            REQUIRE(build.good());
+        }
+
         void AddResolvedInput() const {
             Write(root / "project-settings.txt", "gameplay settings\n");
             std::ofstream manifest{root / ".horo/local/gameplay_build_inputs.txt", std::ios::app};
@@ -104,6 +113,21 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
         }
         FAIL("Gameplay build session did not become terminal.");
+    }
+
+    /** @brief Polls the production test operation on its owner lane. */
+    GameplayTestSnapshot AwaitApprovedTest(GameplayTestService &tests, const OperationId id) {
+        using enum OperationState;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        do {
+            tests.Poll();
+            const auto snapshot = tests.Query(id);
+            REQUIRE(snapshot);
+            if (snapshot->state == Succeeded || snapshot->state == Failed || snapshot->state == Cancelled)
+                return *snapshot;
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        } while (std::chrono::steady_clock::now() < deadline);
+        FAIL("Approved CTest operation did not become terminal.");
     }
 
     std::optional<BuildOutputSnapshot> AwaitTerminalOutput(BuildOutputStore &output, const GameplayBuildSnapshot &terminal) {
@@ -189,6 +213,7 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
     class CompilerDiagnosticProcessRunner final : public IExternalProcessRunner {
     public:
         Result<ExternalProcessResult> Run(const ExternalProcessRequest &request, const CancellationToken &) override {
+            ++calls;
             const std::filesystem::path absoluteSource = request.workingDirectory / "source/gameplay/Movement.cpp";
             request.onOutput({ProcessOutputStream::StandardError,
                               "source/gameplay/Movement.cpp:12:7: warning: deprecated gameplay declaration [-Wdeprecated-declarations]"});
@@ -197,6 +222,8 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
                 {ProcessOutputStream::StandardError, "source/gameplay/Movement.cpp:99999999999999999999:1: error: invalid coordinate"});
             return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Exited, 1});
         }
+
+        std::atomic_uint calls{};
     };
 
     class CountingExternalProcessRunner final : public IExternalProcessRunner {
@@ -339,6 +366,38 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
     }
 }  // namespace
 
+TEST_CASE("The native CTest approval uses the exact successful source-review build", "[integration][gameplay][validation]") {
+    CountingExternalProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    fixture.project.EnableTests();
+    auto request = fixture.Request();
+    request.environment.cmakeExecutable = HORO_GAMEPLAY_CMAKE_COMMAND;
+    request.environment.cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER};
+    request.environment.generator = HORO_TEST_CMAKE_GENERATOR;
+    const auto checks = std::make_shared<std::atomic_uint>();
+    request.validateSources = [checks](const CancellationToken &) {
+        ++*checks;
+        return Result<void>::Success();
+    };
+    const auto started = fixture.service.StartIsolated(request, {});
+    REQUIRE(started.HasValue());
+    const auto build = AwaitTerminal(fixture.service, started.Value());
+    INFO((build.error ? build.error->message : ""));
+    REQUIRE(build.state == GameplayBuildState::Succeeded);
+
+    JobSystem testJobs{{.ioWorkerCount = 1}};
+    GameplayTestService tests{processes, testJobs, fixture.files, fixture.operations, fixture.output};
+    const auto buildCalls = processes.calls.load();
+    const auto buildChecks = checks->load();
+    const auto test = tests.StartForBuild({request, build.activeInputHash}, {HORO_GAMEPLAY_CTEST_COMMAND});
+    REQUIRE(test.HasValue());
+    const auto terminal = AwaitApprovedTest(tests, test.Value());
+    INFO((terminal.error ? terminal.error->message : ""));
+    CHECK(terminal.state == OperationState::Succeeded);
+    CHECK(processes.calls == buildCalls + 1);
+    CHECK(*checks == buildChecks + 2);
+}
+
 TEST_CASE("Gameplay build service consumes exported SDK and preserves last success on failure", "[integration][gameplay][build]") {
     CountingExternalProcessRunner processes;
     GameplayBuildFixture fixture{processes, 2U, 16U, 1024U, 16U, 64U};
@@ -346,18 +405,33 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     auto &project = fixture.project;
     auto &output = fixture.output;
     GameplayBuildRequest request = fixture.Request();
+    request.environment.cmakeExecutable = HORO_GAMEPLAY_CMAKE_COMMAND;
     request.environment.cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER};
     request.environment.generator = HORO_TEST_CMAKE_GENERATOR;
     request.timeouts = {.configure = std::chrono::minutes{1}, .build = std::chrono::minutes{2}};
 
-    const auto started = service.Start(request);
+    const auto observations = std::make_shared<std::atomic_uint>();
+    request.validateSources = [observations](const CancellationToken &) {
+        ++*observations;
+        return Result<void>::Success();
+    };
+    const auto started = service.StartIsolated(request, {});
     REQUIRE(started.HasValue());
     const GameplayBuildSnapshot success = AwaitTerminal(service, started.Value());
+    INFO((success.error ? success.error->message : ""));
     const std::optional<BuildOutputSnapshot> buildOutput = output.SnapshotIfChanged(0);
     REQUIRE(buildOutput.has_value());
+    if (success.error)
+        for (const auto &record : buildOutput->records)
+            UNSCOPED_INFO(record.message);
     const std::optional<BuildOutputSessionId> successfulOutputSession = AssertSuccessfulBuildOutput(*buildOutput, success);
+    CHECK(*observations == 3U);
+    request.validateSources = {};
     REQUIRE(service.IsUpToDate(request));
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
+    const std::string_view generator{HORO_TEST_CMAKE_GENERATOR};
+    if (generator.starts_with("Ninja") || generator.find("Makefiles") != std::string_view::npos)
+        CHECK(std::filesystem::is_regular_file(GameplayLocalBuildDirectory(project.root) / "compile_commands.json"));
 
     const std::size_t callsAfterBuild = processes.calls.load(std::memory_order_relaxed);
     const auto cached = service.Start(request);
@@ -451,6 +525,77 @@ TEST_CASE("Gameplay build service maps cancellation to one correlated terminal r
     REQUIRE_FALSE(fixture.service.RequestCancel(started.Value()));
 }
 
+TEST_CASE("Isolated editor builds never take over or coalesce with a native build", "[unit][gameplay][build][isolation]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto live = [] {
+        return false;
+    };
+    const auto native = fixture.service.Start(fixture.Request());
+    REQUIRE(native.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+    CHECK(fixture.service.StartIsolated(fixture.Request(), live).HasError());
+    REQUIRE(fixture.service.RequestCancel(native.Value()));
+    CHECK(AwaitTerminal(fixture.service, native.Value()).state == GameplayBuildState::Cancelled);
+
+    unsigned checkpoints{};
+    CHECK(fixture.service
+              .StartIsolated(fixture.Request(), [&] {
+        return ++checkpoints == 2;
+    }).HasError());
+    CHECK_FALSE(fixture.service.QueryActiveProject(fixture.project.root));
+    const auto isolated = fixture.service.StartIsolated(fixture.Request(), live);
+    REQUIRE(isolated.HasValue());
+    CHECK(fixture.service.Start(fixture.Request()).HasError());
+    CHECK(fixture.service.StartIsolated(fixture.Request(), live).HasError());
+    REQUIRE(fixture.service.RequestCancel(isolated.Value()));
+    const auto terminal = AwaitTerminal(fixture.service, isolated.Value());
+    CHECK(terminal.state == GameplayBuildState::Cancelled);
+    REQUIRE(terminal.operationId);
+    const auto output = AwaitTerminalOutput(fixture.output, terminal);
+    REQUIRE(output);
+    AssertTerminalOutput(*output, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+}
+
+TEST_CASE("A stale approved source review prevents the isolated build from starting a native process", "[unit][gameplay][build]") {
+    TerminalProcessRunner processes{ProcessTerminationReason::Exited};
+    GameplayBuildFixture fixture{processes};
+    auto request = fixture.Request();
+    request.validateSources = [](const CancellationToken &) {
+        static const ErrorCodeDescriptor Stale{ErrorDomainId{"validation"}, ErrorCode{"stale_review"}, ErrorSeverity::Warning,
+                                               "The reviewed sources changed."};
+        return Result<void>::Failure(MakeError(Stale));
+    };
+    CHECK(fixture.service.Start(request).HasError());
+    const auto id = fixture.service.StartIsolated(request, {});
+    REQUIRE(id.HasValue());
+    const auto result = AwaitTerminal(fixture.service, id.Value());
+    CHECK(result.state == GameplayBuildState::Failed);
+    REQUIRE(result.error);
+    CHECK(result.error->code.Value() == "stale_review");
+    CHECK(processes.calls == 0U);
+}
+
+TEST_CASE("An isolated native failure reports stale approval if source evidence changed during the process", "[unit][gameplay][build]") {
+    CompilerDiagnosticProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    auto request = fixture.Request();
+    const bool changeDuringProcess = GENERATE(false, true);
+    request.validateSources = [changeDuringProcess, &processes](const CancellationToken &) {
+        static const ErrorCodeDescriptor Stale{ErrorDomainId{"validation"}, ErrorCode{"stale_review"}, ErrorSeverity::Warning,
+                                               "The reviewed sources changed."};
+        if (changeDuringProcess && processes.calls > 0)
+            return Result<void>::Failure(MakeError(Stale));
+        return Result<void>::Success();
+    };
+    const auto started = fixture.service.StartIsolated(request, {});
+    REQUIRE(started.HasValue());
+    const auto result = AwaitTerminal(fixture.service, started.Value());
+    CHECK(result.state == GameplayBuildState::Failed);
+    REQUIRE(result.error);
+    CHECK(result.error->code.Value() == (changeDuringProcess ? "stale_review" : "build_failed"));
+}
+
 TEST_CASE("Gameplay build shutdown joins active work and publishes terminal output before returning", "[unit][gameplay][build][shutdown]") {
     CancellationWaitingProcessRunner processes;
     GameplayBuildFixture fixture{processes};
@@ -507,6 +652,7 @@ TEST_CASE("Active gameplay build projection survives readers and clears at cance
     REQUIRE(*active->progress > 0.0F);
     REQUIRE_FALSE(active->cancellationRequested);
     REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root / "other-project").has_value());
+    CHECK_FALSE(fixture.service.QueryLatestCompletedOutput(fixture.project.root));
 
     std::atomic<bool> reading{true};
     std::atomic<bool> invalidSnapshot{false};
@@ -527,7 +673,15 @@ TEST_CASE("Active gameplay build projection survives readers and clears at cance
         REQUIRE(cancelling->cancellationRequested);
     REQUIRE_FALSE(duplicateRequest);
     REQUIRE_FALSE(invalidSnapshot.load(std::memory_order_relaxed));
-    REQUIRE(AwaitTerminal(fixture.service, active->id).state == GameplayBuildState::Cancelled);
+    const auto terminal = AwaitTerminal(fixture.service, active->id);
+    REQUIRE(terminal.state == GameplayBuildState::Cancelled);
+    REQUIRE(terminal.operationId);
+    CHECK(fixture.service.QueryLatestCompletedOutput(fixture.project.root) == terminal.operationId);
+    const auto tail = fixture.output.CaptureOperationTail(*terminal.operationId, 4, 4096);
+    REQUIRE(tail);
+    CHECK(tail->operation == terminal.operationId);
+    CHECK(tail->witness.IsCurrent());
+    CHECK_FALSE(fixture.service.QueryLatestCompletedOutput(fixture.project.root / "other-project"));
     REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root).has_value());
 }
 
@@ -540,10 +694,17 @@ TEST_CASE("Gameplay build service maps process timeout to one correlated termina
     const GameplayBuildSnapshot terminal = AwaitTerminal(fixture.service, started.Value());
     REQUIRE(terminal.state == GameplayBuildState::TimedOut);
     REQUIRE(terminal.operationId.has_value());
+    CHECK(fixture.service.QueryLatestCompletedOutput(fixture.project.root) == terminal.operationId);
     const auto snapshot = fixture.output.SnapshotIfChanged(0);
     REQUIRE(snapshot.has_value());
     AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::TimedOut, "gameplay.build.timed_out");
     AssertTerminalOperation(fixture.operations, terminal, OperationState::Failed);
+    const auto next = fixture.service.Start(fixture.Request(std::chrono::milliseconds{20}));
+    REQUIRE(next.HasValue());
+    const auto replacement = AwaitTerminal(fixture.service, next.Value());
+    REQUIRE(replacement.operationId);
+    CHECK(replacement.operationId != terminal.operationId);
+    CHECK(fixture.service.QueryLatestCompletedOutput(fixture.project.root) == replacement.operationId);
 }
 
 TEST_CASE("Gameplay build service exposes external lock waiting and bounded timeout", "[unit][gameplay][build][lock]") {

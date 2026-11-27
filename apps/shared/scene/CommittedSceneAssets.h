@@ -8,8 +8,13 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
 
 #include <memory>
+#include <span>
 
 namespace Horo::Application::Internal {
+    class CommittedSceneAssets;
+    /** @brief Selects the payload IDs to retain from the already verified generation. */
+    using SceneAssetRetention = std::function<Result<std::vector<Assets::AssetId>>(const CommittedSceneAssets &)>;
+
     /** @brief Explicit host cook selector; neither collision settings nor source-file presence chooses it. */
     struct SceneCookSelection final {
         std::filesystem::path targetRoot;
@@ -26,14 +31,16 @@ namespace Horo::Application::Internal {
         /** @brief Captures the one explicitly selected published generation.
          * @param files Explicit synchronous read/inspection/inventory authority; no reference is retained.
          * @param selection Exact host-selected root and target. @param registry Current project identity snapshot.
+         * @param retain Optional exact payload selection through Find, Artifacts and the Scene decoders before providers are built.
          * @return Owned immutable snapshot or original typed publication/envelope error.
          */
         [[nodiscard]] static Result<std::unique_ptr<CommittedSceneAssets>> Capture(const DurableFileSystem &files,
                                                                                    const SceneCookSelection &selection,
-                                                                                   const Assets::AssetRegistrySnapshot &registry);
+                                                                                   const Assets::AssetRegistrySnapshot &registry,
+                                                                                   const SceneAssetRetention &retain = {});
         /** @brief Borrows the real payload provider; this owner must outlive every AssetLoadService request. */
         [[nodiscard]] const Assets::IAssetProvider &Provider() const noexcept;
-        /** @brief Borrows the Scene loader view: full verified envelopes for Animation, existing payloads for other types.
+        /** @brief Borrows the Scene loader view: full verified envelopes for Animation and NavMesh, payloads for other types.
          * @pre This object was returned by a successful Capture; the immutable view shares the retained providers. */
         [[nodiscard]] const Assets::IAssetProvider &SceneProvider() const noexcept;
         /** @brief Borrows exact original verified envelopes for prefab loading; lifetime matches Provider(). */
@@ -42,10 +49,19 @@ namespace Horo::Application::Internal {
          * @return Borrowed artifact or absence; no fallback to source or another generation.
          */
         [[nodiscard]] const Assets::AssetCookArtifact *Find(Assets::AssetId id) const noexcept;
+        /** @brief Borrows verified retained artifacts for typed catalog admission. */
+        [[nodiscard]] std::span<const Assets::AssetCookArtifact> Artifacts() const noexcept;
         /** @brief Decodes one verified Scene payload with its canonical embedded nonzero revision.
          * @param id Stable Scene asset identity. @return Fully validated definition bound to its derived stable Scene ID.
+         * @details Parent v6 references must resolve to exact leaf payloads in the same captured generation.
          */
         [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> DecodeScene(Assets::AssetId id) const;
+        /** @brief Reads the exact leaf child payload from the same captured generation.
+         * @param reference Immutable child occurrence captured through the validated parent definition.
+         * @return Exact child or typed missing, foreign, stale or unsupported failure.
+         */
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> DecodeChildScene(
+            const Runtime::SceneChildDefinitionReference &reference) const;
 
     private:
         std::vector<Assets::AssetCookArtifact> artifacts_;

@@ -254,12 +254,17 @@ namespace Horo::Prefab {
             return Result<Tokens>::Failure(valid.ErrorValue());
         const auto receipt = options.receipt;
         const auto scopeCancellation = options.scopeCancellation;
+        auto publication = std::move(options.publication);
         auto prepared = Detail::PreparePrefabGroupCommands(preparedTemplate, std::move(components), std::move(options),
                                                            {lease.Scene(), lease.RegistryRevision(), cancellation,
                                                             state_->retirement.Token(), scopeCancellation});
         if (prepared.HasError())
             return Result<Tokens>::Failure(prepared.ErrorValue());
         auto group = std::move(prepared).Value();
+        if (publication) {
+            if (auto bound = group.commands.BindGroupPublication(std::move(publication)); bound.HasError())
+                return Result<Tokens>::Failure(bound.ErrorValue());
+        }
         if (receipt) {
             auto queued = state_->scenes.QueueTrackedStructuralCommands(std::move(group.commands));
             if (queued.HasError())

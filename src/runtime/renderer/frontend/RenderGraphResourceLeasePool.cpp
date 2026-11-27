@@ -1,5 +1,6 @@
 #include "RenderGraphResourceLeasePool.h"
 
+#include "Horo/Runtime/Render/NativeReconstructionViewHistory.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "RenderFrontendErrors.h"
@@ -12,10 +13,13 @@
 
 namespace Horo::Render::Detail {
     namespace {
-        /** @brief Pins multiview workloads in order; the caller's lease transaction owns partial-prefix rollback. */
+        /** @brief Pins workloads with separate view identities in order; the caller's lease transaction owns partial-prefix rollback. */
         template <typename Lease>
-        [[nodiscard]] Result<void> PinMultiviewWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
+        [[nodiscard]] Result<void> PinAdditionalGraphWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
             for (const auto &entry : workloads) {
+                if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&entry.workload))
+                    if (const auto pinned = lease.PinReconstruction(*reconstruction); pinned.HasError())
+                        return pinned;
                 if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&entry.workload))
                     if (auto pinned = lease.PinMaterialRaster(*raster); pinned.HasError())
                         return pinned;
@@ -124,6 +128,25 @@ namespace Horo::Render::Detail {
             templateBinding.reset();
         }
         active = false;
+        for (auto &history : std::span{reconstructionHistories}.first(reconstructionHistoryCount)) {
+            history->NativeLeaseRetired();
+            history.reset();
+        }
+        reconstructionHistoryCount = 0;
+    }
+
+    /** @copydoc RenderGraphResourceLeasePool::RetainReconstructionHistories */
+    bool RenderGraphResourceLeasePool::RetainReconstructionHistories(
+        const IRenderGraphResourceLease *active,
+        const std::span<const std::shared_ptr<NativeReconstructionViewHistory>> histories) noexcept {
+        const auto lease = std::ranges::find_if(leases_, [active](const auto &entry) {
+            return &entry == active && entry.active;
+        });
+        if (lease == leases_.end() || lease->reconstructionHistoryCount != 0 || histories.size() > lease->reconstructionHistories.size())
+            return false;
+        std::ranges::copy(histories, lease->reconstructionHistories.begin());
+        lease->reconstructionHistoryCount = histories.size();
+        return true;
     }
 
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinResource */
@@ -244,6 +267,18 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::Lease::PinReconstruction */
+    Result<void> RenderGraphResourceLeasePool::Lease::PinReconstruction(const RenderGraphNativeReconstruction &workload) {
+        for (const auto &image : workload.images) {
+            const auto view = image.view;
+            if (!view.IsValid())
+                continue;
+            if (auto pinned = PinIdentity({RenderResourceClass::TextureView, {view.owner, view.slot, view.generation}}); pinned.HasError())
+                return pinned;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::Lease::PinMultiview */
     Result<void> RenderGraphResourceLeasePool::Lease::PinMultiview(const RenderGraphMultiview &workload) {
         if (!workload.scene || workload.geometry.size() > materials.size() - materialCount)
@@ -264,6 +299,12 @@ namespace Horo::Render::Detail {
                 return pin;
             if (target.depth.IsValid()) {
                 const auto depth = target.depthView;
+                if (const auto pin = PinIdentity({RenderResourceClass::TextureView, {depth.owner, depth.slot, depth.generation}});
+                    pin.HasError())
+                    return pin;
+            }
+            if (target.predecessorDepth.IsValid()) {
+                const auto depth = target.predecessorDepthView;
                 if (const auto pin = PinIdentity({RenderResourceClass::TextureView, {depth.owner, depth.slot, depth.generation}});
                     pin.HasError())
                     return pin;
@@ -332,7 +373,7 @@ namespace Horo::Render::Detail {
             }
             lease.uiCount = 1;
         }
-        if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
+        if (const auto pinned = PinAdditionalGraphWorkloads(lease, workloads); pinned.HasError())
             return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
         for (const auto &entry : workloads)
             if (const auto *vfx = std::get_if<RenderGraphVfx>(&entry.workload))

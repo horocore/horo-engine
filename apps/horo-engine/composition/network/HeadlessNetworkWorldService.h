@@ -3,13 +3,62 @@
  * @brief Target-private network service adapter over the exact generation-owned world.
  */
 #include "HeadlessAnimationFixed.h"
+#include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkWorldOwners.h"
+#include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AINavigationIntentDispatch.h"
+#include "Horo/WorldStreaming/WorldArtifactErrors.h"
+#include "ProjectScenePerception.h"
+#include "SceneDecisionQueries.h"
+
+#include <cmath>
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
     public:
+        /** @copydoc Network::INetworkModeService::CaptureAuthoredScene */
+        [[nodiscard]] Result<Network::NetworkAuthoredSceneProjection> CaptureAuthoredScene() const override;
+
+        /** @copydoc AcquireHeadlessPublicTransforms */
+        std::shared_ptr<const Network::SceneReplicationCommitSource> PublicTransforms() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested ||
+                request_.world != Network::NetworkModeWorldKind::AuthorityServer)
+                return {};
+            return record_->publicTransforms;
+        }
+
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept {
             return gameplay_ ? gameplay_->PhysicsContext() : nullptr;
+        }
+
+        std::shared_ptr<const Gameplay::GameplayNavigationContext> NavigationContext() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !gameplay_ || !record_ || record_->closeRequested ||
+                !record_->navigationPath)
+                return {};
+            return record_->navigationPath->Context();
+        }
+
+        /** @copydoc InspectHeadlessCrowdDebug */
+        Result<Navigation::NavigationCrowdDebugSnapshot> CrowdDebug(const std::uint64_t tick,
+                                                                    const Navigation::NavigationCrowdDebugLimits limits) const {
+            using Debug = Result<Navigation::NavigationCrowdDebugSnapshot>;
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || record_->closed ||
+                record_->fixedReserved || !record_->navigationPath || tick == 0)
+                return Debug::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+            if (const auto native = record_->native.Borrow();
+                native.HasError() || native.Value().physics.PublishedTick().completedTick != tick)
+                return Debug::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+            return record_->navigationPath->CrowdDebug(tick, limits);
+        }
+
+        Result<void> StageNavigationMotion(AI::AiTaskContinuation task, Navigation::NavigationMovementRequest request,
+                                           const std::uint64_t tick) const {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->decisionMotion ||
+                !record_->ai || tick == 0 || tick != record_->motionEvaluationTick)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPhaseInvalid));
+            if (const auto resolved = record_->ai->CapabilityAtSafePoint().ResolveAgentOwner(task.Operation().agent); resolved.HasError())
+                return Result<void>::Failure(resolved.ErrorValue());
+            return record_->decisionMotion->Stage(std::move(task), tick, std::move(request));
         }
 
         const Vfx::VfxExtractionOutcome *VfxFrame() const noexcept {
@@ -22,10 +71,112 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return std::this_thread::get_id() == owners_->owner && record_ ? record_->animation.get() : nullptr;
         }
 
-        std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
-            if (std::this_thread::get_id() != owners_->owner || !record_ || !record_->scenes)
+        /** @brief Admits an action only through the active authoritative Scene facade. */
+        Animation::GraphActionCommandOutcome QueueAnimationAction(Runtime::EntityRef entity, const Animation::GraphActionRequest &request) {
+            if (request_.service != Network::NetworkModeServiceKind::Scene || !IsAuthoritativeWorld() || !ActiveScene() ||
+                !record_->animation)
+                return {Animation::GraphActionFailure::Closed};
+            return record_->animation->QueueAction(entity, request);
+        }
+
+        std::shared_ptr<const AI::PerceptionSpatialSnapshot> PerceptionSnapshot() const noexcept {
+            if (!IsAuthoritativeWorld() || std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested ||
+                record_->closed)
                 return {};
-            const auto scene = record_->scenes->ActiveScene();
+            return record_->perception.Current();
+        }
+
+        /** @brief Reads one agent's owned native observations from the exact currently committed Scene. */
+        Result<AI::PerceptionMemorySnapshot> PerceptionMemory(const Runtime::EntityRef recipient) const {
+            if (!IsAuthoritativeWorld())
+                return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto scene = ActiveScene();
+            if (!scene || !record_->ai)
+                return Result<AI::PerceptionMemorySnapshot>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            return record_->ai->ReadPerceptionAtSafePoint(*scene, recipient);
+        }
+
+        /** @brief Reads a copied Blackboard value from this exact live owner for product inspection. */
+        Result<std::optional<AI::BlackboardValue>> ReadDecisionValue(AI::AgentId identity, AI::BlackboardKeyId key) const {
+            using Value = Result<std::optional<AI::BlackboardValue>>;
+            if (!IsAuthoritativeWorld() || !ActiveScene() || !record_->ai)
+                return Value::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto capability = record_->ai->CapabilityAtSafePoint();
+            const auto agent = capability.ResolveAgent(identity);
+            if (agent.HasError())
+                return Value::Failure(agent.ErrorValue());
+            return capability.ReadBlackboard(agent.Value(), key);
+        }
+
+        /** @brief Copies the last completed runtime finding from the authoritative Scene on its owner lane. */
+        Result<std::optional<AI::AiRuntimeDecisionDiagnostic>> ReadDecisionFailure() const {
+            if (!IsAuthoritativeWorld())
+                return Result<std::optional<AI::AiRuntimeDecisionDiagnostic>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto scene = ActiveScene();
+            if (!scene || !record_->ai)
+                return Result<std::optional<AI::AiRuntimeDecisionDiagnostic>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            return record_->ai->ReadDecisionFailureAtSafePoint(*scene);
+        }
+
+        /** @brief Borrows the committed configured Scene on the current owner lane. */
+        std::optional<Runtime::RuntimeSceneView> ActiveScene() const noexcept {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->scenes)
+                return {};
+            return record_->scenes->ActiveScene();
+        }
+
+        /** @brief Returns one revocable exact mounted-world origin lease to the active Scene's consumers. */
+        std::optional<WorldStreaming::OriginFrameLease> WorldOrigin() const {
+            if (!ActiveScene() || request_.service != Network::NetworkModeServiceKind::Scene || !record_->mountedWorld)
+                return {};
+            auto lease = record_->mountedWorld->Origin().Lease();
+            if (lease.HasError())
+                return {};
+            return std::move(lease).Value();
+        }
+
+        /** @brief Requests mounted work through the exact live Scene facade and its existing demand owner. */
+        Result<void> RequestMountedCell(const CommittedWorldInitialCell &selected, const CancellationToken &cancellation) const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->RequestLiveCell(selected, cancellation)
+                         : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
+        /** @brief Withdraws mounted work only from the exact live Scene facade and its existing demand owner. */
+        Result<void> WithdrawMountedCell(const std::optional<Runtime::SceneInstanceId> occurrence = {}) const {
+            auto *mount = LiveMountedScene();
+            if (!mount)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            return occurrence ? mount->WithdrawLiveCell(*occurrence) : mount->WithdrawLiveCell();
+        }
+
+        /** @brief Overrides demand through the same authoritative standalone Scene facade. */
+        Result<void> ForceEvictMountedCell(Runtime::SceneInstanceId occurrence) const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->ForceEvictLiveCell(occurrence)
+                         : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
+        /** @brief Projects committed occurrence readiness without consulting a foreign or retired Scene. */
+        Result<MountedWorldCellReadiness> InspectMountedCell(Runtime::SceneInstanceId occurrence) const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->InspectLiveCell(occurrence)
+                         : Result<MountedWorldCellReadiness>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
+        /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */
+        Result<MountedWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
+                                                                    std::span<const Runtime::SceneObjectId> meshes,
+                                                                    Runtime::PrimitiveMeshCache &primitives,
+                                                                    Render::RenderOriginSceneAdapter &renderer) const {
+            const auto scene = ActiveScene();
+            if (!scene || request_.service != Network::NetworkModeServiceKind::Scene || !record_->mountedWorld)
+                return Result<MountedWorldRenderPacket>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            return record_->mountedWorld->CaptureGeometry(*scene, camera, meshes, primitives, renderer);
+        }
+
+        std::optional<Runtime::EntityRef> AnimationEntity(Runtime::SceneObjectId object) const noexcept {
+            const auto scene = ActiveScene();
             return scene ? scene->Find(object) : std::nullopt;
         }
 
@@ -109,9 +260,23 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return lane;
             if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                 (void)owners_->gameplay->moduleRetirements->Drain();
-            if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && gameplay_) {
-                const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
-                return gameplay_->OnPhase(phase, frame);
+            if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && IsSceneOwner() && record_->prefabReplica)
+                return AdvanceReplicaPrefabs();
+            if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && configuredActivated_) {
+                const auto previous = record_->perception.Current();
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && SelectsLiveMount()) {
+                    if (auto advanced = AdvanceLiveMount(); advanced.HasError())
+                        return advanced;
+                } else if (gameplay_) {
+                    const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
+                    if (auto advanced = gameplay_->OnPhase(phase, frame); advanced.HasError())
+                        return advanced;
+                }
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && record_->reducedPopulation)
+                    if (auto reconciled = AdvanceReducedTransfers(phase); reconciled.HasError())
+                        return reconciled;
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && previous == record_->perception.Current())
+                    return PublishConfiguredPerception();
             }
             return Result<void>::Success();
         }
@@ -143,6 +308,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         void Shutdown() noexcept override {
             RevokeGameplayContext();
+            RetireAi();
             RetireGameplay();
             if (IsSceneOwner())
                 CloseRecord(*record_);
@@ -154,6 +320,43 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
     private:
+        /** @brief Checks immutable policy before any live scope lookup or Scene phase forwarding. */
+        bool SelectsLiveMount() const noexcept {
+            return owners_->configured && owners_->configured->mountedWorld && owners_->configured->mountedWorld->liveCell.has_value();
+        }
+
+        /** @brief Resolves only the exact active Scene facade. Physics and other roles cannot issue demand. */
+        MountedWorld *LiveMountedScene() const noexcept {
+            return SelectsLiveMount() && ActiveScene() && request_.service == Network::NetworkModeServiceKind::Scene
+                       ? record_->mountedWorld.get()
+                       : nullptr;
+        }
+
+        /** @brief Publishes pending Gameplay commands before admitting World changes at the same structural cutoff. */
+        Result<void> AdvanceLiveMount() const {
+            if (!record_->mountedWorld || !owners_->fixed)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            constexpr auto cutoff = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
+            const auto &evidence = owners_->fixed->SceneDispatch();
+            Runtime::RuntimeDispatchFacts facts;
+            if (evidence.Read(owners_->fixed->Source(), cutoff, facts) != Runtime::RuntimeDispatchStatus::Valid)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            const Runtime::FrameContext frame{.frameNumber = facts.frame,
+                                              .cancellation = record_->sceneCancellation,
+                                              .dispatchEvidence = evidence};
+            if (gameplay_) {
+                const auto committed = gameplay_->OnPhase(cutoff, frame);
+                if (committed.HasError() || !record_->scenes->CanQueueStructuralCommands())
+                    return committed;
+            }
+            const auto advanced = record_->mountedWorld->AdvanceLiveCell(evidence);
+            if (advanced.HasError() && advanced.ErrorValue().code.Value() != WorldStreaming::WorldArtifactErrors::Cancelled.code.Value())
+                return Result<void>::Failure(advanced.ErrorValue());
+            if (gameplay_ && record_->scenes->CanQueueStructuralCommands())
+                return Result<void>::Success();
+            return record_->scenes->OnPhase(cutoff, frame);
+        }
+
         bool IsSceneOwner() const noexcept {
             return record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene;
         }
@@ -164,13 +367,26 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     context->Revoke();
         }
 
+        /** @brief Cancels scheduled work and retires Scene-owned AI callbacks before the gameplay teardown. */
+        void RetireAi() const noexcept {
+            if (record_ && record_->ai)
+                record_->ai->BeginShutdown();
+            if (record_)
+                record_->decisionQueries.reset();
+        }
+
         void RetireGameplay() noexcept {
+            if (record_ && record_->prefabReplica)
+                record_->prefabReplica->Cancel();
             if (IsSceneOwner() && record_->activeGameplay) {
+                record_->initialTransformCapture.reset();
                 record_->activeGameplay->Shutdown();
                 record_->activeGameplay = nullptr;
             }
-            if (record_ && record_->activeGameplay == gameplay_.get())
+            if (record_ && gameplay_ && record_->activeGameplay == gameplay_.get()) {
+                record_->initialTransformCapture.reset();
                 record_->activeGameplay = nullptr;
+            }
             if (gameplay_)
                 gameplay_->Shutdown();
             gameplay_.reset();
@@ -222,21 +438,95 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Each world record admits exactly one Scene candidate."));
             const auto &input = *owners_->configured;
+            if (input.navigationPath && !IsAuthoritativeWorld())
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                       "The best-effort Navigation path scope requires world authority."));
+            if (!input.navigationActors.empty() && (!input.navigationPath || !input.navigation || !owners_->gameplay))
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityUnavailable));
             const auto &boundary = input.load;
             record_->sceneCancellation = boundary.cancellation;
-            record_->scenes = std::make_unique<Runtime::RuntimeSceneService>(input.registry, input.loads,
+            record_->scenes = std::make_shared<Runtime::RuntimeSceneService>(input.registry, input.loads,
                                                                              Runtime::RuntimeSceneAssetLimits{}, request_.scene);
+            if (auto bound = BindReplicaSceneTransforms(); bound.HasError())
+                return bound;
             if (auto native = PrepareConfiguredNative(); native.HasError())
                 return native;
             if (auto ai = PrepareConfiguredAi(); ai.HasError())
                 return ai;
+            if (input.mountedWorld && input.mountedWorld->liveCell) {
+                if (auto mounted = PrepareConfiguredWorldInventory(); mounted.HasError())
+                    return mounted;
+            }
+            if (auto navigation = PrepareConfiguredNavigation(); navigation.HasError())
+                return navigation;
             if (auto animation = PrepareConfiguredAnimation(*owners_, *record_); animation.HasError())
                 return animation;
             if (auto vfx = PrepareConfiguredVfx(); vfx.HasError())
                 return vfx;
             if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            return PrepareConfiguredTemplates();
+            if (input.decisionReplay && request_.world == Network::NetworkModeWorldKind::Standalone) {
+                if (auto bound = HeadlessDecisionReplay::BindAuthoredScene(*record_, *owners_->definition); bound.HasError())
+                    return bound;
+            }
+            if (auto templates = PrepareConfiguredTemplates(); templates.HasError())
+                return templates;
+            if (auto replica = BindReplicaPrefabs(); replica.HasError())
+                return replica;
+            return PrepareConfiguredWorldMount();
+        }
+
+        /** @brief Admits the exact World inventory before the root decides initial coverage. */
+        Result<void> PrepareConfiguredWorldInventory() const {
+            const auto &input = *owners_->configured;
+            if (!input.mountedWorld)
+                return Result<void>::Success();
+            if (request_.world != Network::NetworkModeWorldKind::Standalone)
+                return Result<void>::Failure(
+                    MakeError(Network::NetworkErrors::NetworkModeInvalid, "Committed World mounting requires standalone authority."));
+            if (std::chrono::steady_clock::now() >= input.load.deadline)
+                return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+            auto world = MountedWorld::Prepare(NativeDurableFileSystem{}, *input.mountedWorld, record_->generation, *record_->scenes,
+                                               record_->sceneCancellation);
+            if (world.HasError())
+                return Result<void>::Failure(world.ErrorValue());
+            if (std::chrono::steady_clock::now() >= input.load.deadline)
+                return Result<void>::Failure(MakeError(HeadlessSceneLoadErrors::Deadline));
+            record_->mountedWorld = std::move(world).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds live World operations to the activated standalone Scene owner. */
+        Result<void> PrepareConfiguredWorldMount() const {
+            const auto &input = *owners_->configured;
+            if (!input.mountedWorld)
+                return Result<void>::Success();
+            if (!record_->mountedWorld) {
+                if (auto admitted = PrepareConfiguredWorldInventory(); admitted.HasError())
+                    return admitted;
+            }
+            auto &world = *record_->mountedWorld;
+            if (input.mountedWorld->initialCell) {
+                const auto activated =
+                    world.ActivateInitialCell(*input.mountedWorld->initialCell, {input.load.cancellation, input.load.deadline});
+                if (activated.HasError())
+                    return activated;
+            }
+            if (const auto &live = input.mountedWorld->liveCell) {
+                if (!owners_->fixed || !input.worldJobs)
+                    return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Invalid));
+                if (auto bound = world.BindLiveCell(owners_->fixed->Source(), *input.worldJobs, live->limits, input.registry.Snapshot());
+                    bound.HasError())
+                    return bound;
+                if (record_->navigation && world.HasLiveNavigationContent()) {
+                    if (auto bound = BindMountedWorldNavigation(world, *record_->navigation, input.navigation); bound.HasError())
+                        return bound;
+                }
+                if (live->firstDemand)
+                    if (auto requested = world.RequestLiveCell(*live->firstDemand, record_->sceneCancellation); requested.HasError())
+                        return requested;
+            }
+            return Result<void>::Success();
         }
 
         Result<void> PrepareConfiguredNative() const {
@@ -251,25 +541,377 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(structural.ErrorValue());
             if (auto added = record_->scenes->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
                 return added;
+            // An absent owner must not block structural groups that require only Scene, Physics or AI.
+            if (!owners_->gameplay &&
+                (SelectsLiveMount() || (OwnsCookedDecisionExecution() && input.cookedDecisions->reducedPopulation)))
+                return Result<void>::Success();
             if (auto added = record_->scenes->AddStructuralParticipant(MakeGameplayStructuralParticipant(record_->activeGameplay));
                 added.HasError())
                 return added;
             return Result<void>::Success();
         }
 
+        /** @brief Reserves only inert Scene identity on a client, even inside a listen-server process. */
         Result<void> PrepareConfiguredAi() const {
             const auto &input = *owners_->configured;
-            auto ai = AI::AiSceneRuntime::Create(input.aiSettings);
+            auto settings = input.aiSettings;
+            if (!IsAuthoritativeWorld()) {
+                settings.availableCapabilities = {};
+                settings.missingController = AI::AiMissingControllerPolicy::PreserveInactive;
+                return InstallAiSceneOwner(settings, {});
+            }
+            settings.requirePerceptionEndpoints = true;
+            if (auto motion = PrepareDecisionMotion(settings); motion.HasError())
+                return motion;
+            if (!OwnsPerception())
+                settings.availableCapabilities.bits &= ~AI::AiCapabilitySet::Of(AI::AiCapability::Perception).bits;
+
+            std::span<const AI::AiControllerDescriptor> catalog = input.aiControllers;
+            if (input.cookedDecisions) {
+                HeadlessQueryPlanCatalog queries;
+                auto selection = *input.cookedDecisions;
+                auto prepared = PrepareCookedControllers(catalog, selection, queries);
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                record_->admittedControllers = std::move(prepared).Value();
+                catalog = record_->admittedControllers;
+                if (OwnsCookedDecisionExecution() && !queries.empty()) {
+                    auto driver = SceneDecisionQueries::Create(std::move(queries), selection.querySchema,
+                                                               ConfiguredDecisionExecution().scheduler, selection.queryWorkUnitsLimit,
+                                                               input.decisionReplay ? std::nullopt : selection.queryCacheLimits,
+                                                               selection.gameplayQueryTests);
+                    if (driver.HasError())
+                        return Result<void>::Failure(driver.ErrorValue());
+                    record_->decisionQueries = std::move(driver).Value();
+                }
+            }
+            if (OwnsPerception() && input.perceptionProject) {
+                auto prepared = PreparePerceptionControllers(catalog, *input.perceptionProject);
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                record_->admittedControllers = std::move(prepared).Value();
+                catalog = record_->admittedControllers;
+            }
+            return InstallAiSceneOwner(settings, catalog);
+        }
+
+        /** @brief Binds the selected policy to this generation's exact decision dispatch. */
+        Result<void> PrepareDecisionMotion(const AI::AiSceneRuntimeSettings &settings) const {
+            const auto &input = *owners_->configured;
+            const auto &policy = input.navigationMotion;
+            if (!policy)
+                return Result<void>::Success();
+            if (!OwnsCookedDecisionExecution() || !input.navigationPath || !policy->HasSolverSelection() || !policy->capture ||
+                input.navigationActors.empty() || input.cookedDecisions->execution->intents)
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
+            if (input.navigationPath->execution == Navigation::NavigationPathExecution::FixedOwner && input.perceptionProject &&
+                input.perceptionProject->policy && SelectsReactiveDecisions(*input.perceptionProject->policy))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid));
+            auto motion =
+                AI::AiNavigationIntentDispatch::Create(settings.maximumAgents,
+                                                       [weak = std::weak_ptr<WorldRecord>{record_},
+                                                        policy](const AI::AiTaskContinuation &task,
+                                                                Navigation::NavigationMovementRequest request, const std::uint64_t tick) {
+                const auto world = weak.lock();
+                if (!world || world->closeRequested || !world->navigationPath || !world->ai || !world->scenes)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+                const auto scene = world->scenes->ActiveScene();
+                return scene ? world->navigationPath->AdmitMotion(*scene, *policy, world->ai->CapabilityAtSafePoint(), task,
+                                                                  std::move(request), tick, world->animation.get())
+                             : Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            });
+            if (motion.HasError())
+                return Result<void>::Failure(std::move(motion).ErrorValue());
+            record_->decisionMotion = std::move(motion).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Shares Scene lifecycle ownership without constructing any client controller or Blackboard. */
+        Result<void> InstallAiSceneOwner(const AI::AiSceneRuntimeSettings settings,
+                                         const std::span<const AI::AiControllerDescriptor> catalog) const {
+            const auto &input = *owners_->configured;
+            if (IsAuthoritativeWorld() && input.perceptionProject && input.perceptionProject->policy &&
+                SelectsReactiveDecisions(*input.perceptionProject->policy) && (!OwnsCookedDecisionExecution() || input.decisionReplay))
+                return Result<void>::Failure(
+                    MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                              "Reactive project decisions require a live scheduler without deterministic replay."));
+            auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
+                          ? AI::AiSceneRuntime::Create(settings, ConfiguredDecisionExecution())
+                          : AI::AiSceneRuntime::Create(settings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
             record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+            if (OwnsCookedDecisionExecution())
+                PrepareDecisionRelevance(*input.cookedDecisions);
+            std::optional<AI::AiScenePerceptionActivationInput> activation;
+            std::optional<AI::AiScenePerceptionGroupInput> structural;
+            if (OwnsPerception()) {
+                activation.emplace(AI::AiScenePerceptionActivationInput{record_->perception, input.perceptionFiltering,
+                                                                        input.perceptionPositions, input.perceptionExecution});
+                structural.emplace(AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering,
+                                                                   input.perceptionGroupPositions, input.perceptionHierarchyPositions});
+            }
             if (auto added = record_->scenes->AddActivationParticipant(
-                    std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, input.aiControllers));
+                    std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, catalog, std::move(activation)));
                 added.HasError())
                 return added;
-            if (auto added = record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(input.aiControllers));
-                added.HasError())
-                return added;
+            return InstallStructuralAi(catalog, std::move(structural));
+        }
+
+        /** @brief Installs the optional reduced transfer owner in the same canonical AI structural adapter. */
+        Result<void> InstallStructuralAi(const std::span<const AI::AiControllerDescriptor> catalog,
+                                          std::optional<AI::AiScenePerceptionGroupInput> structural) const {
+            const auto &input = *owners_->configured;
+            if (!OwnsCookedDecisionExecution() || !input.cookedDecisions->reducedPopulation)
+                return record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(catalog, std::move(structural)));
+            const auto initialOrigin = ReducedOrigin();
+            if (initialOrigin.HasError())
+                return Result<void>::Failure(initialOrigin.ErrorValue());
+            const auto &selection = *input.cookedDecisions;
+            auto reduced = HeadlessReducedPopulation::Create(*selection.reducedPopulation, *owners_->definition,
+                                                               *selection.execution->scheduler.simulationProfile, initialOrigin.Value());
+            if (reduced.HasError())
+                return Result<void>::Failure(reduced.ErrorValue());
+            record_->reducedPopulation.emplace(std::move(reduced).Value());
+            auto participant = record_->ai->MakeReducedPopulationStructuralParticipant(
+                catalog, record_->reducedPopulation->population,
+                [world = std::weak_ptr<WorldRecord>{record_}, initial = initialOrigin.Value()](const Runtime::RuntimeSceneView &scene,
+                                                                                             const Runtime::EntityRef entity) {
+                    const auto record = world.lock();
+                    if (!record)
+                        return Result<Math::WorldCoordinate64>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+                    const auto origin = ReducedOriginAtMount(*record, initial);
+                    return origin.HasError() ? Result<Math::WorldCoordinate64>::Failure(origin.ErrorValue()) :
+                                               CaptureProjectSceneWorldPosition(scene, entity, origin.Value().Origin());
+                },
+                std::move(structural));
+            if (participant.HasError())
+                return Result<void>::Failure(participant.ErrorValue());
+            return record_->scenes->AddStructuralParticipant(
+                record_->reducedPopulation->GuardStructuralParticipant(std::move(participant).Value()));
+        }
+
+        /** @brief Returns the current mounted frame, or the exact configured startup origin for an unmounted Scene. */
+        Result<WorldStreaming::OriginFrame> ReducedOrigin() const {
+            using namespace WorldStreaming;
+            const auto &world = owners_->configured->mountedWorld;
+            const auto initial =
+                OriginFrame::Create({OriginFrameId::Create(request_.scene.value).Value(), OriginFrameRevision::Create(1).Value(),
+                                     OriginGeneration::Create(1).Value()},
+                                    world ? world->origin : Math::WorldCoordinate64{});
+            return initial.HasError() ? initial : ReducedOriginAtMount(*record_, initial.Value());
+        }
+
+        /** @brief Samples a fresh origin lease without depending on the lifetime of an individual world facade. */
+        static Result<WorldStreaming::OriginFrame> ReducedOriginAtMount(const WorldRecord &record,
+                                                                        const WorldStreaming::OriginFrame &initial) {
+            using Output = Result<WorldStreaming::OriginFrame>;
+            if (!record.mountedWorld)
+                return Output::Success(initial);
+            const auto lease = record.mountedWorld->Origin().Lease();
+            return lease.HasError() ? Output::Failure(lease.ErrorValue()) : lease.Value().Get();
+        }
+
+        /** @brief Transfers suspended owners first, then fills free canonical capacity on a later cutoff. */
+        Result<void> QueueReducedTransfers() const {
+            if (!record_->scenes->CanQueueStructuralCommands())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene || record_->sceneCancellation.IsCancellationRequested())
+                return JobCancelled();
+            const auto &input = *owners_->configured;
+            const auto anchorOwner = scene->Find(input.cookedDecisions->simulationAnchor);
+            if (!anchorOwner)
+                return Result<void>::Success();
+            const auto origin = ReducedOrigin();
+            if (origin.HasError())
+                return Result<void>::Failure(origin.ErrorValue());
+            const auto anchor = CaptureProjectSceneWorldPosition(*scene, *anchorOwner, origin.Value().Origin());
+            if (anchor.HasError())
+                return Result<void>::Success();
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            auto &handles = record_->decisionRelevance.agents;
+            const auto scheduled = scheduler.Value()->CopyLiveRegistrationsAtSafePoint(handles);
+            if (scheduled.HasError())
+                return Result<void>::Failure(scheduled.ErrorValue());
+            const auto admission =
+                Runtime::SceneStructuralAdmission{scene->RuntimeId(), input.registry.Snapshot().Revision(), record_->sceneCancellation};
+            const auto &profile = *input.cookedDecisions->execution->scheduler.simulationProfile;
+            if (auto demoted = record_->reducedPopulation->QueueDemotions(
+                    *record_->scenes, *scene, std::span(handles).first(scheduled.Value()), *scheduler.Value(),
+                    record_->ai->CapabilityAtSafePoint(), admission, [&](const Runtime::EntityRef entity) {
+                        if (entity == *anchorOwner)
+                            return false;
+                        const auto position = CaptureProjectSceneWorldPosition(*scene, entity, origin.Value().Origin());
+                        return position.HasValue() && OutsideReducedRadius(anchor.Value(), position.Value(),
+                                                                            profile.suspensionDistanceMillimeters);
+                    });
+                demoted.HasError())
+                return demoted;
+            return record_->reducedPopulation->QueuePromotions(
+                *record_->scenes, origin.Value(), anchor.Value(), handles.size() - scheduled.Value(), admission);
+        }
+
+        /** @brief Tests the same axis-aligned metric as reduced promotion, using the outer hysteresis radius. */
+        static bool OutsideReducedRadius(const Math::WorldCoordinate64 &anchor, const Math::WorldCoordinate64 &position,
+                                         const std::uint64_t radius) noexcept {
+            const auto a = anchor.Millimeters();
+            const auto p = position.Millimeters();
+            return std::max({AxisDistance(a[0], p[0]), AxisDistance(a[1], p[1]), AxisDistance(a[2], p[2])}) > radius;
+        }
+
+        /** @brief Gives existing owners first use of the cutoff, then commits the bounded group against the sampled origin. */
+        Result<void> AdvanceReducedTransfers(const Runtime::RuntimePhase phase) {
+            if (auto queued = QueueReducedTransfers(); queued.HasError())
+                return queued;
+            if (!record_->reducedPopulation->pending)
+                return Result<void>::Success();
+            const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
+            if (auto committed = record_->scenes->OnPhase(phase, frame); committed.HasError())
+                return committed;
+            return record_->reducedPopulation->ReconcilePublication();
+        }
+
+        /** @brief Adds this world's explicit query owner to the selected immutable scheduler policy. */
+        AI::AiSceneCookedDecisionExecution ConfiguredDecisionExecution() const {
+            const auto &input = *owners_->configured;
+            auto execution = *input.cookedDecisions->execution;
+            if (!record_->localPolicies.empty())
+                execution.localPolicies = std::make_shared<const CookedSceneLocalPolicyCatalog>(record_->localPolicies);
+            if (input.perceptionProject && input.perceptionProject->policy && SelectsReactiveDecisions(*input.perceptionProject->policy)) {
+                execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+            }
+            if (record_->decisionQueries) {
+                execution.queryTasks = record_->decisionQueries;
+                if (execution.scheduler.mode == AI::AiSchedulingMode::BestEffort &&
+                    execution.timing == AI::AiCookedDecisionTiming::Deterministic)
+                    execution.timing = AI::AiCookedDecisionTiming::BestEffortQueries;
+            }
+            if (record_->decisionMotion) {
+                execution.intents = record_->decisionMotion;
+                if (execution.scheduler.mode == AI::AiSchedulingMode::BestEffort)
+                    execution.timing = AI::AiCookedDecisionTiming::BestEffortExternalFeedback;
+            }
+            if (execution.timing == AI::AiCookedDecisionTiming::Deterministic && execution.scheduler.simulationProfile)
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortRelevance;
+            return execution;
+        }
+
+        /** @brief Resolves authored endpoints using either the explicit registry or the same prepared native image. */
+        Result<std::vector<AI::AiControllerDescriptor>> PreparePerceptionControllers(
+            std::span<const AI::AiControllerDescriptor> catalog, const HeadlessPerceptionProjectAdmission &project) const {
+            using Output = Result<std::vector<AI::AiControllerDescriptor>>;
+            if (!SelectsNativePerception())
+                return BindProjectPerceptionEndpoints(*project.policy, project.registry, catalog);
+            if (!record_->preparedGameplay)
+                return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
+            const auto contracts = record_->preparedGameplay->DescribePerceptionSenses();
+            if (contracts.HasError())
+                return Output::Failure(contracts.ErrorValue());
+            auto registry = FreezeProjectNativePerceptionRegistry(*project.policy->native, contracts.Value());
+            if (registry.HasError())
+                return Output::Failure(registry.ErrorValue());
+            return BindProjectPerceptionEndpoints(*project.policy, std::move(registry).Value(), catalog);
+        }
+
+        /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */
+        Result<std::vector<AI::AiControllerDescriptor>> PrepareCookedControllers(std::span<const AI::AiControllerDescriptor> catalog,
+                                                                                 HeadlessCookedDecisionInput &selection,
+                                                                                 HeadlessQueryPlanCatalog &queries) const {
+            auto limits = Prefab::PrefabLimitProfile::Create(owners_->configured->prefabPolicy);
+            if (limits.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(limits.ErrorValue());
+            if (selection.provider == HeadlessDecisionProvider::Captured)
+                return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation,
+                                                      &queries, &record_->localPolicies);
+            const auto &gameplay = *owners_->gameplay;
+            const Gameplay::GameModuleLoadExpectation expected{gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
+                                                               gameplay.descriptorRevision};
+            auto image = gameplay.recordReplayImage
+                             ? Gameplay::GameModuleHost::PrepareRecordedImage(gameplay.nativeArtifact, expected, record_->sceneCancellation)
+                             : Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact, expected, record_->sceneCancellation);
+            if (image.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(image.ErrorValue());
+            record_->preparedGameplay = std::move(image).Value();
+            auto nodes = record_->preparedGameplay->AcquireDecisionNodes();
+            if (nodes.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(nodes.ErrorValue());
+            selection.environment.nodes = std::move(nodes).Value();
+            auto tests = record_->preparedGameplay->AcquireGameplayQueryTests();
+            if (tests.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(tests.ErrorValue());
+            auto captured = std::move(tests).Value();
+            if (captured.schema) {
+                if (selection.gameplayQueryTests)
+                    return Result<std::vector<AI::AiControllerDescriptor>>::Failure(
+                        MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict,
+                                  "Select either captured EQS tests or native image tests."));
+                selection.querySchema = std::move(captured.schema);
+                selection.gameplayQueryTests = std::move(captured.tests);
+            }
+            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation,
+                                                  &queries, &record_->localPolicies);
+        }
+
+        /** @brief Installs one authoritative navigation aggregate; paired client worlds stay presentation-only. */
+        Result<void> PrepareConfiguredNavigation() const {
+            const auto &selection = owners_->configured->navigation;
+            if (!selection || !IsAuthoritativeWorld())
+                return Result<void>::Success();
+            const auto &paths = owners_->configured->navigationPath;
+            const auto execution = paths ? paths->execution : Navigation::NavigationPathExecution::BestEffortJobs;
+            auto world = CreateProjectSceneNavigationWorld(*selection, execution);
+            if (world.HasError())
+                return Result<void>::Failure(world.ErrorValue());
+            record_->navigation = std::move(world).Value();
+            const bool streamCoverage = record_->mountedWorld && record_->mountedWorld->HasLiveNavigationContent();
+            return RegisterProjectSceneNavigation(*record_->scenes, *record_->navigation, selection, streamCoverage);
+        }
+
+        /** @brief Identifies the local world that owns authoritative simulation. */
+        bool IsAuthoritativeWorld() const noexcept {
+            const auto world = request_.world;
+            return world == Network::NetworkModeWorldKind::Standalone || world == Network::NetworkModeWorldKind::AuthorityServer;
+        }
+
+        /** @brief The runtime routes AI phases only for explicit authoritative execution. */
+        bool OwnsCookedDecisionExecution() const noexcept {
+            const auto &selection = owners_->configured->cookedDecisions;
+            return IsAuthoritativeWorld() && selection && selection->execution;
+        }
+
+        /** @brief Identifies the selected native mode without constructing registry or provider state. */
+        bool SelectsNativePerception() const noexcept {
+            const auto &project = owners_->configured->perceptionProject;
+            return project && project->provider == HeadlessPerceptionProvider::SelectedNativeGameplay;
+        }
+
+        /** @brief Only an authoritative host with explicit global positions owns a Perception publication. */
+        bool OwnsPerception() const noexcept {
+            return IsAuthoritativeWorld() && owners_->configured->perceptionPositions;
+        }
+
+        /** @brief Matches the real Scene's publication, preserving the prior spatial capture on dependency failure. */
+        Result<void> PublishConfiguredPerception() const {
+            if (!OwnsPerception())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Success();
+            const auto previous = record_->perception.Current();
+            const auto revision = previous && previous->Scene() == scene->RuntimeId() ? previous->Revision() : 0;
+            if (revision == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
+            auto positions = owners_->configured->perceptionPositions(*scene);
+            if (positions.HasError())
+                return Result<void>::Failure(positions.ErrorValue());
+            const auto published = record_->ai->PublishPerceptionAtSafePoint(*scene, revision + 1, positions.Value(), record_->perception,
+                                                                             owners_->configured->perceptionFiltering);
+            if (published.HasError())
+                return Result<void>::Failure(published.ErrorValue());
             return Result<void>::Success();
         }
 
@@ -315,17 +957,80 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             auto selected = *selectedGameplay_;
             selected.vfxScene = record_->vfxScene;
-            auto gameplay = record_->templates
-                                ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &scope.Value().physics,
-                                                                   request_.scene.value, selected, nullptr, &scope.Value().character)
-                                : GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value, selected,
-                                                                   &scope.Value().character);
+            selected.animation = request_.world == Network::NetworkModeWorldKind::Client ? std::weak_ptr<Runtime::SceneAnimationRuntime>{}
+                                                                                         : record_->animation;
+            if (record_->prefabReplica)
+                selected.prefabPermission = GameplayPrefabPermission::ReplicaOnly;
+            if (auto bound = BindAuthorityPrefabs(selected); bound.HasError())
+                return bound;
+            if (auto bound = BindNavigationPath(selected); bound.HasError())
+                return bound;
+            auto gameplay = ComposeConfiguredGameplay(selected, scope.Value().physics, scope.Value().character);
             if (gameplay.HasError())
                 return Result<void>::Failure(gameplay.ErrorValue());
             gameplay_ = std::move(gameplay).Value();
             record_->activeGameplay = gameplay_.get();
             record_->gameplay = gameplay_->PhysicsContext();
+            return BindAuthoritySceneTransforms();
+        }
+
+        /** @brief Installs the cooked Prefab mapping adapter for this exact authority Scene only. */
+        [[nodiscard]] Result<void> BindAuthorityPrefabs(GameplayWorldSelection &selected) const;
+
+        /** @brief Installs an explicitly configured public transform source after exact schema admission. */
+        [[nodiscard]] Result<void> BindAuthoritySceneTransforms() const;
+        [[nodiscard]] Result<void> BindReplicaSceneTransforms() const;
+
+        /** @brief Installs protected Prefab consumption on the exact client Scene, with explicit cooked asset authority. */
+        [[nodiscard]] Result<void> BindReplicaPrefabs();
+
+        /** @brief Submits only fully reconstructed records before the paired Gameplay structural phase. */
+        [[nodiscard]] Result<void> AdvanceReplicaPrefabs();
+
+        /** @brief Binds only the module's selected registered path scope to the already activated immutable provider. */
+        Result<void> BindNavigationPath(GameplayWorldSelection &selected) {
+            const auto &policy = owners_->configured->navigationPath;
+            if (!policy)
+                return Result<void>::Success();
+            const auto &motion = owners_->configured->navigationMotion;
+            const auto *crowd = motion && motion->qualified ? &motion->qualified->admitted : nullptr;
+            auto paths = HeadlessNavigationPathScope::Create(*record_->navigation, *owners_->configured->navigation, *policy,
+                                                             request_.scene, selected.moduleId,
+                                                             record_->decisionQueries && record_->decisionQueries->UsesNavigation(), crowd);
+            if (paths.HasError())
+                return Result<void>::Failure(paths.ErrorValue());
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+            if (auto actors = paths.Value()->PrepareActors(record_->native, *scene, owners_->configured->navigationActors);
+                actors.HasError())
+                return actors;
+            if (auto retained = owners_->HoldNavigationRetirement(record_); retained.HasError())
+                return retained;
+            record_->navigationPath = std::move(paths).Value();
+            selected.navigationContext = record_->navigationPath->Context();
             return Result<void>::Success();
+        }
+
+        /** @brief Activates the same prepared image or the host's ordinary gameplay route. */
+        Result<std::unique_ptr<GameplayWorldComposition>> ComposeConfiguredGameplay(const GameplayWorldSelection &selected,
+                                                                                    Physics::PhysicsWorld &world,
+                                                                                    Character::CharacterWorld &character) const {
+            if (record_->preparedGameplay) {
+                const auto &input = *owners_->configured;
+                std::optional<GameplayPreparedPerception> perception;
+                if (SelectsNativePerception())
+                    perception.emplace(GameplayPreparedPerception{record_->perception, *input.perceptionProject->policy->native});
+                const auto execution = ConfiguredDecisionExecution();
+                const GameplayPreparedDecisions prepared{*record_->preparedGameplay, record_->sceneCancellation, *record_->ai, execution,
+                                                         perception ? &*perception : nullptr};
+                return GameplayWorldComposition::CreatePrepared(*record_->scenes, record_->templates.get(), world, request_.scene.value,
+                                                                selected, character, prepared);
+            }
+            return record_->templates
+                       ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &world, request_.scene.value, selected,
+                                                          nullptr, &character)
+                       : GameplayWorldComposition::Create(*record_->scenes, &world, request_.scene.value, selected, &character);
         }
 
         /** @brief Records actual participation before a fallible gameplay source callback can partially stage work. */
@@ -336,23 +1041,345 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (const auto tracked = owners_->fixed->TrackGameplay(record_, context); tracked.HasError())
                     return tracked;
             }
-            return gameplay_->FixedTick(context);
+            const auto &replay = owners_->configured->decisionReplay;
+            auto *observed = replay ? replay->ObserveGameplay(*record_, context) : nullptr;
+            return gameplay_->FixedTick(context, {}, observed);
+        }
+
+        /** @brief Executes the opted-in canonical AI phases before configured gameplay on the same fixed clock. */
+        Result<void> RunConfiguredDecisions(const Runtime::FixedStepContext &context) const {
+            if (!OwnsCookedDecisionExecution())
+                return Result<void>::Success();
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            if (record_->decisionTick != 0 && record_->decisionTick == context.simulationTick)
+                return Result<void>::Success();
+            if (auto relevance = PublishDecisionRelevance(context); relevance.HasError())
+                return relevance;
+
+            struct ResetMotionPhase {
+                std::uint64_t &tick;
+
+                ~ResetMotionPhase() {
+                    tick = 0;
+                }
+            } reset{record_->motionEvaluationTick};
+
+            record_->motionEvaluationTick = context.simulationTick;
+            auto result = record_->decisionQueries ? RunConfiguredDecisionQueries(context.simulationTick)
+                                                   : EvaluateConfiguredDecisions(context.simulationTick);
+            if (result.HasValue())
+                record_->decisionTick = context.simulationTick;
+            return result;
+        }
+
+        /** @brief Translates one authority snapshot to the live scheduler's atomic relevance batch. */
+        Result<void> PublishDecisionRelevance(const Runtime::FixedStepContext &context) const {
+            const auto &selection = *owners_->configured->cookedDecisions;
+            if (!selection.relevance && !selection.simulationAnchor.IsValid())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+            if (selection.simulationAnchor.IsValid())
+                return PublishAnchorRelevance(*scene, selection.simulationAnchor, context.cancellation);
+            const auto observed = selection.relevance(*scene, context.simulationTick);
+            if (observed.HasError())
+                return Result<void>::Failure(observed.ErrorValue());
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            if (!scene->IsCurrent())
+                return Result<void>::Failure(MakeError(AI::AIErrors::SceneActivationInvalid));
+            return ApplyDecisionRelevance(*scene, observed.Value(), selection.execution->scheduler.maximumAgents);
+        }
+
+        /** @brief Reserves only the buffers needed by the selected owner source. */
+        void PrepareDecisionRelevance(const HeadlessCookedDecisionInput &selection) const {
+            const auto capacity = selection.execution->scheduler.maximumAgents;
+            if (selection.relevance)
+                record_->decisionRelevance.Reserve(capacity);
+            if (selection.simulationAnchor.IsValid()) {
+                record_->decisionRelevance.agents.resize(capacity);
+                record_->decisionRelevance.updates.reserve(capacity);
+            }
+        }
+
+        /** @brief Computes the full signed-coordinate difference without overflow or floating-point cancellation. */
+        static std::uint64_t AxisDistance(const std::int64_t first, const std::int64_t second) noexcept {
+            const auto [low, high] = std::minmax(first, second);
+            return static_cast<std::uint64_t>(high) - static_cast<std::uint64_t>(low);
+        }
+
+        /** @brief Measures rounded-down Euclidean millimetres in the common Scene frame, saturating at the range limit. */
+        static std::uint64_t AnchorDistance(const Math::WorldCoordinate64 &anchor, const Math::WorldCoordinate64 &position) noexcept {
+            const auto a = anchor.Millimeters();
+            const auto p = position.Millimeters();
+            const auto distance = std::hypot(static_cast<long double>(AxisDistance(a[0], p[0])),
+                                             static_cast<long double>(AxisDistance(a[1], p[1])),
+                                             static_cast<long double>(AxisDistance(a[2], p[2])));
+            constexpr auto limit = std::numeric_limits<std::uint64_t>::max();
+            return distance < static_cast<long double>(limit) ? static_cast<std::uint64_t>(distance) : limit;
+        }
+
+        /** @brief Samples exact scheduled owners relative to the live authored anchor. Missing evidence preserves Full. */
+        Result<void> PublishAnchorRelevance(const Runtime::RuntimeSceneView &scene, const Runtime::SceneObjectId anchor,
+                                            const CancellationToken &cancellation) const {
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            auto &buffer = record_->decisionRelevance;
+            const auto copied = scheduler.Value()->CopyLiveRegistrationsAtSafePoint(buffer.agents);
+            if (copied.HasError())
+                return Result<void>::Failure(copied.ErrorValue());
+            const auto anchorEntity = scene.Find(anchor);
+            const auto anchorPosition = anchorEntity ? ReadAnchorPosition(scene, *anchorEntity) : std::nullopt;
+            buffer.updates.clear();
+            const auto capability = record_->ai->CapabilityAtSafePoint();
+            for (const auto handle : std::span(buffer.agents).first(copied.Value()))
+                buffer.updates.push_back({handle, {.anchorDistanceMillimeters = AnchorDistanceForAgent(scene, capability, handle,
+                                                                                                     anchorPosition)}});
+            if (cancellation.IsCancellationRequested())
+                return JobCancelled();
+            return scheduler.Value()->SetRelevanceBatchAtSafePoint(buffer.updates);
+        }
+
+        /** @brief Captures a pose in the shared Scene-relative frame, including the entity's parents. */
+        static std::optional<Math::WorldCoordinate64> ReadAnchorPosition(const Runtime::RuntimeSceneView &scene,
+                                                                         const Runtime::EntityRef entity) {
+            const auto point = CaptureProjectSceneWorldPosition(scene, entity, {});
+            return point.HasValue() ? std::optional{point.Value()} : std::nullopt;
+        }
+
+        /** @brief Leaves distance unknown when either participant lacks a valid current pose. */
+        static std::optional<std::uint64_t> AnchorDistanceForAgent(const Runtime::RuntimeSceneView &scene,
+                                                                  const AI::AiRuntimeCapability &capability, const AI::AgentHandle handle,
+                                                                  const std::optional<Math::WorldCoordinate64> &anchor) {
+            if (!anchor)
+                return std::nullopt;
+            const auto entity = capability.ResolveAgentOwner(handle);
+            if (entity.HasError())
+                return std::nullopt;
+            const auto position = ReadAnchorPosition(scene, entity.Value());
+            return position ? std::optional{AnchorDistance(*anchor, *position)} : std::nullopt;
+        }
+
+        /** @brief Resolves and orders the bounded snapshot without mutating the scheduler during staging. */
+        Result<void> ApplyDecisionRelevance(const Runtime::RuntimeSceneView &scene, std::span<const HeadlessDecisionRelevance> observed,
+                                            std::size_t maximumAgents) const {
+            if (observed.size() > maximumAgents)
+                return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
+            auto &buffer = record_->decisionRelevance;
+            buffer.updates.clear();
+            buffer.staged.clear();
+            const auto capability = record_->ai->CapabilityAtSafePoint();
+            for (const auto &fact : observed) {
+                const auto handle = capability.ResolveAgent(fact.agent);
+                if (handle.HasError())
+                    return Result<void>::Failure(handle.ErrorValue());
+                buffer.updates.push_back({handle.Value(), ProjectDecisionRelevance(scene, fact)});
+                if (fact.streamingRegion)
+                    buffer.staged.push_back({handle.Value(), fact});
+            }
+            std::ranges::sort(buffer.updates, {}, &AI::AiDecisionRelevanceUpdate::agent);
+            if (const auto refreshed = RefreshRetainedRegions(scene, capability, maximumAgents); refreshed.HasError())
+                return refreshed;
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            auto applied = scheduler.Value()->SetRelevanceBatchAtSafePoint(buffer.updates);
+            if (applied.HasValue())
+                buffer.retained.swap(buffer.staged);
+            return applied;
+        }
+
+        /** @brief Rechecks omitted observations while preserving only exact live agent generations. */
+        Result<void> RefreshRetainedRegions(const Runtime::RuntimeSceneView &scene, const AI::AiRuntimeCapability &capability,
+                                           const std::size_t maximumAgents) const {
+            auto &buffer = record_->decisionRelevance;
+            if (buffer.retained.empty())
+                return Result<void>::Success();
+            const std::span<const AI::AiDecisionRelevanceUpdate> supplied{buffer.updates};
+            for (const auto &region : buffer.retained) {
+                if (std::ranges::binary_search(supplied, region.agent, {}, &AI::AiDecisionRelevanceUpdate::agent))
+                    continue;
+                const auto live = capability.ResolveAgent(region.fact.agent);
+                if (live.HasError() || live.Value() != region.agent)
+                    continue;
+                if (buffer.updates.size() == maximumAgents)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
+                buffer.updates.push_back({region.agent, ProjectDecisionRelevance(scene, region.fact)});
+                buffer.staged.push_back(region);
+            }
+            std::ranges::sort(buffer.updates, {}, &AI::AiDecisionRelevanceUpdate::agent);
+            return Result<void>::Success();
+        }
+
+        /** @brief Combines observed gameplay relevance with exact committed streaming membership. */
+        AI::AiDecisionRelevance ProjectDecisionRelevance(const Runtime::RuntimeSceneView &scene,
+                                                         const HeadlessDecisionRelevance &fact) const noexcept {
+            auto relevance = fact.relevance;
+            if (const auto &region = fact.streamingRegion; region && record_->mountedWorld &&
+                record_->mountedWorld->IsLiveRegionPublished(scene, region->occurrence, region->fence))
+                relevance.activeSimulationRegion = true;
+            return relevance;
+        }
+
+        /** @brief Drives the exact Scene and its current origin through all query phases. */
+        Result<void> RunConfiguredDecisionQueries(std::uint64_t tick) const {
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
+            Math::WorldCoordinate64 origin;
+            if (record_->mountedWorld) {
+                const auto lease = record_->mountedWorld->Origin().Lease();
+                if (lease.HasError())
+                    return Result<void>::Failure(lease.ErrorValue());
+                const auto frame = lease.Value().Get();
+                if (frame.HasError())
+                    return Result<void>::Failure(frame.ErrorValue());
+                origin = frame.Value().Origin();
+            }
+            const SceneQueryNavigationSource navigation{record_->navigationPath.get(),
+                                                        [](const void *owner, const Runtime::RuntimeSceneView &, Runtime::EntityRef,
+                                                           const std::uint64_t tick) noexcept -> std::optional<AI::QueryNavigationAccess> {
+                const auto *paths = static_cast<const HeadlessNavigationPathScope *>(owner);
+                return paths ? paths->ReadQueryAccess(tick) : std::nullopt;
+            }};
+            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick, &record_->native, navigation);
+        }
+
+        /** @brief Executes the registered decision phases for worlds without authored query tasks. */
+        Result<void> EvaluateConfiguredDecisions(std::uint64_t tick) const {
+            const auto scheduler = record_->ai->TaskSchedulerAtSafePoint();
+            if (scheduler.HasError())
+                return Result<void>::Failure(scheduler.ErrorValue());
+            if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError())
+                return Result<void>::Failure(evaluated.ErrorValue());
+            const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick);
+            return committed.HasError() ? Result<void>::Failure(committed.ErrorValue()) : Result<void>::Success();
+        }
+
+        /** @brief Polls native observations once on the configured authority's exact fixed tick and Scene. */
+        Result<void> RunConfiguredPerception(const Runtime::FixedStepContext &context) const {
+            if (!OwnsPerception() || (!owners_->configured->perceptionExecution && !SelectsNativePerception()))
+                return Result<void>::Success();
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            const auto polled = Gameplay::PollPerceptionWithGameplay(*record_->ai, *scene, record_->perception, context.simulationTick,
+                                                                    context.fixedDelta, owners_->configured->perceptionEvents);
+            if (polled.HasError())
+                return polled;
+            auto projected = record_->ai->PublishPerceptionBlackboardsAtBlackboardSync(*scene, record_->perception, context.simulationTick);
+            if (projected.HasValue() && owners_->configured->decisionReplay)
+                owners_->configured->decisionReplay->ObserveStimuli(*record_, context, *scene);
+            return projected;
+        }
+
+        /** @brief Publishes path results and consumes the preceding Character result before decision evaluation. */
+        Result<void> PrepareNavigationTick(const Runtime::FixedStepContext &context) {
+            auto *paths = record_->navigationPath.get();
+            if (!paths)
+                return Result<void>::Success();
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            const auto &replay = owners_->configured->decisionReplay;
+            auto *observed = replay ? replay->ObserveNavigation(*record_, context) : nullptr;
+            auto committed = paths->CommitAtFixedTick(context.simulationTick, observed);
+            if (committed.HasError() || !record_->decisionMotion)
+                return committed;
+            if (context.simulationTick == 0)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPhaseInvalid));
+            paths->ObserveMotion(context.simulationTick - 1);
+            paths->BeginMotionTick(context.simulationTick, static_cast<float>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0F);
+            return Result<void>::Success();
+        }
+
+        /** @brief Prepares the selected staged crowd work after decision intent dispatch. */
+        Result<void> DispatchConfiguredMotion(const Runtime::FixedStepContext &context) {
+            if (!record_->decisionMotion || !owners_->configured->navigationMotion->UsesStagedMotion())
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto &configuration = *owners_->configured;
+            return record_->navigationPath->DispatchMotion(*scene, *configuration.navigationMotion,
+                                                           configuration.cookedDecisions->execution->jobs, context.cancellation);
+        }
+
+        /** @brief Submits the selected actors' safe motion after behavior and Animation evaluation. */
+        Result<void> SubmitConfiguredMotion(const Runtime::FixedStepContext &context) {
+            if (!record_->decisionMotion)
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            const auto &policy = *owners_->configured->navigationMotion;
+            if (!policy.UsesStagedMotion())
+                return record_->navigationPath->SubmitMotion(*scene, policy);
+            record_->navigationPath->PublishMotion(*scene, policy, context.cancellation);
+            return Result<void>::Success();
+        }
+
+        /** @brief Runs the fixed stages between Navigation dispatch and native motion publication. */
+        Result<void> RunMotionOverlap(const Runtime::FixedStepContext &context) {
+            if (auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
+                return gameplay;
+            if (record_->animation)
+                return owners_->fixed->Evaluate(record_, context);
+            return Result<void>::Success();
         }
 
         /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
         Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
             if (!configuredActivated_ || !record_ || record_->closeRequested)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
-            if (const auto gameplay = RunConfiguredGameplay(context); gameplay.HasError())
-                return gameplay;
-            if (record_->animation) {
-                auto animation = owners_->fixed->Evaluate(record_, context);
-                if (animation.HasError())
-                    return animation;
+            if (OwnsCookedDecisionExecution() && owners_->configured->decisionReplay && owners_->fixed &&
+                request_.world == Network::NetworkModeWorldKind::Standalone)
+                owners_->fixed->ArmDecisionReplay(*record_, context);
+            if (auto navigation = PrepareNavigationTick(context); navigation.HasError())
+                return navigation;
+            if (const auto perception = RunConfiguredPerception(context); perception.HasError())
+                return perception;
+            if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())
+                return decisions;
+            if (auto dispatched = DispatchConfiguredMotion(context); dispatched.HasError())
+                return dispatched;
+            if (auto overlap = RunMotionOverlap(context); overlap.HasError()) {
+                if (record_->decisionMotion)
+                    record_->navigationPath->DiscardMotionFeedback();
+                return overlap;
+            }
+            if (auto motion = SubmitConfiguredMotion(context); motion.HasError()) {
+                if (record_->decisionMotion)
+                    record_->navigationPath->DiscardMotionFeedback();
+                return motion;
+            }
+            auto advanced = AdvanceConfiguredNative(context);
+            if (advanced.HasError()) {
+                if (record_->decisionMotion)
+                    record_->navigationPath->DiscardMotionFeedback();
+                RetireAi();
+                if (gameplay_)
+                    gameplay_->Shutdown();
+                return advanced;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Keeps authoritative Character candidates under the same scheduler fence as their Animation owner. */
+        Result<void> AdvanceConfiguredNative(const Runtime::FixedStepContext &context) {
+            if (record_->animation && record_->request.world != Network::NetworkModeWorldKind::Client) {
+                const auto scene = record_->scenes->ActiveScene();
+                if (!scene)
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+                return record_->native.StageAnimationFixedTick(*scene, *record_->animation, context);
             }
             auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
-            if (advanced.HasError() && gameplay_)
-                gameplay_->Shutdown();
+            if (advanced.HasValue() && record_->navigationPath)
+                record_->navigationPath->DispatchAtFixedTick(context.simulationTick, context.cancellation);
             return advanced;
         }
 

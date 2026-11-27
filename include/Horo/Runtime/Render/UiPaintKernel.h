@@ -8,8 +8,11 @@
 #include "Horo/Runtime/Render/ShaderReflection.h"
 
 #include <memory>
+#include <string_view>
 
 namespace Horo::Render {
+    inline constexpr std::string_view UiPaintShaderSourceIdentity{"horo/runtime/ui_paint.hlsl"};
+
     /** @brief Exact two-stage artifact with its same-boundary immutable reflection, prepared through the existing locked cook route. */
     struct CookedUiPaintKernel final {
         ShaderManifest manifest;
@@ -25,11 +28,23 @@ namespace Horo::Render {
     class IResidentUiPaintKernel {
     public:
         virtual ~IResidentUiPaintKernel() = default;
+
+        /** @brief Indicates that the selected encoder needs a graph-owned neutral color sample for omitted texture bindings.
+         * @return True when a neutral sampled texture must be declared in every admitted pass using this kernel. */
+        [[nodiscard]] virtual bool RequiresGraphNeutralSample() const noexcept {
+            return false;
+        }
     };
 
     /** @brief Creates the fixed raster interface without compiling or selecting a backend.
      * @param target Explicit owning cook target. @return Inert exact vertex/fragment interface manifest. */
     [[nodiscard]] ShaderManifest MakeUiPaintShaderManifest(const ShaderTargetRequirement &target);
+
+    /** @brief Returns the canonical explicit Vulkan 1.3/SPIR-V 1.6 target consumed by the UI native owner. */
+    [[nodiscard]] ShaderTargetRequirement UiPaintVulkanTarget() noexcept;
+
+    /** @brief Returns every authored Vulkan resource/member name for compiler-produced layout normalization. */
+    [[nodiscard]] std::vector<ShaderReflectionBindingName> UiPaintVulkanReflectionNames();
 
     /** @brief Validates the exact cooked interface, target, artifact envelope and normalized reflection.
      * @param kernel Owned cook evidence and target attachment formats. @param backend Selected native backend family.

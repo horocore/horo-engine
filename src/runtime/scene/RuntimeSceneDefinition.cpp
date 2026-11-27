@@ -27,6 +27,7 @@ namespace Horo::Runtime {
         std::vector<RuntimeEntityDefinition> entities = std::vector<RuntimeEntityDefinition>(std::size_t{0});
         std::vector<SceneAssetDependency> assetDependencies = std::vector<SceneAssetDependency>(std::size_t{0});
         std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence = std::vector<TriggerVolumeMigrationEvidence>(std::size_t{0});
+        std::optional<std::vector<SceneChildDefinitionReference>> childScenes;
     };
 
     namespace {
@@ -306,6 +307,18 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Requires each referenced Runtime UI document before the Scene activation transaction starts. */
+        Result<void> RequireCanvasAssets(SceneDefinitionBuilder &builder, std::span<const RuntimeEntityDefinition> entities) {
+            const auto type = Assets::AssetTypeId::Parse(Ui::UiDocumentAssetTypeName);
+            for (const auto &entity : entities) {
+                if (const auto &canvas = entity.components.uiCanvas; canvas) {
+                    if (auto required = builder.RequireAsset({canvas->canvas.asset, type.Value()}); required.HasError())
+                        return required;
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Requires exact immutable source and optional retarget identities, never a live instance or pose. */
         Result<void> RequireAnimationAssets(SceneDefinitionBuilder &builder, const Animation::AnimationAuthoringComponent &component) {
             const auto require = [&builder](Assets::AssetId asset, std::string_view type) {
@@ -418,6 +431,12 @@ namespace Horo::Runtime {
                         : std::span<const TriggerVolumeMigrationEvidence>{};
     }
 
+    /** @copydoc RuntimeSceneDefinition::ChildScenes */
+    std::span<const SceneChildDefinitionReference> RuntimeSceneDefinition::ChildScenes() const noexcept {
+        return storage_ && storage_->childScenes ? std::span<const SceneChildDefinitionReference>{*storage_->childScenes}
+                                                 : std::span<const SceneChildDefinitionReference>{};
+    }
+
     /** @copydoc SceneDefinitionBuilder::SceneDefinitionBuilder */
     SceneDefinitionBuilder::SceneDefinitionBuilder(SceneDefinitionId id, SceneDefinitionRevision revision) noexcept
         : id_(id), revision_(revision) {}
@@ -499,6 +518,29 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc SceneDefinitionBuilder::RequireChildScene */
+    Result<void> SceneDefinitionBuilder::RequireChildScene(const SceneChildDefinitionReference &child) {
+        if (child.mode != SceneInstanceMode::Activated)
+            return Failure(SceneErrors::BaselineUnsupported, "Only direct Activated child references are supported.");
+        if (!child.occurrence.IsValid() || !child.asset.IsValid() || !child.definition.IsValid() || child.definition == id_ ||
+            child.revision.value == 0 || child.payloadDigest == Sha256Digest{})
+            return Failure(SceneErrors::InvalidDefinition, "Scene child requires exact nonzero identity, revision and digest.");
+        auto &storage = MutableStorage().childScenes;
+        if (!storage)
+            storage.emplace(std::size_t{0});
+        auto &children = *storage;
+        if (children.size() >= MaximumActivatedSceneInstances)
+            return Failure(SceneErrors::BaselineCapacityExceeded, "Scene child inventory exceeds capacity.");
+        for (const auto &existing : children) {
+            if (existing.occurrence == child.occurrence || (existing.definition == child.definition && existing.asset != child.asset) ||
+                (existing.asset == child.asset && (existing.definition != child.definition || existing.revision != child.revision ||
+                                                   existing.payloadDigest != child.payloadDigest)))
+                return Failure(SceneErrors::InvalidDefinition, "Scene child occurrence or target evidence conflicts.");
+        }
+        AppendDetached(children, child);
+        return Result<void>::Success();
+    }
+
     /** @copydoc ValidateRuntimeEntityDefinition */
     Result<void> ValidateRuntimeEntityDefinition(const RuntimeEntityDefinition &entity) {
         if (!entity.object.IsValid())
@@ -530,12 +572,16 @@ namespace Horo::Runtime {
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
         if (auto assets = RequireCharacterAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
+        if (auto assets = RequireCanvasAssets(*this, data.entities); assets.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
         if (auto assets = RequireAnimationAssets(*this, data.entities); assets.HasError())
             return Result<RuntimeSceneDefinition>::Failure(assets.ErrorValue());
         if (auto evidence = ValidateTriggerEvidence(data.entities, data.triggerVolumeEvidence); evidence.HasError())
             return Result<RuntimeSceneDefinition>::Failure(evidence.ErrorValue());
 
         std::ranges::sort(data.triggerVolumeEvidence, {}, &TriggerVolumeMigrationEvidence::object);
+        if (data.childScenes)
+            std::ranges::sort(*data.childScenes, {}, &SceneChildDefinitionReference::occurrence);
 
         std::ranges::sort(data.assetDependencies, {}, [](const SceneAssetDependency &dependency) {
             return dependency.id;

@@ -21,6 +21,14 @@ namespace Horo::Editor::Theme {
 namespace Horo::Editor {
     struct SourceSyntax;
     struct CodeEditorSettings;
+    class SourceReviewOverlay;
+
+    /** @brief Display status of the selected revision-bound source review. */
+    enum class SourceReviewStatus : std::uint8_t {
+        None,
+        Ready,
+        Conflicted
+    };
 
     /** @brief Half-open, revision-relative document byte selection. */
     struct SourceWidgetSelection final {
@@ -92,6 +100,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool HasHighlight(std::uint64_t revision) const noexcept;
         /** @brief Returns exact document-byte selection. @return Empty selection if detached. */
         [[nodiscard]] SourceWidgetSelection Selection() const;
+        /** @brief Reads a nonempty selected range only from the unchanged mirror of this exact current source. */
+        [[nodiscard]] std::optional<SourceContextRange> ReadSelection(const SourceDocumentSnapshot &snapshot) const;
         /** @brief Captures this view's current presentation state for semantic editing/search commands.
          * @return Exact document byte offsets, scroll and host-issued view identity.
          */
@@ -125,6 +135,17 @@ namespace Horo::Editor {
          * @return False without mutation for stale, invalid or oversized input.
          */
         [[nodiscard]] bool Decorate(std::uint64_t revision, std::span<const SourceWidgetDecoration> decorations);
+
+        /** @brief Presents one exact proposal overlay without modifying the editing mirror or selection. */
+        [[nodiscard]] bool PresentReview(const SourceReviewOverlay &overlay);
+        /** @brief Removes only the review projection, preserving ordinary diagnostics. */
+        void ClearReview();
+        /** @brief Shows a conflict for a selected review that no longer matches the source publication. */
+        void ShowReviewConflict();
+        /** @brief Reads the active review state against the current document publication. */
+        [[nodiscard]] SourceReviewStatus ReviewStatus() const noexcept;
+        /** @brief Selects and reveals the previous or next review location, wrapping around the file. */
+        [[nodiscard]] bool NavigateReview(bool forward);
 
     private:
         struct Storage;

@@ -408,21 +408,26 @@ facts provider and worker factory, and query the service's typed snapshots;
 presentation sessions do not own a job. `HoroEngine::ReleaseProcess` owns
 `ReleaseProcess.h` and adapts stage-scoped child invocations to the existing
 Platform process runner. Existing preflight, profile and target-matrix callers
-have no signature migration. New stage workers implement the typed handoffs and
-keep their temporary resources until the attempt completes or cancellation is
-acknowledged. The three generated standalone public-header consumers verify
-ownership and transitive dependencies.
+retain their existing input contracts. Final detached release verification is
+opt-in at the Application manifest and candidate boundaries. The host supplies
+publisher trust explicitly, and the installed host shares the same signature
+document and cryptographic owners. Application has no dependency on Security or
+Platform. Stage workers implement typed handoffs and keep temporary resources
+until completion or acknowledged cancellation. The generated standalone
+public-header consumers verify ownership and transitive dependencies.
 
 ## REL-001.22 GitHub Releases Host Boundary
 
 `HoroEngine::ReleaseGitHub` owns the provider-neutral release publication
 adapter's GitHub identity contract. `HoroEngine::ReleaseGitHubCli` owns the
 additive `GitHubReleaseCliClient.h` host adapter and depends on ReleaseGitHub
-and Platform for bounded, shell-free GitHub CLI invocation. Existing release
-application callers have no signature migration. Hosts that opt into this
-destination compose the CLI client with their process runner and authenticated
-`gh` environment; the generated standalone public-header consumer verifies its
-transitive dependency boundary.
+and Platform for bounded, shell-free GitHub CLI invocation. Existing
+manifest-only callers keep their commit interface. A client publishing
+detached final metadata implements `CommitVerified` and verifies both
+finalized metadata identities before channel promotion. Hosts compose the
+CLI client with their process runner and authenticated `gh` environment.
+The generated standalone public-header consumer verifies its transitive
+dependency boundary.
 
 ## MCP-001.2 Session Boundary
 
@@ -567,6 +572,13 @@ pass the cooperative token to their injected `IExternalProcessRunner`. Native
 handles and termination policy stay private to Platform. No public header changes
 owner or include spelling; the generated CliHost and Platform header consumers
 continue to compile independently.
+
+Long-lived protocol adapters may supply an `IProcessByteChannel` to the same
+runner on an owned worker. The runner preserves raw stdout and partial stdin
+writes without blocking on pipe capacity. The adapter bounds its own queues
+and can refuse stdout to terminate the process tree. Stderr remains separately
+bounded by the existing line capture. Existing line-oriented callers leave the
+channel empty and keep their original behavior.
 
 ## Build-Tree Contract
 

@@ -1,6 +1,6 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserGrid.h"
 
 namespace Horo::Editor {
     /** @copydoc AssetBrowserPane::Attach */
@@ -11,6 +11,11 @@ namespace Horo::Editor {
     /** @copydoc AssetBrowserPane::Detach */
     void AssetBrowserPane::Detach() noexcept {
         m_cardRenderer.Detach();
+    }
+
+    /** @copydoc AssetBrowserPane::Reveal */
+    void AssetBrowserPane::Reveal(const std::string_view absolutePath) {
+        m_interactionSession.RevealSelection(absolutePath);
     }
 
     /** @copydoc AssetBrowserPane::Draw */

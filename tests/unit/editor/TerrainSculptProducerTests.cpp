@@ -1,5 +1,5 @@
-#include "terrain/TerrainSculptProducer.h"
-#include "terrain/TerrainViewportPicking.h"
+#include "terrain/brushes/TerrainSculptProducer.h"
+#include "terrain/viewport/TerrainViewportPicking.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

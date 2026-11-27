@@ -36,13 +36,23 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::vector<std::string> calls;
         std::vector<TaskHandle> tasks;
         std::vector<TaskHandle> abortedTasks;
+        std::vector<AiTaskCancellationReason> abortReasons;
+        AiTaskContinuation continuation;
+        TaskHandle lastResumeTask;
+        std::optional<AiTaskResumeReason> lastResumeReason;
         std::uint64_t succeedTick{2};
         std::size_t factories{};
         std::size_t starts{};
         std::size_t resumes{};
+        std::size_t services{};
         std::size_t aborts{};
         std::size_t cleanups{};
+        AiTaskState lastTerminal{AiTaskState::Idle};
+        std::optional<Error> lastFailure;
         std::function<void()> onStart;
+        std::function<void()> onAbort;
+        std::optional<Result<AiTaskState>> startOutcome;
+        std::optional<Result<AiTaskState>> resumeOutcome;
     };
 
     class Provider final : public IBehaviorTreeExecutor {
@@ -53,26 +63,39 @@ namespace Horo::AI::DecisionGraphTestSupport {
             ++probe_.starts;
             probe_.calls.push_back("start:" + std::to_string(operation.taskDefinition.Value()));
             probe_.tasks.push_back(operation.task);
+            probe_.continuation = context.continuation;
             if (probe_.onStart)
                 probe_.onStart();
+            if (!immediate_ && probe_.startOutcome)
+                return *probe_.startOutcome;
             return Result<AiTaskState>::Success((immediate_ || context.tick >= probe_.succeedTick) ? AiTaskState::Succeeded
                                                                                                    : AiTaskState::Running);
         }
 
-        Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context, const AiTaskOperationContext &) noexcept override {
+        Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context,
+                                   const AiTaskOperationContext &operation) noexcept override {
             ++probe_.resumes;
+            probe_.lastResumeTask = operation.task;
+            probe_.lastResumeReason = context.reason;
+            if (!immediate_ && probe_.resumeOutcome)
+                return *probe_.resumeOutcome;
             return Result<AiTaskState>::Success((immediate_ || context.tick >= probe_.succeedTick) ? AiTaskState::Succeeded
                                                                                                    : AiTaskState::Running);
         }
 
-        void Abort(const AiTaskOperationContext &operation, AiTaskCancellationReason) noexcept override {
+        void Abort(const AiTaskOperationContext &operation, AiTaskCancellationReason reason) noexcept override {
             ++probe_.aborts;
             probe_.abortedTasks.push_back(operation.task);
+            probe_.abortReasons.push_back(reason);
             probe_.calls.push_back("abort");
+            if (probe_.onAbort)
+                probe_.onAbort();
         }
 
-        void Cleanup(const AiTaskOperationContext &, const AiTaskTerminalResult &) noexcept override {
+        void Cleanup(const AiTaskOperationContext &, const AiTaskTerminalResult &result) noexcept override {
             ++probe_.cleanups;
+            probe_.lastTerminal = result.state;
+            probe_.lastFailure = result.failure ? std::optional{result.failure->cause} : std::nullopt;
             probe_.calls.push_back("cleanup");
         }
 
@@ -81,6 +104,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         }
 
         Result<void> Service(const BehaviorTreeEvaluationContext &) noexcept override {
+            ++probe_.services;
             return Result<void>::Success();
         }
 
@@ -202,7 +226,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         return {Graph(graph), 1, SchemaId(), {1, 1}, Location(), MakeIdentity<TaskId>(10000 + graph), std::move(machine)};
     }
 
-    struct Fixture final {
+    struct Fixture {
         struct ProviderOwner final {
             Probe probe;
             std::atomic_bool admission{true};

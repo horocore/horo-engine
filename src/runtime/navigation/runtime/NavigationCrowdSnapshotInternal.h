@@ -22,6 +22,7 @@ namespace Horo::Navigation::Detail {
         NavigationDynamicRegistryRevision dynamicRevision;
         std::uint64_t captureTick{};
         AvoidanceExecutionMode mode{AvoidanceExecutionMode::Disabled};
+        NavigationCrowdDeterministicStamp deterministicStamp;
         std::vector<NavigationCrowdAgentFact> agents;
         std::vector<NavigationCrowdProfileFacts> profiles;
         std::vector<NavigationAvoidanceLayerDescriptor> avoidanceLayers;

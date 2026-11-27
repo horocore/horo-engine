@@ -23,23 +23,28 @@ namespace Horo::Editor {
     public:
         static constexpr std::size_t SlotCount = 4;
         /** @brief Owns frontend-issued handles only. @param frontend Existing selected renderer. @param port Actual private
-         * completion/writes. */
-        EditorViewportColorPipeline(Render::RenderFrontend &frontend, EditorViewportColorResourcePort port) noexcept;
+         * completion/writes. @param frameSlots Number of slots provided by the selected render owner. */
+        EditorViewportColorPipeline(Render::RenderFrontend &frontend, EditorViewportColorResourcePort port,
+                                    std::size_t frameSlots) noexcept;
         /** @brief Releases owned resources through ordinary deferred frontend retirement. */
         ~EditorViewportColorPipeline();
         EditorViewportColorPipeline(const EditorViewportColorPipeline &) = delete;
         EditorViewportColorPipeline &operator=(const EditorViewportColorPipeline &) = delete;
-        /** @brief Realizes genuine cold programs, lookup tables and bounded history storage. @param inputs Host-decoded immutable family.
+        /** @brief Realizes cold programs, lookup tables and history storage when the selected package supports automatic exposure. @param
+         * inputs Host-decoded immutable family.
          * @return Original typed failure; no partial owner is published by its caller. */
         [[nodiscard]] Result<void> Initialize(const EditorViewportColorInputs &inputs);
         /** @brief Selects authored settings without mutating an in-flight candidate. @param settings Exact next settings.
          * @return Validated admission or original failure; unchanged settings preserve history. */
         [[nodiscard]] Result<void> RequestSettings(const Render::ExposureSettings &settings);
+        /** @brief Validates a preview for subsequent candidates without changing a prepared frame. */
+        [[nodiscard]] Result<void> RequestAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &preview);
         /** @brief Prepares one next submitted-view candidate without advancing acceptance. @param view Frontend-issued view.
          * @param extent Exact unexposed scene shape. @param deltaSeconds Host-selected clock delta in [0,1].
          * @return Success, typed pending/capacity or malformed input. */
         [[nodiscard]] Result<void> Prepare(Render::RenderViewId view, Render::FramebufferExtent extent, float deltaSeconds);
-        /** @brief Publishes candidate metadata only after the actual host accepted its native frame. @param accepted Actual Present result.
+        /** @brief Publishes candidate metadata only after the actual host accepted its native graph. @param accepted Actual submission
+         * acceptance.
          * @details False cancels only the unsent candidate and preserves the last accepted state. */
         void Finish(bool accepted) noexcept;
         /** @brief Marks only successful actual graph encoding, before host acceptance. */
@@ -48,6 +53,12 @@ namespace Horo::Editor {
          * @param scene Exact canonical scene view. @param display Exact display-linear view.
          * @return Original bounded resource/material failure. */
         [[nodiscard]] Result<void> PrepareBindings(Render::RenderTextureViewHandle scene, Render::RenderTextureViewHandle display);
+
+        /** @brief Returns the current bounded ring index for matching a cached graph to these exact uniforms. */
+        [[nodiscard]] std::size_t CandidateSlot() const noexcept {
+            return candidateSlot_;
+        }
+
         /** @brief Returns current scene/encode material leases. @param role Zero scene or one encode. @return Synchronous borrow. */
         [[nodiscard]] const std::shared_ptr<const Render::ResidentMaterialBinding> &Material(std::size_t role) const noexcept;
         /** @brief Returns actual fullscreen mesh and its owned vertex/index handles. @return Exact frontend-issued recipe. */
@@ -99,12 +110,15 @@ namespace Horo::Editor {
         /** @brief Publishes staged final states only at actual encoded-and-accepted host completion. */
         void PublishBufferStates() noexcept;
 
+        static constexpr std::size_t SceneBindingCount = 3;  // Direct scene plus a pair of temporal history outputs.
+        using PassBindings = std::array<std::array<std::shared_ptr<const Render::ResidentMaterialBinding>, SlotCount + 1>, 2>;
+
         struct Slot final {
             Render::RenderBufferHandle histogram;
             Render::RenderBufferHandle seed;
             Render::RenderBufferHandle output;
             std::array<Render::RenderBufferHandle, 2> uniform;
-            std::array<std::array<std::shared_ptr<const Render::ResidentMaterialBinding>, SlotCount + 1>, 2> bindings;
+            std::array<PassBindings, SceneBindingCount> bindings;
             Render::ExposureState produced;
         };
 
@@ -140,6 +154,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareLook();
         /** @brief Copies exact validated domain/interpolation controls into actual reflected offsets. */
         [[nodiscard]] Result<void> WriteLookParameters(std::span<std::byte> bytes);
+        /** @brief Packs analytic scene and optional look parameters for the current frame slot. */
+        [[nodiscard]] Result<void> WriteSceneParameters(std::span<std::byte> bytes);
+        /** @brief Writes final-encoder controls and the admitted display RGB rows. */
+        [[nodiscard]] Result<void> WriteEncodeParameters(std::span<std::byte> bytes) const;
         /** @brief Creates one cold immutable slot/predecessor material variant without mutating GPU data. */
         [[nodiscard]] Result<void> Bind(std::size_t role, Render::RenderTextureViewHandle scene, Render::RenderTextureViewHandle display,
                                         std::size_t slot, std::size_t previous);
@@ -191,6 +209,15 @@ namespace Horo::Editor {
         EditorViewportColorResourcePort port_;
         std::array<Slot, SlotCount> slots_;
         std::array<Program, 2> programs_;
+
+        struct TableStaging final {
+            Render::RenderBufferHandle source;
+            Render::FramebufferExtent extent;
+            std::size_t bytes{};
+            Render::RenderTextureFormat format{};
+        };
+
+        std::array<TableStaging, 2> tableStaging_;
         std::array<Render::RenderTextureHandle, 2> tables_;
         std::array<Render::RenderTextureViewHandle, 2> tableViews_;
         std::array<Render::RenderSamplerHandle, 2> samplers_;
@@ -199,7 +226,14 @@ namespace Horo::Editor {
         std::optional<Render::ColorTransformSelection> selection_;
         std::array<Render::RenderBufferHandle, 2> geometry_;
         Render::RenderMeshHandle mesh_;
-        Render::RenderTextureViewHandle boundScene_;
+
+        struct SceneBinding final {
+            Render::RenderTextureViewHandle view;
+            bool ready{};
+        };
+
+        std::array<SceneBinding, SceneBindingCount> sceneBindings_;
+        std::size_t activeSceneBinding_{};
         Render::RenderTextureViewHandle boundDisplay_;
         std::uint64_t materialRevision_{};
         EditorViewportColorStatus status_{EditorViewportColorStatus::Unavailable};
@@ -215,10 +249,15 @@ namespace Horo::Editor {
         std::uint64_t acceptedSubmission_{};
         std::size_t candidateSlot_{};
         std::size_t nextSlot_{};
-        std::size_t activeSlots_{SlotCount};
+        std::size_t activeSlots_;
+        bool manualOnly_{};
+        bool accessibilityEncoder_{};
+        Accessibility::ColorMatrix displayAccessibility_;
         bool candidate_{};
         bool encoded_{};
         bool reset_{true};
         bool resetQueued_{};
+        std::optional<Accessibility::ColorMatrix> accessibilityPreview_;
+        Accessibility::ColorMatrix candidateAccessibility_;
     };
 }  // namespace Horo::Editor

@@ -315,6 +315,7 @@ namespace Horo::AI {
         CHECK(loop.Value().transitions == 1);
         CHECK(loop.Value().disposition == StateMachineStepDisposition::CycleBounded);
         CHECK(loop.Value().lastTransition == Node(11));
+        CHECK(std::ranges::equal(instance->CommittedTransitions(), std::array{Node(10)}));
         source.transitions[0].target = Node(1);
         instance = fixture.Instance(source);
         CHECK(instance->Step(1, fixture.binding, fixture.Snapshot()).Value().disposition == StateMachineStepDisposition::CycleBounded);
@@ -322,8 +323,30 @@ namespace Horo::AI {
         source.maximumTransitionsPerStep = 2;
         instance = fixture.Instance(source);
         CHECK(instance->Step(1, fixture.binding, fixture.Snapshot()).Value().disposition == StateMachineStepDisposition::BudgetBounded);
+        CHECK(std::ranges::equal(instance->CommittedTransitions(), std::array{Node(10), Node(11)}));
+        REQUIRE(instance->Step(1, fixture.binding, fixture.Snapshot()).HasError());
+        CHECK(instance->CommittedTransitions().size() == 2);
+        REQUIRE(instance->Step(2, fixture.binding, fixture.Snapshot()).HasValue());
+        CHECK(instance->CommittedTransitions().empty());
         source.maximumTransitionsPerStep = 0;
         ExpectError(CookedStateMachinePlan::Compile(fixture.Decision(source), source), AIErrors::DecisionAssetLimitExceeded);
+    }
+
+    TEST_CASE("State-machine transition evidence retains earlier commits before a later action failure", "[unit][ai][state-machine]") {
+        MachineFixture fixture;
+        auto source = Flat();
+        source.maximumTransitionsPerStep = 2;
+        source.states[2].entry = MakeIdentity<TaskId>(43);
+        auto instance = fixture.Instance(source);
+        ActionLog log;
+        log.failState = Node(3);
+        log.failPhase = StateMachineActionPhase::Entry;
+        REQUIRE(instance->Step(1, fixture.binding, fixture.Snapshot(), {}, log.Adapter()).HasError());
+        CHECK(std::ranges::equal(instance->CommittedTransitions(), std::array{Node(10)}));
+        REQUIRE(instance->TerminalResult() != nullptr);
+        CHECK(instance->TerminalResult()->state == AiTaskState::Failed);
+        REQUIRE(instance->Step(2, fixture.binding, fixture.Snapshot(), {}, log.Adapter()).HasValue());
+        CHECK(instance->CommittedTransitions().empty());
     }
 
     TEST_CASE("State-machine retirement fences exact agent schema and instance generations", "[unit][ai][state-machine]") {

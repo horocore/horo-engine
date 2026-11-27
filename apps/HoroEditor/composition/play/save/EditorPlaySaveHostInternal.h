@@ -58,7 +58,24 @@ namespace Horo::Application::Internal {
     /** @brief Polls genuine durable job state without joining or relying on bounded global history. */
     [[nodiscard]] bool PlaySaveJobSettled(const JobHandle &job);
 
+    class PlaySaveSupplementCapture final : public Runtime::ICanonicalStateAdapter {
+    public:
+        void Use(std::shared_ptr<const Runtime::ICanonicalStateAdapter> adapter) noexcept {
+            adapter_ = std::move(adapter);
+        }
+
+        Result<Runtime::CanonicalCaptureDisposition> Capture(const Runtime::CanonicalCaptureContext &context,
+                                                             Runtime::ICanonicalCaptureSink &sink) const override {
+            return adapter_ ? adapter_->Capture(context, sink)
+                            : Result<Runtime::CanonicalCaptureDisposition>::Success(Runtime::CanonicalCaptureDisposition::Omitted);
+        }
+
+    private:
+        std::shared_ptr<const Runtime::ICanonicalStateAdapter> adapter_;
+    };
+
     struct EditorPlaySaveHost::State final {
+        std::shared_ptr<PlaySaveSupplementCapture> supplementCapture;
         State(Runtime::RuntimeSceneService &scenes, EditorPlaySaveEnvironment environment,
               std::shared_ptr<const PlaySaveStorageSchema> schema,
               std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
@@ -73,6 +90,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ReleasePhysicsCapture();
         /** @brief Builds same-request preparation without retaining this state in detached workers. */
         [[nodiscard]] std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> CapturePreparation() const;
+        [[nodiscard]] Result<void> PrepareCaptureSources(const Runtime::SaveOperationHandle &operation) const;
         /** @brief Reads the same exact complete current identity map for all canonical Gameplay owners. */
         [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> CurrentIdentities() const;
         /** @brief Binds actual installed behavior sources through the real current

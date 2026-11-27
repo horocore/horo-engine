@@ -14,6 +14,9 @@ namespace Horo::Packages::Detail {
     /** @brief Reads and owner-binds the exact declared descriptor without host work. */
     [[nodiscard]] Result<DeclaredPackageDescriptor> ReadDeclaredPackageDescriptor(const PackageRestorePackage &package,
                                                                                   const PackagePath &descriptor);
+    /** @brief Checks whether a native module declares only importer contributions with no other host dependencies. */
+    [[nodiscard]] bool IsImporterOnlyModule(const Extensions::ExtensionModuleManifest &module,
+                                           const Extensions::ExtensionManifest &manifest);
     /** @brief Applies the owning native platform suffix to an explicit selected entry. */
     [[nodiscard]] std::string SelectedPackageNativeEntry(std::string entry);
     /** @brief Captures the native process compatibility tuple without discovering a host. */
@@ -48,6 +51,8 @@ namespace Horo::Packages::Detail {
 
         [[nodiscard]] virtual bool Finalize() = 0;
         [[nodiscard]] virtual std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept = 0;
+        /** @brief Appends package identities still owned by this composition, including during retirement. */
+        virtual void AppendRetainedPackages(std::vector<HoroPackageId> &packages) const = 0;
     };
 
     /** @brief Detached complete native host; retirement retains files until its actual work leases drain. */
@@ -61,6 +66,7 @@ namespace Horo::Packages::Detail {
         void Retire() noexcept override;
         [[nodiscard]] bool Finalize() override;
         [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept override;
+        void AppendRetainedPackages(std::vector<HoroPackageId> &packages) const override;
 
     private:
         /** @brief Evaluates all grants and stages verified bytes before any executable host callback. */
@@ -69,12 +75,15 @@ namespace Horo::Packages::Detail {
                                                   std::map<std::filesystem::path, Sha256Digest> &artifacts);
         [[nodiscard]] Result<void> Materialize(const PackageActivationCandidate &candidate, const std::filesystem::path &root,
                                                const CancellationToken &cancellation) const;
+        // Publication can be revoked before the native manager finishes retiring this exact install.
+        std::shared_ptr<const VerifiedPackageInstallRecord> install_;
         std::filesystem::path root_;
         std::shared_ptr<PackageActivationSnapshot> snapshot_{std::make_shared<PackageActivationSnapshot>()};
         std::unique_ptr<Assets::AssetImporterCatalog> catalog_{std::make_unique<Assets::AssetImporterCatalog>()};
         std::unique_ptr<Extensions::ExtensionManager> manager_;
         std::vector<Extensions::ExtensionCapabilityAdmission> admissions_;
         std::vector<std::shared_ptr<Extensions::ExtensionRetirement>> retirements_;
+        std::vector<HoroPackageId> retainedPackages_;
         bool retired_{};
         bool removeContent_{true};
     };

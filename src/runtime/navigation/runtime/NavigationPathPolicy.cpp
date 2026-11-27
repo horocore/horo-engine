@@ -3,6 +3,8 @@
 #include "Horo/Navigation/NavigationErrors.h"
 
 #include <algorithm>
+#include <cmath>
+#include <iterator>
 #include <utility>
 
 namespace Horo::Navigation {
@@ -13,6 +15,62 @@ namespace Horo::Navigation {
             return {.kind = kind, .dependency = dependency, .expected = expected, .observed = observed};
         }
 
+        /** @brief Identifies a waypoint that requires an exact off-mesh portal. */
+        bool IsTraversalWaypoint(const NavigationPathWaypoint &waypoint) noexcept {
+            using enum NavigationPathWaypointKind;
+            return waypoint.provenance.kind == TraversalEntrance || waypoint.provenance.kind == TraversalExit;
+        }
+
+        /** @brief Verifies the authored identity, ordered endpoints and absence of shared-edge evidence. */
+        bool ValidTraversalPortal(const NavigationPathPortal &portal, const std::size_t corridorSize) noexcept {
+            return portal.link.IsValid() && portal.toPolygonIndex < corridorSize && portal.toPolygonIndex > 0 &&
+                   portal.fromPolygonIndex == portal.toPolygonIndex - 1 && portal.leftVertexIndex == NavigationPathNoVertex &&
+                   portal.rightVertexIndex == NavigationPathNoVertex && portal.widthMeters == 0 && portal.clearanceMeters == 0 &&
+                   std::isfinite(portal.linkRadiusMeters) && portal.linkRadiusMeters > 0;
+        }
+
+        /** @brief Verifies one traversal waypoint against its exact portal and corridor polygon. */
+        bool MatchesTraversalWaypoint(const NavigationPathWaypoint &waypoint, const NavigationPathWaypointKind kind,
+                                      const std::size_t portalIndex, const NavigationPathCorridorPolygon &polygon,
+                                      const std::uint32_t polygonIndex, const Math::Vec3 position) noexcept {
+            const auto &identity = waypoint.provenance;
+            return identity.kind == kind && identity.portalIndex == portalIndex && identity.corridorPolygonIndex == polygonIndex &&
+                   identity.polygon == polygon.provenance && identity.vertexIndex == NavigationPathNoVertex &&
+                   waypoint.position == position && Math::IsFinite(position);
+        }
+
+        /** @brief Ordinary shared edges carry no optional authored-link evidence. */
+        bool IsRegularPortal(const NavigationPathPortal &portal) noexcept {
+            return portal.kind == NavigationPathPortalKind::SharedPolygonEdge && !portal.link.IsValid() && portal.linkRadiusMeters == 0;
+        }
+
+        /** @brief Pairs every off-mesh portal with consecutive entrance and exit waypoints in one ordered pass. */
+        bool ValidTraversalBoundaries(const NavigationPath &path) noexcept {
+            using enum NavigationPathWaypointKind;
+            auto waypoint = path.waypoints.begin();
+            const auto end = path.waypoints.end();
+            for (std::size_t index = 0; index < path.portals.size(); ++index) {
+                const auto &portal = path.portals[index];
+                if (portal.kind != NavigationPathPortalKind::OffMeshLink) {
+                    if (!IsRegularPortal(portal))
+                        return false;
+                    continue;
+                }
+                if (!ValidTraversalPortal(portal, path.corridor.size()))
+                    return false;
+                waypoint = std::ranges::find_if(waypoint, end, IsTraversalWaypoint);
+                if (waypoint == end || std::next(waypoint) == end)
+                    return false;
+                const auto exit = std::next(waypoint);
+                if (const auto from = portal.fromPolygonIndex, to = portal.toPolygonIndex;
+                    !MatchesTraversalWaypoint(*waypoint, TraversalEntrance, index, path.corridor[from], from, portal.left) ||
+                    !MatchesTraversalWaypoint(*exit, TraversalExit, index, path.corridor[to], to, portal.right))
+                    return false;
+                waypoint = std::next(exit);
+            }
+            return std::ranges::none_of(waypoint, end, IsTraversalWaypoint);
+        }
+
         /** @brief Reject a path whose status or canonical corridor identities contradict its source. */
         bool ValidCorridor(const NavigationPath &path, const NavigationOutcomeProvenance &provenance,
                            const NavigationCoverageEvidence &coverage) noexcept {
@@ -21,12 +79,16 @@ namespace Horo::Navigation {
                 return false;
             if ((path.status == Reachable && !coverage.IsComplete()) || (path.status == Partial && coverage.IsComplete()))
                 return false;
-            const bool corridorMatches = std::ranges::all_of(path.corridor, [&](const auto &polygon) {
-                return polygon.provenance.world == provenance.world && polygon.provenance.topology == provenance.topology;
+            const auto matches = [&provenance](const NavigationQueryProvenance &identity) {
+                return identity.world == provenance.world && identity.topology == provenance.topology;
+            };
+            const bool corridorMatches = std::ranges::all_of(path.corridor, matches, &NavigationPathCorridorPolygon::provenance);
+            const bool waypointsMatch =
+                std::ranges::all_of(path.waypoints, matches,
+                                    [](const NavigationPathWaypoint &waypoint) -> const NavigationQueryProvenance & {
+                return waypoint.provenance.polygon;
             });
-            return corridorMatches && std::ranges::all_of(path.waypoints, [&](const auto &waypoint) {
-                return waypoint.provenance.polygon.world == provenance.world && waypoint.provenance.polygon.topology == provenance.topology;
-            });
+            return corridorMatches && waypointsMatch && ValidTraversalBoundaries(path);
         }
 
         /** @brief Check one bounded covered-or-missing dependency set against the current sorted region slice. */

@@ -32,7 +32,10 @@ namespace Horo::Render {
         RenderTextureViewHandle depthView; /**< Exact prepared single-layer view when depth is present. */
         MultiviewRenderRectangle rectangle;
         std::uint32_t arrayLayer{};
-        std::uint32_t depthArrayLayer{}; /**< Depth mapping is independent of color; instanced routing requires agreement. */
+        std::uint32_t depthArrayLayer{};              /**< Depth mapping is independent of color; instanced routing requires agreement. */
+        RenderGraphResourceId predecessorDepth;       /**< Coverage-only exact read resource. */
+        RenderTextureViewHandle predecessorDepthView; /**< Coverage-only retained single-eye D32 depth view. */
+        std::uint32_t predecessorDepthLayer{};        /**< Exact source array layer sampled by the preceding view. */
     };
 
     /** @brief One visible canonical instance's ready resident mesh/material and exact graph buffer dependencies. */
@@ -56,12 +59,30 @@ namespace Horo::Render {
         }
     };
 
+    /** @brief Explicit color/depth layout and reflected shader contract for a multiview pass. */
+    enum class MultiviewOutput : std::uint8_t {
+        ProjectionColor,
+        MotionDepth,          /**< Separate multipass signed XYZ motion and matching hardware forward depth. */
+        ReprojectionCoverage, /**< Stereo multipass depth consistency into a renderer-owned R32Float attachment. */
+        Count
+    };
+
+    /** @brief Selects the area cleared and stored for each admitted attachment layer. Geometry stays clipped to the active view. */
+    enum class MultiviewClearArea : std::uint8_t {
+        ViewRectangle,  /**< Touch only the active rectangle. */
+        AttachmentLayer /**< Initialize the whole layer for subsequent attachment loads. */
+    };
+
     /** @brief One atomic bounded whole-frame scene workload; all admission precedes encoding any view.
      * @details All spans are borrowed only for synchronous graph admission. The canonical frontend completion lease
      * retains the exact meshes/materials; native command retention uses HORO-326's existing ownership and timelines.
      * Color/depth are cleared exactly once per view and stored; this operation does not publish XR completion itself.
      */
     struct RenderGraphMultiview final {
+        static constexpr std::size_t MaximumPassesPerFrame = static_cast<std::size_t>(MultiviewOutput::Count); /**< One per output. */
+        static constexpr std::size_t MaximumMeshInstances = MultiviewExtractionLimits::HardMaximumInstances * MaximumPassesPerFrame;
+        static constexpr std::size_t MaximumAttachmentViews = MultiviewExtractionLimits::HardMaximumViews * 2 * MaximumPassesPerFrame + 2;
+
         std::shared_ptr<const MultiviewSceneSnapshot> scene;
         MultiviewPublication active;
         std::span<const MultiviewGraphTarget> targets;
@@ -69,6 +90,8 @@ namespace Horo::Render {
         ClearColor clearColor{0.035F, 0.045F, 0.070F, 1.0F};
         float depthClear{1.0F};
         MultiviewNativeWorkLimits limits;
+        MultiviewOutput output{MultiviewOutput::ProjectionColor};
+        MultiviewClearArea clearArea{MultiviewClearArea::ViewRectangle};
     };
 
     /** @brief Exact frontend-resolved resident mesh generation, additional to the graph's typed buffer bindings. */

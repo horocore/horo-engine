@@ -18,18 +18,29 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveSlotLifecycle::ExecuteLocked */
     Result<SaveSlotLifecycleResult> SaveSlotLifecycle::ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                     const CancellationToken &cancellation) {
+                                                                     const CancellationToken &cancellation, ArchiveTransfer *capture) {
         auto &catalog = operation.catalog;
         std::vector<std::byte> bytes;
-        auto admitted = AcquireArchive(operation, request, bytes);
+        const auto ownerLimit = state_->policy.archiveLimits.maximumArchiveBytes;
+        const auto maximumBytes = capture ? std::min(ownerLimit, capture->maximumBytes) : ownerLimit;
+        auto admitted = AcquireArchive(operation, request, bytes, maximumBytes);
         if (admitted.HasError())
             return Result<SaveSlotLifecycleResult>::Failure(admitted.ErrorValue());
+        if (capture && capture->sourceSlot) {
+            const auto &header = admitted.Value().Header();
+            const auto &destination = state_->policy.destination;
+            if (header.slot != *capture->sourceSlot || header.product != destination.name.product ||
+                header.environment != destination.name.environment || header.profile != destination.profile)
+                return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
+        }
         if (request.kind == SaveSlotLifecycleKind::Export) {
             if (auto cancelled = CheckCancellation(cancellation); cancelled.HasError())
                 return Result<SaveSlotLifecycleResult>::Failure(cancelled.ErrorValue());
             const auto source = std::ranges::find(catalog.records, request.source.address.slot, [](const Record &record) {
                 return record.entry.publication.slot;
             });
+            if (capture)
+                capture->parent = admitted.Value().Header().parentGeneration;
             return Result<SaveSlotLifecycleResult>::Success(
                 {.catalogRevision = catalog.revision,
                  .entry = source->entry,
@@ -60,7 +71,7 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveSlotLifecycle::AcquireArchive */
     Result<ValidatedSaveArchive> SaveSlotLifecycle::AcquireArchive(const Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                   std::vector<std::byte> &bytes) const {
+                                                                   std::vector<std::byte> &bytes, const std::size_t maximumBytes) const {
         auto &catalog = operation.catalog;
         const auto source = std::ranges::find(catalog.records, request.source.address.slot, [](const Record &record) {
             return record.entry.publication.slot;
@@ -77,8 +88,7 @@ namespace Horo::Runtime {
                 return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::StoragePermissionDenied));
             bytes = *request.imported.bytes;
         } else {
-            auto read = state_->storage.ReadLifecycleGeneration(source->entry.publication.generation,
-                                                                state_->policy.archiveLimits.maximumArchiveBytes);
+            auto read = state_->storage.ReadLifecycleGeneration(source->entry.publication.generation, maximumBytes);
             if (read.HasError())
                 return Result<ValidatedSaveArchive>::Failure(read.ErrorValue());
             bytes = std::move(read).Value();

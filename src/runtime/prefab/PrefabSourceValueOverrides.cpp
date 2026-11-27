@@ -64,4 +64,14 @@ namespace Horo::Prefab {
         const PrefabValueSchemaSnapshot *schemas, const PrefabLimitProfile &limits, const CancellationToken &cancellation) {
         return Adopt(source, PreparePrefabComponentEdit(Baseline(source), current, edit, schemas, limits, cancellation));
     }
+
+    /** @copydoc PreparePrefabComponentPromotion */
+    Result<PrefabValueOverrideResolution> PreparePrefabComponentPromotion(const EffectivePrefabCandidate &source,
+                                                                          const std::optional<PrefabValueOverrideSet> &current,
+                                                                          std::span<const PrefabComponentOverrideRecord> selected,
+                                                                          const PrefabValueSchemaSnapshot *schemas,
+                                                                          const PrefabLimitProfile &limits,
+                                                                          const CancellationToken &cancellation) {
+        return Adopt(source, PreparePrefabComponentPromotion(Baseline(source), current, selected, schemas, limits, cancellation));
+    }
 }  // namespace Horo::Prefab

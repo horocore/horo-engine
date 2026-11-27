@@ -57,8 +57,18 @@ namespace Horo::AI {
     /** @brief Immutable owned values fixed for one query execution revision. */
     class QueryContextSnapshot final {
     public:
+        /** @brief Returns the template identity that admitted these values. @return Exact query identity. */
+        [[nodiscard]] QueryId Query() const noexcept {
+            return query_;
+        }
+
         /** @brief Returns the source scene incarnation. @return Exact generation-checked runtime ID. */
         [[nodiscard]] Runtime::SceneRuntimeId Scene() const noexcept;
+        /** @brief Checks the owner and structural revision used to capture these values.
+         * @param scene Candidate Scene view on the simulation owner.
+         * @return True only while the captured Scene and its exact structural revision are current.
+         */
+        [[nodiscard]] bool MatchesScene(const Runtime::RuntimeSceneView &scene) const noexcept;
         /** @brief Returns the submission execution revision. @return Non-zero revision. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the complete captured value set. @return Borrowed read-only records. */
@@ -68,7 +78,10 @@ namespace Horo::AI {
 
     private:
         friend class QueryContextCapture;
-        Runtime::SceneRuntimeId scene_;
+        friend class QueryExecution;
+        QueryId query_;
+        Runtime::RuntimeSceneView scene_;
+        std::uint64_t sceneStructure_{};
         std::uint64_t revision_{};
         std::vector<QueryCapturedContext> values_;
     };
@@ -99,6 +112,12 @@ namespace Horo::AI {
         std::vector<QueryContextProviderRegistration> providers_;
     };
 
+    /** @brief Host-owned registry and explicit capabilities for one context capture consumer. */
+    struct QueryContextProviderAccess final {
+        const QueryContextProviderRegistry *registry{}; /**< Borrowed for the lifetime of the composed consumer. */
+        AiCapabilitySet capabilities;
+    };
+
     /** @brief Borrowed submission values; global locations are host-captured, never rebased float origins. */
     struct QueryContextCaptureSource final {
         Runtime::EntityRef querier;
@@ -112,8 +131,8 @@ namespace Horo::AI {
 
     /**
      * @brief Owner-thread capture seam for one admitted query and scene incarnation.
-     * @details One instance is bound to one plan. Repeated reads of a revision return the same immutable allocation;
-     *          advancing the revision captures anew. Old snapshots stay valid while consumers retain them.
+     * @details One instance is bound to one plan. Repeated reads of a revision return the same immutable allocation
+     * while the Scene structure matches. Advancing the revision captures anew. Retained snapshots remain readable as history.
      */
     class QueryContextCapture final {
     public:

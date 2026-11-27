@@ -68,14 +68,11 @@ namespace Horo::Runtime::Ui {
                                                        evidence.pixelExtent.height - static_cast<std::uint32_t>(vertical)});
         }
 
-        [[nodiscard]] Result<UiCanvasDeviceScale> ApplyUiScale(const UiCanvasDeviceScale base, const UiCanvasScaleFactor factor) {
-            if (!base.IsValid() || !factor.IsValid())
-                return Failure<UiCanvasDeviceScale>(UiErrors::CanvasSpaceInvalid);
-            if (base.pixelUnits > std::numeric_limits<std::uint64_t>::max() / factor.numerator ||
-                base.logicalDips > std::numeric_limits<std::uint64_t>::max() / factor.denominator)
-                return Failure<UiCanvasDeviceScale>(UiErrors::CanvasSpaceOverflow);
-            const std::uint64_t numerator = static_cast<std::uint64_t>(base.pixelUnits) * factor.numerator;
-            const std::uint64_t denominator = static_cast<std::uint64_t>(base.logicalDips) * factor.denominator;
+        [[nodiscard]] Result<UiCanvasDeviceScale> ApplyUiScale(const UiCanvasDeviceScale base, const UiCanvasScaleFactor authored,
+                                                               const UiCanvasScaleFactor user) {
+            // Both bounded factors fit together with the full 32-bit device ratio in 64 bits.
+            const std::uint64_t numerator = static_cast<std::uint64_t>(base.pixelUnits) * authored.numerator * user.numerator;
+            const std::uint64_t denominator = static_cast<std::uint64_t>(base.logicalDips) * authored.denominator * user.denominator;
             const auto divisor = std::gcd(numerator, denominator);
             if (numerator / divisor > std::numeric_limits<std::uint32_t>::max() ||
                 denominator / divisor > std::numeric_limits<std::uint32_t>::max())
@@ -145,8 +142,16 @@ namespace Horo::Runtime::Ui {
             const auto safeInsets = canvas.presentation.safeArea == UiSafeAreaMode::Inset ? evidence.safeAreaInsets : UiCanvasPixelInsets{};
             const auto uiScale = ReducedFactor(canvas.presentation.uiScale.numerator, canvas.presentation.uiScale.denominator);
             const auto fontScale = ReducedFactor(canvas.presentation.fontScale.numerator, canvas.presentation.fontScale.denominator);
-            return {logicalExtent, evidence.pixelExtent,         scale, content, safeInsets, dpiScale, uiScale,
-                    fontScale,     canvas.presentation.pixelSnap};
+            return {logicalExtent,
+                    evidence.pixelExtent,
+                    scale,
+                    content,
+                    safeInsets,
+                    dpiScale,
+                    uiScale,
+                    fontScale,
+                    canvas.presentation.pixelSnap,
+                    ReducedFactor(evidence.userUiScale.numerator, evidence.userUiScale.denominator)};
         }
     }  // namespace
 
@@ -183,7 +188,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiCanvasViewportEvidence::IsValid */
     bool UiCanvasViewportEvidence::IsValid() const noexcept {
-        return pixelExtent.IsValid() && (IsUnavailable(dpiScale) || dpiScale.IsValid());
+        return pixelExtent.IsValid() && (IsUnavailable(dpiScale) || dpiScale.IsValid()) && userUiScale.IsValid() &&
+               minimumControlTargetDips <= MaximumUiAccessibleTargetDips;
     }
 
     /** @copydoc ResolveUiScreenCanvas */
@@ -215,7 +221,7 @@ namespace Horo::Runtime::Ui {
         const bool dpiValid = IsUnavailable(dpiScale) || dpiScale.IsValid();
         return pixelExtent.IsValid() && pixelsPerDip.IsValid() && logicalExtent.width >= 0 && logicalExtent.height >= 0 &&
                IsInside(content, pixelExtent) && contentMatchesInsets && dpiValid && uiScale.IsValid() && fontScale.IsValid() &&
-               IsPixelSnapMode(pixelSnap);
+               IsPixelSnapMode(pixelSnap) && userUiScale.IsValid();
     }
 
     /** @copydoc UiCanvasDescriptor::IsValid */
@@ -235,7 +241,7 @@ namespace Horo::Runtime::Ui {
         const auto baseScale = ResolveBaseScale(canvas, evidence);
         if (baseScale.HasError())
             return Result<UiResolvedScreenCanvas>::Failure(baseScale.ErrorValue());
-        auto scale = ApplyUiScale(baseScale.Value(), canvas.presentation.uiScale);
+        auto scale = ApplyUiScale(baseScale.Value(), canvas.presentation.uiScale, evidence.userUiScale);
         if (scale.HasError())
             return Result<UiResolvedScreenCanvas>::Failure(scale.ErrorValue());
         const auto content = ResolveContentRect(canvas, evidence);

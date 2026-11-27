@@ -1,16 +1,41 @@
 #include "../runtime/ai/BehaviorTreeRuntimeTestSupport.h"
+#include "ApprovedGameplayPackageHost.h"
+#include "DecisionGraphCompilerTestSupport.h"
 #include "GameplayModuleTestSupport.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/AI/PerceptionSenseScene.h"
+#include "Horo/Application/ProjectAssetRegistrySource.h"
+#include "Horo/Editor/PackageModalSession.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "Horo/Packages/PackageCache.h"
+#include "Horo/Packages/PackageRequest.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "HostSignatureDocument.h"
+#include "OpenXRProductSigningTestSupport.h"
+#include "PackageApplicationServiceTestSupport.h"
+#include "PackageBehaviorReferences.h"
+#include "PackageHostPolicy.h"
 #include "PackageLifecycleTestSupport.h"
+#include "PackageProjectHost.h"
+#include "PerceptionSenseTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
+#include <fstream>
+#include <functional>
 #include <thread>
 using namespace Horo::Packages::Tests::Support;
 
 namespace {
-    std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false) {
+    std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false,
+                                                       std::optional<std::string> moduleSignature = std::nullopt,
+                                                       std::optional<std::string> importerSignature = std::nullopt) {
         const auto entry = "module" + std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}.extension().string();
         nlohmann::json descriptor{{"id", "fixture.gameplay"},
                                   {"version", "1.0.0"},
@@ -23,6 +48,9 @@ namespace {
                                      {"requiredCapabilities", {"runtime.participate"}}}}}};
         std::vector<std::pair<std::string, std::string>> files;
         files.emplace_back("extensions/native/Node.horo_script", "return {role='condition',check=function() return true end}");
+        files.emplace_back("extensions/native/Sense.horo_script", "return function(x,y,z,lx,ly,lz) return x-lx < 500 end");
+        if (moduleSignature)
+            files.emplace_back("extensions/native/" + entry + ".signature.json", std::move(*moduleSignature));
         if (withBackend) {
             const auto backend = "backend" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
             descriptor["modules"].push_back({{"id", "fixture.backend"},
@@ -32,9 +60,13 @@ namespace {
                                              {"entry", backend}});
             descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", "fixture.backend"}}};
             files.emplace_back("extensions/native/" + backend, FileBytes(HORO_PACKAGE_NATIVE_FIXTURE));
+            if (importerSignature)
+                files.emplace_back("extensions/native/" + backend + ".signature.json", std::move(*importerSignature));
         }
         return Graph(HORO_TEST_GAME_MODULE_PATH, true, true, "fixture.gameplay", std::move(descriptor), std::move(files));
     }
+
+    enum class ImporterApproval { Unrestricted, Exact, WrongArchive };
 
     struct GameplayFixture final {
         Fixture base;
@@ -45,9 +77,10 @@ namespace {
         EnabledPackageModule enabled{Parse<HoroPackageId>("fixture.gameplay"), Parse<PackagePath>("extensions/native/extension.json"),
                                      "game.tests", Extensions::ExtensionModuleRole::RuntimeParticipant};
         unsigned worldFactories{};
+        std::function<void(const VerifiedPackageModule &)> onWorldFactory;
 
         explicit GameplayFixture(const bool approved = true, const bool correctFingerprint = true, const bool composeHost = true,
-                                 const bool mixed = false)
+                                 const bool mixed = false, const ImporterApproval importerApproval = ImporterApproval::Unrestricted)
             : withBackend(mixed) {
             base.service.reset();
             base.trust.capabilities = {{"runtime.participate"}};
@@ -60,8 +93,10 @@ namespace {
                                                                     : "wrong-sdk",
                                                  Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
                                                  {},
-                                                 [this](const VerifiedPackageModule &) {
+                                                 [this](const VerifiedPackageModule &module) {
                 ++worldFactories;
+                if (onWorldFactory)
+                    onWorldFactory(module);
                 return Result<std::shared_ptr<Gameplay::GameplayPhysicsContext>>::Success({});
             }};
             gameplay =
@@ -75,15 +110,23 @@ namespace {
                                                  .artifactGate = ::Horo::Tests::CreateAcceptingArtifactGate()};
             if (composeHost)
                 config.moduleHosts = {gameplay};
+            auto graph = GameplayGraph(mixed);
             if (mixed) {
-                backend = std::make_shared<NativePackageModuleHost>(config);
+                if (importerApproval == ImporterApproval::Unrestricted) {
+                    backend = std::make_shared<NativePackageModuleHost>(config);
+                } else {
+                    const auto &archive = *graph->packages.front().archive;
+                    const auto digest = importerApproval == ImporterApproval::Exact ? archive.Digest() : ComputeSha256({});
+                    backend = std::make_shared<NativePackageModuleHost>(config, std::vector<NativePackageImporterBinding>{
+                        {enabled.package, "fixture.backend", digest, archive.PackageManifestDigest()}});
+                }
                 config.moduleHosts.push_back(backend);
             }
             config.moduleRetirements = retirement;
             auto created = PackageLifecycleService::Create(base.install, base.trust, std::move(config));
             REQUIRE(created.HasValue());
             base.service = std::move(created).Value();
-            base.Install(GameplayGraph(mixed));
+            base.Install(std::move(graph));
         }
 
         ~GameplayFixture() {
@@ -100,6 +143,40 @@ namespace {
             return base.service->ActivateModules(selected, PackageActivationBoundary::Quiescent, base.cancellation.Token());
         }
     };
+
+    /** @brief Runs the same authored closure with one admitted package condition. */
+    std::shared_ptr<const AI::CookedDecisionPlan> RunPackageCondition(const AI::DecisionNodeTypeId type,
+                                                                      const AI::DecisionCompilationEnvironment &environment,
+                                                                      const AI::DecisionGraphTestSupport::Fixture &world,
+                                                                      AI::DecisionStepTrace &trace) {
+        using namespace AI::DecisionGraphTestSupport;
+        auto condition = TreeNode(2, AI::DecisionControlKind::Condition);
+        condition.kind = AI::BehaviorTreeNodeKind::Decorator;
+        condition.minimumChildren = 1;
+        condition.maximumChildren = 1;
+        condition.type = AI::BehaviorTreeNodeTypeId::Create(type.Value()).Value();
+        auto call = TreeNode(3, AI::DecisionControlKind::Subplan);
+        call.call = AI::DecisionSubplanCall{Graph(2), AI::DecisionPlanKind::StateMachine, {1, 1}};
+        const auto root = Tree(1, {TreeNode(1, AI::DecisionControlKind::Root), condition, call}, {Edge(1, 1, 2), Edge(2, 2, 3)});
+        const std::array sources{root, TerminalMachine(2)};
+        auto compiled = AI::DecisionGraphCompiler::Compile(Graph(1), sources, environment);
+        REQUIRE(compiled.HasValue());
+        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
+            UNSCOPED_INFO(diagnostic.message);
+        REQUIRE(compiled.Value().plan);
+        auto plan = std::move(compiled).Value().plan;
+        auto graph = AI::DecisionGraphInstance::Create(plan, environment.nodes, world.RuntimeBinding());
+        REQUIRE(graph.HasValue());
+        const auto units = plan->MaximumDecisionWorkUnits();
+        REQUIRE(units.has_value());
+        const auto snapshot = world.blackboard->Snapshot().Value();
+        AI::AiWorkBudget budget{*units};
+        const auto stepped = graph.Value()->StepBudgetedWithTrace({1, world.binding, snapshot, {}}, budget, trace);
+        REQUIRE(stepped.HasValue());
+        CHECK(stepped.Value() == std::optional{AI::AiTaskState::Succeeded});
+        CHECK(budget.Remaining() == 0);
+        return plan;
+    }
 }  // namespace
 
 TEST_CASE("Package runtime role invokes actual SDK owner and retains native callbacks until drain", "[packages][gameplay][hybrid]") {
@@ -149,6 +226,30 @@ TEST_CASE("Required gameplay role cannot be satisfied by native extension metada
     CHECK(fixture.worldFactories == 0);
 }
 
+TEST_CASE("Package gameplay activation rejects a staged image changed during world binding", "[packages][gameplay][decision-node]") {
+    GameplayFixture fixture;
+    unsigned edited{};
+    fixture.onWorldFactory = [&](const VerifiedPackageModule &module) {
+        const auto filename = std::filesystem::path{module.Artifact().Value()}.filename();
+        for (const auto &entry : std::filesystem::recursive_directory_iterator{fixture.base.temporary.Path()}) {
+            if (entry.path().filename() != filename)
+                continue;
+            std::ofstream output{entry.path(), std::ios::binary | std::ios::app};
+            output.put('\0');
+            output.close();
+            if (output)
+                ++edited;
+        }
+    };
+    const auto activated = fixture.Activate();
+    REQUIRE(edited > 0);
+    REQUIRE(activated.HasError());
+    CHECK(fixture.worldFactories == 1);
+    CHECK_FALSE(fixture.base.service->Active());
+    CHECK(fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service).Value().empty());
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
 TEST_CASE("Package gameplay replacement requires exact previous generation retirement", "[packages][gameplay][hybrid]") {
     GameplayFixture fixture;
     REQUIRE(fixture.Activate().HasValue());
@@ -189,6 +290,16 @@ TEST_CASE("Actual gameplay generations drain before repeated update and uninstal
 }
 
 TEST_CASE("Optional SDK failure preserves an actual native backend in the same verified archive", "[packages][gameplay][hybrid]") {
+    CHECK(InspectGameplayRemovalRoles(GameplayGraph(false)->packages.front()).HasValue());
+    const auto mixed = InspectGameplayRemovalRoles(GameplayGraph(true)->packages.front());
+    REQUIRE(mixed.HasError());
+    const auto &blockers = mixed.ErrorValue().diagnostics;
+    CHECK(std::ranges::any_of(blockers, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_contribution_owner_required" && item.path == "fixture.importer";
+    }));
+    CHECK(std::ranges::any_of(blockers, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_module_owner_required" && item.path == "fixture.backend";
+    }));
     GameplayFixture fixture(true, false, true, true);
     fixture.enabled.requirement = PackageModuleRequirement::Optional;
     REQUIRE(fixture.Activate().HasValue());
@@ -201,15 +312,115 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     });
     REQUIRE(runtime != active->modules.end());
     CHECK(runtime->diagnostic.has_value());
+    const auto decisionNodes = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(decisionNodes.HasValue());
+    CHECK(decisionNodes.Value().empty());
+}
+
+TEST_CASE("Live mixed package withdrawal waits for the retained importer catalog", "[packages][gameplay][hybrid]") {
+    GameplayFixture fixture(true, true, true, true, ImporterApproval::Exact);
+    REQUIRE(fixture.Activate().HasValue());
+    auto &lifecycle = *fixture.base.service;
+    const auto installed = fixture.base.install.InstalledRecord();
+    REQUIRE(installed);
+    const auto &package = installed->Graph()->packages.front();
+    const std::array departing{LockedPackageReference{package.lock.package, package.lock.version}};
+    auto importers = fixture.backend->Importers(fixture.enabled.package, "fixture.backend", lifecycle.Active()->generation);
+    REQUIRE(importers);
+    CHECK(lifecycle.ReserveRemoval(departing).HasError());
+    REQUIRE(lifecycle.ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    lifecycle.FinalizeRetirements();
+    CHECK(lifecycle.ReserveRemoval(departing).HasError());
+    importers.reset();
+    lifecycle.FinalizeRetirements();
+    const auto lease = lifecycle.ReserveRemoval(departing);
+    REQUIRE(lease.HasValue());
+    CHECK(lease.Value()->AllowsNativeImporterReview(package, "fixture.backend"));
+    CHECK_FALSE(lease.Value()->AllowsNativeImporterReview(package, "game.tests"));
+    const auto roles = InspectLivePackageRemovalRoles(package, *lease.Value());
+    REQUIRE(roles.HasValue());
+    REQUIRE(roles.Value().size() == 1);
+    CHECK(roles.Value().front().moduleId == "game.tests");
+}
+
+TEST_CASE("Importer owner rejects a module from an archive outside its startup approval", "[packages][gameplay][hybrid]") {
+    GameplayFixture fixture(true, true, true, true, ImporterApproval::WrongArchive);
+    CHECK_FALSE(fixture.backend->Supports(Extensions::ExtensionModuleRole::HeadlessTooling));
+    const auto activated = fixture.Activate();
+    REQUIRE(activated.HasError());
+    CHECK_FALSE(fixture.base.service->Active());
+    CHECK_FALSE(fixture.backend->Importers(fixture.enabled.package, "fixture.backend", 1));
+    const auto &package = fixture.base.install.InstalledRecord()->Graph()->packages.front();
+    const std::array departing{LockedPackageReference{package.lock.package, package.lock.version}};
+    const auto lease = fixture.base.service->ReserveRemoval(departing);
+    REQUIRE(lease.HasValue());
+    CHECK_FALSE(lease.Value()->AllowsNativeImporterReview(package));
+    CHECK(InspectLivePackageRemovalRoles(package, *lease.Value()).HasError());
+}
+
+TEST_CASE("Importer launcher options bind the exact archive and module", "[packages][decision-node][editor]") {
+    using namespace Horo::Application::Internal;
+    const auto identity = FormatSha256(ComputeSha256({}));
+    std::array<std::string, 9> args{"HoroEditor", "--gameplay-package-publisher-trust",
+                                    (std::filesystem::current_path() / "roots.json").string(),
+                                    "--approve-importer-package", "fixture.gameplay", "fixture.gameplay", "fixture.backend", identity,
+                                    identity};
+    std::array<char *, 9> argv{};
+    std::ranges::transform(args, argv.begin(), [](auto &text) { return text.data(); });
+    const auto parsed = ParseApprovedGameplayPackageArguments(argv);
+    REQUIRE(parsed.HasValue());
+    REQUIRE(parsed.Value());
+    REQUIRE(parsed.Value()->approvals.size() == 1);
+    const auto &entry = parsed.Value()->approvals.front();
+    CHECK(entry.role == Extensions::ExtensionModuleRole::BackendCapability);
+    CHECK(entry.module == "fixture.backend");
+    CHECK(entry.archive == ComputeSha256({}));
+    CHECK(ParseApprovedGameplayPackageArguments(std::span{argv}.first<8>()).HasError());
+}
+
+TEST_CASE("Verified package registrations copy behavior and service ownership without retaining native execution", "[packages][gameplay]") {
+    GameplayFixture fixture;
+    const auto before = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
+    REQUIRE(before.HasValue());
+    CHECK(before.Value().empty());
+    REQUIRE(fixture.Activate().HasValue());
+    const auto snapshot = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
+    REQUIRE(snapshot.HasValue());
+    REQUIRE(snapshot.Value().size() == 1);
+    const auto &registrations = snapshot.Value().front();
+    const auto &locked = fixture.base.install.ActiveGraph()->packages.front().lock;
+    CHECK(registrations.package == locked.package);
+    CHECK(registrations.version == locked.version);
+    CHECK(registrations.artifact == locked.artifactDigest);
+    CHECK(registrations.activationGeneration == fixture.base.service->Active()->generation);
+    CHECK(registrations.moduleId == "game.tests");
+    REQUIRE(registrations.behaviors.size() == 1);
+    CHECK(registrations.behaviors.front().Value() == "game.tests.package_behavior");
+    REQUIRE(registrations.services.size() == 1);
+    CHECK(registrations.services.front().id.Value() == "game.tests.package_service");
+
+    GameplayFixture foreign;
+    REQUIRE(foreign.Activate().HasValue());
+    CHECK(fixture.gameplay->CaptureActiveRegistrations(*foreign.base.service).HasError());
+    REQUIRE(fixture.base.service->ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    REQUIRE(fixture.retirement->Close().HasValue());
+    CHECK(registrations.behaviors.front().Value() == "game.tests.package_behavior");
+    const auto withdrawn = fixture.gameplay->CaptureActiveRegistrations(*fixture.base.service);
+    REQUIRE(withdrawn.HasValue());
+    CHECK(withdrawn.Value().empty());
 }
 
 TEST_CASE("Verified package decision nodes retain exact locked version and real generated factories", "[packages][decision-node]") {
     GameplayFixture fixture;
+    const auto installed = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(installed.HasValue());
+    CHECK(installed.Value().empty());
     REQUIRE(fixture.Activate().HasValue());
     const auto generation = fixture.base.service->Active()->generation;
-    auto acquired = fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation);
+    auto acquired = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
     REQUIRE(acquired.HasValue());
-    auto contribution = std::move(acquired).Value();
+    REQUIRE(acquired.Value().size() == 1);
+    auto contribution = std::move(std::move(acquired).Value().front());
     CHECK(contribution.package == fixture.enabled.package);
     CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
     CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
@@ -217,11 +428,394 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     REQUIRE(contribution.nodes->Contracts().size() == 1);
     CHECK(contribution.nodes->Contracts()[0].descriptor.type.Value() == 201);
     CHECK(contribution.nodes->Contracts()[0].descriptor.origin.kind == AI::DecisionDescriptorSourceKind::Package);
+    CHECK(contribution.nodes->HasImplementation(contribution.nodes->Contracts()[0].descriptor.type));
     CHECK(fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation + 1).HasError());
-    fixture.base.service->Shutdown();
+    GameplayFixture foreign;
+    REQUIRE(foreign.Activate().HasValue());
+    CHECK(foreign.base.service->Active()->generation == generation);
+    CHECK(fixture.gameplay->AcquireActiveDecisionNodes(*foreign.base.service).HasError());
+
+    REQUIRE(fixture.base.service->ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    const auto withdrawn = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(withdrawn.HasValue());
+    CHECK(withdrawn.Value().empty());
     CHECK_FALSE(contribution.nodes->CanAdmit());
     CHECK(fixture.retirement->Close().HasError());
     contribution.nodes.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+namespace {
+    /** @brief Writes exact fixture bytes for the project-bound scanner. */
+    void WriteFixtureSource(const std::filesystem::path &path, std::string_view bytes) {
+        std::ofstream file{path, std::ios::binary};
+        file << bytes;
+        REQUIRE(file.good());
+    }
+
+    /** @brief Leaves a safe point query in place after testing Perception and unreadable blockers. */
+    void CheckQueryRemoval(const std::filesystem::path &root, const auto &attemptRemoval) {
+        namespace AI = Horo::AI;
+        const auto query = AI::QueryId::Create(1).Value();
+        const auto stage = AI::QueryStageId::Create(1).Value();
+        const auto schema = AI::QueryResultSchemaId::Create(1).Value();
+        const auto point = AI::CreateBuiltinLatticeQuery(query, stage, schema, "Local points", {.stepMillimeters = 25, .outerSteps = 1}, 9);
+        const auto perception = AI::CreateBuiltinPerceptionQuery(
+            query, stage, AI::QueryStageId::Create(2).Value(), schema, "Perceived actors", AI::QueryPerceptionMatch::Remembered, 4);
+        REQUIRE(point.HasValue());
+        REQUIRE(perception.HasValue());
+        const auto writeQuery = [](const std::filesystem::path &path, const AI::EnvironmentQueryAsset &source) {
+            const auto encoded = AI::EnvironmentQuerySourceCodec::Encode(source);
+            REQUIRE(encoded.HasValue());
+            WriteFixtureSource(path, {reinterpret_cast<const char *>(encoded.Value().data()), encoded.Value().size()});
+        };
+        const auto pointPath = root / "Assets/Points.horo_eqs";
+        writeQuery(pointPath, point.Value());
+        WriteFixtureSource(root / "Assets/Points.horo_eqs.horo",
+                           R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff82","assetType":"core.environment_query"})");
+        const auto perceptionPath = root / "Assets/Actors.horo_eqs";
+        const auto perceptionSidecar = root / "Assets/Actors.horo_eqs.horo";
+        WriteFixtureSource(perceptionSidecar,
+                           R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff83","assetType":"core.environment_query"})");
+        writeQuery(perceptionPath, perception.Value());
+        const auto checkBlockedQuery = [&](const std::string_view code) {
+            const auto report = attemptRemoval();
+            REQUIRE(report.outcome == Horo::Application::PackageOperationOutcome::Failed);
+            REQUIRE(report.diagnostic);
+            REQUIRE(report.diagnostic->diagnostics.size() == 1);
+            CHECK(report.diagnostic->diagnostics.front().code.Value() == code);
+            CHECK(report.diagnostic->diagnostics.front().location.source == "Assets/Actors.horo_eqs");
+        };
+        checkBlockedQuery("packages.host.perception_reference_review");
+        WriteFixtureSource(perceptionPath, "{");
+        checkBlockedQuery("packages.host.perception_reference_unreadable");
+        REQUIRE(std::filesystem::remove(perceptionSidecar));
+        REQUIRE(std::filesystem::remove(perceptionPath));
+    }
+}  // namespace
+
+TEST_CASE("Signed offline Editor package selection publishes only exactly approved Decision nodes", "[packages][decision-node][editor]") {
+    using namespace Horo::Application::Internal;
+    enum class Admission {
+        Approved,
+        ApprovedWithImporter,
+        ArchiveMismatch,
+        NativeSignatureMismatch
+    };
+    const auto admission = GENERATE(Admission::Approved, Admission::ApprovedWithImporter, Admission::ArchiveMismatch,
+                                    Admission::NativeSignatureMismatch);
+    const bool withImporter = admission == Admission::ApprovedWithImporter;
+    GameplayFixture fixture;
+    Horo::Tests::Packages::TemporaryDirectory project{"editor package decisions"};
+    const auto root = std::filesystem::canonical(project.Path());
+    const auto content = std::filesystem::canonical(fixture.base.temporary.Path());
+    const auto relativeMetadata = root / ".horo";
+    REQUIRE(std::filesystem::create_directories(relativeMetadata));
+    Horo::Tests::OpenXRProduct::SigningKey key;
+    const auto moduleBytes = FileBytes(HORO_TEST_GAME_MODULE_PATH);
+    const auto signedModule = key.Sign(std::as_bytes(
+        std::span{admission == Admission::NativeSignatureMismatch ? std::string_view{"different bytes"} : std::string_view{moduleBytes}}));
+    std::optional<std::string> importerSignature;
+    if (withImporter) {
+        const auto bytes = FileBytes(HORO_PACKAGE_NATIVE_FIXTURE);
+        importerSignature = EncodeDetachedSignatureDocument(key.Sign(std::as_bytes(std::span{bytes})));
+    }
+    const auto locked = GameplayGraph(withImporter, EncodeDetachedSignatureDocument(signedModule), std::move(importerSignature));
+    const auto &entry = locked->packages.front();
+    const auto intent = nlohmann::json{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
+                                       {"dependencies", {{"fixture.gameplay", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}}
+                            .dump();
+    const auto request = ValidatedPackageRequest::Parse(intent);
+    REQUIRE(request.HasValue());
+    const PackageResolutionPlan resolution{
+        .packages = {{entry.lock.package, entry.lock.version, entry.lock.source, entry.lock.artifactDigest, {}}}};
+    const PackageLockArtifact artifact{.package = entry.lock.package,
+                                       .version = entry.lock.version,
+                                       .source = entry.lock.source,
+                                       .artifactDigest = entry.lock.artifactDigest,
+                                       .manifestDigest = entry.lock.manifestDigest,
+                                       .fileManifestDigest = entry.lock.fileManifestDigest,
+                                       .packageFormatVersion = 1,
+                                       .contributions = {"native"}};
+    const auto lock = ValidatedPackageLockfileV1::Generate(resolution, std::span{&entry.lock.package, 1}, request.Value().Digest(),
+                                                           std::span{&artifact, 1});
+    REQUIRE(lock.HasValue());
+    WriteFixtureSource(relativeMetadata / "packages.json", intent);
+    WriteFixtureSource(relativeMetadata / "packages.lock", lock.Value().SerializeCanonical());
+    const auto cacheRoot = content / "decision-host-cache";
+    auto cache = PackageCacheStore::Create(fixture.base.files, cacheRoot);
+    REQUIRE(cache.HasValue());
+    auto cacheStore = std::move(cache).Value();
+    REQUIRE(cacheStore.Publish(*entry.archive, key.Sign(entry.archive->Bytes())).HasValue());
+    const auto trustDocument = content / "approved-publishers.json";
+    constexpr std::string_view digits{"0123456789abcdef"};
+    std::string publicKey;
+    for (const auto byte : key.root.publicKey) {
+        const auto value = std::to_integer<unsigned>(byte);
+        publicKey.push_back(digits[value >> 4U]);
+        publicKey.push_back(digits[value & 15U]);
+    }
+    const auto trustJson = nlohmann::json{{"schemaVersion", 1},
+                                          {"allowUnsigned", false},
+                                          {"publishers",
+                                           {{{"publisherId", key.root.publisherId},
+                                             {"keyId", key.root.keyId},
+                                             {"algorithm", "ecdsa-p256-sha256"},
+                                             {"publicKeyHex", publicKey},
+                                             {"expiresAtUnixMilliseconds", 0},
+                                             {"revoked", false}}}}}
+                               .dump();
+    WriteFixtureSource(trustDocument, trustJson);
+    const auto projectTrust = root / "unapproved-publishers.json";
+    WriteFixtureSource(projectTrust, trustJson);
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
+    const SteadyClock clock;
+    const SystemWallClock wall;
+    const auto platform = NativePackagePlatform();
+    REQUIRE(platform.HasValue());
+    const PackageProjectPolicy base{.projectRoot = root,
+                                    .cacheRoot = cacheRoot,
+                                    .platform = platform.Value(),
+                                    .lifecycle = {.temporaryRoot = cacheRoot / "native",
+                                                  .profile = Extensions::ExtensionHostProfile::Interactive}};
+    const ApprovedGameplayPackage approved{entry.lock.package,
+                                           "fixture.gameplay",
+                                           fixture.enabled.module,
+                                           admission == Admission::ArchiveMismatch ? ComputeSha256({}) : entry.lock.artifactDigest,
+                                           entry.lock.manifestDigest,
+                                           Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+    CHECK(PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {projectTrust, {approved}}).HasError());
+    ApprovedGameplayPackageArguments approvals{trustDocument, {approved}};
+    if (withImporter)
+        approvals.approvals.push_back({entry.lock.package, "fixture.gameplay", "fixture.backend", entry.lock.artifactDigest,
+                                       entry.lock.manifestDigest, 0, Extensions::ExtensionModuleRole::BackendCapability});
+    auto prepared = PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, approvals);
+    REQUIRE(prepared.HasValue());
+    auto configuration = std::move(prepared).Value();
+    auto created =
+        PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, *configuration.execution,
+                                    {Platform::CreateNativeProjectReadFiles, Horo::Application::CreateProjectAssetRegistrySource}},
+                                   std::move(configuration.policy),
+                                   Duration::FromMilliseconds(60'000), nullptr, configuration.publishers.get());
+    REQUIRE(created.HasValue());
+    const auto host = std::move(created).Value();
+    CHECK(host->HasGameplayModuleOwner());
+    CHECK(host->HasImporterModuleOwner() == withImporter);
+    CHECK(host->Acquire(content).HasError());
+    std::shared_ptr<Horo::Application::PackageApplication> application;
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+         !application && std::chrono::steady_clock::now() < deadline;) {
+        auto acquired = host->Acquire(root);
+        if (acquired.HasValue())
+            application = std::move(acquired).Value();
+        else
+            REQUIRE(acquired.ErrorValue().code.Value() == "packages.host.preparing");
+        std::this_thread::yield();
+    }
+    REQUIRE(application);
+    CHECK_FALSE(host->DecisionCatalog(root));
+    const auto unobserved = host->RemovalRegistrations(root, host->Generation());
+    REQUIRE(unobserved.HasValue());
+    CHECK_FALSE(unobserved.Value());
+    Horo::Editor::PackageModalSession modal{application};
+    const auto generation = modal.Open();
+    REQUIRE(generation.HasValue());
+    CHECK(modal.ActivateModules({generation.Value().value + 1}, std::span{&fixture.enabled, 1}).HasError());
+    std::vector selected{fixture.enabled};
+    if (withImporter)
+        selected.emplace_back(fixture.enabled.package, fixture.enabled.descriptor, "fixture.backend",
+                              Extensions::ExtensionModuleRole::BackendCapability);
+    const auto activated = modal.ActivateModules(generation.Value(), selected);
+    REQUIRE(activated.HasValue());
+    const auto pump = [&](Horo::Application::PackageOperationId operation) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(host->PumpProject(root, PackageActivationBoundary::Quiescent).HasValue());
+            auto progress = application->Query(operation);
+            REQUIRE(progress.HasValue());
+            if (progress.Value().outcome != Horo::Application::PackageOperationOutcome::Running)
+                return std::move(progress).Value();
+            std::this_thread::yield();
+        }
+        FAIL("Configured project package request did not finish.");
+        return Horo::Application::PackageOperationSnapshot{};
+    };
+    const auto publication = pump(activated.Value());
+    INFO((publication.diagnostic ? publication.diagnostic->message : ""));
+    if (admission == Admission::ArchiveMismatch || admission == Admission::NativeSignatureMismatch) {
+        CHECK(publication.outcome == Horo::Application::PackageOperationOutcome::Failed);
+        CHECK_FALSE(host->DecisionCatalog(root));
+        REQUIRE(modal.Close(generation.Value()).HasValue());
+        REQUIRE(host->Close().HasValue());
+        return;
+    }
+    REQUIRE(publication.outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    const auto stamp = host->DecisionCatalog(root);
+    REQUIRE(stamp);
+    REQUIRE(publication.activeGeneration);
+    CHECK(stamp->activation == *publication.activeGeneration);
+    CHECK_FALSE(host->DecisionCatalog(content));
+    const auto removalPlan = application->Plan();
+    REQUIRE(removalPlan.HasValue());
+    const auto activeRemoval = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+    REQUIRE(activeRemoval.HasError());
+    CHECK(activeRemoval.ErrorValue().code.Value() == "packages.activation.package_in_use");
+    const auto builtinImporters = std::make_shared<const Assets::AssetImporterCatalogSnapshot>();
+    PackageImporterCatalog retainedImporters;
+    if (withImporter) {
+        auto importers = host->ComposeImporters(root, builtinImporters);
+        REQUIRE(importers.HasValue());
+        retainedImporters = std::move(importers).Value();
+        const auto *contribution = retainedImporters->FindById("fixture.importer");
+        REQUIRE(contribution);
+        CHECK(contribution->packageId == fixture.enabled.package.Value());
+        CHECK(retainedImporters->FindByExtension("raw") == contribution->strategy.get());
+        CHECK(host->ComposeImporters(content, builtinImporters).Value() == builtinImporters);
+        CHECK(host->ComposeImporters(root, retainedImporters).HasError());
+        auto existing = *contribution;
+        existing.contributionId = "zzz.host.importer";
+        Assets::AssetImporterCatalog hostCatalog;
+        REQUIRE(hostCatalog.Register(std::move(existing)).HasValue());
+        auto published = hostCatalog.Publish();
+        REQUIRE(published.HasValue());
+        const auto prioritized = host->ComposeImporters(root, std::move(published).Value());
+        REQUIRE(prioritized.HasValue());
+        REQUIRE(prioritized.Value()->FindContributionByExtension("raw"));
+        CHECK(prioritized.Value()->FindContributionByExtension("raw")->contributionId == "zzz.host.importer");
+        CHECK(prioritized.Value()->FindById("fixture.importer"));
+    }
+    CHECK(host->AcquireDecisionNodes(root, {stamp->project + 1, stamp->activation}).HasError());
+    {
+        const auto leaves = host->AcquireDecisionNodes(root, *stamp);
+        REQUIRE(leaves.HasValue());
+        REQUIRE(leaves.Value().size() == 1);
+        REQUIRE(leaves.Value().front()->Contracts().size() == 1);
+        CHECK(leaves.Value().front()->Contracts().front().descriptor.type.Value() == 201);
+    }
+    const auto disable = modal.Submit(generation.Value(), Horo::Application::PackageOperationKind::Disable);
+    REQUIRE(disable.HasValue());
+    REQUIRE(pump(disable.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    if (withImporter) {
+        CHECK(host->ComposeImporters(root, builtinImporters).Value() == builtinImporters);
+        const auto leasedRemoval = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+        REQUIRE(leasedRemoval.HasError());
+        CHECK(leasedRemoval.ErrorValue().code.Value() == "packages.activation.package_in_use");
+        retainedImporters.reset();
+        REQUIRE(host->PumpProject(root, PackageActivationBoundary::Quiescent).HasValue());
+    }
+    CHECK_FALSE(host->DecisionCatalog(root));
+    CHECK(host->AcquireDecisionNodes(root, *stamp).HasError());
+    const auto retained = host->RemovalRegistrations(root, stamp->project);
+    REQUIRE(retained.HasValue());
+    REQUIRE(retained.Value());
+    REQUIRE(retained.Value()->registrations.size() == 1);
+    const auto &registration = retained.Value()->registrations.front();
+    CHECK(registration.activationGeneration == stamp->activation);
+    CHECK(registration.package == fixture.enabled.package);
+    REQUIRE(registration.behaviors.size() == 1);
+    CHECK(registration.behaviors.front().Value() == "game.tests.package_behavior");
+    REQUIRE(registration.componentUses.size() == 1);
+    CHECK(registration.componentUses.front().component.Value() == "game.tests.external_component");
+    CHECK(std::get<Gameplay::BehaviorTypeId>(registration.componentUses.front().consumer) == registration.behaviors.front());
+    REQUIRE(registration.decisionNodes.size() == 1);
+    CHECK(registration.decisionNodes.front().Value() == 201);
+    CHECK(registration.hasCustomSenses);
+    CHECK(host->RemovalRegistrations(root, stamp->project + 1).HasError());
+
+    REQUIRE(std::filesystem::create_directory(root / "Assets"));
+    if (withImporter) {
+        const auto imported = root / "Assets/Sample.horoasset";
+        auto importerSidecar = imported;
+        importerSidecar += ".horo";
+        WriteFixtureSource(imported, "{}");
+        WriteFixtureSource(importerSidecar,
+                           R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff82","assetType":"core.texture","importerPackageId":"fixture.gameplay"})");
+        const auto attempt = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+        REQUIRE(attempt.HasValue());
+        const auto blocked = pump(attempt.Value());
+        REQUIRE(blocked.outcome == Horo::Application::PackageOperationOutcome::Failed);
+        REQUIRE(blocked.diagnostic);
+        CHECK(std::ranges::any_of(blocked.diagnostic->diagnostics, [](const auto &item) {
+            return item.code.Value() == "packages.host.importer_in_use" && item.path == "Assets/Sample.horoasset";
+        }));
+        REQUIRE(std::filesystem::remove(importerSidecar));
+        REQUIRE(std::filesystem::remove(imported));
+    }
+    const auto graph = AI::DecisionGraphTestSupport::TaskTree(1, registration.decisionNodes.front().Value());
+    const auto saved = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(saved.HasValue());
+    const auto graphPath = root / "Assets/Agent.horo_bt";
+    const auto graphSidecar = root / "Assets/Agent.horo_bt.horo";
+    WriteFixtureSource(graphPath, {reinterpret_cast<const char *>(saved.Value().data()), saved.Value().size()});
+    WriteFixtureSource(graphSidecar,
+                       R"({"schemaVersion":1,"assetId":"174ee050-f0a1-4351-89c4-04a5895bff81","assetType":"core.behavior_tree"})");
+    const auto blocked = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+    REQUIRE(blocked.HasValue());
+    const auto references = pump(blocked.Value());
+    REQUIRE(references.outcome == Horo::Application::PackageOperationOutcome::Failed);
+    REQUIRE(references.diagnostic);
+    for (const auto code : {"packages.host.decision_node_in_use", "packages.host.perception_reference_review"})
+        CHECK(std::ranges::any_of(references.diagnostic->diagnostics, [code](const auto &item) {
+            return item.code.Value() == code && item.location.source == "Assets/Agent.horo_bt";
+        }));
+    REQUIRE(std::filesystem::remove(graphSidecar));
+    REQUIRE(std::filesystem::remove(graphPath));
+
+    CheckQueryRemoval(root, [&] {
+        const auto operation = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+        REQUIRE(operation.HasValue());
+        return pump(operation.Value());
+    });
+
+    const auto removed = modal.Remove(generation.Value(), fixture.enabled.package, removalPlan.Value());
+    REQUIRE(removed.HasValue());
+    REQUIRE(pump(removed.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    CHECK(std::filesystem::is_regular_file(root / "Assets/Points.horo_eqs"));
+    const auto refreshed = PreparePackageProject(base, fixture.base.files, {});
+    REQUIRE(refreshed.HasValue());
+    CHECK(refreshed.Value().application.lockedPlan->Packages().empty());
+    const auto rollback = ReadPackageProjectRollback(base, fixture.base.files, {});
+    REQUIRE(rollback.HasValue());
+    CHECK(rollback.Value().request == intent);
+    CHECK(rollback.Value().lock == lock.Value().SerializeCanonical());
+    REQUIRE(modal.Close(generation.Value()).HasValue());
+    REQUIRE(host->Close().HasValue());
+}
+
+TEST_CASE("Verified package custom senses preserve locked identity and revoke before native cleanup", "[packages][sense-provider]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto acquired = fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation);
+    REQUIRE(acquired.HasValue());
+    auto contribution = std::move(acquired).Value();
+    CHECK(contribution.package == fixture.enabled.package);
+    CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
+    CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
+    CHECK(contribution.activationGeneration == generation);
+    REQUIRE(contribution.senses->Contracts().size() == 1);
+    CHECK(contribution.senses->Contracts()[0].sense.identity.Value() == 202);
+    CHECK(contribution.senses->Contracts()[0].sense.origin.kind == AI::PerceptionDescriptorSourceKind::Package);
+    CHECK(fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation + 1).HasError());
+    bool offOwnerRejected{};
+    std::thread offOwner([&] {
+        offOwnerRejected = fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation).HasError();
+    });
+    offOwner.join();
+    CHECK(offOwnerRejected);
+    AI::PerceptionSenseTestSupport::InputFixture inputs;
+    auto instance = inputs.Instance(contribution.senses);
+    AI::AiWorkBudget budget{6};
+    REQUIRE(instance->Evaluate(inputs.Input(), budget, budget).HasValue());
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(contribution.senses->CanAdmit());
+    CHECK(fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation).HasError());
+    AI::AiWorkBudget revoked{6};
+    AI::TestSupport::ExpectError(instance->Evaluate(inputs.Input(2), revoked, revoked), AI::AIErrors::RuntimeUnavailable);
+    CHECK(fixture.retirement->Close().HasError());
+    instance.reset();
+    CHECK(fixture.retirement->Close().HasError());
+    contribution.senses.reset();
     CHECK(fixture.retirement->Close().HasValue());
 }
 
@@ -269,6 +863,153 @@ TEST_CASE("Verified package script nodes use actual declared bytes and inherit n
     executor.reset();
     nodes.reset();
     program.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Verified native and Lua package nodes use the same cooked decision execution contract", "[packages][decision-node]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto acquired = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(acquired.HasValue());
+    REQUIRE(acquired.Value().size() == 1);
+    const auto native = acquired.Value().front().nodes;
+    REQUIRE(native);
+    REQUIRE(native->Contracts().size() == 1);
+    const auto nativeType = native->Contracts().front().descriptor.type;
+    const auto scriptType = AI::DecisionNodeTypeId::Create(202).Value();
+    auto script = fixture.gameplay->CompileDecisionNode(fixture.enabled.package, "game.tests", generation,
+                                                        Parse<PackagePath>("extensions/native/Node.horo_script"), scriptType,
+                                                        AI::DecisionProviderId::Create(702).Value(), 1);
+    REQUIRE(script.HasValue());
+    auto acquiredScript = script.Value()->Acquire();
+    REQUIRE(acquiredScript.HasValue());
+    const std::array providers{native, acquiredScript.Value()};
+    auto composed = AI::DecisionNodeGeneration::Compose(providers);
+    REQUIRE(composed.HasValue());
+
+    AI::DecisionGraphTestSupport::Fixture world;
+    auto environment = world.Environment();
+    environment.nodes = std::move(composed).Value();
+    AI::DecisionStepTrace nativeTrace;
+    AI::DecisionStepTrace scriptTrace;
+    const auto nativePlan = RunPackageCondition(nativeType, environment, world, nativeTrace);
+    const auto scriptPlan = RunPackageCondition(scriptType, environment, world, scriptTrace);
+    CHECK_FALSE(nativeTrace.Records().empty());
+    CHECK(std::ranges::equal(nativeTrace.Records(), scriptTrace.Records()));
+    CHECK(nativeTrace.Header().planDigest != scriptTrace.Header().planDigest);
+
+    fixture.base.service->Shutdown();
+    for (const auto &plan : {nativePlan, scriptPlan}) {
+        CHECK_FALSE(plan->IsCurrent());
+        CHECK(AI::DecisionGraphInstance::Create(plan, environment.nodes, world.RuntimeBinding()).HasError());
+    }
+}
+
+TEST_CASE("Verified package script senses use declared bytes and retain their actual native parent", "[packages][sense-provider]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto activation = fixture.base.service->Active()->generation;
+    AI::PerceptionSenseTestSupport::InputFixture inputs;
+    const AI::PerceptionDescriptorOrigin origin{AI::PerceptionDescriptorSourceKind::Script,
+                                                AI::TestSupport::MakeIdentity<AI::PerceptionProviderId>(702), 1};
+    AI::PerceptionSenseContract contract{{AI::TestSupport::MakeIdentity<AI::SenseTypeId>(302), origin, "package script sense",
+                                          inputs.capabilities},
+                                         {AI::TestSupport::MakeIdentity<AI::StimulusTypeId>(303), origin, "package script result", 1, {}},
+                                         0,
+                                         4,
+                                         2};
+    const auto source = Parse<PackagePath>("extensions/native/Sense.horo_script");
+    CHECK(fixture.gameplay->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation + 1, source, contract).HasError());
+    CHECK(fixture.gameplay
+              ->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation,
+                                       Parse<PackagePath>("extensions/native/Missing.horo_script"), contract)
+              .HasError());
+    auto compiled = fixture.gameplay->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation, source, contract);
+    REQUIRE(compiled.HasValue());
+    auto program = std::move(compiled).Value();
+    auto acquired = program->Acquire();
+    REQUIRE(acquired.HasValue());
+    auto senses = std::move(acquired).Value();
+    CHECK(senses->Contracts()[0].source.source == source.Value());
+    auto instance = inputs.Instance(senses);
+    AI::AiWorkBudget budget{6};
+    const auto evaluated = instance->Evaluate(inputs.Input(), budget, budget);
+    REQUIRE(evaluated.HasValue());
+    REQUIRE(evaluated.Value().count == 2);
+    CHECK(evaluated.Value().samples[0].sensed);
+    CHECK_FALSE(evaluated.Value().samples[1].sensed);
+
+    Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+    for (std::uint64_t index = 1; index <= 3; ++index) {
+        Runtime::RuntimeEntityDefinition entity;
+        entity.object = Runtime::SceneObjectId{index};
+        builder.Add(entity);
+    }
+    const auto definition = std::move(builder).Build();
+    REQUIRE(definition.HasValue());
+    auto created = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{77});
+    REQUIRE(created.HasValue());
+    auto scene = std::move(created).Value();
+    const auto view = scene->View();
+    AI::PerceptionSenseTestSupport::InputFixture sceneInputs;
+    const auto listener = *view.Find(Runtime::SceneObjectId{1});
+    sceneInputs.binding.listener = AI::ProjectPerceptionSource(listener);
+    auto sceneInstance = sceneInputs.Instance(senses);
+    AI::PerceptionSpatialListener spatialListener;
+    spatialListener.entity = listener;
+    spatialListener.position = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0);
+    spatialListener.senses[0] = contract.sense.identity;
+    spatialListener.senseCount = 1;
+    std::array<AI::PerceptionSpatialSource, 2> sources;
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        auto &candidate = sources[index];
+        candidate.entity = *view.Find(Runtime::SceneObjectId{index + 2});
+        candidate.position = sceneInputs.candidates[index].position;
+        candidate.layers = 1;
+        candidate.senses[0] = contract.sense.identity;
+        candidate.senseCount = 1;
+    }
+    AI::PerceptionSpatialBroadphase spatial;
+    REQUIRE(spatial.Publish(view, 1, std::span{&spatialListener, 1}, sources).HasValue());
+    auto admittedMemory = AI::AIPerceptionMemory::Create(77, sceneInputs.binding.agent);
+    REQUIRE(admittedMemory.HasValue());
+    auto memory = std::move(admittedMemory).Value();
+    const AI::PerceptionSpatialQuery query{.listener = listener,
+                                           .sense = contract.sense.identity,
+                                           .radiusMillimeters = 10'000,
+                                           .visibleLayers = 1,
+                                           .maximumCandidates = 2};
+    AI::AiWorkBudget sceneBudget{100};
+    const auto staged = AI::RunPerceptionSenseAtSensePoll(view, spatial, *sceneInstance, query, 1, memory, sceneBudget, sceneBudget);
+    REQUIRE(staged.HasValue());
+    CHECK(staged.Value().candidates == 2);
+    CHECK(staged.Value().samples == 2);
+    CHECK(sceneBudget.Remaining() == 93);
+    const auto before = memory.Snapshot(1, AI::PerceptionSceneLiveness(*scene));
+    REQUIRE(before.HasValue());
+    REQUIRE(before.Value().count == 1);
+    CHECK(before.Value().entries[0].lastKnownPosition == sources[0].position);
+
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(senses->CanAdmit());
+    CHECK(program->Acquire().HasError());
+    CHECK(fixture.retirement->Close().HasError());
+    AI::AiWorkBudget revoked{6};
+    AI::TestSupport::ExpectError(instance->Evaluate(inputs.Input(2), revoked, revoked), AI::AIErrors::RuntimeUnavailable);
+    AI::TestSupport::ExpectError(AI::RunPerceptionSenseAtSensePoll(view, spatial, *sceneInstance, query, 2, memory, sceneBudget,
+                                                                   sceneBudget),
+                                 AI::AIErrors::RuntimeUnavailable);
+    CHECK(sceneBudget.Remaining() == 93);
+    const auto after = memory.Snapshot(2, AI::PerceptionSceneLiveness(*scene));
+    REQUIRE(after.HasValue());
+    REQUIRE(after.Value().count == 1);
+    CHECK(after.Value().entries[0].lastSensedTick == 1);
+    instance.reset();
+    senses.reset();
+    program.reset();
+    CHECK(fixture.retirement->Close().HasError());
+    sceneInstance.reset();
     CHECK(fixture.retirement->Close().HasValue());
 }
 

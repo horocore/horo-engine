@@ -105,6 +105,14 @@ TEST_CASE("Metal sampled images loaded without a sampler reconcile the genuine c
     REQUIRE(result.HasValue());
     REQUIRE(result.Value().targetBindings.size() == 2);
     CHECK_FALSE(result.Value().targetBindings[1].pairedSampler.IsValid());
+
+    const auto accessibleStage = ColorOutputShaderStage::EncodeSdrWithAccessibility;
+    const auto accessible = MakeColorOutputShaderManifest(accessibleStage, Target());
+    REQUIRE(accessible.HasValue());
+    const auto legacyAsAccessible = NormalizeRegisterRasterReflection(accessible.Value(), Target(), reflection, native,
+                                                                      ColorOutputShaderReflectionNames(accessibleStage));
+    REQUIRE(legacyAsAccessible.HasError());
+    CHECK(legacyAsAccessible.ErrorValue().code.Value() == ShaderReflectionErrors::InvalidReflection.code.Value());
 }
 
 TEST_CASE("Metal independent resources reject duplicate native texture or sampler namespace slots",

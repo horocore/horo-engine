@@ -4,6 +4,7 @@
  * @brief Headless composition of Scene cooking, canonical world artifacts, package admission and Assets publication.
  */
 #include "Horo/Assets/AssetCookOutput.h"
+#include "Horo/Navigation/NavigationCellTileSelection.h"
 #include "Horo/Runtime/Scene/IncrementalSceneCellCook.h"
 #include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
 #include "Horo/Runtime/Scene/WorldBuildValidation.h"
@@ -40,6 +41,12 @@ namespace Horo::WorldCook {
     /** @brief Explicit spatial versus base-content ownership; an absent placement cannot silently drop an object. */
     using ObjectBinding = std::variant<SpatialObjectBinding, BaseObjectBinding>;
 
+    /** @brief Exact membership captured for a required NavigationMesh block in one authored cell. */
+    struct CellNavigationBinding final {
+        WorldStreaming::StreamingCellId cell;
+        Navigation::NavigationCellTileSelection selection;
+    };
+
     /**
      * @brief One host-captured immutable source publication, borrowed for the complete synchronous operation.
      * @details The caller confines source access to the owning thread and prevents mutation until return. Scene owns
@@ -61,6 +68,7 @@ namespace Horo::WorldCook {
         std::string_view worldName;
         WorldStreaming::WorldIndexCoordinateSystem coordinates{};
         std::span<const WorldStreaming::WorldIndexVolume> volumes;
+        std::span<const CellNavigationBinding> navigationCells{}; /**< Strictly canonical cell order, at most one binding per cell. */
     };
 
     /** @brief Explicit registered Assets types for each generated provider-owned artifact role. */

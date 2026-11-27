@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    struct FrameContext;
     struct FixedStepContext;
     class RuntimeDispatchSource;
 }  // namespace Horo::Runtime
@@ -21,6 +22,7 @@ namespace Horo::Runtime {
 namespace Horo::Editor {
     class NavigationProjectSettingsSession;
     class PrefabProjectSettingsSession;
+    class ConfigurationSettingsSession;
 
     /**
      * @file GuiScreen.h
@@ -137,6 +139,12 @@ namespace Horo::Editor {
     public:
         virtual ~GuiScreen() = default;
 
+        /** @brief Opens a modal-owned descriptor draft over this exact project's revocable source operations.
+         * @return Shared generic session, null outside a project, or the original project admission error. */
+        [[nodiscard]] virtual Result<std::shared_ptr<ConfigurationSettingsSession>> ProjectConfiguration() {
+            return Result<std::shared_ptr<ConfigurationSettingsSession>>::Success(nullptr);
+        }
+
         /** @brief Returns this project host's navigation settings authority.
          * @return Borrowed owner, explicit null for nonproject screens, or original admission failure.
          * @pre The host keeps this screen alive until its owned modal has closed.
@@ -170,6 +178,13 @@ namespace Horo::Editor {
 
         /** @brief Receives the actual scheduler callback; the default preserves legacy numeric screen updates. */
         [[nodiscard]] virtual Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context);
+
+        /** @brief Advances screen-owned structural work at the host's deferred lifecycle cutoff.
+         * @param context Current frame with live scheduler evidence for that cutoff.
+         */
+        virtual void OnRuntimeSceneCutoff(const Runtime::FrameContext &context) {
+            static_cast<void>(context);
+        }
 
         /** @brief Binds the actual host issuer after successful entry; ordinary non-runtime screens retain no capability. */
         [[nodiscard]] virtual Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &) {

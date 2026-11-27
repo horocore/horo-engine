@@ -1,9 +1,13 @@
 #if defined(__linux__)
 #include "../../../support/renderer/RenderBackendDrainTestSupport.h"
+#include "EditorVulkanViewportShader.h"
+#include "Horo/Runtime/Render/MaterialBinding.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 
 #include <chrono>
 #include <cstdlib>
 #include <dlfcn.h>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 
@@ -81,8 +85,8 @@ namespace {
             }
         }
 
-        void Initialize() {
-            REQUIRE(RegisterVulkanRenderBackend(registry, loader).HasValue());
+        void Initialize(VulkanEditorGraphicsBridge *bridge = nullptr) {
+            REQUIRE(RegisterVulkanRenderBackend(registry, loader, bridge).HasValue());
             REQUIRE(registry.Seal().HasValue());
             auto created = registry.Create(RenderBackendId{"vulkan"});
             REQUIRE(created.HasValue());
@@ -94,7 +98,7 @@ namespace {
             REQUIRE(initialized.HasValue());
         }
 
-        std::uint64_t Shader(ShaderStage stage, const std::vector<std::uint8_t> &bytes) {
+        std::uint64_t Shader(ShaderStage stage, std::span<const std::uint8_t> bytes) {
             const auto entry = std::ranges::find(metadata.manifest.entryPoints, stage, &ShaderEntryPoint::stage);
             REQUIRE(entry != metadata.manifest.entryPoints.end());
             RenderShaderModuleDescriptor d{metadata.target, stage, entry->name, metadata.artifact,
@@ -119,7 +123,8 @@ namespace {
             fragment = Shader(ShaderStage::Fragment, fragmentBytes);
         }
 
-        void PreparePipeline(const RenderViewRouting routing = RenderViewRouting::SingleView) {
+        void PreparePipeline(const RenderViewRouting routing = RenderViewRouting::SingleView,
+                             const RenderGraphicsPipelineState *exactState = nullptr) {
             const auto identity = backend->QueryPipelineDeviceIdentity();
             REQUIRE(identity.HasValue());
             RenderGraphicsPipelineDescriptor pipeline{.vertex = {{1}, 1, 1},
@@ -133,6 +138,8 @@ namespace {
                 pipeline.state.depthWrite = false;
                 pipeline.state.cull = RenderCullMode::None;
             }
+            if (exactState)
+                pipeline.state = *exactState;
             pipeline.state.viewRouting = routing;
             pipeline.compatibility = {.schemaVersion = 1,
                                       .backend = identity.Value().backend,
@@ -230,6 +237,58 @@ TEST_CASE("Vulkan native device consumes compiled SPIR-V pipeline and material d
 }
 
 #include "VulkanTransformNativeSmoke.inl"
+
+TEST_CASE("Vulkan submits both cooked desktop temporal guide prepasses", "[vulkan][shader][native-smoke][temporal]") {
+    using namespace Horo::Editor;
+    const auto *stage = std::getenv("HORO_TEST_EDITOR_TEMPORAL_STAGE");
+    if (!stage)
+        SKIP("Set HORO_TEST_EDITOR_TEMPORAL_STAGE to the reviewed Vulkan temporal reconstruction cook output.");
+    for (const auto input : {EditorVulkanTemporalInput::LinearDepth, EditorVulkanTemporalInput::Motion}) {
+        const char *name = input == EditorVulkanTemporalInput::LinearDepth ? "viewport-linear-depth-vulkan" : "viewport-motion-vulkan";
+        CAPTURE(name);
+        const auto base = std::filesystem::path{stage} / "assets/shaders/editor" / name;
+        const auto payload = ReadShader((base.string() + ".horoshdr").c_str());
+        const auto reflection = ReadShader((base.string() + ".reflection.json").c_str());
+        const auto cooked = ValidateEditorVulkanTemporalInputCook(input, payload, reflection);
+        REQUIRE(cooked.HasValue());
+        const auto state = EditorVulkanTemporalInputPipelineState(input);
+        REQUIRE(state.HasValue());
+
+        NativeTransformFixture fixture;
+        fixture.Initialize();
+        fixture.metadata.manifest = EditorVulkanTemporalInputShaderManifest(input);
+        fixture.metadata.target = EditorVulkanViewportShaderTarget();
+        fixture.metadata.artifact = cooked.Value().cookedArtifactKey;
+        fixture.metadata.reflection = cooked.Value().reflection;
+        const auto stages = DecodeShaderArtifactStages(payload, fixture.metadata.target.backend, fixture.metadata.target.payloadFormat,
+                                                       16U * 1024U * 1024U);
+        REQUIRE(stages.HasValue());
+        REQUIRE(stages.Value().stageCount == 2);
+        for (const auto &shader : std::span{stages.Value().stages}.first(stages.Value().stageCount)) {
+            auto &handle = shader.stage == ShaderStage::Vertex ? fixture.vertex : fixture.fragment;
+            handle = fixture.Shader(shader.stage, shader.bytes);
+        }
+        fixture.PreparePipeline(RenderViewRouting::SingleView, &state.Value());
+        fixture.PrepareDraw(false, {}, &state.Value());
+
+        const auto layout = PrepareMaterialBindingLayout(cooked.Value().reflection);
+        REQUIRE(layout.HasValue());
+        MaterialParameterBinding uniforms;
+        uniforms.bytes.resize(3 * sizeof(Math::Mat4) + 16);
+        constexpr auto raster = Math::Mat4::Identity();
+        Math::Mat4 view = raster;
+        view.values[14] = -3.0F;
+        RenderMotionCameraPair camera{.hasPrevious = true};
+        RenderMotionObjectPair object{.hasPrevious = true};
+        object.previousLocalToWorld.values[12] = -0.25F;
+        const auto written = input == EditorVulkanTemporalInput::LinearDepth
+                                 ? PackEditorVulkanTemporalDepth(layout.Value(), raster, view, uniforms.bytes)
+                                 : PackEditorVulkanTemporalMotion(layout.Value(), raster, camera, object, uniforms.bytes);
+        REQUIRE(written.HasValue());
+        uniforms.bytes.resize(written.Value());
+        fixture.Submit(std::move(uniforms));
+    }
+}
 
 // Multiview native qualification borrows the transform fixture defined above.
 #include "VulkanMultiviewNativeSmoke.inl"

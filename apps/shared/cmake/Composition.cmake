@@ -1,15 +1,37 @@
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
+set(HORO_NPC_DIALOGUE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/npc_dialogue_host_headers")
+file(MAKE_DIRECTORY "${HORO_NPC_DIALOGUE_HOST_HEADERS}")
+configure_file(shared/ai/NpcDialogueHttpsProvider.h "${HORO_NPC_DIALOGUE_HOST_HEADERS}/NpcDialogueHttpsProvider.h" COPYONLY)
+configure_file(shared/ai/NpcDialogueProjectActivation.h "${HORO_NPC_DIALOGUE_HOST_HEADERS}/NpcDialogueProjectActivation.h" COPYONLY)
+configure_file(shared/ai/NpcDialogueScenePresentation.h "${HORO_NPC_DIALOGUE_HOST_HEADERS}/NpcDialogueScenePresentation.h" COPYONLY)
+add_library(HoroNpcDialogueHttpsHostInternal STATIC shared/ai/NpcDialogueHttpsProvider.cpp shared/ai/NpcDialogueProjectActivation.cpp)
+target_compile_features(HoroNpcDialogueHttpsHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNpcDialogueHttpsHostInternal PUBLIC "${HORO_NPC_DIALOGUE_HOST_HEADERS}")
+target_link_libraries(HoroNpcDialogueHttpsHostInternal PUBLIC HoroEngine::AI HoroEngine::ProjectSettings PRIVATE CURL::libcurl)
+add_library(HoroNpcDialogueScenePresentationInternal STATIC shared/ai/NpcDialogueScenePresentation.cpp)
+target_compile_features(HoroNpcDialogueScenePresentationInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNpcDialogueScenePresentationInternal PUBLIC "${HORO_NPC_DIALOGUE_HOST_HEADERS}")
+target_link_libraries(HoroNpcDialogueScenePresentationInternal PUBLIC HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::ProjectSettings HoroEngine::RuntimeUi)
+
 # Explicit non-installed package composition contract; stage only its owning host header.
 set(HORO_PACKAGE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/package_host_headers")
 file(MAKE_DIRECTORY "${HORO_PACKAGE_HOST_HEADERS}")
 configure_file(shared/packages/PackageProjectSession.h "${HORO_PACKAGE_HOST_HEADERS}/PackageProjectSession.h" COPYONLY)
 configure_file(shared/packages/PackageProjectHost.h "${HORO_PACKAGE_HOST_HEADERS}/PackageProjectHost.h" COPYONLY)
 configure_file(shared/packages/PackageHostPolicy.h "${HORO_PACKAGE_HOST_HEADERS}/PackageHostPolicy.h" COPYONLY)
+configure_file(shared/packages/ApprovedGameplayPackageHost.h "${HORO_PACKAGE_HOST_HEADERS}/ApprovedGameplayPackageHost.h" COPYONLY)
+configure_file(shared/packages/PackageBehaviorReferences.h "${HORO_PACKAGE_HOST_HEADERS}/PackageBehaviorReferences.h" COPYONLY)
+configure_file(shared/packages/PackageUpdateReferences.h "${HORO_PACKAGE_HOST_HEADERS}/PackageUpdateReferences.h" COPYONLY)
 add_library(HoroPackageProjectHost STATIC shared/packages/PackageProjectSession.cpp shared/packages/PackageProjectPreparation.cpp
-    shared/packages/PackageProjectHost.cpp shared/packages/PackageProjectMetadata.cpp shared/packages/PackageHostPolicy.cpp)
+    shared/packages/PackageProjectRemovalReferences.cpp shared/packages/PackageBehaviorReferences.cpp
+    shared/packages/PackageDecisionReferences.cpp shared/packages/PackageUpdateReferences.cpp
+    shared/packages/PackageProjectHost.cpp shared/packages/PackageProjectMetadata.cpp shared/packages/PackageHostPolicy.cpp
+    shared/packages/ApprovedGameplayPackageHost.cpp)
 target_compile_features(HoroPackageProjectHost PUBLIC cxx_std_20)
 target_include_directories(HoroPackageProjectHost PUBLIC "${HORO_PACKAGE_HOST_HEADERS}")
-target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication)
+target_link_libraries(HoroPackageProjectHost PUBLIC HoroEngine::PackageApplication HoroEngine::PackageGameplayHost
+    PRIVATE HoroHostSignatureDocuments HoroEngine::Security HoroEngine::Assets HoroEngine::AI HoroEngine::AISceneIntegration
+        HoroEngine::ProjectMutationGuard HoroEngine::ProjectReadFilesApi HoroEngine::SceneSource HoroEngine::PrefabAuthoring)
 
 # One application-owned signature document codec, shared by the package CLI and
 # explicit installed-host bootstrap. The staged interface is never installed.
@@ -20,6 +42,17 @@ add_library(HoroHostSignatureDocuments STATIC shared/security/HostSignatureDocum
 target_compile_features(HoroHostSignatureDocuments PUBLIC cxx_std_20)
 target_include_directories(HoroHostSignatureDocuments PUBLIC "${HORO_HOST_SIGNATURE_HEADERS}")
 target_link_libraries(HoroHostSignatureDocuments PUBLIC HoroEngine::PackageSecurity PRIVATE HoroFoundationJsonInternal)
+
+# The cold release trust policy bridges the Application and host crypto boundaries.
+set(HORO_RELEASE_MANIFEST_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/release_manifest_host_headers")
+file(MAKE_DIRECTORY "${HORO_RELEASE_MANIFEST_HOST_HEADERS}")
+configure_file(shared/security/HostReleaseManifestSignatureVerifier.h
+    "${HORO_RELEASE_MANIFEST_HOST_HEADERS}/HostReleaseManifestSignatureVerifier.h" COPYONLY)
+add_library(HoroReleaseManifestSignatureHostInternal STATIC shared/security/HostReleaseManifestSignatureVerifier.cpp)
+target_compile_features(HoroReleaseManifestSignatureHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroReleaseManifestSignatureHostInternal PUBLIC "${HORO_RELEASE_MANIFEST_HOST_HEADERS}")
+target_link_libraries(HoroReleaseManifestSignatureHostInternal PUBLIC HoroEngine::Application
+    PRIVATE HoroHostSignatureDocuments HoroEngine::Security)
 
 add_library(HoroHostModuleComposition STATIC
     shared/modules/HostModuleComposition.cpp
@@ -68,7 +101,74 @@ add_library(HoroScenePhysicsHost STATIC shared/scene/ScenePhysicsHost.cpp shared
 target_compile_features(HoroScenePhysicsHost PUBLIC cxx_std_20)
 target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOST_HEADERS}")
 target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
-        HoroEngine::ProjectPhysicsCapture)
+        HoroEngine::ProjectPhysicsCapture PRIVATE HoroEngine::AnimationSceneIntegration)
+
+set(HORO_SCENE_DECISION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_decision_headers")
+file(GENERATE OUTPUT "${HORO_SCENE_DECISION_HEADERS}/CookedDecisionSceneAdmission.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/scene/CookedDecisionSceneAdmission.h\"\n")
+add_library(HoroCookedDecisionSceneAdmissionInternal STATIC shared/scene/CookedDecisionSceneAdmission.cpp)
+target_compile_features(HoroCookedDecisionSceneAdmissionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroCookedDecisionSceneAdmissionInternal PUBLIC "${HORO_SCENE_DECISION_HEADERS}")
+target_link_libraries(HoroCookedDecisionSceneAdmissionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PrefabRuntime
+    PRIVATE HoroScenePhysicsHost HoroEngine::SceneRuntimeConversion HoroEngine::ProjectSettings)
+
+# Project Perception admission and position capture are shared by both application hosts.
+set(HORO_PROJECT_SCENE_PERCEPTION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_scene_perception_headers")
+file(GENERATE OUTPUT "${HORO_PROJECT_SCENE_PERCEPTION_HEADERS}/ProjectScenePerception.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/scene/ProjectScenePerception.h\"\n")
+add_library(HoroProjectScenePerceptionInternal STATIC shared/scene/ProjectScenePerception.cpp)
+target_compile_features(HoroProjectScenePerceptionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroProjectScenePerceptionInternal PUBLIC "${HORO_PROJECT_SCENE_PERCEPTION_HEADERS}")
+target_link_libraries(HoroProjectScenePerceptionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PlatformProjectIo
+    PRIVATE nlohmann_json::nlohmann_json)
+
+set(HORO_SCENE_QUERY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_query_headers")
+file(GENERATE OUTPUT "${HORO_SCENE_QUERY_HEADERS}/SceneDecisionQueries.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/scene/SceneDecisionQueries.h\"\n")
+add_library(HoroSceneDecisionQueriesInternal STATIC shared/scene/SceneDecisionQueries.cpp)
+target_compile_features(HoroSceneDecisionQueriesInternal PUBLIC cxx_std_20)
+target_include_directories(HoroSceneDecisionQueriesInternal PUBLIC "${HORO_SCENE_QUERY_HEADERS}")
+target_link_libraries(HoroSceneDecisionQueriesInternal
+    PUBLIC HoroCookedDecisionSceneAdmissionInternal HoroEngine::AISightIntegration HoroEngine::AINavigationIntegration
+    PRIVATE HoroScenePhysicsHost HoroProjectScenePerceptionInternal)
+
+# The installed standalone and Editor Play hosts share a canonical mounted-World adapter.
+set(HORO_MOUNTED_WORLD_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/mounted_world_host_headers")
+file(MAKE_DIRECTORY "${HORO_MOUNTED_WORLD_HOST_HEADERS}")
+configure_file(shared/world/MountedWorldHost.h "${HORO_MOUNTED_WORLD_HOST_HEADERS}/MountedWorldHost.h" COPYONLY)
+add_library(HoroMountedWorldHostInternal STATIC shared/world/MountedWorldHost.cpp)
+target_compile_features(HoroMountedWorldHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroMountedWorldHostInternal PUBLIC "${HORO_MOUNTED_WORLD_HOST_HEADERS}")
+target_link_libraries(HoroMountedWorldHostInternal
+    PUBLIC HoroEngine::SceneRenderExtraction HoroEngine::WorldStreaming HoroEngine::RuntimeScene HoroEngine::Assets HoroEngine::NavigationCellContent
+    PRIVATE HoroEngine::SceneCellPayload HoroScenePhysicsHost)
+
+set(HORO_PROJECT_NAVIGATION_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_navigation_scene_headers")
+file(GENERATE OUTPUT "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}/ProjectSceneNavigationComposition.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/navigation/ProjectSceneNavigationComposition.h\"\n")
+file(GENERATE OUTPUT "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}/ProjectNavigationLinkClearance.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/navigation/ProjectNavigationLinkClearance.h\"\n")
+add_library(HoroProjectNavigationLinkClearanceInternal STATIC shared/navigation/ProjectNavigationLinkClearance.cpp)
+target_compile_features(HoroProjectNavigationLinkClearanceInternal PUBLIC cxx_std_20)
+target_include_directories(HoroProjectNavigationLinkClearanceInternal PUBLIC "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}")
+target_link_libraries(HoroProjectNavigationLinkClearanceInternal PUBLIC HoroEngine::NavigationApi HoroEngine::Physics)
+add_library(HoroProjectSceneNavigationHostInternal STATIC shared/navigation/ProjectSceneNavigationComposition.cpp
+    shared/navigation/MountedNavigationComposition.cpp)
+target_compile_features(HoroProjectSceneNavigationHostInternal PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectSceneNavigationHostInternal PRIVATE HoroMountedWorldHostInternal)
+target_include_directories(HoroProjectSceneNavigationHostInternal PUBLIC "${HORO_PROJECT_NAVIGATION_SCENE_HEADERS}")
+target_link_libraries(HoroProjectSceneNavigationHostInternal
+    PUBLIC HoroEngine::NavigationAssetSceneIntegration HoroEngine::PlatformProjectReadFiles HoroProjectNavigationLinkClearanceInternal
+    PRIVATE HoroEngine::NavigationRecastDetour HoroEngine::ProjectSettings)
+
+set(HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_ai_navigation_motion_headers")
+file(GENERATE OUTPUT "${HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS}/SceneAiNavigationMotion.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/navigation/SceneAiNavigationMotion.h\"\n")
+add_library(HoroSceneAiNavigationMotionInternal STATIC shared/navigation/SceneAiNavigationMotion.cpp)
+target_compile_features(HoroSceneAiNavigationMotionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroSceneAiNavigationMotionInternal PUBLIC "${HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS}")
+target_link_libraries(HoroSceneAiNavigationMotionInternal PUBLIC HoroEngine::AINavigationIntegration HoroEngine::NavigationCharacterIntegration)
+target_link_libraries(HoroSceneAiNavigationMotionInternal PRIVATE HoroScenePhysicsHost)
 
 # Non-installed identity authority shared by application Scene factories, never by copied counters.
 set(HORO_ANIMATION_HOST_IDENTITY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/animation_host_identity_headers")

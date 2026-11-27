@@ -1,5 +1,5 @@
 #include "AllocationProbe.h"
-#include "PhysicsStateConstructionCodec.h"
+#include "state/construction/codec/PhysicsStateConstructionCodec.h"
 
 #include <array>
 #include <bit>

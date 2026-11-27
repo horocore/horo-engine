@@ -32,6 +32,8 @@ namespace Horo::XR::XRErrors {
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief An XR operation request is malformed. */
     extern const ErrorCodeDescriptor OperationInvalid;
+    /** @brief The platform or XR runtime denied a required permission. */
+    extern const ErrorCodeDescriptor PermissionDenied;
     /** @brief An XR coordinate-space relation or convention is incompatible. */
     extern const ErrorCodeDescriptor CoordinateSpaceIncompatible;
     /** @brief XR clock evidence mixes or omits required time domains. */
@@ -44,6 +46,8 @@ namespace Horo::XR::XRErrors {
     extern const ErrorCodeDescriptor TrackingSnapshotInvalid;
     /** @brief An XR tracking snapshot revision no longer matches the consumer's retained revision. */
     extern const ErrorCodeDescriptor TrackingSnapshotStale;
+    /** @brief An admitted interaction-profile incarnation was lost or replaced. */
+    extern const ErrorCodeDescriptor ActionProfileChanged;
     /** @brief An XR view/configuration/render-target plan is malformed or non-canonical. */
     extern const ErrorCodeDescriptor ViewPlanInvalid;
     /** @brief An XR view-configuration publication was replaced after capture. */

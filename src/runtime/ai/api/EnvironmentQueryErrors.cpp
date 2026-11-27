@@ -5,6 +5,16 @@ namespace Horo::AI::AIErrors {
         const ErrorDomainId AiDomain{"horo.ai"};
     }
 
+    const ErrorCodeDescriptor EnvironmentQueryProviderFailed{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.environment_query.provider_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "An environment-query provider threw while executing an admitted generator or test.",
+        .remediationHint = "Inspect the provider failure and return typed failures from bounded provider operations.",
+        .retryable = false,
+        .userActionable = false,
+    };
+
     const ErrorCodeDescriptor EnvironmentQuerySchemaInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.environment_query.schema_invalid"},

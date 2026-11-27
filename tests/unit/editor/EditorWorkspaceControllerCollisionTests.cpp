@@ -2,7 +2,7 @@
 #include "Horo/Application/ProjectCompatibility.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/WorkspacePathText.h"
+#include "editor/screens/workspace/docking/WorkspacePathText.h"
 
 #include <nlohmann/json.hpp>
 
@@ -114,13 +114,13 @@ namespace Horo::Editor {
             escaped = opened.Value();
         }
         CHECK(escaped->Snapshot().HasError());
-        CHECK(escaped->Preview(Input()).HasError());
+        CHECK(escaped->Preview(Horo::Tests::CollisionSettings::Input()).HasError());
     }
 
     TEST_CASE("Workspace receipt projection changes only at actual injected evidence transitions", "[gui][collision][workspace][receipt]") {
         Project project;
         PrepareWorkspace(project);
-        auto document = Application::ProjectCollisionSettings::Create(Input());
+        auto document = Application::ProjectCollisionSettings::Create(Horo::Tests::CollisionSettings::Input());
         REQUIRE(document.HasValue());
         // This is the internal evidence projection contract; real native receipts are
         // independently exercised by the configured Editor/Character product tests.
@@ -152,7 +152,7 @@ namespace Horo::Editor {
         CHECK(unavailable.generation == 0);
         CHECK(unavailable.documentRevision == 0);
         CHECK(unavailable.fingerprint == 0);
-        REQUIRE(opened.Value()->Preview(RemoveSpare(Input())).HasValue());
-        CHECK_FALSE(opened.Value()->Preview(RemoveSpare(Input())).Value().CanCommit());
+        REQUIRE(opened.Value()->Preview(RemoveSpare(Horo::Tests::CollisionSettings::Input())).HasValue());
+        CHECK_FALSE(opened.Value()->Preview(RemoveSpare(Horo::Tests::CollisionSettings::Input())).Value().CanCommit());
     }
 }  // namespace Horo::Editor

@@ -233,6 +233,8 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor CloudMetadataLimitExceeded;
     /** @brief A bounded cloud metadata snapshot could not be allocated. */
     extern const ErrorCodeDescriptor CloudMetadataAllocationFailed;
+    /** @brief The incoming cloud archive failed local validation before publication. */
+    extern const ErrorCodeDescriptor CloudArchiveRejected;
     /** @brief Save-manager source, revision, filter, or command arguments are invalid. */
     extern const ErrorCodeDescriptor ManagerProjectionInvalid;
     /** @brief Save-manager source or page request exceeds a qualified finite bound. */

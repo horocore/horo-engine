@@ -1126,6 +1126,42 @@ streaming/runtime state never writes back to the Scene, definition or cooked bas
 A missing required block prevents cell activation; temporary nonresidency may only
 produce the existing bounded residency request plus typed partial/no-data outcome.
 
+World cook accepts explicit cell membership in a previously cooked NavMesh
+definition. Its version-one NavigationMesh block records the definition UUID,
+the complete base envelope digest, and strictly ordered tile addresses including
+their Scene scope, surface, profile and grid layer. Release qualification verifies
+the exact captured block and resolves every selected address in the verified base
+artifact. The cell contains membership bytes and the base release retains the
+authoritative portable tile content and input provenance.
+
+The mounted World verifies the block against its admitted index and locates
+the matching base envelope before live work starts. A live demand with required
+NavigationMesh membership needs an explicitly bound navigation publication owner.
+The mount submits the complete proposed resident tile membership with the Scene
+attachment or removal. The host selects the provider and returns the owner for
+the same structural transaction. The mount never selects a backend.
+
+The standalone host admits the mounted inventory before activating the root
+Scene. When the inventory supplies live NavigationMesh membership, the root
+verifies its authored NavMesh but publishes a world with no tile coverage. The
+host-bound Detour adapter rebuilds only the exact resident union for each cell
+transaction. Fixed-tick path dispatch adopts the published topology generation
+under the same world and Scene identity.
+An unloaded cell's old provider can remain charged while a query retains its
+lease. The mount holds the cell in Retiring and acknowledges completion only
+after the provider reports that those leases have drained.
+
+The mounted Scene facade reports geometry visibility and Navigation readiness
+independently for each exact live occurrence and cell generation. A visible
+cell with a verified but empty NavMesh reports Navigation unavailable, even
+when other resident cells contribute coverage. A ready result requires that
+the cell's own traversable tiles and its Scene attachment have both committed.
+The standalone host's forced eviction entry point names an exact live
+occurrence and uses the same Scene retirement fence. The new topology excludes
+that cell when the transaction commits. Pending or unconsumed path results
+from the revoked topology carry `navigation.query.tile_evicted` together with
+their original world, snapshot and topology identities.
+
 [ADR-107](../../adr/107-navigation-query-consistency-and-snapshot-ownership.md)
 requires a navigation query snapshot to record the exact PartitionEpoch,
 StreamingGeneration and tile generations it observed. Cell activation/replacement
@@ -1623,10 +1659,12 @@ state or background job to drain.
 ## Complete Offline World Publication
 
 `HoroWorldCookIntegration` is the non-installed headless composition above
-`HoroSceneCellPayload`, `HoroWorldStreaming` and `HoroAssets`. Applications supply
+`HoroSceneCellPayload`, `HoroWorldStreaming`, `HoroAssets` and `HoroNavigationCellContent`. Applications supply
 immutable authored captures, validated plans, explicit registered artifact types,
 release package intent and the existing Assets durable writer policy. Lower
 owners do not depend on this composition or one another's private headers.
+`HoroNavigationCellContent` owns the portable membership codec and depends only on
+`HoroNavigationApi` and `HoroAssets`. It has no Scene or runtime provider dependency.
 
 Scene owns semantic CoreEcs encoding and its prepared cache receipt;
 WorldStreaming owns canonical index/cell bytes and the separately versioned
@@ -2200,3 +2238,87 @@ failed preparation preserves the active mount. Source changes withdraw actual
 registrations before recomputation. Document replacement, close, workspace
 teardown and explicit stop revoke the bridge before native shutdown. No packaged
 artifact or policy is edited by inspection.
+
+### Standalone committed World admission
+
+The headless standalone project Scene host accepts an explicit
+`--world-mount <absolute-cook-root> <cook-target> <manifest-sha256> <index-asset-id>
+<dependency-asset-id> <x-mm> <y-mm> <z-mm>` launch selection. It pins one committed
+Assets generation and accepts only the selected `world.index`, its matching
+`world.dependencies` and every corresponding `world.cell` envelope. The runtime
+mount owns the verified cell payload provider, partition registry, source planner,
+scheduler and residency ledgers. Its lifecycle is scoped to the private Scene
+candidate and retires before that Scene service. Missing content and mismatched
+targets, manifests, dependency siblings or cell identities fail startup without
+publishing a partial mount.
+
+The standalone host requires the Horo axis convention. It takes its origin from
+the three explicitly selected signed millimeter coordinates. Those coordinates
+grant no camera, entity or geometry authority to the ordinary Scene. A read-only
+origin observation requires a live Scene service and expires when the mount
+retires. This route uses the committed cook store during cold startup and travel.
+
+A standalone launch can also pin one startup cell with
+`--world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>`.
+The planner must publish the exact pin for that mounted cell. Its load verifies and
+decodes the sole CoreEcs provider using the independently pinned Scene definition
+and revision. Activation publishes the Streamed occurrence through the private
+parent Scene's structural commit and advances residency only after the receipt.
+Retirement observes actual parent shutdown before acknowledging the cell. Missing
+content, external asset dependencies, hard co-load requirements, compressed cells,
+and unsupported providers reject startup before mode publication.
+
+The standalone host can instead request one live cell with
+`--world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>
+<frame-ns> <unit-ns> <maximum-entities>`. Preparation runs on the existing job
+owner and activation and removal use the ordinary Scene structural cutoff.
+`--world-live-assets <maximum-assets> <maximum-encoded-bytes>` additionally admits
+the cell's named asset closure. The worker checks types against the pinned project
+registry and reads the exact committed World's verified envelopes. Asset leases
+remain with the structural group through native retirement. The mounted owner
+can admit multiple explicitly selected occurrences with an explicit resident
+count and one in-flight operation. A canonical lease keyed by the exact
+mounted manifest and asset identity shares one immutable allocation across
+cells. Every consumer pins that allocation until its positive Scene removal
+receipt. The charged CPU capacity returns after physical release of the final
+cache allocation, including any remaining detached payload pins. The encoded-byte
+ceiling applies to each cell's closure and to the mount's total retained cache
+capacity. The standalone arguments keep the default live capacity of one
+occurrence. Hard co-load requirements, other payload providers and in-frame
+replacement remain unsupported.
+
+Archive installation, ongoing gameplay-driven scheduling, gameplay focal
+positions and XR view projection require separate host composition.
+
+### Editor Play committed World ingress
+
+`HoroEditor --project <root> --play-world-mount <cook-root> <cook-target>
+<manifest-sha256> <index-asset-id> <dependency-asset-id> <x-mm> <y-mm> <z-mm>`
+selects a committed World for the exact startup project. The Play Scene owner
+uses the same mounted World adapter and shared typed option parser as standalone.
+A failed manifest or project check prevents Scene publication for that Play
+attempt. The canonical origin is readable after the selected Scene publishes
+and its leases expire when Play ends. Preview, prefab authoring and ordinary
+Play without this selection keep independent Scene ownership.
+
+Desktop Play can add `--play-world-cell <x> <y> <z> <lod> <layer> <occurrence>
+<definition> <revision> <camera> <draw-ids>`, where draw IDs are ascending,
+comma-separated authored object IDs. The selected cell uses the standalone
+planner and tracked Scene activation. The selected camera and procedural draws
+must all have canonical anchors. Preparation publishes one exact viewport packet
+for the mounted origin and the frontend-issued view. The editor graph uses this
+packet for mesh preparation and its existing static-mesh pass. It withdraws that
+pass on Scene or origin retirement and does not use the local-transform viewport
+extractor for a selected World cell.
+
+Desktop Play can instead use
+`--play-world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition>
+<revision> <frame-ns> <unit-ns> <maximum-entities>`. The Play owner decodes the
+cell on the existing workers and advances its publication only at the runtime's
+deferred lifecycle cutoff. Select the exact committed Scene with
+`--play-navigation-scene` and its cook with `--cooked-root` and `--cook-target`
+to bind Navigation. Navigation starts without tile coverage for a mount with
+declared cells. The structural commit publishes each cell and its admitted tile
+coverage together, while the Play owner reports geometry visibility and
+Navigation readiness independently. This live mode streams CoreECS content in
+desktop Play. Mounted viewport, XR and Save have their own composition.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/UiPaintFrameUpload.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "Horo/Runtime/Render/VfxGpuKernel.h"
 #include "VulkanCommandRuntime.h"
@@ -14,12 +15,22 @@
 #include <optional>
 
 namespace Horo::Render::Detail {
+    /** @brief Distinguishes the producers allowed to publish host-visible graph bytes. */
+    enum class VulkanReadbackKind {
+        None,
+        StereoCoverage,
+        Color
+    };
+
     /** @brief Actual native generation state committed only after successful queue submission. */
     struct VulkanGraphResourceState {
         RenderGraphLogicalState logical;
         RenderTimelinePoint completion;
         bool hasNativeState{false};
         bool contentsDefined{false};
+        std::size_t readbackBytes{};
+        VulkanReadbackKind readbackKind{VulkanReadbackKind::None};
+        bool coverageReduction{};
     };
 
     /** @brief Device-private graph binding captured before recording, with an exact immutable descriptor. */
@@ -31,6 +42,7 @@ namespace Horo::Render::Detail {
         RenderBufferDescriptor bufferDescriptor;
         RenderTextureDescriptor textureDescriptor;
         VulkanGraphResourceState *state{nullptr};
+        VkImageView stencilView{VK_NULL_HANDLE}; /**< Whole depth/stencil attachment view for stencil writes. */
     };
 
     /** @brief Captured whole-image offscreen attachments; command retention owns their native backing. */
@@ -79,12 +91,33 @@ namespace Horo::Render::Detail {
         bool published{};
     };
 
+    /** @brief Exact common publication for the three buffers written together by one Vulkan UI upload. */
+    struct VulkanUiPaintPublication final {
+        std::array<std::uint64_t, 3> members{};
+        std::uint64_t revision{};
+        std::uint32_t vertices{}, indices{}, parameters{};
+
+        [[nodiscard]] bool operator==(const VulkanUiPaintPublication &) const noexcept = default;
+    };
+
+    /** @brief Short read borrow of a live mapped native UI generation during serialized encoding admission. */
+    struct VulkanUiPaintBufferView final {
+        VulkanUiPaintPublication publication;
+        std::span<const std::byte> bytes;
+    };
+
     /** @brief Exact existing registry generation retained by a cold native particle inventory; never a second registry. */
     struct VulkanVfxGpuBufferCapture {
         NativeVfxGpuBuffer issued;
         VulkanGraphResource resource;
         std::shared_ptr<const void> backing;
         void *mapped{};
+    };
+
+    /** @brief Immutable cold coverage input and its retained native allocation. */
+    struct VulkanCoverageInput final {
+        VkBuffer buffer{};
+        std::shared_ptr<const void> backing;
     };
 
     class VulkanMaterialCapture;
@@ -170,14 +203,44 @@ namespace Horo::Render::Detail {
                                                                             bool hostVisible);
         /** @brief Borrows the canonical buffer completion proof before an explicitly retired-slot host write. */
         [[nodiscard]] Result<RenderTimelinePoint> BufferCompletion(std::uint64_t instance) const;
+        /** @brief Seals an unused exact prepared coverage input after comparing its mapped initialized bytes. */
+        [[nodiscard]] Result<VulkanCoverageInput> SealCoverageInput(std::uint64_t instance, RenderBufferUsage usage,
+                                                                    std::span<const std::byte> expected);
+        /** @brief Captures and maps the selected exact coherent storage counter for cold reducer realization. */
+        [[nodiscard]] Result<VulkanCoverageInput> ExactStereoCoverageCounter(std::uint64_t instance);
+        /** @brief Resolves an owned coverage image view and rejects imported native images. */
+        [[nodiscard]] Result<VulkanDrawViewBinding> ResolveOwnedCoverageView(std::uint64_t instance) const;
+        /** @brief Maps only the storage result marked by the accepted exact reduction completion. */
+        [[nodiscard]] Result<void> ReadStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                               RenderGraphStereoCoverageReduction::Tallies &destination);
+        /** @brief Copies exact coherent graph bytes from the expected producer after the caller observes its GPU signal. */
+        [[nodiscard]] Result<void> ReadGraphBytes(std::uint64_t instance, RenderTimelinePoint completion, VulkanReadbackKind kind,
+                                                  std::span<std::byte> destination);
         /** @brief Replaces exact host-visible uniform or vertex bytes after the selected frame owner proves prior retirement.
          * @pre Caller admits the exact active canonical frame and verifies BufferCompletion before writing.
          * No index/storage usage, allocation, submission or completion authority is introduced. */
         [[nodiscard]] Result<void> WriteHostFrameBuffer(std::uint64_t instance, std::span<const std::byte> bytes);
+        /** @brief Writes an exact host-visible uniform buffer after the prepared-frame owner proves retirement.
+         * @param instance Selected frontend's bound native buffer instance.
+         * @param bytes Complete uniform contents. @return Success or typed size, usage, visibility or I/O failure.
+         */
+        [[nodiscard]] Result<void> WriteHostUniform(std::uint64_t instance, std::span<const std::byte> bytes);
         /** @brief Publishes one exact prepared VFX block after the command owner proves all prior buffer uses retired. */
         [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update, const bool &closing);
         /** @brief Reads accepted publication from the exact live native buffer generation without allocation. */
         [[nodiscard]] Result<VulkanVfxPublication> VfxPublication(std::uint64_t instance) const;
+        /** @brief Validates/maps one exact native buffer family and publishes the whole UI upload atomically.
+         * @param update Frontend-issued exact native identities and portable payload.
+         * @param closing Live device-owner closure fence, checked after native mapping.
+         * @return Success or original validation/cancellation/mapping error without modifying candidate bytes.
+         * @pre Actual Vulkan command owner proved all three earlier submissions retired; facility runs outside a frame. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update, const bool &closing,
+                                                      const FrameToken &activeFrame);
+        /** @brief Borrows one native member and its full family publication for exact frame validation.
+         * @param instance Exact live native buffer identifier.
+         * @return Current published family and mapped bytes, or typed invalid/stale failure.
+         * @pre Selected Vulkan owner lane during synchronous encoding admission. */
+        [[nodiscard]] Result<VulkanUiPaintBufferView> ReadUiPaintBuffer(std::uint64_t instance) const;
         /** @brief Checks a borrowed VFX material against the existing shader owner's live pipeline and reflected schema. */
         [[nodiscard]] Result<void> ValidateVfxMaterial(const VulkanPreparedMaterialBinding &material,
                                                        const MaterialBindingLayout &layout) const;

@@ -1,10 +1,10 @@
 #pragma once
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
-#include "NavigationInspectorSession.h"
+#include "navigation/NavigationInspectorSession.h"
 #include "add_component/AddComponentRegistry.h"
-#include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
-#include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
+#include "editor/screens/workspace/panels/inspector/edits/InspectorEditSession.h"
+#include "editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorSession.h"
 
 #include <imgui.h>
 #include <memory>
@@ -50,6 +50,10 @@ namespace Horo::Editor {
 
         void OnAttach(PanelContext &ctx) override;
         void OnDetach() override;
+        /** @brief Releases hidden name-field focus while preserving persistent property drafts.
+         * @param command Current frame intent, preserved without publishing a name edit.
+         */
+        void OnPresentationHidden(EditorWorkspaceViewCommandData &command) override;
 
         void DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, ImU32 color) override;
 

@@ -3,6 +3,7 @@
 /** @file ColorPipeline.h
  * @brief Cold immutable color-plan admission. No cooking, GPU realization, execution or publication is implied.
  */
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Render/ColorOutputProgram.h"
@@ -12,6 +13,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -143,6 +145,7 @@ namespace Horo::Render {
         std::uint32_t outputBitDepth{8};
         std::uint64_t maximumTransformBytes{64U * 1024U * 1024U};
         CancellationToken cancellation;
+        std::optional<Accessibility::ColorblindSettings> displayAccessibility; /**< Committed desired settings for step 6. */
     };
 
     /** @brief Immutable candidate retaining exact copied metadata and immutable cooked transforms. Borrowed Scene/exposure
@@ -155,11 +158,22 @@ namespace Horo::Render {
         /** @brief Borrows exact immutable inputs. @return Metadata and pins valid for this plan lifetime. */
         [[nodiscard]] const ColorPipelineRequest &Inputs() const noexcept;
 
+        /** @brief Borrows the validated row-major matrix for the complete display-linear Rec.709 composition.
+         * @return The active matrix, or empty when the display accessibility stage can be bypassed.
+         * @details Apply once after composing display-referred UI and before gamut containment, dithering
+         * and transfer encoding. Scene-linear resources, exposure and scene-linear captures do not use it.
+         */
+        [[nodiscard]] const std::optional<Accessibility::ColorMatrix> &DisplayAccessibilityTransform() const noexcept;
+
     private:
         friend Result<ColorPipelinePlan> PrepareColorPipeline(const ColorPipelineRequest &);
-        /** @brief Adopts a validated candidate. @param request Complete copied metadata and immutable transform pins. */
-        explicit ColorPipelinePlan(ColorPipelineRequest request);
+        /** @brief Adopts a validated candidate.
+         * @param request Complete copied metadata and immutable transform pins.
+         * @param displayTransform Prepared step 6 matrix or deliberate bypass.
+         */
+        ColorPipelinePlan(ColorPipelineRequest request, const std::optional<Accessibility::ColorMatrix> &displayTransform);
         ColorPipelineRequest request_;
+        std::optional<Accessibility::ColorMatrix> displayTransform_;
     };
 
     /** @brief Validates an inert candidate without mutating any active plan or waiting for native work.

@@ -4,7 +4,19 @@
 
 #include <format>
 
+namespace Horo::Application {
+    /** @copydoc GameplayLocalBuildDirectory */
+    std::filesystem::path GameplayLocalBuildDirectory(const std::filesystem::path &projectRoot) {
+        return projectRoot / ".horo/local/build/gameplay-debug";
+    }
+}  // namespace Horo::Application
+
 namespace Horo::Application::Detail {
+    /** @copydoc GameplayBuildLockPath */
+    std::filesystem::path GameplayBuildLockPath(const std::filesystem::path &projectRoot) {
+        return projectRoot / ".horo/local/locks/gameplay-build.lock";
+    }
+
     /** @copydoc BuildEnvironment */
     [[nodiscard]] ProcessEnvironment BuildEnvironment() {
         ProcessEnvironment environment;
@@ -21,6 +33,7 @@ namespace Horo::Application::Detail {
             GameplayLibraryPathToUtf8(request.projectRoot),
             "-B",
             GameplayLibraryPathToUtf8(buildRoot),
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             std::format("-DHoroEngineGameplay_DIR={}", GameplayLibraryPathToUtf8(request.environment.gameplaySdkPackage)),
             std::format("-DCMAKE_BUILD_TYPE={}", request.environment.configuration),
             std::format("-DHORO_GAMEPLAY_MANIFEST_OUTPUT={}", GameplayLibraryPathToUtf8(candidateManifest)),

@@ -7,6 +7,7 @@
 #include "Horo/Navigation/NavMeshData.h"
 #include "Horo/Navigation/NavigationBackend.h"
 #include "Horo/Navigation/NavigationBakeInput.h"
+#include "Horo/Navigation/NavigationBakeScopeId.h"
 #include "Horo/Navigation/NavigationLinkTypes.h"
 
 #include <optional>
@@ -36,6 +37,17 @@ namespace Horo::Navigation {
         NavigationLinkKind kind{NavigationLinkKind::Jump};
         NavigationLinkDirection direction{NavigationLinkDirection::StartToEnd};
         float traversalCost{1.0F}; /**< Must be representable by the selected traversal area/filter policy. */
+
+        [[nodiscard]] constexpr bool operator==(const NavigationBakeLinkInput &) const noexcept = default;
+    };
+
+    /** @brief Owned authored link input with its exact Scene and source generation before topology projection. */
+    struct NavigationScopedBakeLinkInput final {
+        NavigationBakeScopeId scope;      /**< Persistent Scene identity of both endpoint surfaces. */
+        std::uint64_t sourceGeneration{}; /**< Exact authored link incarnation seen in the immutable source. */
+        NavigationBakeLinkInput link;
+
+        [[nodiscard]] constexpr bool operator==(const NavigationScopedBakeLinkInput &) const noexcept = default;
     };
 
     /** @brief Available host-composed traversal descriptor for one exact grounded profile and kind. */
@@ -59,7 +71,7 @@ namespace Horo::Navigation {
         NavigationAgentProfileId profile;
         NavigationBakeLinkEndpoint start;
         NavigationBakeLinkEndpoint end;
-        float radiusMeters{};
+        float radiusMeters{}; /**< Measured free radius for this exact direction. */
         float heightMeters{};
     };
 
@@ -134,7 +146,7 @@ namespace Horo::Navigation {
         NavigationLinkKind kind{NavigationLinkKind::Jump};
         NavigationLinkDirection direction{NavigationLinkDirection::StartToEnd};
         NavigationAreaId area;
-        float radiusMeters{};
+        float radiusMeters{}; /**< Usable radius bounded by both connections and all admitted directions. */
     };
 
     /** @brief Cook rows plus their complete semantic key, including the explicit suggestion policy. */

@@ -11,7 +11,7 @@ namespace Horo::Navigation {
         [[nodiscard]] bool ValidLimits(const NavMeshAssetLimits &limits) noexcept {
             return limits.maximumPartitions > 0 && limits.maximumPartitions <= 64 && limits.maximumDecodedBytes > 0 &&
                    limits.maximumDecodedBytes <= 256U * 1024U * 1024U && limits.cook.maximumArtifactBytes > 0 &&
-                   limits.cook.maximumArtifactBytes <= 256U * 1024U * 1024U;
+                   limits.cook.maximumArtifactBytes <= 256U * 1024U * 1024U && limits.maximumBytesPerTile != 0;
         }
 
         /** @brief Validate captured canonical metadata independently of portable decoding. */
@@ -38,14 +38,50 @@ namespace Horo::Navigation {
                    set.provenance->projectProfile->MatchesAuthority(expected.projectProfile);
         }
 
-        /** @brief Resolve complete canonical partitions before admitting any reusable cache allocations. */
-        [[nodiscard]] Result<void> GroupTiles(const NavigationCookedTileSet &set, LoadedNavMeshAsset &loaded,
-                                              const NavMeshAssetLimits &limits) {
+        using TileList = std::vector<std::shared_ptr<const NavigationCookedTile>>;
+
+        /** @brief Selects exact sorted tile addresses from the already verified payload. */
+        [[nodiscard]] Result<TileList> SelectTiles(const NavigationCookedTileSet &set, const NavMeshAssetLoadOptions &options) {
+            using Selected = Result<TileList>;
+            TileList selected;
+            if (!options.selectedTiles) {
+                for (const auto &tile : set.tiles) {
+                    if (tile->Key().scope == options.scope)
+                        selected.push_back(tile);
+                }
+                if (!set.tiles.empty() && selected.empty())
+                    return Selected::Failure(MakeError(NavigationErrors::NoNavigationData));
+                return Selected::Success(std::move(selected));
+            }
+            const auto keys = *options.selectedTiles;
+            if (keys.size() > set.tiles.size())
+                return Selected::Failure(MakeError(NavigationErrors::NoNavigationData));
+            if (std::ranges::adjacent_find(keys, std::ranges::greater_equal{}) != keys.end())
+                return Selected::Failure(MakeError(NavigationErrors::NavMeshArtifactInvalid));
+            selected.reserve(keys.size());
+            const auto keyOf = [](const auto &tile) -> const NavigationBakeTileKey & {
+                return tile->Key();
+            };
+            for (const auto &key : keys) {
+                const auto tile = std::ranges::lower_bound(set.tiles, key, {}, keyOf);
+                if (key.scope != options.scope || tile == set.tiles.end() || (*tile)->Key() != key)
+                    return Selected::Failure(MakeError(NavigationErrors::NoNavigationData));
+                selected.push_back(*tile);
+            }
+            return Selected::Success(std::move(selected));
+        }
+
+        /** @brief Resolve complete selected partitions before admitting any reusable cache allocations. */
+        [[nodiscard]] Result<void> GroupTiles(const TileList &tiles, LoadedNavMeshAsset &loaded, const NavMeshAssetLoadOptions &options) {
             using Key = std::tuple<NavigationBakeScopeId, SurfaceId, NavigationAgentProfileId>;
             std::map<Key, std::size_t> indices;
-            for (const auto &tile : set.tiles) {
-                if (tile->Key().scope != loaded.scope)
-                    continue;
+            auto remaining = options.maximumSelectedBytes.value_or(options.limits.maximumDecodedBytes);
+            const auto tileLimit = options.limits.maximumBytesPerTile.value_or(remaining);
+            for (const auto &tile : tiles) {
+                const auto size = tile->StorageBytes();
+                if (size > std::min(tileLimit, remaining))
+                    return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+                remaining -= size;
                 const auto projected = ProjectNavigationCookedTileDescriptor(*tile);
                 if (projected.HasError())
                     return Result<void>::Failure(projected.ErrorValue());
@@ -53,7 +89,7 @@ namespace Horo::Navigation {
                 const Key key{tile->Key().scope, tile->Key().surface, tile->Key().profile};
                 auto found = indices.find(key);
                 if (found == indices.end()) {
-                    if (loaded.partitions.size() >= limits.maximumPartitions)
+                    if (loaded.partitions.size() >= options.limits.maximumPartitions)
                         return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
                     found = indices.try_emplace(key, loaded.partitions.size()).first;
                     loaded.partitions.push_back({tile->Key().surface, tile->Key().profile, descriptor, {}, tile->Key().scope});
@@ -68,8 +104,6 @@ namespace Horo::Navigation {
                 }
                 partition.tiles.push_back(tile);
             }
-            if (!set.tiles.empty() && loaded.partitions.empty())
-                return Result<void>::Failure(MakeError(NavigationErrors::NoNavigationData));
             return Result<void>::Success();
         }
     }  // namespace
@@ -82,7 +116,8 @@ namespace Horo::Navigation {
         const auto &limits = options.limits;
         const auto *expectation = options.expectation;
         const auto scope = options.scope;
-        if (!ValidMetadata(metadata, registryRevision, limits))
+        if (!ValidMetadata(metadata, registryRevision, limits) || options.maximumSelectedBytes == 0 ||
+            options.maximumSelectedBytes.value_or(0) > limits.maximumDecodedBytes)
             return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NavMeshArtifactInvalid));
         try {
             const auto envelope = Assets::DecodeCookedArtifact(encoded, limits.cook);
@@ -102,15 +137,15 @@ namespace Horo::Navigation {
                                       envelope.Value().cacheKeyDigest};
             loaded.contentProvenance = decoded.Value().provenance;
             loaded.scope = scope;
-            if (const auto grouped = GroupTiles(decoded.Value(), loaded, limits); grouped.HasError())
+            auto selected = SelectTiles(decoded.Value(), options);
+            if (selected.HasError())
+                return Result<LoadedNavMeshAsset>::Failure(selected.ErrorValue());
+            if (const auto grouped = GroupTiles(selected.Value(), loaded, options); grouped.HasError())
                 return Result<LoadedNavMeshAsset>::Failure(grouped.ErrorValue());
-            const auto selectedCount = std::ranges::count_if(decoded.Value().tiles, [scope](const auto &tile) {
-                return tile->Key().scope == scope;
-            });
-            loaded.tileBytes.reserve(static_cast<std::size_t>(selectedCount));
-            for (const auto &tile : decoded.Value().tiles) {
-                if (tile->Key().scope != scope)
-                    continue;
+            if (!options.retainTileBytes)
+                return Result<LoadedNavMeshAsset>::Success(std::move(loaded));
+            loaded.tileBytes.reserve(selected.Value().size());
+            for (const auto &tile : selected.Value()) {
                 auto pin = cache.Admit(std::as_bytes(tile->Bytes()));
                 if (pin.HasError())
                     return Result<LoadedNavMeshAsset>::Failure(pin.ErrorValue());

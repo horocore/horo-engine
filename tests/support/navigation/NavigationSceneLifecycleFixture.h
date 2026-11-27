@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Assets/AssetProvider.h"
 #include "Horo/Navigation/NavigationSceneActivation.h"
 #include "Horo/Navigation/NavigationSceneAgentLifecycle.h"
 #include "navigation/NavigationGroundedProviderFixture.h"
@@ -80,9 +81,12 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
         CancellationSource cancellation;
         JobSystem jobs;
         NavigationAgentRegistry registry{std::move(NavigationAgentRegistry::Create({.maximumAgents = 2})).Value()};
-        Runtime::RuntimeSceneService scene;
         NavigationWorldLifecycle world{std::move(NavigationWorldLifecycle::Create(4)).Value()};
         NavigationCoordinator coordinator{std::move(NavigationCoordinator::Create(jobs, {})).Value()};
+        Assets::AssetRegistry assets;
+        Assets::MemoryAssetProvider bytes;
+        Assets::AssetLoadService loads{jobs, bytes};
+        Runtime::RuntimeSceneService scene{assets, loads};
         NavigationAgentSceneBinding binding;
         NavigationWorldActivationDescriptor activation;
         Runtime::EntityRef entity;
@@ -92,9 +96,19 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
         std::unique_ptr<NavigationSceneAgentLifecycle> lifecycle;
         std::unique_ptr<NavigationAgentSceneCandidate> replacement;
 
-        explicit Fixture(const unsigned workers = 0, const bool holdProvider = false) : jobs{{.workerCount = workers}} {
+        explicit Fixture(const unsigned workers = 0, const bool holdProvider = false, CancellationToken ownerCancellation = {},
+                         NavigationSceneActivationParticipant::StructuralAdmission admission = {},
+                         std::unique_ptr<Runtime::SceneStructuralParticipant> gate = {})
+            : jobs{{.workerCount = workers}} {
             fence->held = holdProvider;
-            REQUIRE(scene.AddActivationParticipant(std::make_unique<NavigationSceneActivationParticipant>(registry)).HasValue());
+            auto navigation = std::make_unique<NavigationSceneActivationParticipant>(registry);
+            if (admission)
+                REQUIRE(scene.AddStructuralParticipant(navigation->MakeStructuralParticipant(world, coordinator, std::move(admission)))
+                            .HasValue());
+            if (gate)
+                REQUIRE(scene.AddStructuralParticipant(std::move(gate)).HasValue());
+            REQUIRE(scene.AddActivationParticipant(std::move(navigation)).HasValue());
+            REQUIRE(assets.Publish(std::vector<Assets::AssetRecord>{}).status == Assets::AssetRegistryBuildStatus::Complete);
             REQUIRE(scene.Startup(cancellation.Token()).HasValue());
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{4}, Runtime::SceneDefinitionRevision{1}};
             Runtime::RuntimeEntityDefinition definition{.object = Runtime::SceneObjectId{101}};
@@ -112,8 +126,8 @@ namespace Horo::Navigation::SceneLifecycleTestSupport {
             agent = registry.Snapshot().Value().Agents().front().handle;
             REQUIRE(world.Stage(activation, std::make_unique<FencedProvider>(MakeGroundedProvider(binding.world), fence)).HasValue());
             REQUIRE(world.CommitAtSafePoint(binding.scene, binding.sceneGeneration).HasValue());
-            auto created =
-                NavigationSceneAgentLifecycle::Create(registry, world, coordinator, *scene.ActiveScene(), {entity, agent, caller, 1});
+            auto created = NavigationSceneAgentLifecycle::Create(registry, world, coordinator, *scene.ActiveScene(),
+                                                                 {entity, agent, caller, 1, std::move(ownerCancellation)});
             REQUIRE(created.HasValue());
             lifecycle = std::move(created).Value();
         }

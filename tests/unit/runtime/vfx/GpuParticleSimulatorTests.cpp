@@ -59,6 +59,15 @@ TEST_CASE("GPU prepared unit rejects every unsupported authored feature before n
                                         VfxErrors::GpuSimulationUnsupported);
 }
 
+TEST_CASE("GPU simulation keeps the authored flash classification for extraction", "[vfx][gpu-logical]") {
+    const Vfx::Tests::GpuSeedFixture input;
+    auto source = input.Source();
+    source.photosensitiveFlash = true;
+    const auto owner = GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(source), input.Info());
+    REQUIRE(owner.HasValue());
+    CHECK(owner.Value()->RenderState().photosensitiveFlash);
+}
+
 TEST_CASE("GPU logical payload copies cannot exceed the shared selected memory envelope", "[vfx][gpu-logical]") {
     Vfx::Tests::GpuSeedFixture input;
     auto info = input.Info();

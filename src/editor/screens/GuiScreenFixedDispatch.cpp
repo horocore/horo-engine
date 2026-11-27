@@ -70,6 +70,18 @@ namespace Horo::Editor {
         return fixedScreen_->OnRuntimeFixedUpdate(context);
     }
 
+    /** @copydoc GuiScreenHost::OnRuntimeSceneCutoff */
+    void GuiScreenHost::OnRuntimeSceneCutoff(const Runtime::FrameContext &context) {
+        Runtime::RuntimeDispatchFacts facts;
+        if (shutdown_ || shutdownPending_ || isScreenCallbackActive_ || fixedScreen_ || !activeScreen_ ||
+            context.dispatchEvidence.Read(dispatchSource_, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, facts) !=
+                Runtime::RuntimeDispatchStatus::Valid ||
+            facts.frame != context.frameNumber)
+            return;
+        ScreenCallbackScope callback(isScreenCallbackActive_);
+        activeScreen_->OnRuntimeSceneCutoff(context);
+    }
+
     bool GuiScreenHost::MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept {
         return fixedScreen_ && fixedEvidence_.RefersToSameDispatch(context.dispatchEvidence) && MatchesContext(context, fixedFacts_);
     }

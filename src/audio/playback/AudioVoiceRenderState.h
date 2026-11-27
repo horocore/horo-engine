@@ -38,6 +38,7 @@ namespace Horo::Audio {
         AudioVoiceHandle voice;
         AudioResamplerDescriptor conversion;
         std::optional<AudioResamplerPlan> residentPlan;
+        AudioTimingFrames resamplerLookAhead; /**< Immutable plan evidence captured before callback ownership begins. */
         std::uint64_t coefficientBytes{};
 
         /** @brief Control-owned slots and SC mailboxes shared with the callback lane. */
@@ -70,8 +71,9 @@ namespace Horo::Audio {
         CallbackState callback;
 
         bool released{};
+        std::optional<AudioVoiceSnapshot> terminalVoice;
         bool streamVoice{};
-        std::uint64_t sourceFrames{};
+        std::optional<std::uint64_t> sourceFrames;
         bool seekable{};
         AudioChannelLayout layout{MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)};
 
@@ -133,7 +135,7 @@ namespace Horo::Audio {
         /** @brief Validate a requested stream seek or exclusive loop against admitted source facts. */
         bool ValidStreamPosition(const AudioVoiceControlRequest &request) const noexcept;
         /** @brief Validate admitted mono/stereo stream facts against the requested conversion before allocation. */
-        static bool ValidStreamFormat(const AudioResamplerDescriptor &conversion, const AudioStreamDecoderSpec &facts) noexcept;
+        static bool ValidStreamFormat(const AudioResamplerDescriptor &conversion, const AudioProcessingFormat &format) noexcept;
         /** @brief Prepare conversion, canonical voice and retained port; the state owns rollback after each acquired resource. */
         Result<void> PrepareStream(AudioStreamHandle streamHandle);
         /** @brief Admit seek/loop only in controllable states with no outstanding realization handshake. */
@@ -150,6 +152,10 @@ namespace Horo::Audio {
         AudioVoiceMixRenderResult RenderResident(std::uint32_t frames) noexcept;
         /** @brief Feed retained stream PCM to its sole spatial converter, retaining every unconsumed input frame. */
         AudioVoiceMixRenderResult RenderStream(std::uint32_t frames) noexcept;
+        /** @brief Cancels live playback and suppresses all PCM staged for this callback. */
+        AudioVoiceMixRenderResult CancelLiveStream(std::uint32_t frames) noexcept;
+        /** @brief Clears private live PCM after native callback detachment, before releasing storage. */
+        void ScrubLiveScratch() noexcept;
         /** @brief Feed the physical stream converter only after canonical execution-state admission. */
         AudioVoiceMixRenderResult RenderStreamPcm(std::uint32_t frames) noexcept;
         /** @brief Fill empty callback scratch once; return true when the sole port reports cancellation. */

@@ -61,6 +61,83 @@
         "dexopt/baseline.profm"
       ]
     },
+    "qualification-openxr-development": {
+      "applicationId": "org.horocore.packagequalification.openxr",
+      "versionName": "0.2.0",
+      "versionCode": 1,
+      "configuration": "Debug",
+      "preset": "android-openxr-development",
+      "minimumApi": 29,
+      "targetApi": 36,
+      "renderer": "none",
+      "distributionQualified": false,
+      "abis": [
+        "arm64-v8a",
+        "x86_64"
+      ],
+      "nativeLibrary": "horo-package-qualification",
+      "permissions": [
+        "org.horocore.packagequalification.openxr.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "org.khronos.openxr.permission.OPENXR",
+        "org.khronos.openxr.permission.OPENXR_SYSTEM"
+      ],
+      "features": [],
+      "assets": {
+        "qualification.json": "android/qualification.json"
+      },
+      "nativeLibraries": [
+        "libhoro-package-qualification.so",
+        "libc++_shared.so",
+        "libopenxr_loader.so"
+      ],
+      "generatedAssets": [],
+      "openxrProfile": {
+        "schema": 1,
+        "runtime": "openxr",
+        "loaderSource": "bundled",
+        "activityRoute": "cold-discovery"
+      }
+    },
+    "qualification-openxr-quest-development": {
+      "applicationId": "org.horocore.packagequalification.openxr.quest",
+      "versionName": "0.2.0",
+      "versionCode": 1,
+      "configuration": "Debug",
+      "preset": "android-openxr-development",
+      "minimumApi": 29,
+      "targetApi": 36,
+      "renderer": "none",
+      "distributionQualified": false,
+      "abis": [
+        "arm64-v8a"
+      ],
+      "nativeLibrary": "horo-package-qualification",
+      "permissions": [
+        "org.horocore.packagequalification.openxr.quest.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "org.khronos.openxr.permission.OPENXR",
+        "org.khronos.openxr.permission.OPENXR_SYSTEM"
+      ],
+      "features": [
+        "com.oculus.feature.PASSTHROUGH"
+      ],
+      "assets": {
+        "qualification.json": "android/qualification.json"
+      },
+      "nativeLibraries": [
+        "libhoro-package-qualification.so",
+        "libc++_shared.so",
+        "libopenxr_loader.so"
+      ],
+      "generatedAssets": [],
+      "openxrProfile": {
+        "schema": 1,
+        "runtime": "openxr",
+        "loaderSource": "bundled",
+        "activityRoute": "cold-discovery"
+      }
+    },
     "qualification-vulkan-development": {
       "applicationId": "org.horocore.packagequalification",
       "versionName": "0.2.0",

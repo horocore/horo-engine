@@ -34,10 +34,13 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
         std::optional<std::filesystem::path> diagnosticPath;
         bool diagnosticRoute{};
         bool persistenceAvailable{true};
+        JobSystem *recoveryJobs{};
+        bool mutableAssets{};
         std::unique_ptr<EditorWorkspaceController> controller;
 
-        explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false)
-            : project(sourceName), diagnosticRoute(useDiagnosticRoute) {
+        explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false, JobSystem *jobs = nullptr,
+                           bool writableAssets = false)
+            : project(sourceName), diagnosticRoute(useDiagnosticRoute), recoveryJobs(jobs), mutableAssets(writableAssets) {
             project.WriteScene();
             Open(PrefabAsset(9).Asset());
         }
@@ -62,12 +65,19 @@ namespace Horo::Editor::PrefabWorkspaceTestSupport {
                                         .prefabAction = action});
         }
 
-        void Open(const Assets::AssetId session) {
+        void Open(const Assets::AssetId session, ProjectMutationCoordinator *mutations = nullptr, DurableFileSystem *files = nullptr) {
             controller = std::make_unique<
                 EditorWorkspaceController>(project.directory.path, runtime, project.registry.Snapshot(),
-                                           EditorWorkspaceDependencies{.world = {.documentSessionOwner = session},
-                                                                       .mutations = persistenceAvailable ? &project.mutations : nullptr,
-                                                                       .durableFiles = persistenceAvailable ? &project.files : nullptr,
+                                           EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry =
+                                                                                      mutableAssets ? &project.registry : nullptr},
+                                                                       .world = {.documentSessionOwner = session},
+                                                                       .mutations = mutations ? mutations
+                                                                                              : (persistenceAvailable ? &project.mutations
+                                                                                                                      : nullptr),
+                                                                       .durableFiles =
+                                                                           files ? files
+                                                                                 : (persistenceAvailable ? &project.files : nullptr),
+                                                                       .jobs = recoveryJobs,
                                                                        .sourceNavigation =
                                                                            {.sourceOpenNavigator =
                                                                                 diagnosticRoute

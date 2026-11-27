@@ -24,6 +24,7 @@ namespace Horo::Runtime {
         RestoreDeleted,
         PublishSave,
         Retention,
+        CloudSync,
         Count
     };
     /** @brief Explicit deletion policy; unsupported recycle never falls back to permanent deletion. */
@@ -156,6 +157,13 @@ namespace Horo::Runtime {
         bool cleanupDeferred{}; /**< Publication succeeded; exact retired generation/journal cleanup remains recoverable. */
     };
 
+    /** @brief Independently owned verified archive and lineage from one exact slot selection. */
+    struct SaveSlotVerifiedExport final {
+        SaveSlotCatalogEntry entry;             /**< Exact source publication selected by the catalog. */
+        ImmutableSaveArchive archive;          /**< Immutable complete bytes verified against the selection. */
+        std::optional<SlotGenerationId> parent; /**< Parent generation from the verified archive header. */
+    };
+
     /**
      * @brief Contained filesystem lifecycle authority using hidden immutable generations and one atomic selection manifest.
      *
@@ -197,6 +205,81 @@ namespace Horo::Runtime {
          * permanent deletion retires the generation after publication, with durable pending cleanup evidence.
          * Platform recycle is explicit and unavailable capability fails before mutation. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> Execute(SaveSlotLifecycleRequest request, const CancellationToken &cancellation = {});
+        /** @brief Exports a verified snapshot with its exact archive lineage and an additional read bound.
+         * @param target Exact selected generation, namespace binding and catalog revision.
+         * @param maximumBytes Positive caller budget, intersected with the owner's archive limit before reading.
+         * @param cancellation Cooperative cancellation.
+         * @return Detached immutable archive or typed stale, budget, permission or validation failure.
+         * @details Uses the existing Export capability and host verification policy. Does not change local storage.
+         */
+        [[nodiscard]] Result<SaveSlotVerifiedExport> ExportVerified(const SaveSlotLifecycleTarget &target, std::size_t maximumBytes,
+                                                                   const CancellationToken &cancellation = {});
+        /** @brief Imports a verified source slot within the destination's product, environment and profile.
+         * @param request Standard Import command with immutable staged bytes and exact destination consent.
+         * @param requiredSourceSlot Slot from the authorized source address.
+         * @param cancellation Observed until the normal manifest commit gate.
+         * @return Durable import result or typed validation, authorization or publication failure.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ImportVerified(const SaveSlotLifecycleRequest &request,
+                                                                     SaveGameSlotId requiredSourceSlot,
+                                                                     const CancellationToken &cancellation = {});
+        /** @brief Reads the selected catalog and cloud metadata together under the namespace lease.
+         * @param access Exact local binding. @param scope Authenticated coordinator's provider/account binding.
+         * @return Validated pair, derived all-unknown evidence for a legacy catalog, or a typed failure.
+         * @details Requires CloudSync capability. A different persisted provider/account scope must be explicitly rebound.
+         */
+        [[nodiscard]] Result<SaveCloudRevisionSnapshot> ReadCloudRevision(const SaveNamespaceAccessRequest &access,
+                                                                         const SaveCloudMetadataScope &scope) const;
+        /** @brief Atomically persists the candidate sidecar under exact catalog and previous sidecar consent.
+         * @param access Exact local binding. @param expected Current pair captured by ReadCloudRevision.
+         * @param candidate Validated same-index successor, or the same pair for idempotent confirmation.
+         * @return Durable success, no-write stale rejection, or typed storage failure including commit outcome unknown.
+         * @details Requires CloudSync capability and publishes through the existing selection manifest.
+         */
+        [[nodiscard]] Result<void> PublishCloudRevision(const SaveNamespaceAccessRequest &access,
+                                                        const SaveCloudRevisionSnapshot &expected,
+                                                        const SaveCloudRevisionSnapshot &candidate);
+
+        /** @brief Applies a verified cloud descendant with its original generation and bytes.
+         * @param target Exact existing slot, binding and catalog revision.
+         * @param expected Catalog and provider evidence selected before the transfer.
+         * @param object Opaque key and exact observed provider revision.
+         * @param archive Immutable complete remote bytes verified again by the local Save authority.
+         * @param cancellation Observed before the atomic catalog visibility gate.
+         * @return Durable result or typed conflict, validation or storage failure.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendant(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
+            SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {});
+        /** @brief Applies a descendant through complete intermediate archives, nearest the remote head first.
+         * @param target Existing slot and binding. @param expected Pair selected before transfer.
+         * @param object Exact cloud key and revision. @param archive Selected remote archive.
+         * @param cancellation Observed before publication. @param ancestors Intermediate archives excluding both selected heads.
+         * @return Durable result or a typed conflict, validation or storage failure.
+         */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendant(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, SaveCloudObjectRef object,
+            const ImmutableSaveArchive &archive, const CancellationToken &cancellation,
+            std::span<const ImmutableSaveArchive> ancestors);
+
+        /** @brief Inspects exact local and remote archives without publishing or retiring either one.
+         * @param target Existing selected local slot and binding. @param expected Pair selected before transfer.
+         * @param archive Complete remote bytes verified by the local Save authority.
+         * @param cancellation Observed before and after validation.
+         * @return A bounded, display-safe comparison or typed validation, scope or storage failure.
+         */
+        [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownload(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
+            const ImmutableSaveArchive &archive, const CancellationToken &cancellation = {}) const;
+        /** @brief Inspects a download with a bounded sequence of intermediate ancestors.
+         * @param target Existing slot and binding. @param expected Pair selected before transfer.
+         * @param archive Selected remote archive. @param cancellation Observed during validation.
+         * @param ancestors Intermediate archives, nearest the remote head first, within the archive byte budget.
+         * @return A display-safe comparison or typed rejection.
+         */
+        [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownload(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected, const ImmutableSaveArchive &archive,
+            const CancellationToken &cancellation, std::span<const ImmutableSaveArchive> ancestors) const;
         /** @brief Exports a verified independent snapshot to a host-admitted contained destination capability.
          * @param request Export command with exact source consent. @param destination Approved export storage; outlives this call.
          * @param slot Opaque external destination identity. @param cancellation Observed before external atomic replacement.
@@ -274,7 +357,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<bool> PreserveRetired(Operation &operation) const;
         /** @brief Acquires and admits exact source bytes without mutating the detached selection. */
         [[nodiscard]] Result<ValidatedSaveArchive> AcquireArchive(const Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                  std::vector<std::byte> &bytes) const;
+                                                                  std::vector<std::byte> &bytes, std::size_t maximumBytes) const;
         /** @brief Prepares the detached catalog mutation and all result metadata before staging. */
         [[nodiscard]] Result<std::optional<SaveStorageWrite>> PrepareMutation(Operation &operation, const SaveSlotLifecycleRequest &request,
                                                                               const ValidatedSaveArchive &archive,
@@ -285,11 +368,31 @@ namespace Horo::Runtime {
         /** @brief Creates journal-owned candidate bytes and crosses the non-cancellable selection gate. */
         [[nodiscard]] Result<void> PublishPrepared(const std::optional<SaveStorageWrite> &prepared, std::span<const std::byte> catalog,
                                                    const CancellationToken &cancellation) const;
+        /** @brief Caller-owned capture state used only by the bounded export path. */
+        struct ArchiveTransfer final {
+            std::size_t maximumBytes;
+            std::optional<SlotGenerationId> parent;
+            std::optional<SaveGameSlotId> sourceSlot;
+        };
+        /** @brief Executes a command with optional archive transfer constraints under the existing lifecycle authority. */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteWithCapture(const SaveSlotLifecycleRequest &request,
+                                                                         const CancellationToken &cancellation, ArchiveTransfer *capture);
         /** @brief Executes a validated command while holding namespace and operation leases. */
         [[nodiscard]] Result<SaveSlotLifecycleResult> ExecuteLocked(Operation &operation, const SaveSlotLifecycleRequest &request,
-                                                                    const CancellationToken &cancellation);
+                                                                    const CancellationToken &cancellation, ArchiveTransfer *capture);
         /** @brief Pins exact binding in the operation and loads the sole catalog under complete operation ownership. */
         [[nodiscard]] Result<void> BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const;
+        /** @brief Applies a cloud descendant while holding the exact local publication authority. */
+        [[nodiscard]] Result<SaveSlotLifecycleResult> ApplyCloudDescendantLocked(
+            Operation &operation, const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &expected,
+            SaveCloudObjectRef object, const ImmutableSaveArchive &archive, const CancellationToken &cancellation,
+            std::span<const ImmutableSaveArchive> ancestors);
+        /** @brief Reads and compares two exact archives while the local catalog lease remains held. */
+        [[nodiscard]] Result<SaveCloudConflictSnapshot> InspectCloudDownloadLocked(
+            const SaveSlotLifecycleTarget &target, const SaveCloudRevisionSnapshot &current, const ImmutableSaveArchive &archive,
+            const CancellationToken &cancellation, std::span<const ImmutableSaveArchive> ancestors) const;
+        /** @brief Reads the selected archive and matches it to its trusted local catalog entry. */
+        [[nodiscard]] Result<SaveCloudPublicationHead> ReadCloudPublication(const SaveSlotCatalogEntry &entry) const;
         /** @brief Validates exact selected or retained consent before any metadata mutation. */
         [[nodiscard]] Result<void> CheckRetentionTarget(const Operation &operation, const SaveSlotLifecycleTarget &target,
                                                         bool retained) const;

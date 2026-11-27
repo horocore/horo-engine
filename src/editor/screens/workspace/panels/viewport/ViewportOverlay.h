@@ -23,6 +23,7 @@ namespace Horo::Editor {
         std::size_t objectCount{};
         std::optional<std::size_t> vertexCount;
         std::optional<std::size_t> triangleCount;
+        bool canReviewWithAgent{};
     };
 
     /** @brief One user intent from the viewport controls. */
@@ -32,6 +33,7 @@ namespace Horo::Editor {
         std::optional<EditorViewportAxisView> axisView;
         bool toggleGrid{};
         bool focusSelection{};
+        bool reviewWithAgent{};
     };
 
     /** @brief Toolbar rows shared by transform controls, navigation options and pointer admission. */

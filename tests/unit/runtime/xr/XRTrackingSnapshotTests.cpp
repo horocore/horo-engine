@@ -1,4 +1,5 @@
 #include "Horo/XR/XRErrors.h"
+#include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRTrackingSnapshot.h"
 #include "support/AllocationProbe.h"
 #include "support/TypedIdentityTestSupport.h"
@@ -18,15 +19,15 @@ namespace Horo::XR {
             return {.id = {session, {index, 1}}, .kind = kind, .worldOriginRevision = Horo::Tests::IdentityValue<XRWorldOriginRevision>(9)};
         }
 
-        [[nodiscard]] XRPoseSample PoseSample(const XRSessionId &session, const XRRuntimeTime sampledAt) {
-            const auto trackedPosition =
-                XRPoseComponent<Math::Vec3>{.value = Math::Vec3{1.0F, 2.0F, 3.0F}, .validity = XRPoseComponentValidity::Tracked};
+        [[nodiscard]] XRPoseSample PoseSample(const XRSessionId &session, const XRRuntimeTime sampledAt,
+                                              XRSpaceKind target = XRSpaceKind::Local, Math::Vec3 position = {1.0F, 2.0F, 3.0F}) {
+            const auto trackedPosition = XRPoseComponent<Math::Vec3>{.value = position, .validity = XRPoseComponentValidity::Tracked};
             const auto trackedOrientation =
                 XRPoseComponent<Math::Quaternion>{.value = Math::Quaternion::Identity(), .validity = XRPoseComponentValidity::Tracked};
             auto result =
                 XRPoseSample::Create({.session = session,
                                       .source = TrackingSpace(session, XRSpaceKind::View, 11),
-                                      .target = TrackingSpace(session, XRSpaceKind::Local, 12),
+                                      .target = TrackingSpace(session, target, 12),
                                       .purpose = XRPosePurpose::SimulationInput,
                                       .time = {.runtimeSample = sampledAt, .simulation = Horo::Tests::IdentityValue<XRSimulationTime>(80)},
                                       .components = {.positionMeters = trackedPosition,
@@ -115,6 +116,41 @@ namespace Horo::XR {
             REQUIRE(SnapshotHasError(fixture.Descriptor(), fixture, XRErrors::TrackingSnapshotInvalid));
         }
     }  // namespace
+
+    TEST_CASE("XR Stage boundary proximity requires exact current Stage-relative tracking", "[xr][tracking-snapshot][comfort]") {
+        TrackingFixture fixture;
+        const XRReferenceSpaceSnapshot referenceSpaces{fixture.session, TrackingSpace(fixture.session, XRSpaceKind::View, 11),
+                                                       TrackingSpace(fixture.session, XRSpaceKind::Local, 13),
+                                                       TrackingSpace(fixture.session, XRSpaceKind::Stage, 12), XRStageBounds{4, 6}};
+        for (const auto [x, expected] :
+             std::array{std::pair{1.0F, XRStageBoundaryProximity::Inside}, std::pair{1.75F, XRStageBoundaryProximity::Near},
+                        std::pair{2.0F, XRStageBoundaryProximity::Near}, std::pair{-2.25F, XRStageBoundaryProximity::Outside}}) {
+            fixture.poses[0].sample = PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::Stage, {x, 1.5F, 0});
+            const auto snapshot = fixture.Snapshot();
+            const auto cutoff = DescribeXRInteractionCutoff(snapshot);
+            const auto before = Tests::AllocationProbe::Count();
+            const auto proximity = QueryXRStageBoundary(snapshot, cutoff, referenceSpaces, 0.25F);
+            const auto after = Tests::AllocationProbe::Count();
+            REQUIRE(proximity.HasValue());
+            CHECK(proximity.Value() == expected);
+            CHECK(before == after);
+        }
+
+        fixture.poses[0].sample = PoseSample(fixture.session, fixture.sampledAt);
+        const auto local = fixture.Snapshot();
+        auto cutoff = DescribeXRInteractionCutoff(local);
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, referenceSpaces, 0.25F), XRErrors::OperationUnavailable));
+        auto unsupported = referenceSpaces;
+        unsupported.stage.reset();
+        unsupported.stageBounds.reset();
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, unsupported, 0.25F), XRErrors::OperationUnsupported));
+        auto stale = referenceSpaces;
+        stale.stage->worldOriginRevision = Horo::Tests::IdentityValue<XRWorldOriginRevision>(8);
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, stale, 0.25F), XRErrors::OriginRevisionStale));
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, referenceSpaces, -1.0F), XRErrors::OperationInvalid));
+        cutoff.sampledAt = Horo::Tests::IdentityValue<XRRuntimeTime>(101);
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, referenceSpaces, 0.25F), XRErrors::TrackingSnapshotStale));
+    }
 
     TEST_CASE("XR tracking snapshots own bounded canonical evidence", "[unit][xr][tracking-snapshot]") {
         TrackingFixture fixture;
@@ -273,6 +309,68 @@ namespace Horo::XR {
                                  XRErrors::OperationInvalid));
     }
 
+    TEST_CASE("Controller Grip and Aim produce distinct geometry from the same XR cutoff", "[xr][interaction]") {
+        TrackingFixture fixture;
+        const Math::Vec3 grip{1, 2, 3};
+        const Math::Vec3 aim{4, 5, 6};
+        fixture.poses.back().sample = PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::World, grip);
+        fixture.poses.emplace_back(XRTrackedPoseRecord{fixture.controller.id, XRTrackedPoseKind::Aim,
+                                                       PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::World, aim)});
+        const auto snapshot = fixture.Snapshot();
+        const auto cutoff = DescribeXRInteractionCutoff(snapshot);
+        const auto device = fixture.controller.id;
+        const auto confidence = XRTrackingConfidence::High;
+        const std::array probes{XRInteractionProbe{device, XRControllerInteractionPose::Grip, XRInteractionDirectProbe{}, confidence},
+                                XRInteractionProbe{device, XRControllerInteractionPose::Aim, XRInteractionRayProbe{{0, 0, -1}, 4},
+                                                   confidence},
+                                XRInteractionProbe{device, XRControllerInteractionPose::Grip, XRInteractionProximityProbe{0.25F},
+                                                   confidence}};
+        const auto before = Tests::AllocationProbe::Count();
+        const auto geometry = BuildXRInteractionCandidates(snapshot, cutoff, probes);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(geometry.HasValue());
+        CHECK(after == before);
+        CHECK(geometry.Value().Cutoff() == cutoff);
+        const auto candidates = geometry.Value().Candidates();
+        REQUIRE(candidates.size() == probes.size());
+        CHECK(std::get<Math::Vec3>(candidates[0].shape) == grip);
+        CHECK(std::get<Math::Ray>(candidates[1].shape).origin == aim);
+        CHECK(std::get<Math::BoundingSphere>(candidates[2].shape).center == grip);
+    }
+
+    TEST_CASE("Controller interaction withdraws when its tracking authority changes", "[xr][interaction]") {
+        TrackingFixture fixture;
+        fixture.poses.back().sample = PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::World);
+        const std::array probes{XRInteractionProbe{fixture.controller.id, XRControllerInteractionPose::Grip, XRInteractionDirectProbe{},
+                                                   XRTrackingConfidence::High}};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 1;
+        descriptor.bindingRevision = 19;
+        auto retiredCutoff = XRInteractionCutoff{fixture.session, fixture.revision, fixture.origin, fixture.sampledAt, 19};
+        auto expected = XRErrors::OperationUnavailable;
+        SECTION("focus is withdrawn") {
+            descriptor.focus = XRTrackingFocusState::Unfocused;
+        }
+        SECTION("visibility is withdrawn") {
+            descriptor.visibility = XRTrackingVisibilityState::Hidden;
+        }
+        SECTION("bindings are replaced without a pose revision change") {
+            ++descriptor.bindingRevision;
+            expected = XRErrors::TrackingSnapshotStale;
+        }
+        SECTION("session is replaced") {
+            retiredCutoff.session = ActiveSession(6);
+            expected = XRErrors::IdentityStale;
+        }
+        SECTION("session is retired") {
+            retiredCutoff.session = {};
+            expected = XRErrors::IdentityInvalid;
+        }
+        const auto snapshot = XRTrackingSnapshot::Create(descriptor, fixture.session, fixture.origin);
+        REQUIRE(snapshot.HasValue());
+        CHECK(HasErrorIdentity(BuildXRInteractionCandidates(snapshot.Value(), retiredCutoff, probes), expected));
+    }
+
     TEST_CASE("XR action snapshots bind exact generation and plan revision independently of pose validity",
               "[unit][xr][tracking-snapshot]") {
         TrackingFixture fixture;
@@ -320,9 +418,40 @@ namespace Horo::XR {
         descriptor.focus = XRTrackingFocusState::Unfocused;
         CHECK(!SnapshotHasValue(descriptor, fixture));
         descriptor.focus = XRTrackingFocusState::Focused;
+        descriptor.visibility = XRTrackingVisibilityState::Hidden;
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+        actions[0].active = false;
+        actions[0].x = 0.0F;
+        CHECK(SnapshotHasValue(descriptor, fixture));
+        descriptor.visibility = XRTrackingVisibilityState::Visible;
+        actions[0].active = true;
+        actions[0].x = 1.0F;
         actions[0].device = {fixture.session, {21, 2}};
         CHECK(!SnapshotHasValue(descriptor, fixture));
         CHECK(actions[0].device.slot.generation == 2);
+    }
+
+    TEST_CASE("XR tracking snapshots permit only one controller generation per slot", "[unit][xr][tracking-snapshot]") {
+        TrackingFixture fixture;
+        auto replacement = fixture.controller;
+        ++replacement.id.slot.generation;
+        replacement.role = XRTrackedDeviceRole::RightController;
+        fixture.devices.push_back(replacement);
+        std::array actions{XRTrackedActionRecord{fixture.controller.id, 0, XRTrackedActionKind::Scalar, true, 0.5F, 0.0F}};
+        auto descriptor = fixture.Descriptor();
+        descriptor.limits.maximumActions = 1;
+        descriptor.bindingRevision = 1;
+        descriptor.actions = actions;
+
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+
+        fixture.devices[1].id = replacement.id;
+        descriptor.devices = std::span{fixture.devices}.first(2);
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+        fixture.poses[1].device = replacement.id;
+        CHECK(SnapshotHasError(descriptor, fixture, XRErrors::TrackingSnapshotInvalid));
+        actions[0].device = replacement.id;
+        CHECK(SnapshotHasValue(descriptor, fixture));
     }
 
     TEST_CASE("XR action snapshot ordering and aggregate capacity are finite", "[unit][xr][tracking-snapshot]") {

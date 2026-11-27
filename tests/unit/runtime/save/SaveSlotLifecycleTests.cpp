@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "SaveSlotLifecycleTestSupport.h"
 
 using namespace Horo::Runtime::SaveSlotLifecycleTest;
@@ -108,7 +109,10 @@ TEST_CASE("Platform recycle failure is durable deferred cleanup and never falls 
           "[runtime][save][lifecycle]") {
     Fixture fixture;
     fixture.host.recycleSupported = true;
-    fixture.host.recycleFailure = true;
+    fixture.host.onRecycle = [] {
+        CHECK(Log::DiagnosticsSuppressed());
+        return Result<void>::Failure(MakeError(SaveErrors::StoragePermanentIo, "private recycle path"));
+    };
     const auto imported = fixture.Import(10);
     const auto original = fixture.ExportBytes(10);
     auto deleted = fixture.owner->Execute(
@@ -119,7 +123,7 @@ TEST_CASE("Platform recycle failure is durable deferred cleanup and never falls 
     fixture.Reopen();
     CHECK(fixture.Index().entries.empty());
     CHECK(fixture.owner->Reconcile(fixture.Access()).Value());
-    fixture.host.recycleFailure = false;
+    fixture.host.onRecycle = {};
     CHECK_FALSE(fixture.owner->Reconcile(fixture.Access()).Value());
     CHECK(fixture.host.recycled.at(imported.entry->publication.generation) == original);
     CHECK_FALSE(std::filesystem::exists(fixture.Generation(imported.entry->publication.generation)));
@@ -194,6 +198,59 @@ TEST_CASE("Export owns an immutable independent snapshot and publishes only comp
     fixture.Import(10, MakeArchive("1.2.4-preview.1").bytes);
     CHECK(*snapshot.exported.bytes == bytes);
     CHECK(fixture.ExportBytes(10) != bytes);
+}
+
+TEST_CASE("Save export withholds private host diagnostics and publishes only after admission", "[runtime][save][lifecycle]") {
+    Fixture fixture;
+    fixture.Import(10);
+    const auto source = fixture.ExportBytes(10);
+    const auto request = fixture.Export(10);
+    auto external = Namespace();
+    external.environment = Id<EnvironmentStorageId>(50);
+    auto opened = SaveFilesystemStorage::Open(fixture.root, external);
+    REQUIRE(opened.HasValue());
+    const auto destination = std::move(opened).Value();
+    const auto slot = Id<SaveGameSlotId>(60);
+
+    const Error cause{ErrorCode{"private.slot_id"}, ErrorDomainId{"private.profile"}, ErrorSeverity::Error, "private player"};
+    const auto privateError = [&cause](const ErrorCodeDescriptor &descriptor) {
+        auto error = MakeError(descriptor, "private slot title");
+        error.diagnostics.emplace_back(DiagnosticCode{"private.payload"}, DiagnosticSeverity::Error, "private progress",
+                                       SourceLocation{"private path"}, "private field");
+        return WithCause(std::move(error), cause);
+    };
+    const auto *expected = &SaveErrors::NamespaceStale;
+    SECTION("profile binding rejects before opening an archive") {
+        fixture.host.onBinding = [&expected, &privateError] {
+            CHECK(Log::DiagnosticsSuppressed());
+            return Result<void>::Failure(privateError(*expected));
+        };
+    }
+    SECTION("semantic validation rejects private payload details") {
+        expected = &SaveErrors::RestoreParticipantInvalid;
+        fixture.host.onSemantics = [] {
+            CHECK(Log::DiagnosticsSuppressed());
+        };
+        fixture.host.semanticDiagnostic = privateError(*expected);
+    }
+
+    const auto denied = fixture.owner->ExportTo(request, destination, slot);
+    REQUIRE(denied.HasError());
+    const auto &error = denied.ErrorValue();
+    CHECK(error.code.Value() == expected->code.Value());
+    CHECK(error.message == expected->summary);
+    CHECK(error.diagnostics.empty());
+    REQUIRE(error.cause.Get());
+    CHECK(error.cause.Get()->code.Value() == SaveErrors::DiagnosticUnsupported.code.Value());
+    CHECK(error.cause.Get()->message == SaveErrors::DiagnosticUnsupported.summary);
+    CHECK_FALSE(Log::DiagnosticsSuppressed());
+    CHECK(destination.Read(slot, source.size()).HasError());
+    CHECK(fixture.host.leases == 0);
+
+    fixture.host.onBinding = {};
+    fixture.host.semanticDiagnostic.reset();
+    REQUIRE(fixture.owner->ExportTo(request, destination, slot).HasValue());
+    CHECK(destination.Read(slot, source.size()).Value() == source);
 }
 
 TEST_CASE("Lifecycle repack preserves unknown optional stored compressed records exactly", "[runtime][save][lifecycle]") {
@@ -287,7 +344,26 @@ TEST_CASE("Required signature policy verifies untrusted source then signs and re
     const auto sourceEntry = fixture.Index().entries.front();
     SECTION("Unavailable authorized signer") {
         fixture.host.signer = {};
-        CHECK(fixture.owner->Execute(fixture.Copy(10, 11)).HasError());
+        const auto failed = fixture.owner->Execute(fixture.Copy(10, 11));
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == SaveErrors::ProtectionUnavailable.code.Value());
+        CHECK(fixture.Index().entries == std::vector{sourceEntry});
+    }
+    SECTION("Signer failure reports key state without private context") {
+        fixture.host.signer = [](std::vector<std::byte>) {
+            CHECK(Log::DiagnosticsSuppressed());
+            auto error = MakeError(SaveErrors::ProtectionKeyRevoked, "private key identity");
+            Error provider{ErrorCode{"private.signer"}, ErrorDomainId{"private.key_service"}, ErrorSeverity::Error, "private endpoint"};
+            return Result<std::vector<std::byte>>::Failure(WithCause(std::move(error), std::move(provider)));
+        };
+        const auto failed = fixture.owner->Execute(fixture.Copy(10, 11));
+        REQUIRE(failed.HasError());
+        const auto &error = failed.ErrorValue();
+        CHECK(error.code.Value() == SaveErrors::ProtectionKeyRevoked.code.Value());
+        CHECK(error.message == SaveErrors::ProtectionKeyRevoked.summary);
+        REQUIRE(error.cause.Get());
+        CHECK(error.cause.Get()->code.Value() == SaveErrors::DiagnosticUnsupported.code.Value());
+        CHECK(error.cause.Get()->message == SaveErrors::DiagnosticUnsupported.summary);
         CHECK(fixture.Index().entries == std::vector{sourceEntry});
     }
     SECTION("Signer cannot return unsigned output") {

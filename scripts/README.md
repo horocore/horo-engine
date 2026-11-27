@@ -8,6 +8,11 @@ Developer and reusable tooling scripts belong here. GitHub workflow helpers belo
 under `.github/scripts/`; shared action setup belongs under `.github/actions/`.
 Legacy scripts are under `deprecated/scripts/` until migrated.
 
+Device and artifact qualification use separate evidence validators.
+`qualify_console_artifact.py` verifies console artifacts.
+`qualify_xr_device.py` checks XR smoke records against a declared device tuple.
+`qualify_xr_release.py` checks the release capability matrix against its declared evidence.
+
 ## Pull request annotations
 
 `dev.py pr-annotations` checks a PR against its development issue. It validates the

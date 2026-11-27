@@ -4,6 +4,7 @@
 #include "support/OpenXRNativeTestSupport.h"
 
 #include <bit>
+#include <functional>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -29,6 +30,7 @@ namespace Horo::Tests::OpenXR {
         XrTime sample{42'000'000};
         XrResult result{XR_SUCCESS};
         std::size_t conversions{};
+        std::function<void()> onConvert;
         bool reenter{};
         bool nestedRejected{};
         bool missing{};
@@ -56,18 +58,20 @@ namespace Horo::Tests::OpenXR {
 #endif
             CHECK(instance != XR_NULL_HANDLE);
             ++active->conversions;
+            if (active->onConvert)
+                active->onConvert();
             if (active->reenter && active->clock)
                 active->nestedRejected = active->clock->PresentationNow().HasError();
             *output = active->sample;
             return active->result;
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance instance, const char *name, PFN_xrVoidFunction *output) {
+        static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance, const char *name, PFN_xrVoidFunction *output) {
             if (std::string_view{name} == ClockFunction) {
                 *output = active->missing ? nullptr : std::bit_cast<PFN_xrVoidFunction>(&Convert);
                 return *output ? XR_SUCCESS : XR_ERROR_FUNCTION_UNSUPPORTED;
             }
-            return Script::GetProc(instance, name, output);
+            return XR_ERROR_FUNCTION_UNSUPPORTED;
         }
     };
 

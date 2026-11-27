@@ -24,6 +24,15 @@ namespace Horo::Editor {
         return Output::Success(resolved.Value());
     }
 
+    /** @copydoc LoadEditorVulkanManualColorInputs */
+    Result<EditorViewportColorInputs> LoadEditorVulkanManualColorInputs(const std::filesystem::path &root) {
+        using Outcome = Result<EditorViewportColorInputs>;
+        auto color = Render::Internal::LoadColorOutputCookPackage(root / "color", Render::ShaderTargetBackend::Vulkan);
+        if (color.HasError())
+            return Outcome::Failure(color.ErrorValue());
+        return Outcome::Success({.package = std::make_shared<const Render::Internal::ColorOutputCookPackage>(std::move(color).Value())});
+    }
+
     /** @copydoc PrepareEditorColorPipeline */
     Result<void> PrepareEditorColorPipeline(IEditorViewportRenderer &viewport, const std::filesystem::path &root,
                                             const Render::ExposureSettings &settings,

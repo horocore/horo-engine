@@ -10,6 +10,31 @@
 #include <imgui.h>
 
 namespace Horo::Editor {
+    /** @brief Stages the candidate atlas pixels in the selected GUI backend before publishing the CPU atlas.
+     * @param renderer Prepared GUI renderer. @param candidate Separate built atlas.
+     * @return Success with candidate texture ID, or failure preserving the active renderer and atlas.
+     */
+    [[nodiscard]] inline Result<void> ReplaceEditorFontAtlas(IEditorGuiRenderer &renderer, ImFontAtlas &candidate) {
+        if (!ImGui::GetCurrentContext())
+            return Result<void>::Failure(MakeError(RendererErrors::GuiOwnerInvalid));
+        if (const auto *active = ImGui::GetIO().Fonts;
+            active->Locked || &candidate == active || candidate.Locked || !candidate.IsBuilt() || candidate.TexID != 0)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiTextureInvalid));
+        unsigned char *pixels{};
+        int width{};
+        int height{};
+        candidate.GetTexDataAsRGBA32(&pixels, &width, &height);
+        if (!pixels || width <= 0 || height <= 0)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiTextureInvalid));
+        const auto uploaded =
+            renderer.ReplaceFontTexture({static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
+                                         std::span{pixels, static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4}});
+        if (uploaded.HasError())
+            return Result<void>::Failure(uploaded.ErrorValue());
+        candidate.SetTexID(static_cast<ImTextureID>(uploaded.Value()));
+        return Result<void>::Success();
+    }
+
     /** @brief Synchronous borrowed draw snapshot and exact frontend sample declarations; owns no image resource. */
     class EditorGuiComposition final {
     public:

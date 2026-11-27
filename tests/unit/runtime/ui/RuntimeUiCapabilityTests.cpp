@@ -93,6 +93,50 @@ namespace Horo::Tests::UiAccess {
         CHECK(client->Validate().HasError());
     }
 
+    TEST_CASE("Runtime UI host can inspect only the current canvas publication it owns", "[runtime-ui][inspection]") {
+        Fixture fixture{false, true};
+        const auto canvas = Stable<UiCanvasId>(2);
+        const auto lease = Take(fixture.service.Acquire(Instance()));
+        const auto captured = Take(fixture.service.Inspect(Instance(), lease, canvas));
+        REQUIRE(captured.bindings);
+        REQUIRE(captured.bindings->providers.size() == 1);
+        REQUIRE(captured.bindings->bindings.size() == 1);
+        REQUIRE(captured.actions);
+        CHECK(captured.bindings->providers.front().active);
+        CHECK(captured.bindings->providers.front().instance == Fixture::Provider());
+        CHECK(captured.bindings->bindings.front().value == UiBindingValue{std::string{"initial"}});
+
+        const auto overBudget = fixture.service.Inspect(Instance(), lease, canvas, {.providers = 0});
+        REQUIRE(overBudget.HasError());
+        CHECK(overBudget.ErrorValue().code.Value() == UiErrors::BindingCapacityExceeded.code.Value());
+
+        Fixture foreign;
+        const auto foreignLease = Take(foreign.service.Acquire(Instance()));
+        const auto foreignCapture = fixture.service.Inspect(Instance(), foreignLease, canvas);
+        REQUIRE(foreignCapture.HasError());
+        CHECK(foreignCapture.ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
+
+        bool wrongThread{};
+        std::thread worker{[&] {
+            const auto result = fixture.service.Inspect(Instance(), lease, canvas);
+            wrongThread = result.HasError() && result.ErrorValue().code.Value() == UiErrors::CapabilityWrongThread.code.Value();
+        }};
+        worker.join();
+        CHECK(wrongThread);
+
+        REQUIRE(fixture.service.Reload(Instance(), fixture.Make(2), Lifecycle).HasValue());
+        const auto stale = fixture.service.Inspect(Instance(), lease, canvas);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
+        const auto current = Take(fixture.service.Acquire(Instance()));
+        CHECK(Take(fixture.service.Inspect(Instance(), current, canvas)).tree != captured.tree);
+        fixture.service.Shutdown();
+        const auto stopped = fixture.service.Inspect(Instance(), current, canvas);
+        REQUIRE(stopped.HasError());
+        CHECK(stopped.ErrorValue().code.Value() == UiErrors::CapabilityRevoked.code.Value());
+        CHECK(captured.bindings->providers.front().active);
+    }
+
     TEST_CASE("Runtime UI child revocation isolates siblings and bounds delegation", "[runtime-ui][lifetime]") {
         Fixture fixture;
         auto root = fixture.Client();
@@ -225,6 +269,61 @@ namespace Horo::Tests::UiAccess {
         CHECK_FALSE(Take(fixture.service.CanReclaim()));
         presentation = {};
         client.reset();
+        REQUIRE(fixture.service.CollectRetired().HasValue());
+        CHECK(Take(fixture.service.CanReclaim()));
+    }
+
+    TEST_CASE("Scene-owned UI fences provider work and queued input before final shutdown", "[runtime-ui][scene][qualification]") {
+        Fixture fixture{true, true};
+        const auto canvas = Stable<UiCanvasId>(2);
+        const auto binding = Stable<UiBindingId>(30);
+        auto client = fixture.Client();
+        auto presentation = Take(fixture.service.Acquire(Instance()));
+
+        CancellationSource cancellation;
+        auto cancelled = Take(fixture.service.Issue(fixture.Grant(), cancellation.Token()));
+        Take(cancelled->Screen(UiRouteOperationRequest::Push(Stable<UiRouteId>(9))));
+        cancellation.RequestCancellation();
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+        CHECK(Take(client->ScreenGuard()).revision.Value() == 1);
+        const auto route = Take(client->Screen(UiRouteOperationRequest::Push(Stable<UiRouteId>(9))));
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+        const auto routeResult = Take(client->Poll(route));
+        REQUIRE(routeResult);
+        CHECK(std::get<UiRouteOperationResult>(*routeResult).outcome == UiRouteOperationOutcome::Committed);
+
+        const auto publish = Take(client->Publish({Fixture::Provider(),
+                                                   fixture.schema.Version(),
+                                                   Revision<UiBindingSnapshotRevision>(1),
+                                                   Revision<UiBindingSnapshotRevision>(2),
+                                                   {{0, std::string{"late"}}}}));
+        REQUIRE(fixture.service.WithdrawProvider(Instance(), canvas, Fixture::Provider(), RuntimeUiCommandCutoff::BeforeVariableUpdate)
+                    .HasValue());
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::BeforeVariableUpdate)) == 1);
+        const auto refused = Take(client->Poll(publish));
+        REQUIRE(refused);
+        CHECK(std::holds_alternative<Error>(*refused));
+        CHECK(client->Read(binding).HasError());
+
+        const auto source = Take(client->Source(Take(client->Find(Stable<UiElementId>(11))), fixture.actionOwner.interaction));
+        Take(client->Action(source, UiGameplayActionCommand{Stable<UiActionId>(22), {}}));
+        CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
+        {
+            auto prepared = Take(fixture.service.PrepareTransition({Runtime::SceneRuntimeId{101}, {}}, {}));
+            const auto retired = Take(fixture.service.CommitTransition(prepared, Lifecycle));
+            CHECK(retired.retiredSceneInstances == 1);
+        }
+        Actions actions;
+        CHECK(fixture.service.DispatchActions(Instance(), canvas, actions).HasError());
+        CHECK(actions.calls == 0);
+        CHECK(client->Validate().HasError());
+        REQUIRE(presentation.Get() != nullptr);
+
+        fixture.service.Shutdown();
+        CHECK_FALSE(Take(fixture.service.CanReclaim()));
+        presentation = {};
+        client.reset();
+        cancelled.reset();
         REQUIRE(fixture.service.CollectRetired().HasValue());
         CHECK(Take(fixture.service.CanReclaim()));
     }

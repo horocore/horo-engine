@@ -23,6 +23,28 @@ namespace Horo::WorldCook {
             return Result<ValidationReport>::Success(std::move(report));
         }
 
+        /** @brief Requires exact provider membership, policy and version for the captured cell. */
+        Result<void> CheckCapturedNavigation(const SourceCapture &source, const CellArtifactView &artifact,
+                                             const StreamingCellHeaderView &header, const PublicationLimits &limits) {
+            const auto *binding = Detail::FindNavigationCell(source, header.cell);
+            if (!binding)
+                return header.payloads.size() == 1 ? Result<void>::Success()
+                                                   : Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
+            const auto row =
+                std::ranges::find(header.payloads, StreamingCellProvider::NavigationMesh, &StreamingCellPayloadHeader::provider);
+            if (header.payloads.size() != 2 || row == header.payloads.end() ||
+                row->requirement != StreamingCellPayloadRequirement::Required ||
+                row->version != Navigation::NavigationCellTileSelection::WireVersion)
+                return Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
+            auto expected = Navigation::EncodeNavigationCellTileSelection(binding->selection, limits.cell.maximumDecodedBytes);
+            if (expected.HasError())
+                return Result<void>::Failure(expected.ErrorValue());
+            const auto bytes = artifact.bytes.subspan(static_cast<std::size_t>(row->offset), static_cast<std::size_t>(row->compressedSize));
+            if (!std::ranges::equal(expected.Value(), bytes))
+                return Result<void>::Failure(MakeError(Errors::Stale));
+            return Result<void>::Success();
+        }
+
         /** @brief Verifies actual semantic bytes against the captured source without trusting wire schema approvals. */
         Result<void> CheckCapturedCore(const SourceCapture &source, const Runtime::SceneCellCookInput &captured,
                                        const std::span<const std::byte> bytes, const PublicationLimits &limits,
@@ -64,11 +86,14 @@ namespace Horo::WorldCook {
                 header.compression != StreamingCellCompression::None)
                 return Result<std::shared_ptr<const RuntimeSceneCellPayload>>::Failure(MakeError(Errors::Stale));
             const auto core = std::ranges::find(header.payloads, StreamingCellProvider::CoreEcs, &StreamingCellPayloadHeader::provider);
-            if (core == header.payloads.end() || header.payloads.size() != 1 ||
-                core->requirement != StreamingCellPayloadRequirement::Required || core->version != SceneCellPayloadCodecVersion)
+            if (core == header.payloads.end() || core->requirement != StreamingCellPayloadRequirement::Required)
                 return Result<std::shared_ptr<const RuntimeSceneCellPayload>>::Failure(MakeError(SceneCellPayloadErrors::Unsupported));
+            if (const auto navigation = CheckCapturedNavigation(source, artifact, header, limits); navigation.HasError())
+                return Result<std::shared_ptr<const RuntimeSceneCellPayload>>::Failure(navigation.ErrorValue());
             const auto bytes =
                 artifact.bytes.subspan(static_cast<std::size_t>(core->offset), static_cast<std::size_t>(core->compressedSize));
+            if (!MatchesSceneCellPayloadWireVersion(bytes, core->version))
+                return Result<std::shared_ptr<const RuntimeSceneCellPayload>>::Failure(MakeError(SceneCellPayloadErrors::Unsupported));
             auto decoded = DecodeSceneCellPayload(source.partition, bytes, captured->expected, captured->source.componentSchemas,
                                                   captured->source.behaviorSchemas, limits.scene, cancellation);
             if (decoded.HasError())
@@ -174,6 +199,8 @@ namespace Horo::WorldCook {
                                                         const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Result<ValidationReport>::Failure(MakeError(Errors::Cancelled));
+        if (const auto valid = Detail::ValidateNavigationCells(source); valid.HasError())
+            return Result<ValidationReport>::Failure(valid.ErrorValue());
         if (!source.sourceRevision || !limits.maximumTotalArtifactBytes || !limits.maximumObjectBindings ||
             !limits.semantic.maximumDiagnostics || source.objects.size() > limits.maximumObjectBindings)
             return Result<ValidationReport>::Failure(MakeError(Errors::Invalid));

@@ -47,7 +47,8 @@ Result<void> EditorViewportRendererMetal::PrepareColorPipeline(const EditorViewp
         const std::array updates{MetalViewportBufferUpdate{buffer, bytes, 0}};
         return MetalViewportResourceBridge::UpdateBuffers(*owner.frontend, *owner.graphicsBridge, updates);
     }};
-    impl_->colorCandidate = std::make_unique<EditorViewportColorPipeline>(*impl_->frontend, port);
+    const auto slots = impl_->frontend->Capabilities().support.limits.maxFramesInFlight;
+    impl_->colorCandidate = std::make_unique<EditorViewportColorPipeline>(*impl_->frontend, port, slots);
     if (const auto ready = impl_->colorCandidate->Initialize(inputs); ready.HasError())
         return ready;
     if (const auto resources = impl_->resources.EnableColorPipeline(); resources.HasError())
@@ -63,6 +64,15 @@ Result<void> EditorViewportRendererMetal::RequestColorSettings(const Render::Exp
     return impl_->color->RequestSettings(settings);
 }
 
+/** @copydoc EditorViewportRendererMetal::RequestColorAccessibilityPreview */
+Result<void> EditorViewportRendererMetal::RequestColorAccessibilityPreview(
+    const std::optional<Accessibility::ColorblindSettings> &preview) {
+    if (impl_->owner != std::this_thread::get_id())
+        return Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput));
+    return impl_->color ? impl_->color->RequestAccessibilityPreview(preview)
+                        : IEditorViewportRenderer::RequestColorAccessibilityPreview(preview);
+}
+
 /** @copydoc EditorViewportRendererMetal::SetColorFrameDelta */
 void EditorViewportRendererMetal::SetColorFrameDelta(float deltaSeconds) noexcept {
     impl_->colorDelta = deltaSeconds;
@@ -70,6 +80,7 @@ void EditorViewportRendererMetal::SetColorFrameDelta(float deltaSeconds) noexcep
 
 /** @copydoc EditorViewportRendererMetal::FinishColorFrame */
 void EditorViewportRendererMetal::FinishColorFrame(bool accepted) noexcept {
+    impl_->imageCapture.Finish(accepted);
     if (impl_->color)
         impl_->color->Finish(accepted);
 }
@@ -107,6 +118,9 @@ Result<void> EditorViewportRendererMetal::PrepareLightingFrame(const Render::Sta
     const auto prepared = impl_->clusteredFrame->Prepare(pass, view);
     if (prepared.HasError())
         return ColorFrameFailure(prepared.ErrorValue(), "scene-prepare", ColorDiagnostics());
+    if (const auto copy = impl_->imageCapture.Pending())
+        if (impl_->clusteredFrame->PrepareCapture(pass, *copy).HasError())
+            impl_->imageCapture.Fail();
     return prepared;
 }
 
@@ -128,7 +142,7 @@ Result<void> EditorViewportRendererMetal::ExecutePreparedFrame(Render::RenderFra
         frame.Cancel();
         return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
     }
-    const auto encoded = impl_->clusteredFrame->Execute(frame, *parsed.Value().viewport, *parsed.Value().output);
+    const auto encoded = impl_->clusteredFrame->Execute(frame, *parsed.Value().viewport, *parsed.Value().output, &impl_->imageCapture);
     if (encoded.HasError()) {
         frame.Cancel();
         return ColorFrameFailure(encoded.ErrorValue(), "graph-execute", ColorDiagnostics());

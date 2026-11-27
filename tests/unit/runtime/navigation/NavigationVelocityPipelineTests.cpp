@@ -139,8 +139,10 @@ namespace Horo::Navigation {
         fixture.Feedback(publication, true);
         publication = fixture.Publish(fixture.Capture(2));
         CHECK(publication.intent.state == NavigationMovementState::Following);
+        CHECK(publication.recovery == NavigationCrowdRecovery::Stalled);
         fixture.Feedback(publication, false, {0.1F, 0, 0});
         publication = fixture.Publish(fixture.Capture(3));
+        CHECK(publication.recovery == NavigationCrowdRecovery::Clear);
         fixture.Feedback(publication, true);
         publication = fixture.Publish(fixture.Capture(4));
         CHECK(publication.intent.state == NavigationMovementState::Following);
@@ -148,6 +150,7 @@ namespace Horo::Navigation {
         publication = fixture.Publish(fixture.Capture(5));
         CHECK(publication.intent.state == NavigationMovementState::Querying);
         CHECK(publication.intent.desiredVelocity == Math::Vec3{});
+        CHECK(publication.recovery == NavigationCrowdRecovery::RepathRequested);
     }
 
     TEST_CASE("Velocity reset retires old work feedback and corridor without replacing the movement owner",
@@ -261,6 +264,57 @@ namespace Horo::Navigation {
         CHECK(stopped.Value().preferredVelocity.x == Catch::Approx(1));
         fixture.Feedback(stopped.Value(), true);
         CHECK(fixture.Publish(fixture.Capture(2)).intent.state == NavigationMovementState::Following);
+    }
+
+    TEST_CASE("Crowd density slows corridor intent without changing its direction or solver limits", "[unit][navigation][velocity]") {
+        VelocityFixture fixture;
+        const auto profileId = NavigationAgentProfileId::Create(1).Value();
+        const auto neighbor = fixture.registry.RegisterAtSafePoint(
+            {.owner = {fixture.binding.scene, 2, 1}, .profile = profileId, .filter = Request().filter});
+        REQUIRE(neighbor.HasValue());
+        fixture.PublishRoute();
+        const auto agents = fixture.registry.Snapshot().Value();
+        const auto dynamic = fixture.dynamic.Snapshot().Value();
+        std::array motions{NavigationCrowdMotionSample{.handle = fixture.agent, .position = fixture.position},
+                           NavigationCrowdMotionSample{.handle = neighbor.Value(), .position = {0, 0, 1}}};
+        std::array profiles{
+            NavigationCrowdProfileFacts{.profile = profileId, .densitySaturationNeighbors = 2, .minimumDensitySpeedScale = 0.5F}};
+        const auto capture = [&](const std::uint64_t tick = 1) {
+            return BuildNavigationCrowdSnapshot(agents, dynamic, motions, profiles, {}, tick);
+        };
+        const auto populated = capture();
+        REQUIRE(populated.HasValue());
+        const auto &fact = populated.Value().Agents().front();
+        REQUIRE(fact.handle == fixture.agent);
+        CHECK(fact.densitySpeedScale == Catch::Approx(0.75F));
+        profiles.front().maximumNeighbors = 0;
+        const auto truncated = capture();
+        REQUIRE(truncated.HasValue());
+        CHECK(truncated.Value().Agents().front().truncatedNeighbors == 1);
+        CHECK(truncated.Value().Agents().front().densitySpeedScale == fact.densitySpeedScale);
+        profiles.front().densitySaturationNeighbors = 1;
+        const auto saturated = capture();
+        REQUIRE(saturated.HasValue());
+        CHECK(saturated.Value().Agents().front().densitySpeedScale == 0.5F);
+        profiles.front().densitySaturationNeighbors = 0;
+        CHECK(capture().HasError());
+        const auto work = fixture.Prepare(populated.Value());
+        CHECK(work.request.preferredVelocity == work.preferred.desiredVelocity * 0.75F);
+        CHECK(work.request.maximumSpeedMetersPerSecond == Catch::Approx(2.625F));
+        const auto solved = fixture.solver.Solve(populated.Value(), work.request);
+        REQUIRE(solved.HasValue());
+        const auto published = fixture.pipeline->Commit(work, solved.Value(), populated.Value(), fixture.Now(1));
+        REQUIRE(published.HasValue());
+        CHECK(published.Value().intent.desiredVelocity == work.request.preferredVelocity);
+
+        profiles.front().densitySaturationNeighbors = 1;
+        motions.front().velocity = {3.4F, 0, 0};
+        const auto braking = capture(2);
+        REQUIRE(braking.HasValue());
+        const auto next = fixture.pipeline->Prepare(fixture.Now(2), braking.Value(),
+                                                    {.maximumAccelerationMetersPerSecondSquared = 1, .stepSeconds = 0.1F});
+        REQUIRE(next.HasValue());
+        CHECK(next.Value().request.maximumSpeedMetersPerSecond == Catch::Approx(3.3F));
     }
 
     TEST_CASE("Velocity operation replacement retires old feedback and pending work without changing Character incarnation",

@@ -3,6 +3,46 @@
 namespace Horo::Navigation {
     using namespace CoordinatorTestSupport;
 
+    TEST_CASE("Fixed-owner path candidates publish on the declared tick under worker pressure", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0, .maxQueuedJobs = 1}};
+        auto held = jobs.SubmitResult({}, [](const CancellationToken &) {
+            return Result<void>::Success();
+        });
+        REQUIRE(held.HasValue());
+        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
+        Activate(world, std::make_unique<ControlledBackend>());
+        auto limits = Limits();
+        limits.execution = NavigationPathExecution::FixedOwner;
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, limits)).Value();
+        auto input = Input();
+        input.targetTick = 2;
+        const auto completed = Admit(coordinator, world, input);
+        const auto withdrawn = Admit(coordinator, world, input);
+        CancellationSource aborted;
+        aborted.RequestCancellation();
+        CHECK(coordinator.Dispatch(1, aborted.Token()) == 0);
+        CHECK(coordinator.Dispatch(1) == 2);
+        CHECK(coordinator.Dispatch(1) == 0);
+        CHECK_FALSE(coordinator.Take(completed));
+        const std::array callers{Caller()};
+        CHECK(coordinator.Commit(Current(callers, 1)) == 0);
+        REQUIRE(coordinator.Cancel(withdrawn));
+        CHECK(coordinator.Dispatch(2) == 0);
+        CHECK(coordinator.Commit(Current(callers, 2)) == 2);
+        auto result = coordinator.Take(completed);
+        REQUIRE(result);
+        CHECK(result->result.HasValue());
+        CHECK(result->job == 0);
+        CHECK(result->source.completionTick == 2);
+        auto retired = coordinator.Take(withdrawn);
+        REQUIRE(retired);
+        CHECK(ErrorIs(*retired, NavigationErrors::QueryCancelled));
+        CHECK(coordinator.IsDrained());
+        const auto queued = held.Value().Snapshot();
+        REQUIRE(queued);
+        CHECK(queued->state == JobState::Queued);
+    }
+
     TEST_CASE("Coordinator rejects malformed bounds and admits no inline work", "[unit][navigation][coordinator]") {
         JobSystem jobs{{.workerCount = 0}};
         auto bad = Limits();
@@ -120,6 +160,83 @@ namespace Horo::Navigation {
         }
     }
 
+    TEST_CASE("Same-world topology replacement publishes a stale result with the exact old source", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0}};
+        auto world = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        Activate(world);
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        const auto request = Admit(coordinator, world);
+        REQUIRE(coordinator.Dispatch(1) == 1);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+
+        const NavigationPathCaller callers[]{Caller()};
+        auto current = Current(callers);
+        current.activation.topology = NavigationGeneration::Create(Topology().Value() + 1U).Value();
+        current.source.topology = current.activation.topology;
+        current.source.snapshot = NavigationSnapshotToken::Create(2).Value();
+        REQUIRE(world.Stage(current.activation, MakeObservedNavigationBackend()).HasValue());
+        REQUIRE(world.CommitAtSafePoint(current.activation.scene, current.activation.sceneGeneration).HasValue());
+        REQUIRE(world.RetiredCount() == 1);
+
+        REQUIRE(coordinator.Commit(current) == 1);
+        const auto completion = coordinator.Take(request);
+        REQUIRE(completion);
+        REQUIRE(ErrorIs(*completion, NavigationErrors::StaleSnapshot));
+        REQUIRE(completion->source.world == World());
+        REQUIRE(completion->source.topology == Topology());
+        REQUIRE(completion->activation == Activation());
+        REQUIRE(coordinator.IsDrained());
+        REQUIRE(world.CollectRetired() == NavigationWorldLifecycleState::Active);
+        REQUIRE(world.RetiredCount() == 0);
+    }
+
+    TEST_CASE("Taking a published path rechecks its pinned topology after logical removal", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0}};
+        auto world = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        Activate(world, std::make_unique<ControlledBackend>(std::make_shared<Gate>()));
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        auto input = Input();
+        input.request.start.x = 2.0F;
+        const auto request = Admit(coordinator, world, input);
+        REQUIRE(coordinator.Dispatch(1) == 1);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        const NavigationPathCaller callers[]{Caller()};
+        bool publishedSuccess{};
+        const NavigationPathCommitObserver observer{&publishedSuccess,
+                                                    [](void *context, const NavigationPathCompletion &completion) noexcept {
+            *static_cast<bool *>(context) = completion.result.HasValue();
+        }};
+        REQUIRE(coordinator.Commit(Current(callers), observer) == 1);
+        REQUIRE(publishedSuccess);
+
+        const ErrorCodeDescriptor *expected{};
+        SECTION("forcing world unload invalidates the queued result before the next commit") {
+            REQUIRE(world.Unload(World()).HasValue());
+            REQUIRE(world.Acquire(World()).HasError());
+            expected = &NavigationErrors::InvalidWorld;
+        }
+        SECTION("replacing topology preserves the original reason through later shutdown") {
+            auto replacement = Activation();
+            replacement.topology = NavigationGeneration::Create(Topology().Value() + 1U).Value();
+            REQUIRE(world.Stage(replacement, MakeObservedNavigationBackend()).HasValue());
+            REQUIRE(world.CommitAtSafePoint(replacement.scene, replacement.sceneGeneration).HasValue());
+            REQUIRE(world.Acquire(World()).Value().Descriptor() == replacement);
+            world.BeginShutdown();
+            expected = &NavigationErrors::StaleSnapshot;
+        }
+
+        REQUIRE(expected);
+        CHECK(world.RetiredCount() == 1);
+        const auto completion = coordinator.Take(request);
+        REQUIRE(completion);
+        CHECK(ErrorIs(*completion, *expected));
+        CHECK(completion->activation == Activation());
+        CHECK(completion->source.topology == Topology());
+        CHECK_FALSE(coordinator.Take(request));
+        static_cast<void>(world.CollectRetired());
+        CHECK(world.RetiredCount() == 0);
+    }
+
     TEST_CASE("Queued scheduler cancellation and exception publish each request terminally", "[unit][navigation][coordinator]") {
         for (bool fail : {false, true}) {
             JobSystem jobs{{.workerCount = 0}};
@@ -143,6 +260,30 @@ namespace Horo::Navigation {
             REQUIRE_FALSE(coordinator.Take(first));
             REQUIRE(coordinator.IsDrained());
         }
+    }
+
+    TEST_CASE("A throwing first path request does not fail later compatible batch members", "[unit][navigation][coordinator]") {
+        JobSystem jobs{{.workerCount = 0}};
+        auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
+        Activate(world, std::make_unique<ControlledBackend>(nullptr, true));
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        auto input = Input();
+        input.request.start.x = 2;
+        const auto failed = Admit(coordinator, world, input);
+        input = Input(Caller(2));
+        input.request.start.x = 3;
+        const auto healthy = Admit(coordinator, world, input);
+        REQUIRE(coordinator.Dispatch(1) == 2);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+        const NavigationPathCaller callers[]{Caller(), Caller(2)};
+        REQUIRE(coordinator.Commit(Current(callers)) == 2);
+        const auto failure = coordinator.Take(failed);
+        const auto success = coordinator.Take(healthy);
+        REQUIRE(failure);
+        CHECK(ErrorIs(*failure, NavigationErrors::ProviderFailed));
+        REQUIRE(success);
+        CHECK(success->result.HasValue());
+        CHECK(coordinator.IsDrained());
     }
 
     TEST_CASE("Running cancellation holds slot and provider lifetime until worker drain", "[unit][navigation][coordinator]") {

@@ -12,6 +12,8 @@ static_assert(sizeof(Horo::Render::ExposureGpuState) == 32);
 static_assert(sizeof(Horo::Render::ExposureGpuDispatchParameters) == 96);
 static_assert(
     std::is_same_v<decltype(std::declval<const Horo::Render::ColorPipelinePlan &>().Inputs()), const Horo::Render::ColorPipelineRequest &>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::ColorPipelinePlan &>().DisplayAccessibilityTransform()),
+                             const std::optional<Horo::Accessibility::ColorMatrix> &>);
 static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::CookedColorTransform &>().Rgb()), std::span<const float>>);
 static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::CookedColorOutputProgram &>().Source()), std::string_view>);
 static_assert(

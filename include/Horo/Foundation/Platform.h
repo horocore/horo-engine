@@ -25,6 +25,22 @@ namespace Horo {
     class NativeExternalProcessRunner;
     class PublicationLockAccess;
 
+    /** @brief Typed refusals for exclusive moves that cannot use a native atomic rename. */
+    namespace DurableFileErrors {
+        inline const ErrorCodeDescriptor CrossVolume{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                                     .code = ErrorCode{"filesystem.cross_volume_move"},
+                                                     .defaultSeverity = ErrorSeverity::Error,
+                                                     .summary = "An exclusive rename cannot cross filesystem volumes.",
+                                                     .remediationHint = "Choose a destination on the source volume.",
+                                                     .userActionable = true};
+        inline const ErrorCodeDescriptor MoveUnsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                                         .code = ErrorCode{"filesystem.file_move_unsupported"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "The filesystem does not support an exclusive rename.",
+                                                         .remediationHint = "Choose a filesystem with native exclusive rename support.",
+                                                         .userActionable = true};
+    }  // namespace DurableFileErrors
+
     /** @brief Reports availability of optional platform facilities for a composed host. */
     struct PlatformCapabilities {
         bool supportsProcessExecution{false}; /**< Whether the host permits process execution. */
@@ -246,10 +262,43 @@ namespace Horo {
         [[nodiscard]] virtual Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared,
                                                                 const std::filesystem::path &destination,
                                                                 AtomicFileReplacementReceipt &receipt);
+        /**
+         * @brief Publishes a prepared sibling directory atomically without replacing an existing destination.
+         * @param prepared Existing complete directory whose contents were durably prepared by the caller.
+         * @param destination Absent sibling destination; an existing directory, file or redirect is never replaced.
+         * @param receipt Fresh thread-owned commit witness, recorded immediately after native rename and before later sync/errors.
+         * @return Success after the platform's requested durability operations, failure before commit, or a durability failure after
+         * commit.
+         * @pre Both paths are absolute normalized siblings under the caller's exclusive publication authority; receipt is uncommitted.
+         * @details No cross-volume copy or check-then-replace fallback is permitted. The default rejects unsupported publication
+         * before any write. A committed receipt forbids reporting rollback or deleting the published destination after an error.
+         */
+        [[nodiscard]] virtual Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                            const std::filesystem::path &destination,
+                                                                            AtomicFileReplacementReceipt &receipt);
         /** @brief Durably removes a file. @param path File to remove. @return Success after directory durability, or typed I/O failure. */
         [[nodiscard]] virtual Result<void> RemoveDurable(const std::filesystem::path &path) = 0;
         /** @brief Synchronizes directory metadata. @param path Directory to synchronize. @return Success or typed I/O failure. */
         [[nodiscard]] virtual Result<void> SyncDirectory(const std::filesystem::path &path) = 0;
+        /** @brief Publishes a prepared regular, single-link file without replacing any existing destination.
+         * @param prepared Existing, durably staged file. @param destination Absent sibling filename.
+         * @param receipt Fresh caller-owned commit witness, recorded before any later sync/error.
+         * @return Durable success or a typed publication failure. An existing destination is preserved.
+         * @pre Absolute normalized siblings within the caller's protected publication directory.
+         * @details The default rejects unsupported publication. Native implementations use an exclusive rename and never copy.
+         */
+        [[nodiscard]] virtual Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                       const std::filesystem::path &destination,
+                                                                       AtomicFileReplacementReceipt &receipt);
+        /** @brief Moves a regular single-link file to an absent name on the same filesystem.
+         * @param source Current absolute normalized file. @param destination Absolute normalized target.
+         * @param receipt Fresh commit witness. @return Result including parent-directory durability.
+         * @pre The caller holds authority for both paths.
+         * @details Cross-volume and unsupported moves fail before commit with typed errors. No copy fallback is used.
+         */
+        [[nodiscard]] virtual Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &source,
+                                                                    const std::filesystem::path &destination,
+                                                                    AtomicFileReplacementReceipt &receipt);
     };
 
     /** @brief Native Windows/macOS/Linux durable filesystem implementation. */
@@ -310,6 +359,18 @@ namespace Horo {
         [[nodiscard]] Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                                         AtomicFileReplacementReceipt &receipt) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;
+        /** @copydoc DurableFileSystem::PublishDirectoryNoReplaceTracked */
+        [[nodiscard]] Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                    const std::filesystem::path &destination,
+                                                                    AtomicFileReplacementReceipt &receipt) override;
+        /** @copydoc DurableFileSystem::PublishFileNoReplaceTracked */
+        [[nodiscard]] Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
+                                                               const std::filesystem::path &destination,
+                                                               AtomicFileReplacementReceipt &receipt) override;
+        /** @copydoc DurableFileSystem::MoveFileNoReplaceTracked */
+        [[nodiscard]] Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &source, const std::filesystem::path &destination,
+                                                            AtomicFileReplacementReceipt &receipt) override;
+        /** @copydoc DurableFileSystem::SyncDirectory */
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
     private:
@@ -328,6 +389,35 @@ namespace Horo {
                                               .retryable = false,
                                               .userActionable = false};
         return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::PublishDirectoryNoReplaceTracked */
+    inline Result<void> DurableFileSystem::PublishDirectoryNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                            AtomicFileReplacementReceipt &) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.directory_publication_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support tracked exclusive directory publication.",
+                                              .remediationHint = "Compose an authority with native no-replace directory publication.",
+                                              .retryable = false,
+                                              .userActionable = false};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::PublishFileNoReplaceTracked */
+    inline Result<void> DurableFileSystem::PublishFileNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                       AtomicFileReplacementReceipt &) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.file_publication_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support tracked exclusive file publication."};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::MoveFileNoReplaceTracked */
+    inline Result<void> DurableFileSystem::MoveFileNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                    AtomicFileReplacementReceipt &) {
+        return Result<void>::Failure(MakeError(DurableFileErrors::MoveUnsupported));
     }
 
     /** @copydoc DurableFileSystem::WritePrivateDurable */
@@ -428,7 +518,7 @@ namespace Horo {
     class CrashService;
 
     /** @brief Explicitly composed baseline and optional platform services for one host lifetime. */
-    class PlatformServices {
+    class PlatformHostServices {
     public:
         /**
          * @brief Constructs a platform service bundle from host-owned services.
@@ -441,9 +531,9 @@ namespace Horo {
          * @param dialogs Optional native dialog service.
          * @param crash Optional crash service.
          */
-        PlatformServices(FileSystem &files, Clock &clock, ProcessService &processes, UserDirectories &directories,
-                         PlatformCapabilities capabilities = {}, CredentialStore *credentials = nullptr, NativeDialogs *dialogs = nullptr,
-                         CrashService *crash = nullptr) noexcept;
+        PlatformHostServices(FileSystem &files, Clock &clock, ProcessService &processes, UserDirectories &directories,
+                             PlatformCapabilities capabilities = {}, CredentialStore *credentials = nullptr,
+                             NativeDialogs *dialogs = nullptr, CrashService *crash = nullptr) noexcept;
 
         /** @brief Gets the capabilities declared by the composition root. @return Capability values. */
         [[nodiscard]] const PlatformCapabilities &Capabilities() const noexcept;

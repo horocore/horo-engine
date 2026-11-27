@@ -1,20 +1,38 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/DesignSystem/DesignTokens.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "LuaModuleHostApi.h"
+#include "ScriptModuleHostServices.h"
+#include "editor/language/HoroScriptSyntax.h"
+#include "editor/source_editor/HoroScriptAuthoringConfig.h"
+#include "editor/source_editor/HoroScriptModuleLanguage.h"
 #include "editor/source_editor/SourceEditorTheme.h"
 #include "editor/source_editor/SourceSyntax.h"
 #include "editor/source_editor/SourceSyntaxCache.h"
 #include "editor/source_editor/SourceSyntaxProjection.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
 
 using namespace Horo::Editor;
 
 namespace {
+    /** @brief Opens a Lua fixture through the same document owner used by editor queries. */
+    SourceDocumentSnapshot OpenLuaSource(SourceFileOpenService &sources, const std::string_view code) {
+        constexpr auto file = "example.lua";
+        std::ofstream(sources.ProjectRoot() / file, std::ios::binary) << code;
+        const auto opened = sources.Open({.path = file});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot);
+        return *opened.Value().sourceSnapshot;
+    }
+
     void RequireRole(const std::string_view path, const std::string_view text, const std::string_view token,
                      const SourceSyntaxRole expected) {
         const auto syntax = TokenizeSource(ClassifySourceLanguage(path), text);
@@ -66,6 +84,183 @@ TEST_CASE("Horo Script syntax supports Lua comments strings and keywords", "[edi
     RequireRole("a.lua", "--[=[ first\r\nreturn ]=]\nlocal x", "return", SourceSyntaxRole::Comment);
     RequireRole("a.lua", "local s = [==[ -- text\nreturn ]==]", "return", SourceSyntaxRole::String);
     RequireRole("a.lua", "local s = \"return \\\"text\\\"\"", "return", SourceSyntaxRole::String);
+}
+
+TEST_CASE("Project script bindings validate source identity and let one source select one module", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    Horo::Tests::OwnedTestDirectory directory{"horo-script-config"};
+    const auto root = std::filesystem::canonical(directory.Path());
+    const auto missing = LoadScriptModuleSourceBindings(root);
+    REQUIRE(missing.HasValue());
+    CHECK(missing.Value().empty());
+    REQUIRE(std::filesystem::create_directory(root / ".horo"));
+    const auto config = root / ".horo/script-language.json";
+    std::ofstream(config) << R"({"schemaVersion":1,"bindings":[
+        {"source":"scripts/demo.lua","package":"example.pack","module":"example.pack.runner"},
+        {"source":"scripts/another.horo_script","package":"second.pack","module":"second.pack.runner"}
+    ]})";
+    const auto loaded = LoadScriptModuleSourceBindings(root);
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value().size() == 2);
+    const auto demo = SourceDocumentId::Parse("scripts/demo.lua");
+    REQUIRE(demo.HasValue());
+    const auto *binding = FindScriptModuleSourceBinding(loaded.Value(), demo.Value());
+    REQUIRE(binding);
+    CHECK(binding->module == "example.pack.runner");
+    std::ofstream(config) << R"({"schemaVersion":1,"bindings":[
+        {"source":"scripts/demo.lua","package":"example.pack","module":"example.pack.runner"},
+        {"source":"scripts/demo.lua","package":"second.pack","module":"second.pack.runner"}
+    ]})";
+    CHECK(LoadScriptModuleSourceBindings(root).HasError());
+    std::ofstream(config) << R"({"schemaVersion":1,"bindings":[{"source":"../bad.lua","package":"p","module":"m"}]})";
+    CHECK(LoadScriptModuleSourceBindings(root).HasError());
+}
+
+TEST_CASE("Horo Script import queries ignore inert or out-of-scope aliases and retire with the source", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    using enum SourceLanguageRequestKind;
+    Horo::Tests::OwnedTestDirectory directory{"horo-script-import-query"};
+    constexpr std::string_view code = R"(local a = [=[horo.import('available').pkg.api.read]=]
+-- horo.import('available').pkg.api.read
+local b = other.horo.import('available').pkg.api.read
+local c = horo.import('missing').pkg.api.read
+return horo.import('available').pkg.ap
+)";
+    SourceFileOpenService sources{directory.Path()};
+    const auto source = OpenLuaSource(sources, code);
+    const std::array imports{
+        Horo::Extensions::ScriptModuleApiMetadata{.alias = "available",
+                                                  .descriptor = Horo::Extensions::ScriptExportDescriptor{.nameSpace = "pkg.api",
+                                                                                                         .functions = {{.id = "read"}}}}};
+    auto cursor = code.find(".read");
+    for (int index = 0; index < 4; ++index) {
+        REQUIRE(cursor != code.npos);
+        const auto result = QueryHoroScriptApi(source, Hover, cursor + 2, imports);
+        REQUIRE(result.HasValue());
+        CHECK(std::holds_alternative<std::monostate>(result.Value().payload));
+        cursor = code.find(".read", cursor + 1);
+    }
+    const auto prefix = code.rfind(".ap") + 1;
+    const auto complete = QueryHoroScriptApi(source, Completion, prefix + 2, imports);
+    REQUIRE(complete.HasValue());
+    const auto &choices = std::get<LanguageCompletions>(complete.Value().payload).items;
+    REQUIRE(choices.size() == 1);
+    CHECK(choices.front().label == "api");
+    CHECK(choices.front().primaryEdit == LanguageByteSpan{prefix, prefix + 2});
+
+    REQUIRE(sources.Documents().Edit(source.Identity().instance, {source.Revision(), prefix, 2, "api"}).HasValue());
+    CHECK(QueryHoroScriptApi(source, Completion, prefix + 2, imports).HasError());
+}
+
+TEST_CASE("Horo Script import diagnostics identify exact members and retire on provider replacement", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    using namespace std::chrono_literals;
+    Horo::Tests::OwnedTestDirectory directory{"horo-script-import-diagnostics"};
+    constexpr std::string_view code = "\xEF\xBB\xBF-- \xC3\xA9\r\n"
+                                      "local inert = [=[horo.import('api').pkg.api.inert]=]\r\n"
+                                      "local other = receiver.horo.import('api').pkg.api.ignored\r\n"
+                                      "local unknown = horo.import('unavailable').pkg.api.ignored\r\n"
+                                      "local available = horo.import('api').available\r\n"
+                                      "local failure = horo.import('api').code\r\n"
+                                      "local partial = horo.import('api').pkg\r\n"
+                                      "local bad = horo.import('api').pkg.wrong.member\r\n"
+                                      "local valid = horo.import('api').pkg.api.read\r\n"
+                                      "return horo.import('api').pkg.api.missing\r\n";
+    SourceFileOpenService sources{directory.Path()};
+    const auto source = OpenLuaSource(sources, code);
+    const Horo::Extensions::ScriptModuleApiMetadata registered{.alias = "api",
+                                                               .descriptor =
+                                                                   Horo::Extensions::ScriptExportDescriptor{.nameSpace = "pkg.api",
+                                                                                                            .functions = {{.id = "read"}}}};
+    const std::array imports{registered, Horo::Extensions::ScriptModuleApiMetadata{.alias = "unavailable"}};
+    const auto &items = DiagnoseHoroScriptImports(source.Text(), imports).items;
+    REQUIRE(items.size() == 2);
+    CHECK(items[0].code == LanguageDiagnosticCode::UnknownScriptImportMember);
+    CHECK(items[0].span == LanguageByteSpan{code.find("wrong"), code.find("wrong") + 5});
+    CHECK(items[1].span == LanguageByteSpan{code.find("missing"), code.find("missing") + 7});
+
+    Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+    HoroScriptSyntaxWorkspace workspace;
+    const auto capture = [&](const SourceDocumentSnapshot &) {
+        return std::vector{registered};
+    };
+    CHECK_FALSE(workspace.Poll(jobs, sources, source, 1, capture));
+    std::optional<LanguageResult> publication;
+    const auto poll = [&](const std::uint64_t revision, const HoroScriptSyntaxWorkspace::CaptureImports &captureImports) {
+        for (auto deadline = std::chrono::steady_clock::now() + 3s; std::chrono::steady_clock::now() < deadline && !publication;) {
+            publication = workspace.Poll(jobs, sources, source, revision, captureImports);
+            std::this_thread::sleep_for(2ms);
+        }
+    };
+    poll(2, {});
+    REQUIRE(publication);
+    CHECK(publication->context.source.SharesStateWith(source));
+    CHECK(std::get<LanguageDiagnostics>(publication->payload).items.empty());
+    publication.reset();
+    poll(3, capture);
+    REQUIRE(publication);
+    CHECK(std::get<LanguageDiagnostics>(publication->payload).items.size() == 2);
+}
+
+TEST_CASE("Lua host members remain visible without module metadata", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    using enum SourceLanguageRequestKind;
+    Horo::Tests::OwnedTestDirectory directory{"horo-lua-api-query"};
+    constexpr std::string_view code = "local fake = other.horo.u64\n-- horo.u64\nlocal real = horo.u64\nreturn horo.\n";
+    SourceFileOpenService sources{directory.Path()};
+    const auto source = OpenLuaSource(sources, code);
+
+    const auto complete = QueryHoroScriptApi(source, Completion, code.rfind("horo.") + 5, {});
+    REQUIRE(complete.HasValue());
+    const auto &items = std::get<LanguageCompletions>(complete.Value().payload).items;
+    REQUIRE(items.size() == Horo::Extensions::LuaModuleHostMembers.size());
+    for (const auto &member : Horo::Extensions::LuaModuleHostMembers) {
+        const auto found = std::ranges::find(items, member.name, &LanguageCompletionItem::label);
+        REQUIRE(found != items.end());
+        CHECK(found->detail == member.signature);
+    }
+    const auto real = code.rfind("u64");
+    const auto hover = QueryHoroScriptApi(source, Hover, real + 1, {});
+    REQUIRE(hover.HasValue());
+    CHECK(std::get<LanguageHover>(hover.Value().payload).span == LanguageByteSpan{real, real + 3});
+    const auto fake = QueryHoroScriptApi(source, Hover, code.find("u64") + 1, {});
+    REQUIRE(fake.HasValue());
+    CHECK(std::holds_alternative<std::monostate>(fake.Value().payload));
+}
+
+TEST_CASE("Lua import alias completion changes only the quoted content", "[editor][source][script-api]") {
+    using namespace Horo::Editor::Language;
+    using enum SourceLanguageRequestKind;
+    Horo::Tests::OwnedTestDirectory directory{"horo-lua-alias-query"};
+    constexpr std::string_view code = "local a = horo.import('back-end')\nlocal b = horo.import(\"\")\n"
+                                      "return horo.import('back-unavailable').available\n";
+    SourceFileOpenService sources{directory.Path()};
+    const auto source = OpenLuaSource(sources, code);
+    const std::array imports{
+        Horo::Extensions::ScriptModuleApiMetadata{.alias = "back-end",
+                                                  .descriptor = Horo::Extensions::ScriptExportDescriptor{.nameSpace = "pkg.api"}},
+        Horo::Extensions::ScriptModuleApiMetadata{.alias = "back-unavailable"},
+    };
+    const auto start = code.find("back-end");
+    const auto completion = QueryHoroScriptApi(source, Completion, start + 4, imports);
+    REQUIRE(completion.HasValue());
+    const auto &items = std::get<LanguageCompletions>(completion.Value().payload).items;
+    REQUIRE(items.size() == 1);
+    REQUIRE(items.front().edits.size() == 1);
+    CHECK(items.front().edits.front() == LanguageTextEdit{{start, start + 8}, "back-end"});
+    const auto hover = QueryHoroScriptApi(source, Hover, start + 4, imports);
+    REQUIRE(hover.HasValue());
+    CHECK(std::get<LanguageHover>(hover.Value().payload).text == "pkg.api");
+    const auto empty = code.find("\"\"") + 1;
+    const auto insertion = QueryHoroScriptApi(source, Completion, empty, imports);
+    REQUIRE(insertion.HasValue());
+    const auto &suggestions = std::get<LanguageCompletions>(insertion.Value().payload).items;
+    REQUIRE(suggestions.size() == 1);
+    CHECK(suggestions.front().primaryEdit == LanguageByteSpan{empty, empty});
+    const auto status = code.find(".available") + 1;
+    const auto fallback = QueryHoroScriptApi(source, Hover, status + 3, imports);
+    REQUIRE(fallback.HasValue());
+    CHECK(std::get<LanguageHover>(fallback.Value().payload).text == "available: boolean");
 }
 
 TEST_CASE("Configuration syntax separates properties values and comments", "[editor][source][syntax]") {

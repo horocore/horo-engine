@@ -21,7 +21,7 @@ endif()
 
 set(_horo_state_identity_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/physics-state-identity")
 file(MAKE_DIRECTORY "${_horo_state_identity_headers}")
-configure_file(physics/PhysicsStateImagesInternal.h
+configure_file(physics/state/identity/PhysicsStateImagesInternal.h
     "${_horo_state_identity_headers}/PhysicsStateImagesInternal.h" COPYONLY)
 add_library(HoroPhysicsStateIdentityInternal INTERFACE)
 target_include_directories(HoroPhysicsStateIdentityInternal INTERFACE "$<BUILD_INTERFACE:${_horo_state_identity_headers}>")

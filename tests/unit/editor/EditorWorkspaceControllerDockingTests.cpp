@@ -3,7 +3,7 @@
 #include "Horo/Assets/MeshEditorPayload.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
 #include <algorithm>
 #include <atomic>
@@ -200,7 +200,7 @@ namespace {
 
         REQUIRE(
             (controller.ViewModel().activityBarLayout.FindSlot("horo.viewport") == ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
-        REQUIRE_FALSE(controller.ViewModel().activityBarLayout.FindSlot("horo.input_mapping").has_value());
+        REQUIRE((controller.ViewModel().activityBarLayout.FindSlot("horo.input_mapping") == ActivityBarSlot{ActivityBarRail::Right, 2, 0}));
     }
 
     TEST_CASE("Dropping Into The Lower Half Splits The Left Dock", "[unit][editor]") {

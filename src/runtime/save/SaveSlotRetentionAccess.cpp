@@ -18,7 +18,9 @@ namespace Horo::Runtime {
     Result<void> SaveSlotLifecycle::BeginRetention(Operation &operation, const SaveNamespaceAccessRequest &access) const {
         if (access.expected != state_->policy.destination.name)
             return Result<void>::Failure(MakeError(SaveErrors::NamespaceStale));
-        auto lease = state_->host->AcquireBinding(access);
+        auto lease = InvokeSaveSlotHost([this, &access] {
+            return state_->host->AcquireBinding(access);
+        });
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
         if (!lease.Value())

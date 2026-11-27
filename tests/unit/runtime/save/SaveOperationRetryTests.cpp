@@ -136,6 +136,34 @@ TEST_CASE("Storage retry retains one operation and immutable capture identity wi
     CHECK(handle.Snapshot()->IsTerminal());
 }
 
+TEST_CASE("Automated storage retries withhold provider text before retry and completion publication",
+          "[unit][runtime][save][arbiter][retry][privacy]") {
+    auto arbiter = Arbiter();
+    auto request = RetryRequest();
+    request.mode = GENERATE(SavePolicyMode::Auto, SavePolicyMode::Checkpoint, SavePolicyMode::Suspend);
+    const auto handle = BeginRetrySave(arbiter, request);
+    const auto result = arbiter.DeferStorageRetry(handle.Id(),
+                                                  {.category = SaveStorageFailureCategory::TransientIo,
+                                                   .nativeCause = MakeError(SaveErrors::StorageTransientIo, "private native storage path")},
+                                                  0);
+    REQUIRE(result.HasValue());
+    REQUIRE(result.Value());
+    const auto pending = arbiter.Snapshot(handle.Id());
+    REQUIRE(pending);
+    REQUIRE(pending->retry.lastError);
+    REQUIRE(pending->retry.lastError->cause.Get());
+    RequireError(*pending->retry.lastError->cause.Get(), SaveErrors::StorageTransientIo);
+    CHECK(pending->retry.lastError->cause.Get()->message.find("private native storage path") == std::string::npos);
+    REQUIRE(
+        arbiter.ResumeStorageRetry(handle.Id(), request.retry->preconditions, request.retry->policy.maximumElapsedMilliseconds).HasValue());
+    const auto terminal = handle.Snapshot();
+    REQUIRE(terminal);
+    REQUIRE(terminal->terminalError);
+    RequireError(*terminal->terminalError, SaveErrors::StorageTransientIo);
+    REQUIRE(terminal->terminalError->cause.Get());
+    CHECK(terminal->terminalError->cause.Get()->message.find("private native storage path") == std::string::npos);
+}
+
 TEST_CASE("Manual work takes the arbiter before a due background retry and does not discard it", "[unit][runtime][save][arbiter][retry]") {
     auto arbiter = Arbiter();
     const auto request = RetryRequest();

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -28,8 +29,18 @@ namespace Horo::Tests::OpenXR {
         XrResult failureResult{XR_ERROR_RUNTIME_FAILURE};
         std::string_view absent;
         std::string_view instanceDispatchAbsent;
+        PFN_xrGetInstanceProcAddr resolveExtra{};
         std::vector<std::string_view> calls;
+        std::vector<std::string> enabledExtensions;
         bool depthExtension{};
+        bool handExtension{};
+        bool synthesisExtension{};
+        bool spaceWarpExtension{};
+        bool refuseReprojectionInstance{};
+        std::string_view refusedInstanceExtension;
+        std::span<const std::string_view> extraExtensions;
+        std::uint32_t extraExtensionVersion{1};
+        bool gazeExtension{};
         bool legacyVulkan{};   /**< Selects the existing Vulkan-enable1 application bridge in real-loader fixtures. */
         bool clockExtension{}; /**< Optional official native clock extension for same-production-clock tests. */
         std::uint32_t extensionCount{1};
@@ -44,6 +55,7 @@ namespace Horo::Tests::OpenXR {
         bool throwUnknownAfterInstance{};
         std::uint32_t liveInstances{};
         std::uint32_t liveSessions{};
+        std::size_t dispatchLookups{};
         XrSession lastSession{}; /**< Observes the actual script-created native handle; never issues a Horo identity. */
 
         struct RetirementProbe final {
@@ -96,7 +108,28 @@ namespace Horo::Tests::OpenXR {
                         CopyNativeLiteral(properties[index].extensionName, "XR_KHR_convert_timespec_time");
 #endif
                     }
-                    properties[index].extensionVersion = 1;
+                    if (!layer && active->handExtension && index == 1U + active->depthExtension + active->clockExtension)
+                        CopyNativeLiteral(properties[index].extensionName, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+                    const auto synthesisIndex = 1U + active->depthExtension + active->clockExtension + active->handExtension;
+                    if (!layer && active->synthesisExtension && index == synthesisIndex)
+                        CopyNativeLiteral(properties[index].extensionName, XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME);
+                    if (!layer && active->spaceWarpExtension && index == synthesisIndex + active->synthesisExtension)
+                        CopyNativeLiteral(properties[index].extensionName, XR_FB_SPACE_WARP_EXTENSION_NAME);
+                    if (!layer && active->gazeExtension &&
+                        index == synthesisIndex + active->synthesisExtension + active->spaceWarpExtension)
+                        CopyNativeLiteral(properties[index].extensionName, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+                    const auto extraIndex =
+                        synthesisIndex + active->synthesisExtension + active->spaceWarpExtension + active->gazeExtension;
+                    if (!layer && index >= extraIndex && index - extraIndex < active->extraExtensions.size()) {
+                        const auto name = active->extraExtensions[index - extraIndex];
+                        auto &destination = properties[index].extensionName;
+                        REQUIRE(name.size() < std::size(destination));
+                        std::ranges::copy(name, std::begin(destination));
+                        destination[name.size()] = '\0';
+                        properties[index].extensionVersion = active->extraExtensionVersion;
+                    } else {
+                        properties[index].extensionVersion = 1;
+                    }
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;
                 }
@@ -106,7 +139,18 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL CreateInstance(const XrInstanceCreateInfo *info, XrInstance *instance) {
             active->enabledLayer = info->enabledApiLayerCount == 1 && std::string_view{info->enabledApiLayerNames[0]} == "XR_APILAYER_TEST";
+            active->enabledExtensions.clear();
+            for (std::uint32_t index = 0; index < info->enabledExtensionCount; ++index)
+                active->enabledExtensions.emplace_back(info->enabledExtensionNames[index]);
             const auto result = Record("instance");
+            if (XR_SUCCEEDED(result) && !active->refusedInstanceExtension.empty() &&
+                std::ranges::find(active->enabledExtensions, active->refusedInstanceExtension) != active->enabledExtensions.end())
+                return XR_ERROR_EXTENSION_NOT_PRESENT;
+            if (XR_SUCCEEDED(result) && active->refuseReprojectionInstance &&
+                std::ranges::any_of(active->enabledExtensions, [](std::string_view name) {
+                return name == XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME || name == XR_FB_SPACE_WARP_EXTENSION_NAME;
+            }))
+                return XR_ERROR_EXTENSION_NOT_PRESENT;
             if (XR_SUCCEEDED(result)) {
                 *instance = NativeHandle<XrInstance>(++active->liveInstances);
             }
@@ -154,6 +198,7 @@ namespace Horo::Tests::OpenXR {
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance instance, const char *name, PFN_xrVoidFunction *function) {
+            ++active->dispatchLookups;
             *function = nullptr;
             if (active->absent == name || (instance != XR_NULL_HANDLE && active->instanceDispatchAbsent == name))
                 return XR_ERROR_FUNCTION_UNSUPPORTED;
@@ -173,7 +218,7 @@ namespace Horo::Tests::OpenXR {
                                       DispatchEntry{"xrDestroySession", reinterpret_cast<PFN_xrVoidFunction>(&DestroySession)}};
             const auto entry = std::ranges::find(dispatch, std::string_view{name}, &DispatchEntry::name);
             if (entry == dispatch.end())
-                return XR_ERROR_FUNCTION_UNSUPPORTED;
+                return active->resolveExtra ? active->resolveExtra(instance, name, function) : XR_ERROR_FUNCTION_UNSUPPORTED;
             *function = entry->function;
             return XR_SUCCESS;
         }
@@ -234,6 +279,8 @@ namespace Horo::Tests::OpenXR {
 
     class Fence final : public IOpenXRCompositionFence {
     public:
+        std::function<void()> onValidate;
+
         Result<void> ValidatePreparation(const XRLoaderPreflightSnapshot &preflight,
                                          const XRLoaderPreflightAttempt attempt) const override {
             if (Script::active->stale)
@@ -243,15 +290,18 @@ namespace Horo::Tests::OpenXR {
         }
 
         Result<void> Validate(const XRSessionId &, const XRLoaderPreflightSnapshot &, const XRFeaturePlan &) const override {
+            if (onValidate)
+                onValidate();
             return Script::active->stale ? Result<void>::Failure(MakeError(XRErrors::CapabilityStale)) : Result<void>::Success();
         }
     };
 
-    inline XRLoaderPreflightSnapshot Preflight() {
+    inline XRLoaderPreflightSnapshot Preflight(const XRPreflightProductMode mode = XRPreflightProductMode::Shipping) {
         const XRLoaderPreflightRequest request{.attempt = IdentityValue<XRLoaderPreflightAttempt>(1),
                                                .backend = IdentityValue<XRBackendId>(2),
                                                .installRecord = IdentityValue<XRInstallRecordId>(3),
                                                .productProfile = IdentityValue<XRProductProfileId>(4),
+                                               .productMode = mode,
                                                .admittedLoaderVersions = {{1, 0, 0}, {1, 1, 63}}};
         const XRLoaderProbeEvidence evidence{.attempt = request.attempt,
                                              .loader = XRLoaderAvailability::Available,
@@ -265,12 +315,17 @@ namespace Horo::Tests::OpenXR {
         return result.Value();
     }
 
-    inline XRCapabilitySnapshot Capabilities(std::uint32_t maximumActions = 16) {
-        XRCapabilityDescriptor
-            descriptor{.system = {.runtime = IdentityValue<XRRuntimeGeneration>(1), .slot = {.index = 1, .generation = 1}},
-                       .revision = IdentityValue<XRCapabilityRevision>(1),
-                       .limits = {.maximumViews = 2, .maximumSpaces = 8, .maximumActions = maximumActions, .maximumDevices = 4}};
+    inline XRCapabilitySnapshot Capabilities(std::uint32_t maximumActions = 16, const bool synthesis = false, const bool quad = false) {
+        XRCapabilityDescriptor descriptor{.system = {.runtime = IdentityValue<XRRuntimeGeneration>(1),
+                                                     .slot = {.index = 1, .generation = 1}},
+                                          .revision = IdentityValue<XRCapabilityRevision>(1),
+                                          .limits = {.maximumViews = quad ? 4U : 2U,
+                                                     .maximumSpaces = 8,
+                                                     .maximumActions = maximumActions,
+                                                     .maximumDevices = 4}};
         descriptor.states.fill(XRCapabilityState::Available);
+        descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] =
+            synthesis ? XRCapabilityState::Available : XRCapabilityState::Unsupported;
         const auto result = XRCapabilitySnapshot::Create(descriptor);
         REQUIRE(result.HasValue());
         return result.Value();
@@ -300,7 +355,8 @@ namespace Horo::Tests::OpenXR {
                     .preflight = preflight,
                     .capabilities = capabilities,
                     .plan = plan,
-                    .activeAttempt = preflight.Attempt()};
+                    .activeAttempt = preflight.Attempt(),
+                    .productMode = preflight.ProductMode()};
         }
     };
 }  // namespace Horo::Tests::OpenXR

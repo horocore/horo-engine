@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveOperationArbiter.h"
 
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "SaveOperationArbiterState.h"
@@ -14,6 +15,12 @@
 
 namespace Horo::Runtime {
     using namespace SaveOperationArbiterDetail;
+
+    /** @copydoc ProjectArbiterFailure */
+    void SaveOperationArbiterDetail::ProjectArbiterFailure(const SavePolicyMode mode, Error &error) {
+        if (UsesAutomatedDiagnosticPolicy(mode))
+            error = RedactSaveDiagnosticError(error);
+    }
 
     namespace {
         [[nodiscard]] Error ArbiterError(const ErrorCodeDescriptor &descriptor, const char *message) {
@@ -231,9 +238,14 @@ namespace Horo::Runtime {
             auto operation = CreateSaveOperation(request.operation);
             if (operation.HasError())
                 return Result<SaveArbiterAdmission>::Failure(operation.ErrorValue());
-            const std::uint64_t enqueueOrder = state.nextEnqueueOrder++;
-            state.records.push_back(
-                State::Record{.request = std::move(request), .controller = std::move(operation).Value(), .enqueueOrder = enqueueOrder});
+            std::optional<Error> projectionFallback;
+            if (UsesAutomatedDiagnosticPolicy(request.mode))
+                projectionFallback = MakeError(SaveErrors::OperationAllocationFailed);
+            state.records.push_back(State::Record{.request = std::move(request),
+                                                  .controller = std::move(operation).Value(),
+                                                  .enqueueOrder = state.nextEnqueueOrder,
+                                                  .projectionFallback = std::move(projectionFallback)});
+            ++state.nextEnqueueOrder;
             const State::Record &accepted = state.records.back();
             return Result<SaveArbiterAdmission>::Success({.handle = accepted.controller.Handle(),
                                                           .disposition = replaced.has_value()
@@ -366,6 +378,16 @@ namespace Horo::Runtime {
         const auto found = FindActiveRecord(*state_, operation);
         if (found == state_->records.end())
             return Result<void>::Failure(MakeError(SaveErrors::ArbiterInvalid));
+        if (found->projectionFallback) {
+            try {
+                ProjectArbiterFailure(found->request.mode, error);
+            } catch (const std::bad_alloc &) {
+                const auto transition = found->controller.Fail(std::move(*found->projectionFallback), outcome);
+                if (transition == SaveOperationTransitionResult::Applied)
+                    found->projectionFallback.reset();
+                return FinishTerminalTransition(*state_, *found, transition);
+            }
+        }
         return FinishTerminalTransition(*state_, *found, found->controller.Fail(std::move(error), outcome));
     }
 

@@ -71,6 +71,9 @@ namespace Horo::Editor::SceneDocumentDetail {
         }
         if (delta.prefabCreation)
             bytes += EstimateTypedDeltaMemoryBytes(*delta.prefabCreation);
+        bytes += delta.prefabValues.size() * sizeof(PrefabInstanceValuesDelta);
+        for (const auto &replacement : delta.prefabValues)
+            bytes += replacement.ownedBytes;
         return bytes;
     }
 
@@ -463,15 +466,21 @@ namespace Horo::Editor::SceneDocumentDetail {
         }
     }
 
-    /** @brief Mutates the optional linked placement alongside its canonical object replacement delta. */
+    /** @brief Applies exact creation and value replacements in the same canonical authored batch. */
     template <bool Revert>
     inline void MutateReplacementPrefab(std::vector<ScenePrefabInstance> &instances, const SceneObjectsReplacedDelta &delta) {
-        if (!delta.prefabCreation)
-            return;
-        if constexpr (Revert)
-            RevertPrefabTypedDelta(instances, *delta.prefabCreation);
-        else
-            ApplyPrefabTypedDelta(instances, *delta.prefabCreation);
+        if (delta.prefabCreation) {
+            if constexpr (Revert)
+                RevertPrefabTypedDelta(instances, *delta.prefabCreation);
+            else
+                ApplyPrefabTypedDelta(instances, *delta.prefabCreation);
+        }
+        for (const auto &replacement : delta.prefabValues) {
+            if constexpr (Revert)
+                RevertPrefabTypedDelta(instances, replacement);
+            else
+                ApplyPrefabTypedDelta(instances, replacement);
+        }
     }
 
     /** @brief Dispatch one typed delta while preserving the separate canonical Prefab and object owners. */

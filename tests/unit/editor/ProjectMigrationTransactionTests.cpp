@@ -1,6 +1,9 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../../support/project/ProjectMigrationFailingFilesystem.h"
+#include "Horo/Application/PrefabSourceMigrationPlan.h"
 #include "Horo/Editor/ProjectMigrationTransaction.h"
+#include "Horo/Editor/ProjectOpenService.h"
+#include "Horo/Platform/SecureRandom.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -147,6 +150,62 @@ namespace {
 
     [[nodiscard]] ReleaseCompatibilityDecision TargetDecision() {
         return {.release = {ParseHoroVersion("0.1.0").Value()}, .contractBaseline = Version("0.1.0"), .persistentContract = Contract(2)};
+    }
+
+    TEST_CASE("Legacy production verification reaches the final target contract without publication", "[unit][editor][prefab]") {
+        Project project;
+        constexpr std::string_view LegacySource =
+            R"({"horoVersion":"0.0.1","persistentContract":"sha256:5ef87e96e24c0a3a5e44f4dee182dbd3bfb5402e08e07aaf3d64d4a3ff24ae6d","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})";
+        constexpr std::string_view PrefabSource = R"({"projectVersion":"0.0.1","objects":[]})";
+        project.Write(".horo/project.json", LegacySource);
+        project.Write("assets/player.prefab", PrefabSource);
+        project.Write("assets/player.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        NativeDurableFileSystem files;
+        SystemWallClock clock;
+        ProjectMutationCoordinator coordinator{files};
+        JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 32}};
+        ProjectMigrationTransactionService service{files, clock, coordinator,
+                                                   jobs,  {},    {.random = Platform::CreateNativeSecureRandomSource()}};
+        const ProjectOpenPreflightService preflight{service};
+        const auto snapshot = preflight.Inspect(project.root);
+        REQUIRE(snapshot.migrationPlan.has_value());
+        REQUIRE(Horo::ProjectMigrations::PlanIncludesPrefabSourceAdoption(*snapshot.migrationPlan));
+        REQUIRE(snapshot.migrationPlan->targetValidator != nullptr);
+        REQUIRE(snapshot.compatibility.metadata.has_value());
+        REQUIRE(snapshot.compatibility.sourceBaseline.has_value());
+        const auto *target = BuiltInReleaseCompatibilityRegistry().Find(snapshot.compatibility.targetVersion);
+        REQUIRE(target != nullptr);
+        ProjectMigrationTransactionRequest request{.projectRoot = project.root,
+                                                   .sourceMetadata = *snapshot.compatibility.metadata,
+                                                   .sourceBaseline = *snapshot.compatibility.sourceBaseline,
+                                                   .targetDecision = *target,
+                                                   .plan = *snapshot.migrationPlan,
+                                                   .engineBuildIdentity = "verified-test"};
+        SECTION("Verification uses target metadata and history without taking the mutation lease") {
+            const auto lease = coordinator.TryAcquire({project.root, ProjectMutationOwner::Save, "verification-observer"});
+            REQUIRE(lease.HasValue());
+            const auto verified = service.Verify(request);
+            REQUIRE(verified.HasValue());
+            const auto &changed = verified.Value().changedFiles;
+            CHECK(std::ranges::find(changed, ".horo/project.json") != changed.end());
+            CHECK(std::ranges::find(changed, ".horo/migration_history.json") != changed.end());
+            CHECK(std::ranges::find(changed, "assets/player.prefab") != changed.end());
+        }
+        SECTION("Cancelled verification leaves the authoritative tree untouched") {
+            CancellationSource cancellation;
+            cancellation.RequestCancellation();
+            request.cancellation = cancellation.Token();
+            const auto rejected = service.Verify(request);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "project.migration.cancelled");
+        }
+        CHECK(project.Read(".horo/project.json") == LegacySource);
+        CHECK(project.Read("assets/player.prefab") == PrefabSource);
+        CHECK_FALSE(std::filesystem::exists(project.root / ".horo/migration_history.json"));
+        CHECK_FALSE(std::filesystem::exists(project.root / ".horo/local/migration"));
+        for (const auto &entry : std::filesystem::directory_iterator(project.root))
+            CHECK_FALSE(entry.path().filename().string().starts_with(".horo-migration-dry-run-"));
     }
 
     TEST_CASE("Transaction Publishes History And Preserves Unknown Metadata", "[unit][editor]") {

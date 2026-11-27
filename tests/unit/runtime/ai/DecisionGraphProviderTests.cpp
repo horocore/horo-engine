@@ -1,11 +1,16 @@
 #include "DecisionGraphCompilerTestSupport.h"
+#include "EnvironmentQueryTestSupport.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaDecisionNode.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "OwnedTestDirectory.h"
 
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 namespace Horo::AI {
     namespace {
@@ -24,6 +29,8 @@ namespace Horo::AI {
             Gameplay::GameModuleHost host;
             auto loaded = shadow.empty() ? host.Load(HORO_TEST_AI_MODULE_PATH, NativeExpectation())
                                          : host.LoadShadowCopy(HORO_TEST_AI_MODULE_PATH, shadow, NativeExpectation());
+            if (loaded.HasError())
+                UNSCOPED_INFO(loaded.ErrorValue().message);
             REQUIRE(loaded.HasValue());
             REQUIRE_FALSE(loaded.Value().diagnostic);
             return std::move(loaded).Value().owner;
@@ -40,6 +47,181 @@ namespace Horo::AI {
             std::memcpy(&observe, &symbol, sizeof(observe));
             observe(counters.data());
         }  // The extra loader reference is released before any shutdown/quiescence assertion.
+
+        TEST_CASE("Prepared native image qualifies the same provider generation before a single scoped activation",
+                  "[ai][decision-compiler-provider][prepared-image]") {
+            using namespace Gameplay;
+            Fixture fixture;
+            const auto expectation = NativeExpectation();
+            auto prepared = GameModuleHost::PrepareImage(HORO_TEST_AI_MODULE_PATH, expectation);
+            REQUIRE(prepared.HasValue());
+            auto acquired = prepared.Value()->AcquireDecisionNodes();
+            REQUIRE(acquired.HasValue());
+            const auto generation = std::move(acquired).Value();
+            REQUIRE(generation->CanUse());
+            CHECK_FALSE(generation->CanAdmit());
+            CHECK(generation->HasImplementation(Type(101)));
+
+            auto environment = fixture.Environment();
+            environment.nodes = generation;
+            const std::array sources{TaskTree(1, 101)};
+            auto compiled = DecisionGraphCompiler::Compile(Graph(1), sources, environment);
+            REQUIRE(compiled.HasValue());
+            auto plan = std::move(compiled).Value().plan;
+            REQUIRE(plan);
+            TestSupport::ExpectError(DecisionGraphInstance::Create(plan, generation, fixture.RuntimeBinding()),
+                                     AIErrors::RuntimeUnavailable);
+            TestSupport::ExpectError(GameModuleHost{}.ActivatePrepared(*prepared.Value()), GameplayErrors::PhysicsUnavailable);
+            CHECK(prepared.Value()->AcquireDecisionNodes().Value() == generation);
+            CHECK_FALSE(generation->CanAdmit());
+
+            GameModuleHost host{
+                GameModuleHostOptions{{},
+                                      {.physics = GameplayPhysicsContext::Withheld({.moduleId = std::string{expectation.moduleId},
+                                                                                    .scene = 7,
+                                                                                    .sceneGeneration = 1,
+                                                                                    .moduleEnabled = true},
+                                                                                   GameplayPhysicsDenial::Unavailable),
+                                       .character = GameplayCharacterContext::Withheld({.moduleId = std::string{expectation.moduleId},
+                                                                                        .scene = 7,
+                                                                                        .sceneGeneration = 1,
+                                                                                        .moduleEnabled = true},
+                                                                                       GameplayCharacterDenial::Unavailable)}}};
+            auto activated = host.ActivatePrepared(*prepared.Value());
+            REQUIRE(activated.HasValue());
+            REQUIRE_FALSE(activated.Value().diagnostic);
+            auto module = std::move(activated).Value().owner;
+            REQUIRE(module);
+            CHECK(generation->CanAdmit());
+            CHECK(module->AcquireDecisionNodes().Value() == generation);
+            CHECK(prepared.Value()->AcquireDecisionNodes().HasError());
+            CHECK(host.ActivatePrepared(*prepared.Value()).HasError());
+            auto created = DecisionGraphInstance::Create(plan, generation, fixture.RuntimeBinding());
+            REQUIRE(created.HasValue());
+            CHECK(fixture.Step(*created.Value(), 1) == AiTaskState::Running);
+            module->RequestRetirement();
+            CHECK_FALSE(generation->CanUse());
+            CHECK(fixture.Step(*created.Value(), 2) == AiTaskState::Cancelled);
+        }
+
+        TEST_CASE("Qualified native EQS publishes the same winner and work on repeat", "[ai][eqs][native]") {
+            auto module = NativeModule();
+            const auto acquired = module->AcquireGameplayQueryTests();
+            REQUIRE(acquired.HasValue());
+            const auto &capture = acquired.Value();
+            REQUIRE(capture.tests->CanEvaluate());
+            const auto &schema = *capture.schema;
+            const auto winner = Math::WorldCoordinate64::FromMillimeters(1500, 0, 500);
+            const std::array points{Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500), winner,
+                                    Math::WorldCoordinate64::FromMillimeters(1000, 0, 500)};
+            const auto generated =
+                CreateBuiltinAuthoredPointQuery(MakeIdentity<QueryId>(21), MakeIdentity<QueryStageId>(22),
+                                                MakeIdentity<QueryResultSchemaId>(23), "Qualified native EQS", points, 1);
+            REQUIRE(generated.HasValue());
+            const auto distance = AddBuiltinPointDistanceTest(generated.Value(), MakeIdentity<QueryStageId>(24), {5000, true});
+            REQUIRE(distance.HasValue());
+            const auto stage = MakeIdentity<QueryStageId>(25);
+            const std::array properties{QueryPropertyValue{MakeIdentity<QueryPropertyId>(93), std::uint64_t{500}}};
+            const auto source =
+                EditGameplayPointTest(distance.Value(), schema, MakeIdentity<QueryTestId>(90), stage, std::span{properties});
+            REQUIRE(source.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(source.Value(), schema);
+            REQUIRE(plan.HasValue());
+            REQUIRE(capture.tests->SupportsDeterministic(plan.Value()));
+
+            const auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto contextProviders = QueryContextProviderRegistry::Capture({}, schema);
+            REQUIRE(contextProviders.HasValue());
+            QueryContextCapture contextCapture;
+            const auto context =
+                contextCapture.Capture(plan.Value(), schema, contextProviders.Value(), view, QueryTestSupport::Source(view));
+            REQUIRE(context.HasValue());
+            const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}}, context.Value()};
+            const QueryExecutionSettings settings{.submittedTick = 1, .deadlineTick = 20, .maximumCandidates = 8, .bestCount = 1};
+            const auto run = [&] {
+                auto prepared = PrepareGameplayPointTest(plan.Value(), stage, schema, view, inputs, settings, capture.tests, nullptr);
+                REQUIRE(prepared.HasValue());
+                std::array stages{std::move(prepared).Value()};
+                auto query = AdmitBuiltinPointProviderQuery(plan.Value(), schema, view, inputs, settings, stages, nullptr,
+                                                            QueryExecutionMode::DeterministicWorkUnits);
+                REQUIRE(query.HasValue());
+                std::vector<std::size_t> work;
+                for (std::uint64_t tick = 1; tick < settings.deadlineTick && !query.Value()->Sync(tick); ++tick) {
+                    AiWorkBudget budget{48};
+                    query.Value()->Advance(tick, {budget, budget, budget});
+                    work.push_back(budget.Remaining());
+                }
+                const auto *result = query.Value()->Published();
+                REQUIRE(result);
+                CHECK(result->status == QueryExecutionStatus::Completed);
+                CHECK(result->mode == QueryExecutionMode::DeterministicWorkUnits);
+                CHECK(result->publicationTick == 9);
+                REQUIRE(result->winners.size() == 1);
+                CHECK(std::get<Math::WorldCoordinate64>(result->winners.front().item) == winner);
+                return work;
+            };
+            const std::vector<std::size_t> expected{48, 3, 44, 44, 42, 44, 42, 44};
+            CHECK(run() == expected);
+            CHECK(run() == expected);
+        }
+
+        TEST_CASE("Native EQS leases revoke before replacement and never acquire the new generation", "[ai][eqs][native]") {
+            Horo::Tests::OwnedTestDirectory shadows{"native-query-generation"};
+            auto active = NativeModule(shadows.Path());
+            const auto oldPath = active->LoadedArtifactPath();
+            auto acquired = active->AcquireGameplayQueryTests();
+            REQUIRE(acquired.HasValue());
+            auto old = std::move(acquired).Value();
+            const auto test = MakeIdentity<QueryTestId>(90);
+            REQUIRE(old.tests);
+            REQUIRE(old.tests->Contains(test));
+            CHECK(old.tests->CanEvaluate());
+
+            std::optional<Result<Gameplay::GameModuleReloadSnapshot>> foreignPrepare;
+            std::jthread foreign([&] {
+                foreignPrepare = active->PrepareReload();
+            });
+            foreign.join();
+            REQUIRE(foreignPrepare);
+            TestSupport::ExpectError(*foreignPrepare, Gameplay::GameplayErrors::GameplayReloadRestartRequired);
+            CHECK(old.tests->CanEvaluate());
+
+            TestSupport::ExpectError(active->PrepareReload(), Gameplay::GameplayErrors::GameplayReloadRestartRequired);
+            CHECK_FALSE(old.tests->IsCurrent());
+            CHECK_FALSE(old.tests->CanEvaluate());
+            CHECK(active->AcquireGameplayQueryTests().HasError());
+            CHECK(std::filesystem::exists(oldPath));
+
+            auto replacement = NativeModule(shadows.Path());
+            CHECK(replacement->LoadedArtifactPath() != oldPath);
+            const auto fresh = replacement->AcquireGameplayQueryTests();
+            REQUIRE(fresh.HasValue());
+            REQUIRE(fresh.Value().tests);
+            CHECK(fresh.Value().tests != old.tests);
+            CHECK(fresh.Value().tests->CanEvaluate());
+            CHECK_FALSE(old.tests->CanEvaluate());
+
+            const std::weak_ptr<const GameplayQueryTestRegistry> oldLease = old.tests;
+            old.tests.reset();
+            CHECK(oldLease.expired());
+            const auto snapshot = active->PrepareReload();
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(active->TryRetire().HasValue());
+            active.reset();
+            CHECK_FALSE(std::filesystem::exists(oldPath));
+            CHECK(old.schema->Find(test));
+
+            std::optional<Result<void>> foreignRestore;
+            std::jthread restorer([&] {
+                foreignRestore = replacement->RestoreReload(snapshot.Value());
+            });
+            restorer.join();
+            REQUIRE(foreignRestore);
+            TestSupport::ExpectError(*foreignRestore, Gameplay::GameplayErrors::GameplayReloadRestartRequired);
+            REQUIRE(replacement->RestoreReload(snapshot.Value()).HasValue());
+            CHECK(fresh.Value().tests->CanEvaluate());
+        }
 
         TEST_CASE("A compiled authored call closure executes actual generated native nodes and pins their code image",
                   "[ai][decision-compiler-provider]") {

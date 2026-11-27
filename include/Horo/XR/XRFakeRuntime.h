@@ -110,7 +110,7 @@ namespace Horo::XR {
          * @param session Current owner; scripts cannot be reused across replacement.
          * @param steps Finite time, view, action, event and failure evidence; no span is retained.
          * @return Typed invalid, stale, unsupported, capacity or shutdown status without mutation on rejection.
-         * @throws std::bad_alloc If bounded script copying fails; the old script remains intact.
+         * Allocation failure while copying returns CapacityExceeded and preserves the previous script and cursor.
          */
         [[nodiscard]] XRFrameStatus LoadScript(const XRSessionId &session, std::span<const XRFakeStep> steps);
         /**
@@ -121,7 +121,8 @@ namespace Horo::XR {
         [[nodiscard]] XRFakeOutcome Step(const XRSessionId &session);
         /** @brief Consumes one validated supplied interactive step through the SAME gates and cleanup path.
          * No allocation, script copying, I/O or native work occurs. Loaded scripts and supplied steps cannot be mixed.
-         * Rejected input is not consumed; prediction times increase within the issued session.
+         * Rejected input is not consumed. Within the issued session, prediction time increases and present runtime sample
+         * time never regresses. The two clocks are compared independently.
          * @param session Exact expected active fake session, fenced before consumption.
          * @param step Caller-owned complete bounded step; borrowed only until this call returns.
          * @return Owned consumption/status/session/frame evidence after exact existing cleanup.
@@ -134,6 +135,17 @@ namespace Horo::XR {
 
     private:
         friend class RuntimeInternal::XRFakeRuntimeHostComposition;
+
+        /** @brief Monotonic watermarks for the independent clocks in one issued session. */
+        struct Timeline final {
+            XRRenderPredictionTime prediction;
+            XRRuntimeTime sample;
+
+            /** @brief Accepts event-only steps and nonregressing evidence from both clocks. */
+            [[nodiscard]] bool Accepts(const XRFakeStep &step) const noexcept;
+            /** @brief Advances only clocks carried by the admitted step. */
+            void Record(const XRFakeStep &step) noexcept;
+        };
 
         /** @brief Immediate fake resource port; lifetime encloses both production gates. */
         class Resources final : public IXRSessionResources {
@@ -167,7 +179,7 @@ namespace Horo::XR {
         std::optional<XRFeaturePlan> plan_;
         std::vector<XRFakeStep> script_;
         std::size_t cursor_{};
-        XRRenderPredictionTime previousPrediction_;
+        Timeline timeline_;
         bool shutdown_{};
     };
 }  // namespace Horo::XR

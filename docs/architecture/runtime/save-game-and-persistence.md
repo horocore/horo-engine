@@ -351,7 +351,7 @@ class RuntimeSaveService final {
 public:
     RuntimeSaveService(IRuntimeSessionHost&, CanonicalStateParticipantRegistry&,
                        SaveStorageAdapter&, SaveNamespaceBinding&,
-                       PlatformServices&, JobSystem&, OperationStore&);
+                       PlatformHostServices&, JobSystem&, OperationStore&);
     Result<SaveOperationHandle> SaveSlotAsync(
         SaveAddress, SaveRequest, CancellationToken);
     Result<RestoreOperationHandle> LoadSlotAsync(
@@ -1665,6 +1665,39 @@ Platform Services treats that key and finalized archive bytes as opaque and cann
 edit local storage. The application/profile-owned `CloudSaveCoordinator` is the one
 sync state authority; Platform Services and UI are transport/presentation adapters.
 
+The application's internal `CloudSaveTransport` projects the coordinator's
+authenticated client-profile scope into a stable binary list prefix. The
+versioned prefix hashes the product, environment, portable game profile,
+provider and opaque account identities. The object key appends a separately
+tagged hash of that prefix and the logical slot. Installation-local user IDs
+stay out of both tokens so the same account and profile address the same slots
+on another device. Reads carry a finite byte budget. Writes and deletes carry
+the journal's mutation ID and exact conditional revision, and each admitted
+platform request retains its owning Save operation correlation.
+
+The application mutation journal durably stores versioned intent entries in
+host-granted Save storage before cloud dispatch. Its private partition binds
+the complete local namespace to the authenticated remote scope. Each entry
+retains the exact key, local generation and parent, archive identity, payload
+size and digest where applicable, and conditional revision. Reopening checks
+entry integrity and recomputes the binding before issuing dispatch proof.
+An identical mutation can be reused after rebinding to the same scope.
+Changed facts under the same mutation ID fail without replacing the record.
+The coordinator owns pending-work discovery, payload leases and reconciliation.
+
+The application upload path uses `SaveSlotLifecycle::ExportVerified` to capture
+the selected generation and its verified lineage. It intersects the local archive
+limit with the provider's byte budget before reading and leaves the local catalog
+untouched. Commit evidence produces a candidate sidecar only while the selected
+generation, archive digest, remote key and previous revision still match. Its
+owner publishes that candidate through the conditional catalog gate. A
+cloud-enabled catalog uses manifest version 3 to keep the sidecar under the
+same atomic replacement and integrity check as the selected records.
+Existing versions load with a derived unknown cloud state. Catalog changes
+carry forward evidence for matching generations and derive unknown state for
+changed rows. Publication requires explicit CloudSync capability and exact
+prior local and cloud snapshots.
+
 The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
 complete local `SaveNamespaceId` plus distinct provider and account identities. Each
 record names one current slot generation and exact `ArchiveContentHash`, with bounded
@@ -1840,6 +1873,15 @@ for work that never ran. Metrics use only stage/outcome dimensions. Correlation
 uses safe numeric operation and parent IDs in an isolated diagnostic snapshot;
 paths, display names, accounts, payloads and raw provider/error text are excluded.
 JobSystem and retained PlatformRequest contexts preserve this snapshot boundary.
+The Play sandbox projects errors before sharing them with the operation history
+or editor presentation. Its storage job publishes a sanitized job result and
+keeps the producer's result inside the storage owner. Each projected cause uses
+only its registered Save descriptor. Unknown causes use the generic diagnostic
+code, and projection stops at the fixed diagnostic cause limit. Source text and
+attached diagnostic fields never cross this boundary.
+When a diagnostic bundle removes private Save records from a mixed aggregate,
+it retains independently classified records under a neutral key. The original
+group key can contain a player or slot name and is withheld.
 
 Current production hooks cover participant capture, archive finalization,
 migration execution, slot commit/recovery, staged restore preparation, arbiter
@@ -1858,7 +1900,42 @@ inputs. It creates no second event store. Input work is bounded to 32 sources,
 missing input is represented explicitly. Only closed stage/outcome names and
 validated unsigned aggregates enter the summary; raw rows and source paths are
 never copied. The summary describes retained observations, not lifetime totals;
-queue/dispatcher drops and retention can limit evidence.
+queue/dispatcher drops and retention can limit evidence. The summary lists the
+data categories it includes and excludes and reports failure counts using the
+closed Save failure taxonomy. The CLI terminal bundle result displays the same
+included and excluded Save categories as the archive manifest. Failed or
+cancelled rows with missing or invalid category evidence contribute to the
+unclassified count.
+Editor and CLI bundles withhold the Save telemetry namespace, error domain, and
+diagnostic code namespace from raw JSON evidence. The code namespace also
+identifies flattened diagnostics that omit the domain. Structured log fields
+`error_domain` and `error_code` preserve that classification when another
+subsystem forwards a Save error. A Save error in a nested cause or
+a flattened causal list suppresses each wrapping causal record, since wrappers
+can copy private text or fields. An object or array that directly mixes text,
+numbers, or booleans with a private descendant is withheld even without a
+diagnostic label.
+Log admission and bundle export also redact named Save payload, display text,
+and identifier fields in forwarded records from other subsystems. Independent
+numeric counters such as `save.slot_count` remain available.
+Independent structured sibling records remain available.
+Withheld records are removed with their enclosing map keys, including wrappers
+that contain no independent evidence after redaction. This keeps slot names
+used as diagnostic map keys out of support bundles.
+Entries indexed by absolute local paths are withheld with their keys, even when
+the values carry no Save diagnostic label.
+An absolute local path immediately after a diagnostic label such as `path:`
+is covered by the same rule. A forward-slash network share immediately after
+the full label `path:` or `source:` is also redacted. Other non-file URI
+authority separators remain intact.
+Raw diagnostic JSON and JSONL records with duplicate object members or
+excessive nesting fail bundle preparation before any archive is published.
+
+Auto, Checkpoint and Suspend operation snapshots publish canonical Save error
+descriptors and bounded causal classifications. Storage retry decisions still
+use the original provider evidence within the arbiter. The retry snapshot,
+terminal receipt and autosave scheduler expose the classified result without
+provider text.
 
 ## Qualification And Implementation Status
 

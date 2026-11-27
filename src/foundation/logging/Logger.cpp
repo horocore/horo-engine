@@ -5,6 +5,7 @@
 #include "Horo/Foundation/Diagnostics/OperationHistory.h"
 #include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
+#include "ProcessFaultMarker.h"
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,7 @@ namespace Horo::Log {
             std::mutex lifecycleMutex;
             std::shared_ptr<StructuredLogStore> store;
             std::filesystem::path shutdownMarkerPath;
+            std::filesystem::path faultMarkerPath;
             std::string sessionId;
             bool writeSessionMarkers{};
             std::atomic<std::uint64_t> sessionSequence{};
@@ -192,15 +194,43 @@ namespace Horo::Log {
             return false;
         }
 
+        /** @brief Checks a bounded decimal component of an engine-generated session identifier. */
+        bool IsSessionIdComponent(const std::string_view component) {
+            if (component.empty() || component.size() > 20)
+                return false;
+            std::uint64_t parsed{};
+            const auto end = component.data() + component.size();
+            const auto [next, error] = std::from_chars(component.data(), end, parsed);
+            return error == std::errc{} && next == end;
+        }
+
+        /** @brief Validates the timestamp, process and sequence components written by CreateSessionId. */
+        bool IsMarkerSessionId(std::string_view value) {
+            if (value.starts_with('-'))
+                value.remove_prefix(1);
+            const auto first = value.find('-');
+            if (first == std::string_view::npos)
+                return false;
+            const auto remainder = value.substr(first + 1);
+            const auto second = remainder.find('-');
+            return second != std::string_view::npos && IsSessionIdComponent(value.substr(0, first)) &&
+                   IsSessionIdComponent(remainder.substr(0, second)) && IsSessionIdComponent(remainder.substr(second + 1));
+        }
+
         /** @brief Reads a bounded marker and extracts its restricted session identifier. */
         std::optional<std::string> ReadMarkerSessionId(const std::filesystem::path &path) {
+            constexpr std::size_t maxMarkerSize = 16U * 1024U;
             std::error_code error;
-            if (const std::uintmax_t size = std::filesystem::file_size(path, error); error || size == 0 || size > 16U * 1024U)
+            if (!std::filesystem::is_regular_file(path, error))
                 return std::nullopt;
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return std::nullopt;
-            const std::string content{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            std::array<char, maxMarkerSize + 1U> bytes;
+            input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            if (input.bad() || input.gcount() == static_cast<std::streamsize>(bytes.size()))
+                return std::nullopt;
+            const std::string_view content{bytes.data(), static_cast<std::size_t>(input.gcount())};
             constexpr std::string_view prefix{R"("sessionId":")"};
             const std::size_t start = content.find(prefix);
             if (start == std::string::npos)
@@ -209,12 +239,10 @@ namespace Horo::Log {
             const std::size_t end = content.find('"', valueStart);
             if (end == std::string::npos || end == valueStart)
                 return std::nullopt;
-            const std::string value = content.substr(valueStart, end - valueStart);
-            for (const unsigned char character : value) {
-                if (character != '-' && (character < '0' || character > '9'))
-                    return std::nullopt;
-            }
-            return value;
+            const std::string_view value = content.substr(valueStart, end - valueStart);
+            if (!IsMarkerSessionId(value))
+                return std::nullopt;
+            return std::string{value};
         }
 
         /** @brief Creates a collision-resistant process-local session identifier. */
@@ -224,9 +252,27 @@ namespace Horo::Log {
             return std::format("{}-{}-{}", timestamp, ProcessId(), State().sessionSequence.fetch_add(1));
         }
 
+        /** @brief Locates the private staging artifact associated with one validated session. */
+        std::filesystem::path FaultMarkerPath(const LoggerConfiguration &configuration, const std::string_view sessionId) {
+            return configuration.logDirectory / std::format("{}.fault-{}.bin", configuration.baseName, sessionId);
+        }
+
+        /** @brief Writes only the scalar identity and classification recovered from a completed native marker. */
+        void AppendInterruptedFault(std::string &content, const Internal::ProcessFault &fault) {
+            const auto classification =
+                fault.classification == Internal::ProcessFaultClass::WindowsException ? "windows-exception" : "posix-signal";
+            content += std::format(
+                R"(,"interruptedFault":{{"id":"{:08x}{:08x}{:08x}{:08x}","class":"{}","code":{})",
+                fault.id[0], fault.id[1], fault.id[2], fault.id[3], classification, fault.code);
+            if (fault.thread != 0)
+                content += std::format(R"(,"thread":{})", fault.thread);
+            content += '}';
+        }
+
         /** @brief Writes immutable current-session identity without private machine data. */
         bool WriteSessionMarker(const LoggerConfiguration &configuration, const std::string_view sessionId,
-                                const bool previousCleanShutdown) {
+                                const std::optional<std::string> &previousSessionId, const bool previousCleanShutdown,
+                                const std::optional<Internal::ProcessFault> &fault) {
             std::string content;
             content.reserve(configuration.hostName.size() + configuration.hostVersion.size() + sessionId.size() + 192U);
             content += R"({"schemaVersion":1,"sessionId":")";
@@ -240,6 +286,13 @@ namespace Horo::Log {
             content += std::format(R"(","processId":{})", ProcessId());
             content += R"(,"previousCleanShutdown":)";
             content += previousCleanShutdown ? "true" : "false";
+            if (previousSessionId && !previousCleanShutdown) {
+                content += R"(,"interruptedSessionId":")";
+                AppendJsonEscaped(content, *previousSessionId);
+                content += '"';
+                if (fault)
+                    AppendInterruptedFault(content, *fault);
+            }
             content += "}\n";
             return WriteMarkerAtomically(configuration.logDirectory / (configuration.baseName + ".session.json"), content);
         }
@@ -507,6 +560,20 @@ namespace Horo::Log {
         };
 
         /** @brief Consumer-thread adapter for the optional bounded editor log store. */
+        /** @brief Retains only compact, already-redacted record metadata for presentation consumers. */
+        std::vector<Telemetry::Field> PresentationFields(const std::vector<Telemetry::Field> &fields) {
+            constexpr std::size_t maximumFields = 16;
+            constexpr std::size_t maximumKey = 64;
+            constexpr std::size_t maximumValue = 256;
+            std::vector<Telemetry::Field> retained;
+            for (const auto &field : std::span{fields}.first(std::min<std::size_t>(maximumFields, fields.size()))) {
+                const auto *text = std::get_if<std::string>(&field.value);
+                if (field.key.size() <= maximumKey && (!text || text->size() <= maximumValue))
+                    retained.push_back(field);
+            }
+            return retained;
+        }
+
         class StructuredLogStoreSink final : public Telemetry::ISink {
         public:
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *) override {
@@ -521,7 +588,8 @@ namespace Horo::Log {
                                                   .level = log->severity,
                                                   .category = log->category,
                                                   .message = log->message,
-                                                  .context = FormatPresentationContext(record.context)});
+                                                  .context = FormatPresentationContext(record.context),
+                                                  .fields = PresentationFields(log->fields)});
             }
 
             void Flush() override {
@@ -642,11 +710,24 @@ namespace Horo::Log {
         const std::optional<std::string> previousSessionId = ReadMarkerSessionId(sessionMarkerPath);
         const std::optional<std::string> cleanSessionId = ReadMarkerSessionId(shutdownMarkerPath);
         const bool previousCleanShutdown = previousSessionId.has_value() && cleanSessionId == previousSessionId;
+        const bool captureFaults = resolved.writeSessionMarkers && resolved.captureProcessFaults;
+        std::filesystem::path priorFaultPath;
+        if (captureFaults && previousSessionId)
+            priorFaultPath = FaultMarkerPath(resolved, *previousSessionId);
+        const auto fault = !priorFaultPath.empty() && !previousCleanShutdown ? Internal::ReadProcessFault(priorFaultPath) : std::nullopt;
+
         const std::string sessionId = CreateSessionId();
-        if (resolved.writeSessionMarkers && !WriteSessionMarker(resolved, sessionId, previousCleanShutdown)) {
+        if (resolved.writeSessionMarkers && !WriteSessionMarker(resolved, sessionId, previousSessionId, previousCleanShutdown, fault)) {
             static_cast<void>(Telemetry::Runtime::Shutdown());
             std::fprintf(stderr, "[Logger] failed to persist session identity\n");
             return false;
+        }
+        if (!priorFaultPath.empty())
+            Internal::DiscardProcessFaultMarker(priorFaultPath);
+        if (captureFaults) {
+            auto path = FaultMarkerPath(resolved, sessionId);
+            if (Internal::ArmProcessFaultMarker(path))
+                state.faultMarkerPath = std::move(path);
         }
 
         state.level.store(ParseEnvironmentLevel(state.level.load()));
@@ -672,10 +753,12 @@ namespace Horo::Log {
         if (state.ownsRuntime.exchange(false)) {
             static_cast<void>(EmitLog("observability.shutdown", Level::Info, "Observability runtime stopping", {}, {}));
             const bool clean = Telemetry::Runtime::Shutdown();
-            if (clean && state.writeSessionMarkers && !WriteShutdownMarker(state.shutdownMarkerPath, state.sessionId))
+            const bool noFault = state.faultMarkerPath.empty() || Internal::DisarmProcessFaultMarker(state.faultMarkerPath);
+            if (clean && noFault && state.writeSessionMarkers && !WriteShutdownMarker(state.shutdownMarkerPath, state.sessionId))
                 std::fprintf(stderr, "[Logger] failed to persist clean-shutdown marker\n");
         }
         state.shutdownMarkerPath.clear();
+        state.faultMarkerPath.clear();
         state.sessionId.clear();
         state.writeSessionMarkers = false;
         state.SetStore({});
@@ -724,7 +807,7 @@ namespace Horo::Log {
     /** @copydoc Logger::Write */
     void Logger::Write(const std::string_view category, const Level level, const std::string_view message,
                        const std::span<const Telemetry::Field> fields) {
-        if (!IsEnabled(level))
+        if (DiagnosticsSuppressed() || !IsEnabled(level))
             return;
 
         LogContextSnapshot context = CaptureLogContext();
@@ -752,7 +835,8 @@ namespace Horo::Log {
 
     /** @copydoc Logger::WriteEmergency */
     void Logger::WriteEmergency(const std::string_view category, const Level level, const std::string_view message) noexcept {
-        EmergencyWrite(level, category, message);
+        if (!DiagnosticsSuppressed())
+            EmergencyWrite(level, category, message);
     }
 
     /** @copydoc Logger::DumpStartupInfo */

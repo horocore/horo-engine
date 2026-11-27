@@ -17,6 +17,8 @@ namespace Horo::TestSupport {
 
         SourceProject() {
             std::filesystem::create_directory(directory);
+            // Publication authorities require the actual root, including when the OS temp path has a redirect.
+            directory = std::filesystem::canonical(directory);
         }
 
         ~SourceProject() {

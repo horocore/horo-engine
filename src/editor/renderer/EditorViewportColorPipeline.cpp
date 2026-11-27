@@ -12,9 +12,9 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorViewportColorPipeline::EditorViewportColorPipeline */
-    EditorViewportColorPipeline::EditorViewportColorPipeline(Render::RenderFrontend &frontend,
-                                                             EditorViewportColorResourcePort port) noexcept
-        : frontend_(&frontend), port_(port) {}
+    EditorViewportColorPipeline::EditorViewportColorPipeline(Render::RenderFrontend &frontend, EditorViewportColorResourcePort port,
+                                                             std::size_t frameSlots) noexcept
+        : frontend_(&frontend), port_(port), activeSlots_(frameSlots) {}
 
     /** @copydoc EditorViewportColorPipeline::~EditorViewportColorPipeline */
     EditorViewportColorPipeline::~EditorViewportColorPipeline() {
@@ -51,7 +51,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(ColorPending());
         if (const auto valid = Render::ValidateExposureSettings(settings); valid.HasError())
             return valid;
-        if (settings.timeSource != Render::ExposureTimeSource::View)
+        if (settings.timeSource != Render::ExposureTimeSource::View || (manualOnly_ && settings.mode != Render::ExposureMode::Manual))
             return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Unsupported));
         if (settings == settings_)
             return Result<void>::Success();
@@ -63,16 +63,34 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportColorPipeline::RequestAccessibilityPreview */
+    Result<void> EditorViewportColorPipeline::RequestAccessibilityPreview(
+        const std::optional<Accessibility::ColorblindSettings> &preview) {
+        if (!preview) {
+            accessibilityPreview_.reset();
+            return Result<void>::Success();
+        }
+        if (!accessibilityEncoder_ || !selection_)
+            return Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput));
+        const auto matrix = Accessibility::PrepareColorAccessibilityTransform(*preview);
+        if (matrix.HasError())
+            return Result<void>::Failure(matrix.ErrorValue());
+        accessibilityPreview_ = matrix.Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorViewportColorPipeline::SelectSlot */
     Result<std::size_t> EditorViewportColorPipeline::SelectSlot() {
         using Selection = Result<std::size_t>;
         for (std::size_t offset = 0; offset < activeSlots_; ++offset) {
             const auto index = (nextSlot_ + offset) % activeSlots_;
             const auto &slot = slots_[index];
-            if (slot.output == previous_.buffer)
+            if (!manualOnly_ && slot.output == previous_.buffer)
                 continue;
             bool ready = true;
-            for (const auto handle : {slot.histogram, slot.seed, slot.output, slot.uniform[0], slot.uniform[1]}) {
+            const std::array handles{slot.histogram, slot.seed, slot.output, slot.uniform[0], slot.uniform[1]};
+            const auto checked = manualOnly_ ? std::span{handles}.last(2) : std::span<const Render::RenderBufferHandle>{handles};
+            for (const auto handle : checked) {
                 const auto state = port_.bufferReadiness(port_.context, handle);
                 if (state.HasError())
                     return Selection::Failure(state.ErrorValue());
@@ -90,6 +108,8 @@ namespace Horo::Editor {
         if (generation_ == std::numeric_limits<std::uint64_t>::max() ||
             acceptedSubmission_ >= std::numeric_limits<std::uint64_t>::max() - 1)
             return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Capacity));
+        if (manualOnly_)
+            return Result<void>::Success();
         auto automatic = settings_;
         automatic.mode = Render::ExposureMode::AutomaticHistogram;
         const auto dispatch = Render::PrepareExposureDispatch(automatic, extent, {0, 0, extent.width, extent.height}, deltaSeconds);
@@ -127,7 +147,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorPipeline::ValidatePreparation */
     Result<void> EditorViewportColorPipeline::ValidatePreparation(Render::RenderViewId view, Render::FramebufferExtent extent) const {
-        if (candidate_ || !kernel_ || !view.IsValid())
+        if (candidate_ || (!manualOnly_ && !kernel_) || !selection_ || !view.IsValid() || !extent.IsValid())
             return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::InvalidInput));
         if (std::uint64_t{extent.width} * extent.height > 16'777'216U)
             return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::Capacity));
@@ -153,10 +173,13 @@ namespace Horo::Editor {
         pendingStateCount_ = 0;
         if (view != view_ || extent != extent_)
             reset_ = true;
+        if (manualOnly_ && (!std::isfinite(deltaSeconds) || deltaSeconds < 0 || deltaSeconds > 1))
+            return Result<void>::Failure(MakeError(Render::ExposureGpuErrors::InvalidInput));
         if (const auto identity = PrepareIdentity(view, extent, deltaSeconds); identity.HasError())
             return identity;
         view_ = view;
         extent_ = extent;
+        candidateAccessibility_ = accessibilityPreview_.value_or(displayAccessibility_);
         candidate_ = true;
         encoded_ = false;
         status_ = EditorViewportColorStatus::Prepared;
@@ -168,8 +191,12 @@ namespace Horo::Editor {
         if (!candidate_)
             return;
         if (accepted && encoded_) {
-            previous_ = slots_[candidateSlot_].produced;
-            acceptedSubmission_ = previous_.sourceSubmission;
+            if (manualOnly_)
+                ++acceptedSubmission_;
+            else {
+                previous_ = slots_[candidateSlot_].produced;
+                acceptedSubmission_ = previous_.sourceSubmission;
+            }
             reset_ = resetQueued_;
             PublishBufferStates();
             tablesUsed_ = true;
@@ -234,7 +261,7 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportColorPipeline::Diagnostics */
     EditorViewportColorDiagnostics EditorViewportColorPipeline::Diagnostics() const noexcept {
         return {.status = status_,
-                .active = kernel_ != nullptr,
+                .active = kernel_ != nullptr || (manualOnly_ && selection_.has_value()),
                 .candidate = candidate_,
                 .automatic = settings_.mode == Render::ExposureMode::AutomaticHistogram,
                 .resetPending = reset_,

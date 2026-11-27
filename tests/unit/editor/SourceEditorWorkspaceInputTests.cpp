@@ -1,15 +1,116 @@
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Editor/GuiScreen.h"
 #include "editor/input/EditorInputActions.h"
-#include "editor/screens/workspace/EditorWorkspaceInputRouting.h"
+#include "editor/screens/workspace/EditorWorkspaceScreen.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
+#include "editor/screens/workspace/screen/EditorWorkspaceInputRouting.h"
+#include "editor/source_editor/SourceReviewOverlay.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "support/OwnedTestDirectory.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fstream>
+#include <imgui_internal.h>
 #include <tuple>
+
+TEST_CASE("Editor Play projects a rebindable interaction as one gameplay press", "[editor][play][input]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Input::InputRouter router;
+    REQUIRE(router.SetActionMap(BuildEditorInputActions()).HasValue());
+    Input::InputBindingProfile profile;
+    profile.overrides.push_back({Input::ActionId{kGameplayInteractAction},
+                                 {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}});
+    REQUIRE(router.SetProfile(profile).HasValue());
+    WorkspaceScreenDetail::WorkspaceInputState workspace{router};
+    Input::RawInputCollector input;
+    input.BeginFrame(1);
+    input.SetKey(Input::Key::Right, true);
+    input.SetKey(Input::Key::Space, true);
+    router.BeginFrame(input.Commit());
+    workspace.gameplayFrames.Capture(router, workspace.context);
+
+    const auto pressed = workspace.ConsumeGameplay(10);
+    REQUIRE(pressed.size() == 2);
+    CHECK(pressed[0].action.Value() == kGameplayMoveAction);
+    CHECK(pressed[0].x == 1.0F);
+    CHECK(pressed[1].action.Value() == kGameplayInteractAction);
+    CHECK(pressed[1].pressed);
+    CHECK_FALSE(pressed[1].released);
+
+    const auto catchup = workspace.ConsumeGameplay(11);
+    REQUIRE(catchup.size() == 1);
+    CHECK(catchup.front().x == 1.0F);
+}
+
+TEST_CASE("Workspace review controls follow the selected source tab at high DPI", "[editor][source][review]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Proposals;
+    Editor::Tests::EditorGuiContextFixture gui;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/en-US.json";
+    REQUIRE(gui.localization.LoadCatalogFile(catalog));
+    REQUIRE(gui.localization.Prepare(LocaleTag{"en-US"}));
+    REQUIRE(gui.localization.ActivatePrepared());
+    ImGui::GetIO().DisplayFramebufferScale = {2, 2};
+    Horo::Tests::OwnedTestDirectory directory{"source-review-tabs"};
+    const std::string original = "first\n" + std::string(4'096, 'x') + "\nlast\n";
+    std::ofstream(directory.Path() / "one.cpp", std::ios::binary) << original;
+    std::ofstream(directory.Path() / "two.cpp", std::ios::binary) << "other\n";
+    HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController controller{directory.Path(), {}, [](const SourceOpenResult &) {
+        return true;
+    }};
+    const auto open = [&](const char *path) {
+        EditorWorkspaceViewCommandData command{.command = EditorWorkspaceViewCommand::OpenSourceFile};
+        command.sourceOpenRequest = SourceOpenRequest{.path = path, .mode = SourceOpenMode::EmbeddedOnly};
+        controller.ProcessCommand(command);
+    };
+    open("one.cpp");
+    REQUIRE(controller.ViewModel().sourceDocuments.size() == 1);
+    const auto one = controller.ViewModel().sourceDocuments.front();
+    open("two.cpp");
+    REQUIRE(controller.ViewModel().sourceDocuments.size() == 2);
+    const auto two = *controller.ViewModel().workspacePanelHost.ActiveDocument();
+    const auto path = one.Identity().key.source;
+    const auto policy = ProjectPolicy::Capture("workspace", 1, {{path, false}}).Value();
+    const auto proposal = ChangeSet::Capture(policy, {"review",
+                                                      1,
+                                                      {"provider", "model", "request"},
+                                                      {EditFile{FileBase::Capture(one).Value(), {{0, "first", "new"}}}}})
+                              .Value();
+    const std::array observations{SourcePathObservation{path, one}};
+    const auto plan = PlanWorkspaceEdits(proposal, policy, observations).Value();
+    auto overlay = std::make_shared<const SourceReviewOverlay>(SourceReviewOverlay::Capture(proposal, plan, 0).Value());
+    WorkspacePanelRegistry panels;
+    auto inputContext =
+        gui.input.PushContext(Input::InputContextId{kEditorWorkspaceInputContext}, Input::InputContextKind::EditorWorkspace);
+    EditorWorkspaceView view{gui.context, panels, 0, gui.input, inputContext};
+    REQUIRE(view.StageSourceReview(overlay));
+    const auto draw = [&](const DocumentInstanceId instance) {
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument, .documentInstance = instance});
+        gui.imgui.BeginFrame();
+        ImGui::LogToBuffer();
+        EditorWorkspaceViewCommandData command;
+        view.Draw(controller.ViewModel(), command, {.width = 520, .height = 600});
+        const std::string text = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+        gui.imgui.EndFrame();
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+        return text;
+    };
+    const auto unrelated = draw(two);
+    CHECK(unrelated.find("Next change") == std::string::npos);
+    CHECK(unrelated.find("No language diagnostics for this source revision.") == std::string::npos);
+    const auto reviewed = draw(one.Identity().instance);
+    CHECK(reviewed.find("Next change") != std::string::npos);
+    CHECK(reviewed.find("No language diagnostics for this source revision.") != std::string::npos);
+    CHECK(draw(two).find("Next change") == std::string::npos);
+    CHECK(draw(one.Identity().instance).find("Dismiss review") != std::string::npos);
+    CHECK(one.Text() == original);
+    CHECK(one.IsCurrent());
+}
 
 TEST_CASE("Actual workspace carries first-frame source ownership when Delete and navigation produce no edit",
           "[editor][source][widget][input]") {

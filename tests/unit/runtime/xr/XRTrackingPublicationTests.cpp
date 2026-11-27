@@ -238,6 +238,39 @@ namespace Horo::XR::RuntimeInternal {
         CHECK(fixture.owner.Current() == nullptr);
     }
 
+    TEST_CASE("XRRuntime never restores a tracking cutoff across a lifecycle interruption", "[xr][tracking-owner]") {
+        PublicationFixture fixture;
+        REQUIRE(fixture.owner.Publish(fixture.Request()).HasValue());
+        REQUIRE(fixture.owner.Current() != nullptr);
+        const auto revision = fixture.owner.Current()->Revision();
+        SECTION("duplicate focus events preserve uninterrupted cutoffs") {
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::BecameFocused).HasValue());
+            REQUIRE(fixture.owner.Current() != nullptr);
+            CHECK(fixture.owner.Current()->Revision() == revision);
+            return;
+        }
+        SECTION("focus loss and return without an intermediate read") {
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::FocusLost).HasValue());
+        }
+        SECTION("visibility loss drops every previous observation") {
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::VisibilityLost).HasValue());
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::BecameVisible).HasValue());
+        }
+        SECTION("restarting the retained native session cannot restore its cutoff") {
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::Stopping).HasValue());
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::Idle).HasValue());
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::Ready).HasValue());
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::Started).HasValue());
+            REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::BecameVisible).HasValue());
+        }
+        REQUIRE(fixture.lifecycle.ApplyEvent(fixture.session, XRSessionEvent::BecameFocused).HasValue());
+        CHECK(fixture.lifecycle.Snapshot().session == fixture.session);
+        CHECK(fixture.owner.Current() == nullptr);
+        REQUIRE(fixture.owner.Publish(fixture.Request()).HasValue());
+        REQUIRE(fixture.owner.Current() != nullptr);
+        CHECK(fixture.owner.Current()->Revision() > revision);
+    }
+
     TEST_CASE("XRRuntime tracking publication closes on actual focus loss and rejects wrong-thread mutation", "[xr][tracking-owner]") {
         PublicationFixture fixture;
         REQUIRE(fixture.owner.Publish(fixture.Request()).HasValue());

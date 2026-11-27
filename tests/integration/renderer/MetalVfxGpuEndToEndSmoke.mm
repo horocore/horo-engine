@@ -33,3 +33,13 @@ TEST_CASE("Configured Metal GPU VFX observations match CPU semantics and retain 
         RunObservedMetalVfxGpu(PackageRoot(), VfxGpuObservationCase::TimedOut);
     }
 }
+
+TEST_CASE("Configured Metal simple forces match the versioned CPU reference over twelve steps",
+          "[integration][renderer][metal][vfx-gpu][gpu][configured-artifact][qualification]") {
+    Horo::Render::Test::RunEquivalentMetalVfxGpu(PackageRoot());
+}
+
+TEST_CASE("Configured Metal GPU VFX meets the explicit high-count wall-time budget",
+          "[.][vfx-budget][integration][renderer][metal][gpu][configured-artifact]") {
+    Horo::Render::Test::RunBudgetMetalVfxGpu(PackageRoot());
+}

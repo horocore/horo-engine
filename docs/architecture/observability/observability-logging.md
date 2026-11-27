@@ -1143,6 +1143,12 @@ A bundle does not include by default:
 - unrestricted user paths
 - unrelated logs from other games or projects
 
+The structured export withholds records indexed by a local path or file URI.
+In a diagnostic string it replaces the first recognized local path and the
+remaining text with a redaction marker, since spaces and punctuation can be
+part of the path. Manifest metadata rejects field names and values that contain
+local paths.
+
 Before export, the editor displays the bundle contents, time range, approximate
 size, included metrics/captures, and privacy level. Creation is local and does
 not upload automatically. The bundle is written to a user-selected location
@@ -1184,6 +1190,28 @@ The crash path is split into two phases:
    previous session directory, records whether shutdown was clean, and makes the
    crash available for diagnostic-bundle selection.
 
+The logger can also detect an interrupted session independently of a fault
+marker. If the prior session has a valid identifier and no matching clean
+shutdown marker, the current session metadata includes `interruptedSessionId`.
+Support bundles can correlate this identifier with retained startup records.
+The identifier alone classifies an interruption and leaves its cause unknown.
+
+Host executables opt in through `LoggerConfiguration::captureProcessFaults`.
+On Windows this prepares one small local marker per session and adds a
+top-level exception filter while the logger is active. The filter writes the
+exception code and thread ID, then delegates to the preceding filter or normal
+Windows exception handling. Linux and macOS record fatal signals that still have
+their default disposition and then re-deliver the same signal. Existing custom
+handlers retain ownership. The signal path uses a pre-opened descriptor, writes
+one fixed-size record and excludes forked children from the parent's marker.
+Startup and cleanup acquire the marker only after its writer has released it.
+
+The next startup associates a complete marker with the interrupted session and
+exposes its random ID, class, code and available thread ID as
+`interruptedFault` in the current session metadata. A clean shutdown removes
+unused staging. The marker contains no exception parameters, memory dump or user
+data. Hosts without native capture still report unclean shutdowns.
+
 [ADR-048](../../adr/048-gpu-crash-and-device-loss-diagnostic-bundles.md) extends
 this two-phase model for renderer incidents without weakening it. A process fault
 adds only preallocated scalar renderer/device/frame context to the marker. A live
@@ -1210,6 +1238,12 @@ export. Upload, if a product later implements it, is outside this architecture
 and requires a separate privacy, authentication, and endpoint policy.
 
 ## Redaction And Privacy
+
+When a host exports a namespace only through a privacy summary, the bundle
+withholds any structured log, operation, or error that contains a record from
+that namespace. The containing record can repeat private fields in its own
+message. This rule applies to nested fields and causal chains. Aggregate
+documents still retain independent diagnostic records that pass redaction.
 
 Observability output is classified before storage or export:
 

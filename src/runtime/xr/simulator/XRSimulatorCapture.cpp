@@ -103,13 +103,8 @@ namespace Horo::XR {
         using enum Horo::XR::XRSimulatorCaptureState;
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
-        if (impl_->recorded.empty()) {
-            impl_->capture = {.state = Cancelled};
-            return Result<void>::Failure(MakeError(XRSimulatorErrors::CaptureUnavailable));
-        }
-        if (Active(impl_->capture.state))
-            impl_->EndCapture(Complete);
-        if (impl_->capture.state != Complete && impl_->capture.state != Partial)
+        impl_->EndCapture(Complete);
+        if (impl_->recorded.empty() || (impl_->capture.state != Complete && impl_->capture.state != Partial))
             return Result<void>::Failure(MakeError(XRSimulatorErrors::CaptureUnavailable));
         return Result<void>::Success();
     }

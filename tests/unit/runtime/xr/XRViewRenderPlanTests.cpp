@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
 #include "Horo/XR/XRErrors.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "Horo/XR/XRViewRenderPlan.h"
@@ -139,6 +140,28 @@ namespace Horo::XR {
 
             static_assert(std::is_trivially_copyable_v<XRSwapchainImageId>);
             static_assert(!std::is_same_v<XRSwapchainImageId, Render::RenderTextureHandle>);
+        }
+
+        TEST_CASE("Quad views require one peripheral and one inset per eye in runtime order", "[unit][xr][views]") {
+            PlanFixture fixture{4};
+            const XRViewAdmissionPolicy policy{.mode = XRViewAdmissionMode::BoundedNView, .maximumViews = 4};
+            SECTION("Runtime order remains authoritative") {
+                std::swap(fixture.views[0].role, fixture.views[2].role);
+                const auto plan = fixture.Create(policy);
+                REQUIRE(plan.Views().size() == 4);
+                CHECK(plan.Views()[0].role == XRViewRole::FoveatedInsetLeft);
+                CHECK(plan.Views()[2].role == XRViewRole::PrimaryLeft);
+                CHECK(plan.Targets()[0].view == plan.Views()[0].id);
+                CHECK(plan.Targets()[2].view == plan.Views()[2].id);
+            }
+            SECTION("A repeated role cannot stand in for a missing inset") {
+                fixture.views[3].role = XRViewRole::FoveatedInsetLeft;
+                RequireFailureIdentity(fixture.TryCreate(policy), XRErrors::OperationIncompatible);
+            }
+            SECTION("A generic view cannot stand in for a peripheral eye") {
+                fixture.views[0].role = XRViewRole::Auxiliary;
+                RequireFailureIdentity(fixture.TryCreate(policy), XRErrors::OperationIncompatible);
+            }
         }
 
         TEST_CASE("XR implementation admission rejects unsupported complete configurations without truncation", "[unit][xr][views]") {
@@ -395,6 +418,173 @@ namespace Horo::XR {
                     .acquiredImages = std::span{fixture.acquired}.first(fixture.acquiredCount),
                     .renderer = {1, 2, fixture.origin.Value(), fixture.revision.Value(), 3, 4},
                     .capabilities = {XRHardLimits::MaximumViews, true, true, false}};
+        }
+
+        TEST_CASE("Quad extraction keeps all projections and requires exact layer routing for instancing", "[unit][xr][multiview]") {
+            using enum Render::MultiviewExecutionPolicy;
+            PlanFixture fixture{4};
+            const XRViewAdmissionPolicy admission{.mode = XRViewAdmissionMode::BoundedNView, .maximumViews = 4};
+            fixture.views[2].projection = {-0.3F, 0.4F, -0.2F, 0.2F};
+            fixture.views[3].projection = {-0.4F, 0.3F, -0.2F, 0.2F};
+            auto active = MultiviewOwner(fixture);
+            active.capabilities.instancedTargetRouting = true;
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1), OriginSample(fixture, 2),
+                                     OriginSample(fixture, 3)};
+            const auto extract = [&](const Render::MultiviewExecutionPolicy policy) {
+                const auto plan = fixture.Create(admission);
+                return XRMultiviewScene::Create({.plan = plan,
+                                                 .referenceToWorld = origins,
+                                                 .publication = active.renderer,
+                                                 .policy = policy,
+                                                 .limits = {.maximumViews = 4}},
+                                                active);
+            };
+
+            SECTION("Canonical layers admit indexed instancing") {
+                const auto scene = extract(RequireInstanced);
+                REQUIRE(scene.HasValue());
+                CHECK(scene.Value().Scene().Mode() == Render::MultiviewExecutionMode::Instanced);
+                REQUIRE(scene.Value().Scene().Views().size() == 4);
+                CHECK(scene.Value().Scene().Views()[0].worldToClip != scene.Value().Scene().Views()[2].worldToClip);
+            }
+            SECTION("Permuted layers remain an exact multipass plan") {
+                std::swap(fixture.targets[0].arrayLayer, fixture.targets[2].arrayLayer);
+                const auto scene = extract(PreferInstanced);
+                REQUIRE(scene.HasValue());
+                CHECK(scene.Value().Scene().Mode() == Render::MultiviewExecutionMode::Multipass);
+                REQUIRE(scene.Value().Scene().Views().size() == 4);
+                CHECK(scene.Value().Plan().Targets()[0].arrayLayer == 2);
+                RequireFailureIdentity(extract(RequireInstanced), Render::MultiviewExtractionErrors::Unsupported);
+            }
+            SECTION("An independent inset image can be replaced without aliasing its old plan") {
+                for (std::size_t index = 0; index < fixture.viewCount; ++index) {
+                    auto &target = fixture.targets[index];
+                    target.target.slot.index += static_cast<std::uint32_t>(index);
+                    target.image.target = target.target;
+                    target.arrayLayer = 0;
+                    target.arrayLayerCount = 1;
+                    fixture.acquired[index] = target.image;
+                }
+                fixture.targets[2].renderRectangle = {0, 0, 512, 512};
+                fixture.acquiredCount = fixture.viewCount;
+                active.acquiredImages = std::span{fixture.acquired}.first(fixture.acquiredCount);
+                const auto scene = extract(PreferInstanced);
+                REQUIRE(scene.HasValue());
+                CHECK(scene.Value().Scene().Mode() == Render::MultiviewExecutionMode::Multipass);
+                CHECK(scene.Value().Plan().Targets()[2].renderRectangle.width == 512);
+                CHECK(scene.Value().Validate(active).HasValue());
+                ++fixture.acquired[2].slot.generation;
+                RequireFailureIdentity(scene.Value().Validate(active), XRErrors::IdentityStale);
+            }
+            SECTION("Stereo-only hardware rejects all four views") {
+                active.capabilities.maximumViews = 2;
+                RequireFailureIdentity(extract(PreferInstanced), Render::MultiviewExtractionErrors::Unsupported);
+            }
+        }
+
+        TEST_CASE("XR World canvas uses each live eye rectangle and one shared readable plane", "[unit][xr][multiview][world-canvas]") {
+            PlanFixture fixture;
+            fixture.targets[1].renderRectangle = {21, 13, 512, 640};
+            fixture.views[1].pose.components.positionMeters.value = Math::Vec3{0.064F, 1.7F, 0};
+            const auto plan = fixture.Create();
+            auto active = MultiviewOwner(fixture);
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1)};
+            const auto scene =
+                XRMultiviewScene::Create({.plan = plan, .referenceToWorld = origins, .publication = active.renderer}, active);
+            REQUIRE(scene.HasValue());
+
+            XRWorldCanvasDescriptor canvas{Math::Mat4::Identity(), 120};
+            canvas.worldFromCanvas.values[12] = 3;
+            canvas.worldFromCanvas.values[13] = 1.7F;
+            canvas.worldFromCanvas.values[14] = -2;
+            const auto allocationsBefore = Tests::AllocationProbe::Count();
+            const auto projected = scene.Value().ProjectWorldCanvas(canvas, active);
+            const auto allocationsAfter = Tests::AllocationProbe::Count();
+            REQUIRE(projected.HasValue());
+            CHECK(allocationsBefore == allocationsAfter);
+            const auto &stereo = projected.Value();
+            REQUIRE(stereo.drawable);
+            CHECK(stereo.publication == active.renderer);
+            CHECK(stereo.worldFromCanvas.values == canvas.worldFromCanvas.values);
+            CHECK(stereo.views[0].view == fixture.views[0].id);
+            CHECK(stereo.views[1].view == fixture.views[1].id);
+            CHECK(stereo.views[0].arrayLayer == 0);
+            CHECK(stereo.views[1].arrayLayer == 1);
+            CHECK(stereo.views[1].renderRectangle == fixture.targets[1].renderRectangle);
+            CHECK(Math::NearlyEqual(stereo.views[0].projectedSpanPixels, 256.0F));
+            CHECK(Math::NearlyEqual(stereo.views[1].projectedSpanPixels, 128.0F));
+            CHECK(!Math::NearlyEqual(stereo.views[0].canvasToClip.At(0, 3), stereo.views[1].canvasToClip.At(0, 3)));
+
+            canvas.minimumSpanPixels = 129;
+            const auto unreadable = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(unreadable.HasValue());
+            CHECK_FALSE(unreadable.Value().drawable);
+
+            canvas.minimumSpanPixels = 24;
+            canvas.worldFromCanvas.values[12] = 5.45F;
+            const auto beforeClip = Tests::AllocationProbe::Count();
+            const auto sliver = scene.Value().ProjectWorldCanvas(canvas, active);
+            const auto afterClip = Tests::AllocationProbe::Count();
+            REQUIRE(sliver.HasValue());
+            CHECK(afterClip == beforeClip);
+            CHECK_FALSE(sliver.Value().drawable);
+            for (const auto &eye : sliver.Value().views) {
+                CHECK(eye.projectedSpanPixels > 10);
+                CHECK(eye.projectedSpanPixels < 24);
+            }
+            canvas.minimumSpanPixels = 10;
+            const auto partiallyVisible = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(partiallyVisible.HasValue());
+            CHECK(partiallyVisible.Value().drawable);
+
+            const auto overfill = Math::Transform{.translation = {3, 1.7F, -2},
+                                                  .rotation = Math::Quaternion::FromEulerRadians({0, 0, Math::Pi / 4}),
+                                                  .scale = {4, 4, 1}}
+                                      .TryToMatrix();
+            REQUIRE(overfill.HasValue());
+            canvas.worldFromCanvas = overfill.Value();
+            const auto clippedCorners = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(clippedCorners.HasValue());
+            CHECK(clippedCorners.Value().drawable);
+            for (const auto &eye : clippedCorners.Value().views)
+                CHECK(eye.projectedSpanPixels <= static_cast<float>(std::min(eye.renderRectangle.width, eye.renderRectangle.height)));
+
+            canvas.minimumSpanPixels = 1;
+            canvas.worldFromCanvas = stereo.worldFromCanvas;
+            canvas.worldFromCanvas.values[14] = -0.05F;
+            const auto tooClose = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(tooClose.HasValue());
+            CHECK_FALSE(tooClose.Value().drawable);
+            canvas.worldFromCanvas.values[14] = -2;
+            canvas.worldFromCanvas.values[12] = 40;
+            const auto offscreen = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(offscreen.HasValue());
+            CHECK_FALSE(offscreen.Value().drawable);
+
+            const auto diagonal = Math::Transform{.translation = {5.12F, 3.82F, -2},
+                                                  .rotation = Math::Quaternion::FromEulerRadians({0, 0, Math::Pi / 4}),
+                                                  .scale = {0.3F, 0.3F, 1}}
+                                      .TryToMatrix();
+            REQUIRE(diagonal.HasValue());
+            canvas.worldFromCanvas = diagonal.Value();
+            const auto beyondCorner = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(beyondCorner.HasValue());
+            CHECK_FALSE(beyondCorner.Value().drawable);
+
+            const auto edgeOn =
+                Math::Transform{.translation = {3, 1.7F, -2}, .rotation = Math::Quaternion::FromEulerRadians({0, Math::Pi / 2, 0})}
+                    .TryToMatrix();
+            REQUIRE(edgeOn.HasValue());
+            canvas.worldFromCanvas = edgeOn.Value();
+            const auto thin = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(thin.HasValue());
+            CHECK_FALSE(thin.Value().drawable);
+
+            canvas.minimumSpanPixels = 0;
+            RequireFailureIdentity(scene.Value().ProjectWorldCanvas(canvas, active), XRErrors::ViewPlanInvalid);
+            canvas.minimumSpanPixels = 1;
+            active.originRevision = Horo::Tests::IdentityValue<XRWorldOriginRevision>(10);
+            RequireFailureIdentity(scene.Value().ProjectWorldCanvas(canvas, active), XRErrors::OriginRevisionStale);
         }
 
         TEST_CASE("XR multiview converts actual asymmetric projections and declared reference poses", "[unit][xr][multiview]") {

@@ -222,16 +222,17 @@ TEST_CASE("Variant preflight admits the exact eight-edge boundary and rejects th
     using namespace Horo::Prefab;
     using namespace LayerTest;
     Graph graph;
-    graph.AddParent(92, 91, Revision(1));
+    graph.AddVariant(92, 91, Revision(1), graph.Assign(Asset(), Property(), 3.0));
     for (std::uint8_t owner = 93; owner <= 99; ++owner)
-        graph.AddParent(owner, owner - 1, Revision(owner - 1));
+        graph.AddVariant(owner, owner - 1, Revision(owner - 1), graph.Assign(Id(owner - 1), Property(), owner - 89.0));
     const auto accepted = graph.Resolve(Id(99));
-    CHECK(Speed(accepted, Object()) == 2.0);
+    CHECK(Speed(accepted, Object()) == 10.0);
+    CHECK(accepted.Objects()[0].originChain.size() == PrefabHardLimits::VariantInheritanceDepth);
     graph.AddParent(100, 99, Revision(99));
     const auto rejected = graph.Snapshot().Resolve(Id(100), PrefabInstanceId::Create(9).Value(), Limits());
     REQUIRE(rejected.HasError());
     CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
-    CHECK(Speed(accepted, Object()) == 2.0);
+    CHECK(Speed(accepted, Object()) == 10.0);
 }
 
 TEST_CASE("Mixed dependency cycles are rejected before any source expansion and cancellation leaves accepted values intact",
@@ -246,6 +247,10 @@ TEST_CASE("Mixed dependency cycles are rejected before any source expansion and 
         const auto rejected = graph.Snapshot().Resolve(Id(92), PrefabInstanceId::Create(9).Value(), Limits());
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == PrefabErrors::DependencyGraphInvalid.code.Value());
+        const auto &edges = rejected.ErrorValue().diagnostics;
+        REQUIRE(edges.size() == 2);
+        CHECK(edges[0].message == "VariantParent " + Id(92).ToString() + " -> " + Id(93).ToString());
+        CHECK(edges[1].message == "NestedPlacement " + Id(93).ToString() + " -> " + Id(92).ToString() + " placement=7");
     }
     SECTION("cancel") {
         CancellationSource cancellation;

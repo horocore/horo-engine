@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -38,6 +39,36 @@ namespace Horo::Navigation {
         std::uint8_t count{};
     };
 
+    /** @brief Canonical directed authored link outside the native grounded adjacency table. */
+    struct RecastDetourLinkArc final {
+        std::uint32_t from{};
+        std::uint32_t to{};
+        NavigationLinkId link;
+        NavigationAreaId area;
+        Math::Vec3 entrance;
+        Math::Vec3 exit;
+        float radiusMeters{};
+
+        [[nodiscard]] auto Key() const noexcept {
+            return std::pair{from, to};
+        }
+    };
+
+    /** @brief Finds an exact sorted arc. Ordinary shared edges cannot overlap an admitted arc. */
+    [[nodiscard]] const RecastDetourLinkArc *FindRecastDetourLinkArc(std::span<const RecastDetourLinkArc> arcs, std::uint32_t from,
+                                                                     std::uint32_t to);
+
+    /** @brief Builds immutable A* arcs without altering native spatial-query topology. */
+    [[nodiscard]] Result<std::vector<RecastDetourLinkArc>> BuildLinkArcs(const NavigationTileBuildResult *cooked,
+                                                                         std::span<const NavigationPolygonAdjacency> adjacency,
+                                                                         const dtNavMeshQuery &query, std::span<const dtPolyRef> references,
+                                                                         const NavigationAreaRegistry &areas);
+
+    /** @brief Resolves destination admission and the distinct traversal area and clearance of an authored arc. */
+    [[nodiscard]] Result<NavigationTraversalPolicy> ResolveTraversalEdge(const NavigationAreaRegistry &areas, NavigationFilterId filter,
+                                                                         NavigationAreaId destinationArea, const RecastDetourLinkArc *arc,
+                                                                         float requestedClearance, float defaultClearance);
+
     struct NavigationAStarNode final {
         std::uint32_t polygon{InvalidNavigationPolygonIndex};
         std::uint32_t parent{InvalidNavigationPolygonIndex};
@@ -46,6 +77,10 @@ namespace Horo::Navigation {
         bool open{};
         bool closed{};
     };
+
+    /** @brief Selects the geometric frontier if authored arcs require a zero search heuristic. */
+    [[nodiscard]] std::uint32_t SelectAuthoredTraversalFrontier(std::span<const NavigationAStarNode> nodes,
+                                                                std::span<const Math::Vec3> centers, Math::Vec3 target);
 
     struct QuerySlot final {
         QuerySlot() = default;
@@ -87,6 +122,7 @@ namespace Horo::Navigation {
         std::vector<Math::Vec3> vertices;
         std::vector<GroundedNavigationPolygon> polygons;
         std::vector<NavigationPolygonAdjacency> adjacency;
+        std::vector<RecastDetourLinkArc> links;
         std::vector<Math::Vec3> polygonCenters;
         std::vector<dtPolyRef> polygonReferences;
         NavigationAreaRegistry areaRegistry;

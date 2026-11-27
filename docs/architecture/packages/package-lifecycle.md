@@ -91,6 +91,41 @@ safe merely by reducing permissions.
 In non-interactive mode, new trust requirements fail unless a policy allowlist or
 previous user-local trust state exists.
 
+### Editor Gameplay Package Approval
+
+The ordinary desktop Editor accepts an explicit startup project, a separate
+publisher roots document in the existing signature-document format, and one or
+more exact gameplay module approvals.
+
+```text
+HoroEditor --project <absolute-project> --gameplay-package-publisher-trust <absolute-roots-json> --approve-gameplay-package <package> <extension> <module> <archive-sha256> <manifest-sha256> <descriptor-revision>
+```
+
+The publisher roots document must be outside the project and package cache.
+Repeat the approval option for additional modules. All approvals for one package
+must identify the same archive, manifest and extension. The archive publisher
+signature is reverified from the offline cache. The selected native role also
+requires its own signed `<artifact>.signature.json` sibling in the exact
+verified contribution inventory. The SDK build fingerprint comes from the host.
+
+`--approve-importer-package <package> <extension> <module> <archive-sha256> <manifest-sha256>`
+uses the same project and publisher binding. The Package dialog can activate
+the declared importer module. The native owner verifies the detached signature
+and admits importer contributions from that exact module. Removal reservations
+carry the same immutable approval identities, so reference review can identify
+an importer outside the configured owner's scope.
+Import, file drop, and Content Browser operations acquire a combined catalog for
+the current project. Duplicate contribution IDs fail catalog composition. New
+operations see the host catalog when the project module is disabled, and open
+import operations retain their captured catalog until they close.
+
+Startup approval makes the role available for explicit activation from the
+existing Package dialog. Decision descriptors become visible only after that
+activation publishes and disappear when it is withdrawn. The configured package
+host is bound to the one startup project. A selected XR package host currently
+rejects the combined gameplay package request. The default desktop package
+host continues to require configured execution authority.
+
 ### Extension Activation Hand-Off
 
 For each enabled extension descriptor, `PackageLifecycleService` lends
@@ -144,6 +179,31 @@ shared registry aliases and absent/wrong module realms fail closed. Hosts retain
 the realm through retirement; the application retains its normal owner-lane
 context and completion responsibilities.
 
+Platform provider packages use the same verified native handoff. Applications pass
+`PackageLifecycleConfiguration::platformProviderCommit` explicitly to publish the
+copied `platform.services.provider` claim into their Platform Services composition.
+Both `Activate` and `NativePackageModuleHost` forward this callback to the existing
+extension manager; an omitted callback rejects the provider before native load.
+PackageLifecycle checks the provider's copied permission requests against the exact
+package approval before invoking the application callback. A broader process policy
+cannot grant permissions absent from that package approval. PackageLifecycle
+acquires no Platform Services target dependency and never selects or initializes a
+provider. The application validates its additional provider policy and owns the
+publication registry, lifecycle host and owner-lane drain.
+
+This is an additive configuration field owned by the existing
+`HoroPackageLifecycle` public-header boundary. Existing applications keep their
+current behavior; provider applications set the callback before constructing the
+native role host. The callback's captured owners must outlive every package
+retirement. Exact product selection remains application-owned while a different
+contract version stages in the registry. A registry rejects a duplicate
+capability/version; the application must disable and drain before reusing that
+slot. Neither path permits silent fallback or premature unload.
+Mixed provider/importer contributions remain rejected under the current atomic
+provider-only ABI profile. A failed package attempt revokes its publication through
+the normal extension rollback owner, including cancellation and stale-install
+failures after native registration.
+
 `GameplayPackageModuleHost` is a dedicated application adapter target linking the
 PackageLifecycle and GameplayModuleHost contracts. PackageLifecycle does not depend
 on Gameplay. Runtime participants use the actual generated gameplay SDK exports,
@@ -169,6 +229,8 @@ provider parent. Revocation closes new Lua callbacks, and package retirement
 cannot unload the native image or remove its verified staged resources until
 the Lua programs, executors and cleanup have released those leases. A manifest
 role or generic `ScriptInvocationProvider` never certifies a node factory.
+After binding its world services, the Gameplay host rechecks the native member
+against the verified archive and signature policy before loading the module.
 Node descriptor versions are separate from package versions; the existing
 locked resolver selects package versions before these APIs can acquire them.
 
@@ -253,6 +315,9 @@ quiescent boundary. Disable selects an empty or reduced module set. Uninstall
 removes package availability only after the same withdrawal/drain policy and
 project-reference checks; old resource receipts remain valid until drain. These
 operations do not create a second installer or mutate project-owned assets.
+The package application rejects an install-graph replacement that would remove a
+package still owned by an active or retiring module. The diagnostic identifies
+the retained packages. The host can retry after their owners drain.
 
 ## Enablement State
 
@@ -309,6 +374,106 @@ Update validation checks:
 
 Trust escalation requires explicit approval.
 
+The resolver's `PackageUpdatePreview` compares the complete current and
+candidate lockfiles after validating each against its portable request. It
+returns the exact old and new entries for added, removed, or changed packages,
+including same-version artifact replacements, and distinguishes request-only
+changes. The preview is inert. Artifact verification, reference checks, trust
+approval, and migration belong to the transaction that applies the candidate.
+The package application checks current project authority and candidate platform
+compatibility before returning this preview to a host adapter.
+
+The headless CLI also supports a read-only preview of an already resolved
+candidate:
+
+```sh
+horo-engine package preview-update --project /path/to/project \
+  --candidate-request /path/to/candidate/packages.json \
+  --candidate-lock /path/to/candidate/packages.lock
+```
+
+The command returns the total number of changes, up to 32 ordered rows and
+the next offset. Pass `--offset` to read the following page. A next offset of
+`-1` means there are no more rows. The approval fingerprint identifies the
+reviewed project and the exact current and candidate documents. A pending package metadata recovery blocks
+the preview until a recovery-capable operation repairs the project.
+
+Pass `--package-cache-root` to `preview-update` or `preview-rollback` to
+review the cached archives as well as lock metadata. The preview verifies
+changed archives and unchanged entries required for offline staging. It reports
+missing archives, removed paths, changed bytes or owners, and packages that
+require a migration or executable lifecycle owner. It emits an
+approval fingerprint only when this review succeeds. JSON output includes the
+bounded list of diagnosed package paths. This preview does not claim cache
+locks, quarantine artifacts, or write package metadata. Apply verifies the
+archives again before publication.
+Missing current or candidate archives are reported with their package and role.
+The review continues across independent entries up to the diagnostic limit.
+During an offline package exchange, a rejected migration declaration still
+allows the preview to report independent departing archive and saved-reference
+findings.
+
+Behavior rename previews identify each matching attachment with the SHA-256
+of its saved Scene or Prefab bytes. Unreadable sources block the review and
+appear alongside findings from readable sources within the diagnostic limit.
+With a complete asset inventory, the preview also reports missing and
+wrong-type child Scene and Prefab sources alongside the confirmed attachments.
+It reports recursive child Scene links and cycles through nested and variant
+Prefab links from those same saved sources.
+Missing object identities and duplicate object or attachment identities make
+a Scene's edit addresses unusable. The preview reports the address and keeps matches
+from other readable sources.
+
+`horo-engine package apply-update` takes the same project and candidate options,
+plus `--approve` with the preview fingerprint and `--package-cache-root` with the
+absolute path to an existing verified cache. This path stages offline and
+publishes updates that retain existing package references. Newly added packages
+must declare asset-only contributions and pass the same archive path and
+execution checks as replaced asset packages. An asset-only
+replacement can change versions or add files when the package manifest and
+lock policy stay identical and verified archives prove that every existing
+path keeps its bytes and contribution owner. An offline update can exchange
+asset-only packages in one transaction. With a verified cache, preview
+checks both archives and reports saved importer references to departing
+packages, including when another archive has invalid migration metadata.
+Publication repeats the reference checks under the project
+mutation lease. The same checks apply to the inverse exchange on rollback.
+
+The update host publishes a previously reviewed candidate only when the exact
+base and candidate documents still match the review and the candidate lock
+matches a verified staging record for the same project. It uses the project
+mutation lease and the package metadata journal. A failed pre-commit write
+attempts recovery while holding the lease. If the lock replacement committed
+and durability remains uncertain, the journal preserves enough evidence to
+confirm the new pair on the next preparation.
+
+The metadata update retains one rollback point containing the exact previous
+request and lock. It records the new pair's digests before committing. A retry
+recognizes the point only if the current request and lock still match those
+digests. After writing the pending rollback point, the host rechecks the
+approved base pair before admitting the journal. An external edit detected
+there remains in place and the uncommitted rollback point is discarded.
+After writing the journal, the host checks the pair again before replacing
+either document. A changed pair aborts publication and leaves the external edit
+in place. After replacing the request, the host checks that the published
+request and prior lock still match before replacing the lock. An independent
+edit at that point leaves the journal available for recovery.
+Failed updates retain a previous completed rollback point. The point
+records package metadata and does not include project document migrations.
+
+`horo-engine package preview-rollback --project /path/to/project` reads the
+retained pair automatically. Update and rollback previews recheck the exact
+request and lock bytes. A replaced lock invalidates the snapshot even if the
+request stays the same. A pending publication also blocks rollback after the
+checkpoint has been read. Pass the preview fingerprint as `--approve` to
+`package rollback-update`, together with the project and
+`--package-cache-root`. Rollback stages the older lock before publication and
+applies the same reference-safety boundary as forward updates. A successful
+rollback retains the pair it replaced as the next rollback point.
+When rolling back an asset-only addition, the host also verifies the departing
+archives and checks the saved project references under the package mutation
+lease before restoring the exact older documents.
+
 ## Uninstall Policy
 
 Before uninstall:
@@ -327,12 +492,167 @@ If required references remain, policy may:
 
 Silent dangling references are forbidden.
 
+A removal preview can prepare a matching portable request and lockfile without
+resolving new versions or changing either project document. The lock drops only
+entries unreachable from the remaining roots. Withdrawing the last root produces
+a schema-v1 lock with empty `roots` and `packages` arrays. The preview preserves
+the artifact and source identities of every retained entry. Reference checks,
+approval, and durable publication belong to the uninstall transaction. A
+successful removal retains the exact previous request and lock in the same
+rollback checkpoint as a package update. The package cache is left intact so
+the existing rollback command can stage the previously locked artifacts. A
+failed removal attempts to restore the prior pair before releasing the
+mutation lease. If repair cannot finish, the journal remains for the next
+project preparation.
+
+The editor's application-level preview reports which departing packages still
+have active or retiring native modules. It samples the same composition owners
+that guard installation, including the retirement queue. It reports native
+ownership at preview time. The uninstall transaction still owns the reference
+checks and mutation. Application and editor consumers can call `InspectRemoval`
+for both graph effects and blockers. `PreviewRemoval` continues to provide the
+graph effects alone.
+
+Before a live removal can publish, the lifecycle owner issues a reservation
+for the same project and exact departing set. Packages with active or retiring
+module owners cannot be reserved. Each departing ID must appear once and match
+its verified installed version. Requests during activation preparation are
+rejected before the staged modules can publish. The reservation retains the install record
+and prevents activation while the transaction inspects references and
+publishes metadata. Dropping an uncommitted reservation reopens admission.
+Once the lock commits, admission on the old session remains revoked until
+the host composes from the new lock.
+Lifecycle shutdown revokes the reservation and cancels reference review or
+publication before the transaction writes its journal. After the journal is
+written, publication uses the same recovery rules as other metadata changes.
+
+When the same lifecycle also owns a native backend through the concrete
+importer host, a withdrawal reservation can admit a sealed importer-only
+backend alongside gameplay roles. The backend may declare only importer
+contributions, with no service imports, exports, local module dependencies,
+or additional capability requirements. This path excludes mounted assets. The project still checks
+importer sidecars and observes gameplay registrations, and the reservation
+waits for live and retiring role receipts to drain. Otherwise, the review
+identifies the blocked contribution, module, or archive path and keeps any
+confirmed references found in saved sources. Incomplete descriptor or archive
+review also preserves independently verified gameplay roles for registration
+diagnostics while the unsupported archive remains blocked.
+Retained registration history from a replaced artifact is excluded from saved
+Scene, Prefab, and Decision attribution. An unobserved role in the current
+locked artifact still blocks removal.
+
+The desktop editor can apply a reviewed removal for verified asset packages
+and packages owned entirely by the native gameplay runtime. The workspace requires saved documents and stopped Play before
+confirmation. The operation binds to the displayed package plan, inspects
+saved references on its I/O job, and reopens the package session from freshly
+prepared metadata after success. The executable supplies explicit root-bound
+read and asset registry factories. Hosts without those factories expose the
+preview alone. The editor verifies the complete executable manifest, requires
+exact observations of every departing runtime role after retirement, and
+checks saved behavior, Decision and service references. Mixed roles, unknown
+archive paths and unreviewed component, asset, query or persistence
+contributions block removal. The host reads native module identities from the
+descriptors in the sealed archive inventory and checks them against the lock.
+Each descriptor accounts for artifacts under its declared contribution root.
+A locked contribution without a covered descriptor or asset owner blocks
+withdrawal. Custom senses block removal when saved authoring sources still
+require a binding review. The host decodes each Scene and Prefab once for
+behavior, native component and custom-sense review. Exact native component
+matches include saved property and topology overrides, including
+conflicts and orphans. Child scenes, prefab placements and nested or variant
+prefabs must resolve to sources of the expected type in the same reviewed asset
+inventory. A missing or mismatched target blocks removal and reports its asset
+ID and the source that refers to it. For departing component providers, the review checks
+declared reads and writes in observed retained native behavior and system
+registrations. A matching access identifies the consumer package, descriptor and
+registration. Standalone Scenes without AI or
+generic gameplay bindings and standalone Prefabs containing only plain objects
+can pass this review. Authored AI, opaque components and unresolved composition
+still require review, including disabled attachments. An EQS source is independent of a
+departing sense when its complete source is admitted against the engine-owned
+point-query schema. Perception queries and queries with unresolved stages still
+require review. Unreadable queries are reported with their project-relative
+paths and block the operation. An unreadable Scene, Prefab or Decision source
+also blocks removal. The review reports its path alongside references from the
+other readable documents. When an otherwise decoded Scene contains an unknown
+component owner, the review keeps confirmed typed references from that Scene
+alongside the unsupported-source blocker. A degraded asset inventory also blocks removal.
+Review still reports confirmed references from individually admitted sources
+and defers checks that require a complete inventory, such as resolving
+composition links. Importer, Scene, Prefab and Decision checks share one
+admitted inventory within the removal transaction. The removal dialog shows the source and target of
+unresolved Scene, Prefab and Decision links, along with identified modules,
+contributions and archive paths that require a lifecycle owner. An unverified
+extension descriptor is reported at its archive path. Independent descriptors
+and unowned archive members are still reviewed in the same attempt.
+The application package project host borrows the
+inert EQS descriptor schema and authoring validator from AI Scene integration.
+The review does not compose a live Scene or execute queries.
+
+`horo-engine package preview-remove --project /path/to/project --package-id
+com.vendor.pack` checks saved asset importer references and reports any locked
+contributions that require a live lifecycle owner. When those checks pass, it
+lists the departing packages and returns an approval fingerprint. Add
+`--package-cache-root` to verify the exact departing archives during preview
+and identify any archive members that require a live owner. This check reads
+the cache without restoring packages or activating modules. Preview and apply
+identify the owning package for each blocking archive member, including when
+one root withdrawal removes several packages. Pass the fingerprint as `--approve` to `package
+remove` together with the same project, package ID, and
+`--package-cache-root`. The command verifies the current locked archives from
+the local cache, matches the departing archive entries to the exact lock, and
+rechecks the project inventory under the mutation lease.
+Offline withdrawal supports asset-only archives. Extensions and other
+executable contributions require their live lifecycle owner.
+
+Observed native package registrations include service dependencies and system
+service requirements. Within one project session, reactivating the same
+verified archive and role retains previously observed service IDs and required
+service edges. A failed or over-limit capture prevents removal. The uninstall
+transaction checks retained observations against the exact current lock and
+reports which retained registration requires a service owned by a departing
+package. When a departing package provides a
+gameplay service or component, every retained runtime role needs a registration
+observation from its exact locked archive, including roles declared by packages
+with additional extension contributions. The gameplay-only withdrawal rule
+applies to departing packages. The review reports unobserved roles and roles
+with unsupported reference classes together, with the package, module ID and
+descriptor path for each. The saved request and lock stay intact until coverage
+and reference checks pass.
+
+Removal checks also use Decision node IDs observed from the exact native
+gameplay registry. Saved Behavior Tree, State Machine, and Utility sources
+are decoded with the bounded Decision codec. References report the source
+asset and node or action phase. When a departing package owns Decision nodes,
+an unreadable graph blocks removal. Authored subplan calls also require an
+unambiguous semantic graph identity with a compatible family and schema version
+from the same scan. The review reports call resolution only after a complete
+scan. When a source is unreadable, the review reports its path and any
+independently confirmed provider references. After a complete scan, the caller
+path, authored node and target ID identify each call that requires review.
+A node containing both a typed call and a legacy subtree reference is reported
+as incompatible while the review continues collecting independent references.
+
 ## Rollback Contract
 
 Package lifecycle operations write a transaction journal before mutating project
 metadata, cache indexes, enablement state, activation state, or document files.
 Rollback restores metadata and activation state when failure occurs before
 irreversible project document migrations commit.
+
+Uninstall and withdrawal rollback recheck saved references after staging the
+rollback point and before writing the metadata journal. The second review uses
+the same mutation lease, cancellation and deadline. A late reference blocks the
+operation and preserves the previous package metadata.
+An update or rollback that drops a package requires the withdrawal publication
+path, even when the staged candidate and approval are valid.
+
+A withdrawal rollback may also restore a retained asset package at the same
+version and with the same locked source, dependencies and contribution policy.
+Preview and publication review the exact older and current archives. The
+restored archive must preserve every currently mounted asset path, owner and
+payload. Rollback still checks the saved project references to departing
+packages before publishing the older request and lock together.
 
 Migrations that modify project-owned scenes or assets are previewed first and
 then committed through editor document transactions or explicit file migration
@@ -357,6 +677,56 @@ requiresUserReview = true
 
 Migration plans must be previewable. Any migration that changes project-owned
 scene or asset files uses editor document commands/transactions where applicable.
+
+The cache-backed update preview reads the optional `migrations/asset-renames.json`
+file from the candidate's verified inventory. A version-one declaration binds
+the candidate package ID and version and lists exact prior artifact selectors.
+Compatible asset replacements may carry or retire this archive metadata when
+no selector matches the installed artifact and all existing asset paths retain
+their bytes and owners. Preview and apply both validate a candidate declaration.
+An asset-only addition has no installed predecessor. The same declaration
+validation still checks its destination identity, selectors and path rules.
+
+```json
+{
+  "schemaVersion": 1,
+  "packageId": "com.vendor.weapon-pack",
+  "toVersion": "2.0.0",
+  "transitions": [
+    {
+      "fromVersion": "1.0.0",
+      "fromArtifactSha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "renames": [{"from": "assets/rifle.mesh", "to": "assets/weapons/rifle.mesh"}]
+    }
+  ]
+}
+```
+
+The preview checks each applicable mapping against both verified inventories and
+reports whether the destination also changes bytes. Path collisions, links,
+executables, duplicate selectors and missing paths invalidate the applicable
+review. This declaration supplies evidence for review. Applying the mapping to
+project files and producing an approval for that migration require a document
+transaction.
+
+The optional inert `migrations/behavior-renames.json` declaration uses the same
+destination and exact source selectors, with stable Gameplay type IDs in
+`from` and `to`. Cache-backed preview matches applicable source IDs against
+saved Scene and Prefab attachments, including disabled attachments, and reports
+the relative path, object and attachment identity. The shared review retains
+the exact asset ID, source digest and both package artifact digests with each
+attachment. CLI output is derived from that typed review. A degraded asset inventory
+reports the failing metadata path and retains matches from admitted records.
+Matches show possible impact. Invalid migration declarations block approval,
+with the declaration and its error reported alongside independently verified
+asset and behavior findings.
+If multiple packages claim the same saved type, or one package supplies
+different destinations for that type, the preview reports ambiguity without
+choosing a rename. A preview whose output budget omits any confirmed impact
+reports that the review is incomplete.
+They require live provider ownership and field compatibility verification before
+the host can approve a migration. The preview does not activate package code or
+edit project sources.
 
 Legacy extension directories and `.horo/plugins.json` use the bounded ADR-054
 migration. It parses legacy metadata only to build a preview, generates a

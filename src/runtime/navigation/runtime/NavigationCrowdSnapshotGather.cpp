@@ -67,6 +67,15 @@ namespace Horo::Navigation::Detail {
             return Result<void>::Success();
         }
 
+        /** @brief Uses the exact candidate count without scanning extra pairs or changing retained solver facts. */
+        [[nodiscard]] float DensitySpeedScale(const NavigationCrowdProfileFacts &profile, const std::size_t count) noexcept {
+            if (profile.densitySaturationNeighbors == 0)
+                return 1.0F;
+            const auto saturation = static_cast<std::size_t>(profile.densitySaturationNeighbors);
+            const auto density = static_cast<float>(std::min(count, saturation)) / static_cast<float>(saturation);
+            return std::lerp(1.0F, profile.minimumDensitySpeedScale, density);
+        }
+
         [[nodiscard]] Result<void> GatherNeighbors(const std::uint32_t agentIndex, const NavigationCrowdProfileFacts &profile,
                                                    const NavigationCrowdSnapshotLimits &limits, NavigationCrowdSnapshotStorage &storage,
                                                    std::size_t &pairChecks, std::vector<Candidate> &candidates) {
@@ -111,6 +120,7 @@ namespace Horo::Navigation::Detail {
             agent.firstNeighbor = static_cast<std::uint32_t>(storage.neighborIndices.size());
             agent.neighborCount = static_cast<std::uint32_t>(admitted);
             agent.truncatedNeighbors = static_cast<std::uint32_t>(candidates.size() - admitted);
+            agent.densitySpeedScale = DensitySpeedScale(profile, candidates.size());
             for (std::size_t index = 0; index < admitted; ++index)
                 storage.neighborIndices.push_back(candidates[index].index);
             return Result<void>::Success();

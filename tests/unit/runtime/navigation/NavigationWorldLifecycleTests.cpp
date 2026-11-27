@@ -126,6 +126,90 @@ namespace Horo::Navigation {
         REQUIRE(destructions->load() == 1);
     }
 
+    TEST_CASE("Replacing topology within a navigation world revokes the old lease at publication",
+              "[unit][navigation][headless][lifecycle]") {
+        auto lifecycle = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        const auto destructions = std::make_shared<std::atomic<std::uint32_t>>(0);
+        const auto first = TestSupport::Activation(21, 1, 201, 1);
+        const auto replacement = TestSupport::Activation(21, 1, 201, 2);
+        REQUIRE(lifecycle.Stage(first, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(first.scene, first.sceneGeneration).HasValue());
+        auto oldLease = std::move(lifecycle.Acquire(first.world)).Value();
+
+        REQUIRE(lifecycle.Stage(replacement, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        REQUIRE(lifecycle.Acquire(first.world).Value().Descriptor() == first);
+        REQUIRE_FALSE(oldLease.IsRevoked());
+        REQUIRE(lifecycle.Pause(first.world).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(first.scene, first.sceneGeneration).HasValue());
+
+        REQUIRE(lifecycle.ActiveDescriptor().Value() == replacement);
+        REQUIRE(lifecycle.State() == NavigationWorldLifecycleState::Paused);
+        RequireError(lifecycle.Acquire(first.world), NavigationErrors::CapabilityUnavailable);
+        REQUIRE(oldLease.Descriptor() == first);
+        REQUIRE(oldLease.IsRevoked());
+        REQUIRE(oldLease.Cancellation().IsCancellationRequested());
+        REQUIRE(lifecycle.RetiredCount() == 1);
+        REQUIRE(destructions->load() == 0);
+
+        REQUIRE(lifecycle.Resume(first.world).HasValue());
+        REQUIRE(lifecycle.Acquire(first.world).Value().Descriptor() == replacement);
+        oldLease = {};
+        REQUIRE(lifecycle.CollectRetired() == NavigationWorldLifecycleState::Active);
+        REQUIRE(lifecycle.RetiredCount() == 0);
+        REQUIRE(destructions->load() == 1);
+    }
+
+    TEST_CASE("Navigation topology replacement requires the active Scene and an advancing generation",
+              "[unit][navigation][headless][lifecycle]") {
+        auto lifecycle = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        const auto destructions = std::make_shared<std::atomic<std::uint32_t>>(0);
+        const auto active = TestSupport::Activation(21, 1, 201, 2);
+        const auto previous = TestSupport::Activation(21, 1, 201, 1);
+        const auto foreignScene = TestSupport::Activation(22, 1, 201, 3);
+        const auto foreignGeneration = TestSupport::Activation(21, 2, 201, 3);
+        REQUIRE(lifecycle.Stage(active, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(active.scene, active.sceneGeneration).HasValue());
+
+        RequireError(lifecycle.Stage(active, TestSupport::MakeObservedNavigationBackend(destructions)), NavigationErrors::InvalidWorld);
+        RequireError(lifecycle.Stage(previous, TestSupport::MakeObservedNavigationBackend(destructions)), NavigationErrors::StaleSnapshot);
+        RequireError(lifecycle.Stage(foreignScene, TestSupport::MakeObservedNavigationBackend(destructions)),
+                     NavigationErrors::InvalidWorld);
+        RequireError(lifecycle.Stage(foreignGeneration, TestSupport::MakeObservedNavigationBackend(destructions)),
+                     NavigationErrors::InvalidWorld);
+        REQUIRE_FALSE(lifecycle.HasStagedCandidate());
+        REQUIRE(lifecycle.Acquire(active.world).Value().Descriptor() == active);
+    }
+
+    TEST_CASE("Streamed topology staging fences its predecessor and exact rollback generation", "[unit][navigation][headless][lifecycle]") {
+        auto lifecycle = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        const auto destructions = std::make_shared<std::atomic<std::uint32_t>>(0);
+        const auto active = TestSupport::Activation(21, 1, 201, 1);
+        const auto discarded = TestSupport::Activation(21, 1, 201, 2);
+        const auto replacement = TestSupport::Activation(21, 1, 201, 3);
+        REQUIRE(lifecycle.Stage(active, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(active.scene, active.sceneGeneration).HasValue());
+        auto pinned = lifecycle.Acquire(active.world).Value();
+
+        REQUIRE(lifecycle.StageTopology(active, discarded.topology, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        RequireError(lifecycle.DiscardStagedTopology(replacement), NavigationErrors::StaleSnapshot);
+        REQUIRE(lifecycle.DiscardStagedTopology(discarded).HasValue());
+        CHECK(destructions->load() == 1);
+        CHECK_FALSE(pinned.IsRevoked());
+        CHECK(lifecycle.Acquire(active.world).Value().Descriptor() == active);
+        RequireError(lifecycle.StageTopology(active, discarded.topology, TestSupport::MakeObservedNavigationBackend()),
+                     NavigationErrors::StaleSnapshot);
+
+        REQUIRE(lifecycle.StageTopology(active, replacement.topology, TestSupport::MakeObservedNavigationBackend()).HasValue());
+        RequireError(lifecycle.DiscardStagedTopology(discarded), NavigationErrors::StaleSnapshot);
+        REQUIRE(lifecycle.CommitAtSafePoint(active.scene, active.sceneGeneration).HasValue());
+        CHECK(pinned.Revocation() == NavigationWorldRevocation::TopologyReplaced);
+        CHECK(lifecycle.Acquire(active.world).Value().Descriptor() == replacement);
+        const auto future = NavigationGeneration::Create(replacement.topology.Value() + 1).Value();
+        RequireError(lifecycle.StageTopology(active, future, TestSupport::MakeObservedNavigationBackend()),
+                     NavigationErrors::StaleSnapshot);
+        CHECK_FALSE(lifecycle.HasStagedCandidate());
+    }
+
     TEST_CASE("Retirement saturation preserves the published navigation world", "[unit][navigation][headless][lifecycle]") {
         auto lifecycle = std::move(NavigationWorldLifecycle::Create(1)).Value();
         const auto destructions = std::make_shared<std::atomic<std::uint32_t>>(0);

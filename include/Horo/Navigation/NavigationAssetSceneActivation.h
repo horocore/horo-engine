@@ -4,6 +4,7 @@
  * @brief Host-composed atomic Scene navigation asset loading and query lifetime pins. */
 
 #include "Horo/Navigation/NavMeshAssetLoading.h"
+#include "Horo/Navigation/NavigationRuntimeTileRebuild.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -15,6 +16,13 @@ namespace Horo::Navigation {
         Assets::AssetId definition;
         std::uint64_t surfaceGeneration{};         /**< Exact live Scene surface incarnation, independent of bake revision. */
         const LoadedNavMeshPartition *partition{}; /**< Borrow expires when the injected factory returns. */
+    };
+
+    /** @brief One exact partition from a verified, possibly selectively loaded asset. */
+    struct NavigationStreamedSurface final {
+        const LoadedNavMeshAsset &asset;
+        std::size_t partitionIndex{};
+        std::uint64_t surfaceGeneration{};
     };
 
     /** @brief Unique native provider plus its host-qualified allocation reservation. */
@@ -42,8 +50,8 @@ namespace Horo::Navigation {
 
     /** @brief Separate immutable tile cache and per-world provider reservation accounting. */
     struct NavigationAssetWorldSnapshot final {
-        std::size_t liveWorlds{};            /**< Includes retired query-pinned and detached prepared worlds. */
-        std::size_t reservedProviderBytes{}; /**< Never refunded while the backend remains query-pinned. */
+        std::size_t liveWorlds{};            /**< Active, retired or detached provider slots, including admitted rebuild jobs. */
+        std::size_t reservedProviderBytes{}; /**< Provider, rebuild and portable storage charged through final release. */
         Assets::AssetPayloadCacheSnapshot immutableBytes;
     };
 
@@ -53,6 +61,17 @@ namespace Horo::Navigation {
         std::size_t maximumReservedProviderBytes{256U * 1024U * 1024U};
         NavMeshAssetLimits assets;
     };
+
+    /** @brief Exact host-selected local or packaged Scene scope and optional mandatory project policy. */
+    struct NavigationAssetSceneSelection final {
+        NavigationBakeScopeId scope;
+        std::optional<NavigationProjectProfile> requiredProfile; /**< Requires a real world and exact cooked project policy. */
+        bool streamCoverage{}; /**< Start with a verified catalog and grant coverage only through streamed cell commits. */
+        bool runtimeRebuild{}; /**< Explicitly retain a non-streamed closure for authorized runtime rebuilds. */
+    };
+
+    /** @brief Re-observes current owner-lane source and command authority before structural publication. */
+    using NavigationRuntimeRebuildAuthority = std::function<Result<NavigationRuntimeRebuildFence>()>;
 
     namespace Detail {
         struct NavigationAssetSceneState;
@@ -77,10 +96,12 @@ namespace Horo::Navigation {
          * @param factory Fully initialized provider constructor, without backend discovery.
          * @param limits Finite positive live-world/provider and asset bounds.
          * @param content Optional owned release expectations. Presence requires an exact entry for each Scene NavMesh asset;
-         * empty or missing entries never permit legacy fallback. The host obtains these from verified package evidence. */
+         * empty or missing entries never permit legacy fallback. The host obtains these from verified package evidence.
+         * @param selection Exact selected scope and project-policy requirement. Default retains definition-local compatibility. */
         NavigationAssetSceneActivationParticipant(Assets::AssetPayloadCache &cache, AssetCookTargetId target,
                                                   NavigationAssetBackendFactory factory, const NavigationAssetSceneLimits &limits = {},
-                                                  std::optional<std::vector<NavMeshAssetContentExpectation>> content = std::nullopt);
+                                                  std::optional<std::vector<NavMeshAssetContentExpectation>> content = std::nullopt,
+                                                  NavigationAssetSceneSelection selection = {});
         /** @brief Revoke active work without waiting; worker leases keep storage safe. */
         ~NavigationAssetSceneActivationParticipant() override;
         /** @copydoc Runtime::SceneActivationParticipant::Prepare */
@@ -89,6 +110,48 @@ namespace Horo::Navigation {
         /** @brief Acquire current generation through the existing runtime world lease.
          * @return Current provider pin or NoNavigationData. */
         [[nodiscard]] Result<NavigationWorldReadLease> Acquire() const;
+        /** @brief Pins the active lifecycle for structural registration on the same host owner thread.
+         * @return Exact published lifecycle or null. The Scene participant still owns replacement and shutdown. */
+        [[nodiscard]] std::shared_ptr<NavigationWorldLifecycle> ActiveWorld() const noexcept;
+        /** @brief Pins the active opt-in portable closure on the owner lane.
+         * @return Immutable tile pins with lifetime accounting, or an empty pointer when rebuild is unavailable.
+         */
+        [[nodiscard]] std::shared_ptr<const std::vector<std::shared_ptr<const NavigationCookedTile>>> ActiveRuntimeRebuildTiles()
+            const noexcept;
+        /** @brief Reserves one detached rebuild budget before submitting work on the opted-in Scene.
+         * @param expected Exact active predecessor and authorized source fence.
+         * @param maximumOwnedBytes Hard worker budget for scratch and detached output.
+         * @return Exclusive transferable reservation or a typed stale, unavailable or capacity failure.
+         */
+        [[nodiscard]] Result<NavigationRuntimeRebuildReservation> ReserveRuntimeRebuild(const NavigationRuntimeRebuildFence &expected,
+                                                                                        std::size_t maximumOwnedBytes);
+        /** @brief Adopts a detached rebuild as a staged Scene structural candidate.
+         * @param rebuild Consumed candidate from the active opted-in closure. Worker candidates require this Scene's reservation.
+         * @param observe Owned authority observation called during admission and immediately before publication.
+         * @param cancellation Optional cancellation observed at both boundaries.
+         * @return Candidate rolling back its stage on destruction, or a typed failure preserving the active world.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareRuntimeRebuildPublication(
+            NavigationRuntimeTileRebuildCandidate rebuild, NavigationRuntimeRebuildAuthority observe, CancellationToken cancellation = {});
+        /** @brief Builds and stages the complete desired resident set for the active world.
+         * @param expected Exact live predecessor before cell work started.
+         * @param next New unique topology generation.
+         * @param surfaces Verified authored asset selections, borrowed only during preparation.
+         * @return Success or a typed failure. The active world is preserved until its owner commits the candidate.
+         * @details The backend retains selected tile bytes and its reservation through worker retirement. An empty
+         * desired set publishes NoNavigationData under a new topology generation of the same world.
+         */
+        [[nodiscard]] Result<void> StageStreamedTopology(const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
+                                                         std::span<const NavigationStreamedSurface> surfaces);
+        /** @brief Prepares topology for publication through a Scene structural transaction.
+         * @param expected Exact active predecessor. @param next New unique topology generation.
+         * @param surfaces Borrowed verified desired resident set.
+         * @param change Typed cause reported to readers of the retiring topology.
+         * @return Owned structural candidate or original error. Its destruction discards any unpublished stage.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareStreamedPublication(
+            const NavigationWorldActivationDescriptor &expected, NavigationGeneration next,
+            std::span<const NavigationStreamedSurface> surfaces, NavigationTopologyChange change = NavigationTopologyChange::Replacement);
         /** @brief Read exact asset provenance for the current provider generation.
          * @return Owner-thread borrow valid until publication or shutdown; no inactive fallback is returned. */
         [[nodiscard]] std::span<const NavigationAssetProvenance> ActiveAssetProvenance() const noexcept;

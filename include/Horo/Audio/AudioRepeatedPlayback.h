@@ -55,6 +55,8 @@ namespace Horo::Audio {
         std::uint32_t rampFrames{64};
         std::uint64_t maximumVoiceStorageBytes{};
         std::uint64_t maximumCoefficientBytes{};
+        std::optional<AudioSceneContextHandle> hostContext{}; /**< Host-admitted process context, retained independently of source scenes.
+                                                              Required to opt into KeepAliveInHostContext; never discovered by Audio. */
     };
 
     /** @brief Caller-resolved resident clip; borrowed PCM is copied on admission, never retained. */
@@ -119,6 +121,10 @@ namespace Horo::Audio {
      * frames; queued targets must be nondecreasing per bucket. Stack evaluates both source-local ceilings
      * and the same scoped group evaluator. Physical stealing/virtualization, streaming, bus/spatial mixing
      * and host scene-admission validation remain outside this resident owner; unsupported requests fail.
+     * @details KeepAliveInHostContext requires an explicit config.hostContext already admitted by the host.
+     * Its voice and returned command scope belong to that context from admission, while the lane retains
+     * its producer scene identity. Retiring the source scene closes the lane but preserves admitted playback
+     * and scheduled starts. Retiring the host context cancels them. No live context transfer is performed.
      */
     class AudioRepeatedPlayback final {
     public:
@@ -145,7 +151,8 @@ namespace Horo::Audio {
          * @return Receipt or typed failure; errors leave random, bag and cooldown history unchanged.
          * Latest identical replay returns Replay with no commands even after the original target frame;
          * the control time must still match the current timeline. Older/conflicting sequences fail.
-         * Unsupported bus/spatial/scene-lifecycle/admission-action requests fail explicitly. */
+         * Unsupported bus/spatial/admission-action requests and host-lifetime requests without an admitted
+         * hostContext fail explicitly. */
         [[nodiscard]] Result<AudioRepeatedPlaybackReceipt> Submit(const AudioRepeatedPlaybackRequest &request,
                                                                   std::span<const AudioResolvedPlaybackClip> clips,
                                                                   AudioConcurrencyTime time);
@@ -173,7 +180,9 @@ namespace Horo::Audio {
         [[nodiscard]] Result<void> Release(AudioVoiceHandle voice);
         /** @brief Close one scene's lanes and cancel its voices at a detached unload barrier.
          * @param scene Exact retiring scene generation. @return Success or typed owner/identity error.
-         * Terminal snapshots remain queryable until Release; other contexts retain their history. */
+         * Terminal snapshots remain queryable until Release; other contexts retain their history.
+         * Source retirement closes its persistent lanes without cancelling their host-owned voices or pending starts;
+         * host-context retirement cancels those voices and permanently closes further persistent admission. */
         [[nodiscard]] Result<void> RetireScene(AudioSceneContextHandle scene);
         /** @brief Reset at a detached clock barrier, invalidating lanes and cancelling every retained voice.
          * @param epoch Strictly newer callback epoch. @param clockGeneration Nonzero current clock generation.

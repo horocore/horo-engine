@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "UiPaintProgramInternal.h"
 
 #include <algorithm>
@@ -11,6 +12,7 @@ namespace Horo::Render {
         struct ProgramGraphTarget final {
             const UiPaintFrameBuffers &buffers;
             FramebufferExtent extent;
+            UiPaintRootTarget target;
         };
 
         /** @brief Load-time graph assembly over one already owned resident slot; no source or native authority is duplicated. */
@@ -20,32 +22,126 @@ namespace Horo::Render {
                          std::span<const UiOpacityGroup> groups, ProgramGraphTarget target, std::shared_ptr<IResidentUiPaintKernel> primary,
                          std::shared_ptr<IResidentUiPaintKernel> offscreen)
                 : slot_(slot), external_(external), masks_(masks), groups_(groups), buffers_(target.buffers), extent_(target.extent),
-                  primary_(std::move(primary)), offscreen_(std::move(offscreen)) {}
+                  target_(target.target), primary_(std::move(primary)), offscreen_(std::move(offscreen)) {}
 
-            Result<void> Build() {
-                const auto passes = masks_.size() + groups_.size() + 1;
-                auto created = RenderGraphBuilder::Create(
-                    {static_cast<std::uint32_t>(passes), static_cast<std::uint32_t>(4 + external_.size() + slot_.surfaces.size()),
-                     RenderGraphLimits::HardMaxUsages, static_cast<std::uint32_t>(std::max<std::size_t>(1, passes - 1))});
+            Result<void> Build(const std::uint32_t slotIndex, const UiPaintSceneCanvasRecipe *scene) {
+                if (scene)
+                    queue_ = scene->graphicsQueue;
+                const auto paintPasses = masks_.size() + groups_.size() + 1;
+                const bool neutral = slot_.neutralSample.handle.IsValid();
+                const auto passes = paintPasses + static_cast<std::size_t>(neutral);
+                const auto limits = scene ? scene->limits
+                                          : RenderGraphLimits{passes, 4 + external_.size() + slot_.surfaces.size(),
+                                                              RenderGraphLimits::HardMaxUsages, std::max<std::size_t>(1, passes - 1)};
+                auto created = RenderGraphBuilder::Create(limits);
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
                 auto builder = std::move(created).Value();
                 if (const auto imported = Import(builder); imported.HasError())
                     return imported;
-                slot_.sampled.resize(passes);
+                if (target_ == UiPaintRootTarget::CanvasSurface) {
+                    if (const auto exported = builder.ExportResource(slot_.textures.back()); exported.HasError())
+                        return exported;
+                }
+                slot_.sampled.resize(paintPasses);
                 slot_.workloads.resize(passes);
                 RenderGraphPassRef previous;
-                for (std::size_t index = 0; index < passes; ++index) {
+                if (neutral) {
+                    const auto initialized = InitializeNeutralSample(builder);
+                    if (initialized.HasError())
+                        return Result<void>::Failure(initialized.ErrorValue());
+                    previous = initialized.Value();
+                }
+                for (std::size_t index = 0; index < paintPasses; ++index) {
                     if (const auto added = Pass(builder, index, previous); added.HasError())
                         return added;
                 }
+                const auto consumer = AddScene(builder, slotIndex, scene);
+                if (consumer.HasError())
+                    return Result<void>::Failure(consumer.ErrorValue());
+                return Compile(builder, consumer.Value());
+            }
+
+        private:
+            /** @brief Defines the slot's neutral texel in the existing graph before any native encoder samples it. */
+            Result<RenderGraphPassRef> InitializeNeutralSample(RenderGraphBuilder &builder) {
+                const auto imported = builder.ImportTexture(slot_.neutralSample.handle, RenderGraphResourceClass::Persistent);
+                if (imported.HasError())
+                    return Result<RenderGraphPassRef>::Failure(imported.ErrorValue());
+                neutralSample_ = imported.Value();
+                initial_.push_back({neutralSample_, {}, RenderGraphInitialContents::Discarded});
+                const auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+                if (pass.HasError())
+                    return pass;
+                if (const auto used =
+                        builder.AddUsage({pass.Value(), neutralSample_, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+                    used.HasError())
+                    return Result<RenderGraphPassRef>::Failure(used.ErrorValue());
+                slot_.workloads.front() = {pass.Value(), RenderGraphColorAttachment{neutralSample_, {.clearColor = {1, 1, 1, 1}}}};
+                return pass;
+            }
+
+            /** @brief Adds the scene's cold recipe after the same graph's resident canvas writer. */
+            Result<RenderGraphPassRef> AddScene(RenderGraphBuilder &builder, const std::uint32_t slotIndex,
+                                                const UiPaintSceneCanvasRecipe *scene) {
+                if (!scene)
+                    return Result<RenderGraphPassRef>::Success({});
+                std::vector<RenderGraphImportedState> sceneInitial;
+                auto consumer = scene->author(builder, {slotIndex, {slot_.surfaces.back().handle, extent_}, slot_.textures.back()},
+                                              sceneInitial, externalSlots_, optionalReads_);
+                if (consumer.HasValue())
+                    initial_.insert(initial_.end(), sceneInitial.begin(), sceneInitial.end());
+                return consumer;
+            }
+
+            /** @brief Protects the exact canvas writer and ensures its selected consuming pass actually declares sampling. */
+            bool ValidSceneRead(const RenderGraph &graph, const RenderGraphPassRef consumer) const noexcept {
+                if (consumer.owner != graph.Owner() || consumer == slot_.workloads.back().pass)
+                    return false;
+                const auto root = slot_.textures.back();
+                const bool sampled = std::ranges::any_of(graph.Usages(), [&](const auto &use) {
+                    return use.pass == consumer && use.resource == root && use.kind == RenderGraphUsageKind::Sampled &&
+                           use.access == RenderGraphAccess::Read;
+                });
+                return sampled && std::ranges::none_of(graph.Usages(), [&](const auto &use) {
+                    return use.resource == root && use.pass != slot_.workloads.back().pass && use.access != RenderGraphAccess::Read;
+                });
+            }
+
+            /** @brief Prepares immutable synchronization and reserves frame scratch without retaining any author callback. */
+            Result<void> Compile(RenderGraphBuilder &builder, const RenderGraphPassRef consumer) {
                 auto graph = builder.Finalize();
                 if (graph.HasError())
                     return Result<void>::Failure(graph.ErrorValue());
+                if (target_ == UiPaintRootTarget::SceneCanvas && !ValidSceneRead(graph.Value(), consumer))
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
                 auto schedule = CompileRenderGraph(graph.Value());
                 if (schedule.HasError())
                     return Result<void>::Failure(schedule.ErrorValue());
-                const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+                if (target_ == UiPaintRootTarget::SceneCanvas) {
+                    const auto ordered = schedule.Value().OrderedPasses();
+                    const auto paintCount = slot_.workloads.size();
+                    if (ordered.size() <= paintCount ||
+                        !std::ranges::equal(ordered.first(paintCount), slot_.workloads, std::ranges::equal_to{}, std::identity{},
+                                            &RenderGraphPassWorkload::pass))
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+                    const auto scenePasses = ordered.subspan(paintCount);
+                    if (std::ranges::find(scenePasses, consumer) == scenePasses.end())
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+                    slot_.sceneExecution.resize(ordered.size());
+                }
+                const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, queue_}};
+                slot_.inventory = {schedule.Value().OrderedPasses().size(), graph.Value().Resources().size(), 0};
+                if (!externalSlots_.empty()) {
+                    auto prepared =
+                        PreparedRenderGraphTemplate::Prepare(std::move(graph).Value(), externalSlots_, initial_, queues, 1, optionalReads_);
+                    if (prepared.HasError())
+                        return Result<void>::Failure(prepared.ErrorValue());
+                    slot_.sceneTemplate.emplace(std::move(prepared).Value());
+                    return Result<void>::Success();
+                }
+                if (!optionalReads_.empty())
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
                 auto synchronization = SynthesizeRenderGraphSynchronization(graph.Value(), schedule.Value(), queues, initial_);
                 if (synchronization.HasError())
                     return Result<void>::Failure(synchronization.ErrorValue());
@@ -56,7 +152,6 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
-        private:
             Result<void> Import(RenderGraphBuilder &builder) {
                 const std::array handles{buffers_.vertices, buffers_.indices, buffers_.parameters};
                 for (std::size_t index = 0; index < handles.size(); ++index) {
@@ -65,11 +160,8 @@ namespace Horo::Render {
                         return Result<void>::Failure(imported.ErrorValue());
                     bufferIds_[index] = imported.Value();
                     initial_.push_back({imported.Value(),
-                                        {RenderGraphSynchronizationAccess::Read,
-                                         RenderGraphSynchronizationOperation::GraphicsInputBuffer,
-                                         RenderGraphPipelineScope::Graphics,
-                                         RenderGraphTextureLayout::NotApplicable,
-                                         {1}}});
+                                        {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                                         RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue_}});
                 }
                 slot_.textures.reserve(external_.size() + slot_.surfaces.size());
                 for (const auto handle : external_)
@@ -95,11 +187,8 @@ namespace Horo::Render {
                     initial_.push_back({imported.Value(), {}, RenderGraphInitialContents::Discarded});
                 else
                     initial_.push_back({imported.Value(),
-                                        {RenderGraphSynchronizationAccess::Read,
-                                         RenderGraphSynchronizationOperation::Sampled,
-                                         RenderGraphPipelineScope::Graphics,
-                                         RenderGraphTextureLayout::ShaderReadOnly,
-                                         {1}}});
+                                        {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::Sampled,
+                                         RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::ShaderReadOnly, queue_}});
                 return Result<void>::Success();
             }
 
@@ -116,6 +205,8 @@ namespace Horo::Render {
                         if (groups_[index].parent == group)
                             samples.push_back(slot_.textures[external_.size() + masks_.size() + index]);
                 }
+                if (neutralSample_.IsValid())
+                    samples.push_back(neutralSample_);
             }
 
             Result<void> Pass(RenderGraphBuilder &builder, std::size_t index, RenderGraphPassRef &previous) {
@@ -129,24 +220,31 @@ namespace Horo::Render {
                         return ordered;
                 }
                 previous = pass;
-                const bool root = index == slot_.workloads.size() - 1;
+                auto paintWorkloads = slot_.PaintWorkloads();
+                const bool root = index == paintWorkloads.size() - 1;
                 const bool mask = index < masks_.size();
+                const bool primary = root && target_ == UiPaintRootTarget::PrimaryOutput;
                 const auto group = mask || root ? NoPaintRole : static_cast<std::uint32_t>(groups_.size() - 1 - (index - masks_.size()));
                 Samples(index, group);
-                const auto surface = mask ? index : masks_.size() + group;
-                RenderGraphUiPaint paint{.color = root ? RenderGraphResourceId{} : slot_.textures[external_.size() + surface],
+                RenderGraphResourceId color;
+                if (!primary) {
+                    const auto surface = root ? slot_.surfaces.size() - 1 : (mask ? index : masks_.size() + group);
+                    color = slot_.textures[external_.size() + surface];
+                }
+                RenderGraphUiPaint paint{.color = color,
                                          .stencil = mask ? RenderGraphResourceId{} : stencil_,
                                          .vertices = bufferIds_[0],
                                          .indices = bufferIds_[1],
                                          .parameters = bufferIds_[2],
                                          .sampledResources = slot_.sampled[index],
                                          .extent = extent_,
-                                         .kernel = root ? primary_ : offscreen_,
-                                         .clearColor = !root,
+                                         .kernel = primary ? primary_ : offscreen_,
+                                         .clearColor = !primary,
                                          .clearStencil = !mask,
-                                         .activity = UiPaintPassActivity::Hidden};
-                slot_.workloads[index] = {pass, std::move(paint)};
-                return Usages(builder, pass, std::get<RenderGraphUiPaint>(slot_.workloads[index].workload));
+                                         .activity = UiPaintPassActivity::Hidden,
+                                         .neutralSample = neutralSample_};
+                paintWorkloads[index] = {pass, std::move(paint)};
+                return Usages(builder, pass, std::get<RenderGraphUiPaint>(paintWorkloads[index].workload));
             }
 
             Result<void> Usages(RenderGraphBuilder &builder, RenderGraphPassRef pass, const RenderGraphUiPaint &paint) const {
@@ -176,20 +274,26 @@ namespace Horo::Render {
             std::span<const UiOpacityGroup> groups_;
             UiPaintFrameBuffers buffers_;
             FramebufferExtent extent_;
+            UiPaintRootTarget target_;
+            RenderQueueId queue_{1};
             std::shared_ptr<IResidentUiPaintKernel> primary_;
             std::shared_ptr<IResidentUiPaintKernel> offscreen_;
             std::array<RenderGraphResourceId, 3> bufferIds_;
             RenderGraphResourceId stencil_;
+            RenderGraphResourceId neutralSample_;
             std::vector<RenderGraphImportedState> initial_;
+            std::vector<RenderGraphExternalTextureSlot> externalSlots_;
+            std::vector<RenderGraphOptionalRead> optionalReads_;
         };
     }  // namespace
 
     /** @copydoc UiPaintProgram::Storage::CreateSlot */
     Result<void> UiPaintProgram::Storage::CreateSlot(RenderFrontend &renderer, std::uint32_t index, const UiPaintFrameBuffers &buffers,
-                                                     RenderTextureFormat stencilFormat) {
+                                                     RenderTextureFormat stencilFormat, const Detail::UiPaintSceneCanvasRecipe *scene) {
         auto &slot = native.slots[index];
         const FramebufferExtent extent{descriptor.projection.pixelExtent.width, descriptor.projection.pixelExtent.height};
-        slot.surfaces.resize(source.masks.size() + source.prototype.Groups().size());
+        const bool dedicated = target != Detail::UiPaintRootTarget::PrimaryOutput;
+        slot.surfaces.resize(source.masks.size() + source.prototype.Groups().size() + static_cast<std::size_t>(dedicated));
         for (auto &surface : slot.surfaces) {
             const auto created =
                 renderer.CreateOwnedUiPaintTexture(renderer.memoryConfig_.defaultResourceScope,
@@ -208,23 +312,35 @@ namespace Horo::Render {
         if (stencil.HasError())
             return Result<void>::Failure(stencil.ErrorValue());
         slot.stencil = stencil.Value();
-        if (const auto compiled = CompileSlot(index, buffers); compiled.HasError())
+        if (native.offscreen->RequiresGraphNeutralSample()) {
+            const auto neutral =
+                renderer.CreateOwnedUiPaintTexture(renderer.memoryConfig_.defaultResourceScope,
+                                                   {.extent = {1, 1},
+                                                    .format = RenderTextureFormat::Rgba8Unorm,
+                                                    .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment},
+                                                   {}, retirement);
+            if (neutral.HasError())
+                return Result<void>::Failure(neutral.ErrorValue());
+            slot.neutralSample = neutral.Value();
+        }
+        if (const auto compiled = CompileSlot(index, buffers, scene); compiled.HasError())
             return compiled;
         for (auto &frame : slot.frames) {
             frame.vertices.reserve(descriptor.capacity.vertices);
             frame.indices.reserve(descriptor.capacity.indices);
             frame.parameters.reserve(descriptor.capacity.parameters);
             frame.draws.reserve(descriptor.capacity.parameters);
-            frame.ranges.resize(slot.workloads.size());
+            frame.ranges.resize(slot.PaintWorkloads().size());
         }
         return Result<void>::Success();
     }
 
     /** @copydoc UiPaintProgram::Storage::CompileSlot */
-    Result<void> UiPaintProgram::Storage::CompileSlot(std::uint32_t index, const UiPaintFrameBuffers &buffers) {
+    Result<void> UiPaintProgram::Storage::CompileSlot(std::uint32_t index, const UiPaintFrameBuffers &buffers,
+                                                      const Detail::UiPaintSceneCanvasRecipe *scene) {
         const FramebufferExtent extent{descriptor.projection.pixelExtent.width, descriptor.projection.pixelExtent.height};
-        ProgramGraph graph{native.slots[index], source.external, source.masks,    source.prototype.Groups(),
-                           {buffers, extent},   native.primary,  native.offscreen};
-        return graph.Build();
+        ProgramGraph graph{native.slots[index],       source.external, source.masks,    source.prototype.Groups(),
+                           {buffers, extent, target}, native.primary,  native.offscreen};
+        return graph.Build(index, scene);
     }
 }  // namespace Horo::Render

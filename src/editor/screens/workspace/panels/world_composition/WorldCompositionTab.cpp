@@ -2,7 +2,7 @@
 
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
-#include "editor/screens/workspace/WorldLayerOutliner.h"
+#include "editor/screens/workspace/world/WorldLayerOutliner.h"
 
 #include <array>
 

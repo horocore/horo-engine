@@ -12,7 +12,9 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace Horo::Mcp {
     /** @brief Finite admission and retention budgets for one host-owned controller. */
@@ -22,6 +24,19 @@ namespace Horo::Mcp {
         std::size_t maximumRecent{128};
         std::size_t maximumPumpBatch{8};
         std::chrono::milliseconds shutdownDrainTimeout{5'000};
+    };
+
+    /** @brief Redacted owner-issued identity of a pending or executing request. */
+    struct McpActiveRequest {
+        std::uint64_t id{};
+        std::string tool;
+        bool running{};
+    };
+
+    /** @brief Bounded revision-scoped view of one authorized session's active requests. */
+    struct McpActiveRequestSnapshot {
+        std::uint64_t revision{};
+        std::vector<McpActiveRequest> requests;
     };
 
     /**
@@ -66,6 +81,14 @@ namespace Horo::Mcp {
         /** @brief Executes up to maximumPumpBatch queued calls on the bound owner thread.
          * @param owner Context to pump. @return Number executed or typed wrong-thread failure. */
         [[nodiscard]] Result<std::size_t> Pump(McpOwnerContext owner) const;
+
+        /** @brief Reads active requests without exposing arguments or results.
+         * @param context Exact authenticated owner context.
+         * @param knownRevision Last observed active request revision, or zero.
+         * @return Owned same-session snapshot, no change, or typed authority failure.
+         */
+        [[nodiscard]] Result<std::optional<McpActiveRequestSnapshot>> ReadActiveRequests(const McpRequestContext &context,
+                                                                                         std::uint64_t knownRevision) const;
 
         /** @brief Closes admission, finalizes queued work, cancels running work and drains bounded callbacks and owner pumps.
          * @return Success when callbacks and pumps drained, or typed timeout while callback state leases stay alive.

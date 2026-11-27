@@ -99,6 +99,7 @@ TEST_CASE("Canvas preview evaluates real Runtime UI layout and device profiles w
     REQUIRE(desktop.HasValue());
     REQUIRE(desktop.Value().boxes.size() == 2);
     CHECK(desktop.Value().boxes.back().bounds.extent.width == 100 * 64);
+    CHECK(desktop.Value().boxes.back().measurement.desired.width == 100 * 64);
     CHECK_FALSE(desktop.Value().profile.has_value());
     state.device = UiCanvasPreviewDevice::Phone;
     auto phone = BuildUiCanvasPreview(source, state, Instance());
@@ -107,6 +108,7 @@ TEST_CASE("Canvas preview evaluates real Runtime UI layout and device profiles w
     CHECK(phone.Value().canvas.safeAreaInsets.top == 141);
     CHECK(phone.Value().profile == Id<UiPresentationProfileId>(5));
     CHECK(phone.Value().boxes.back().bounds.extent.width == 40 * 64);
+    CHECK(phone.Value().boxes.back().measurement.desired.width == 40 * 64);
     state.rotated = true;
     auto rotated = BuildUiCanvasPreview(source, state, Instance());
     REQUIRE(rotated.HasValue());
@@ -338,21 +340,66 @@ TEST_CASE("Preview admits the legacy implicit root and rejects world projection 
     }
 }
 
+TEST_CASE("Canvas preview retains the exact failing authored override from an active registry", "[ui_canvas][preview][styles]") {
+    const UiStyleAssetDocument style{UiStyleContentRevision::Create(1).Value(), {.id = Id<RuntimeStyleAssetId>(8)}, {}, {}};
+    const auto resources = Resources(style);
+    auto property = Id<UiStylePropertyId>(99);
+    const auto *expected = &UiErrors::StyleReferenceInvalid;
+    SECTION("unregistered property") {}
+    SECTION("registered property with incompatible value") {
+        property = CoreUiStylePropertyId(UiCoreStyleProperty::Width);
+        expected = &UiErrors::StyleTypeMismatch;
+    }
+    auto presentation = *Document().Elements().back().presentation;
+    presentation.inlineStyle = {{property, UiStyleValueSource::Literal(UiStyleScalar{1}), false}};
+    const auto document = Document(false, &presentation);
+    const auto original = SerializeUiDocument(document).Value();
+    std::optional<UiDiagnosticRecord> problem;
+    UiStylePropertyId rejected;
+    REQUIRE(BuildUiCanvasPreview(document, {}, Instance(), &resources, &problem, &rejected).HasError());
+    REQUIRE(problem);
+    REQUIRE(problem->correlationCount == 3);
+    CHECK(problem->code.Value() == expected->code.Value());
+    CHECK(std::get<UiElementId>(problem->correlation[1].value) == document.Elements().back().id);
+    CHECK(rejected == property);
+    CHECK(SerializeUiDocument(document).Value() == original);
+    REQUIRE(BuildUiCanvasPreview(Document(), {}, Instance(), &resources, &problem, &rejected).HasValue());
+    CHECK_FALSE(problem);
+    CHECK_FALSE(rejected.IsValid());
+}
+
 TEST_CASE("Preview preserves typed missing style and intrinsic capability failures", "[ui_canvas][preview][capabilities]") {
     auto presentation = *Document().Elements().back().presentation;
     presentation.styleAsset = Id<RuntimeStyleAssetId>(8);
     const auto styled = Document(false, &presentation);
-    const auto missingStyle = BuildUiCanvasPreview(styled, {}, Instance());
+    std::optional<UiDiagnosticRecord> problem;
+    const auto missingStyle = BuildUiCanvasPreview(styled, {}, Instance(), nullptr, &problem);
     REQUIRE(missingStyle.HasError());
+    REQUIRE(problem);
+    CHECK(problem->category == UiDiagnosticCategory::Render);
+    REQUIRE(problem->correlationCount == 3);
+    CHECK(problem->correlation[0].key == UiDiagnosticCorrelationKey::Document);
+    CHECK(std::get<UiDocumentId>(problem->correlation[0].value) == styled.Id());
+    CHECK(problem->correlation[1].key == UiDiagnosticCorrelationKey::Element);
+    CHECK(std::get<UiElementId>(problem->correlation[1].value) == styled.Elements().back().id);
+    CHECK(problem->correlation[2].key == UiDiagnosticCorrelationKey::Canvas);
+    CHECK(std::get<UiCanvasId>(problem->correlation[2].value) == styled.Canvases().front().id);
     CHECK(missingStyle.ErrorValue().domain.Value() == UiErrors::StyleReferenceInvalid.domain.Value());
     CHECK(missingStyle.ErrorValue().code.Value() == UiErrors::StyleReferenceInvalid.code.Value());
     presentation.styleAsset = {};
     presentation.intrinsic = {.kind = UiLayoutIntrinsicKind::Text, .required = true};
     const auto source = Document(false, &presentation);
     const auto before = SerializeUiDocument(source).Value();
-    const auto missingIntrinsic = BuildUiCanvasPreview(source, {}, Instance());
+    const auto missingIntrinsic = BuildUiCanvasPreview(source, {}, Instance(), nullptr, &problem);
     REQUIRE(missingIntrinsic.HasError());
+    REQUIRE(problem);
+    CHECK(problem->category == UiDiagnosticCategory::Layout);
+    REQUIRE(problem->correlationCount == 3);
+    CHECK(problem->correlation[1].key == UiDiagnosticCorrelationKey::Element);
+    CHECK(std::get<UiElementId>(problem->correlation[1].value) == source.Elements().back().id);
     CHECK(missingIntrinsic.ErrorValue().domain.Value() == UiErrors::LayoutIntrinsicUnavailable.domain.Value());
     CHECK(missingIntrinsic.ErrorValue().code.Value() == UiErrors::LayoutIntrinsicUnavailable.code.Value());
     CHECK(SerializeUiDocument(source).Value() == before);
+    REQUIRE(BuildUiCanvasPreview(Document(), {}, Instance(), nullptr, &problem).HasValue());
+    CHECK_FALSE(problem);
 }

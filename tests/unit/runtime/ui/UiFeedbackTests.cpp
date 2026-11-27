@@ -240,6 +240,19 @@ namespace Horo::Runtime::Ui {
                                           std::nullopt};
             CHECK_FALSE(queue.ObserveFocus(focusOwner, recovered).Value());
             CHECK(queue.QueuedCount() == 0);
+
+            const auto originalRequest = NavigationRequest();
+            const auto originalResult = UiActionResult::Rejected(originalRequest.id, UiActionRejectionReason::Busy);
+            REQUIRE(originalResult.HasValue());
+            REQUIRE(queue.ObserveAction(originalRequest, originalResult.Value()).Value());
+            REQUIRE(queue.AdvancePresentation(owner.interaction).HasValue());
+            CHECK(queue.QueuedCount() == 1);
+            REQUIRE(queue.AdvancePresentation(revisedRequest.source.owner.interaction).HasValue());
+            CHECK(queue.QueuedCount() == 0);
+            ExpectError(queue.AdvancePresentation(owner.interaction), UiErrors::FeedbackSourceStale);
+            REQUIRE(queue.ObserveAction(revisedRequest, revisedResult.Value()).Value());
+            queue.DiscardPending();
+            CHECK_FALSE(queue.TryDequeue().Value());
         }
 
         TEST_CASE("Runtime UI feedback is allocation-free after creation and closes on reload or shutdown", "[runtime_ui][feedback]") {

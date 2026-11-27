@@ -1,0 +1,217 @@
+"""Validate bounded Android cold-discovery receipts referenced by an XR release row."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+import stat
+from typing import BinaryIO
+import zipfile
+import zlib
+
+from project import OPENXR_DEVELOPMENT_PROFILES, OPENXR_LOADER_NAME, PROVENANCE_ASSET, android_profile, archive_limits
+from qualify_xr_device import (
+    ANDROID_RECEIPT_FIELDS, MAX_ARTIFACT_BYTES, decode_record, fields, in_set, is_digest, is_standalone_android, require,
+)
+
+
+MAX_ANDROID_RECEIPT_BYTES = 16 * 1024
+DEPLOY_HOSTS = {"linux-x64", "macos-arm64", "macos-x64", "windows-x64"}
+ANDROID_PREFLIGHT_FIELDS = {"receiptSha256", "apkSha256", "deviceBuildSha256", "profile", "adbConnection"}
+
+
+def receipt_fields(value: object, required: set[str], optional: set[str], name: str) -> dict:
+    """Allow only fields from the redacted deployment schema, including declared optional evidence."""
+    require(isinstance(value, dict) and required <= value.keys() <= required | optional, f"Unexpected fields in {name}")
+    return value
+
+
+def is_json_integer(value: object) -> bool:
+    """Exclude JSON booleans from integer fields."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def android_runtime_version(value: object) -> str:
+    """Normalize the deployer's exact OpenXR version fields for comparison with a release tuple."""
+    version = fields(value, {"major", "minor", "patch"}, "Android OpenXR runtime version")
+    parts = (version["major"], version["minor"], version["patch"])
+    require(all(is_json_integer(part) and low <= part < high for part, low, high in
+                zip(parts, (1, 0, 0), (2**16, 2**16, 2**32))), "Invalid Android OpenXR runtime version")
+    return ".".join(map(str, parts))
+
+
+def validate_android_preflight(value: object) -> dict:
+    """Read an independently selected diagnostic package and Android target."""
+    expected = fields(value, ANDROID_PREFLIGHT_FIELDS, "Android preflight declaration")
+    for name in ("receiptSha256", "apkSha256", "deviceBuildSha256"):
+        require(is_digest(expected[name]), f"Invalid Android preflight {name}")
+    name = expected["profile"]
+    require(isinstance(name, str) and name in OPENXR_DEVELOPMENT_PROFILES, "Unsupported Android preflight profile")
+    require(in_set(expected["adbConnection"], {"usb", "tcpip"}), "Android preflight requires a physical ADB connection")
+    return expected
+
+
+def check_android_artifact(artifact: object, expected: dict, profile: dict, revision: str, abi: str) -> None:
+    artifact = receipt_fields(artifact, {"apkSha256", "sourceRevision", "profile", "provenanceSha256", "openxr", "openxrImages",
+                                         "applicationId", "declaredRenderer", "abis"},
+                              {"expectedApkSha256"}, "Android preflight artifact")
+    require(artifact.get("apkSha256") == expected["apkSha256"], "Android preflight uses a different diagnostic APK")
+    require(artifact.get("sourceRevision") == revision, "Android preflight is from another source revision")
+    require(artifact.get("profile") == expected["profile"], "Android preflight uses a different diagnostic profile")
+    route = artifact.get("openxr")
+    require(route == profile["openxrProfile"] and is_json_integer(route["schema"]) and is_digest(artifact.get("provenanceSha256")),
+            "Invalid Android preflight artifact provenance")
+    images = fields(artifact.get("openxrImages"), {"abi", "diagnosticHostSha256", "loaderSha256"}, "Android preflight images")
+    require(images["abi"] == abi, "Android preflight uses a different packaged ABI")
+    require(is_digest(images["diagnosticHostSha256"]) and is_digest(images["loaderSha256"]),
+            "Invalid Android preflight image digests")
+    require(artifact.get("expectedApkSha256", expected["apkSha256"]) == expected["apkSha256"],
+            "Android preflight expected a different diagnostic APK")
+    require(artifact["applicationId"] == profile["applicationId"], "Invalid Android preflight application")
+    require(artifact["declaredRenderer"] == profile["renderer"], "Invalid Android cold discovery renderer")
+    abis = artifact["abis"]
+    supported_abis = profile["abis"]
+    require(isinstance(abis, list) and 1 <= len(abis) <= len(supported_abis)
+            and all(candidate in supported_abis for candidate in abis) and abi in abis and abis == sorted(set(abis)),
+            "Invalid Android preflight packaged ABI list")
+
+
+def check_android_target(receipt: dict, expected: dict, profile: dict, runtime_version: str) -> str:
+    target = fields(receipt.get("qualification"), {"host", "connection", "runtime", "physicalXrQualification", "profile"},
+                    "Android preflight target")
+    connection = expected["adbConnection"]
+    require(target["connection"] == {"requested": connection, "observed": connection},
+            "Android preflight uses a different ADB connection")
+    require(target["profile"] == expected["profile"], "Android preflight uses a different target profile")
+    require(target["physicalXrQualification"] == "not_run", "Expected cold discovery evidence")
+    host = fields(target["host"], {"requested", "observed"}, "Android preflight host")
+    require(in_set(host["requested"], DEPLOY_HOSTS) and host["requested"] == host["observed"],
+            "Android preflight did not confirm its selected host")
+    runtime = receipt_fields(target["runtime"], {"requested", "selection", "status"}, {"expectedVersion"}, "Android preflight runtime")
+    require((runtime.get("requested"), runtime.get("selection"), runtime.get("status")) ==
+            ("openxr", "system-default", "cold_system_discovered"), "Expected completed Android OpenXR discovery")
+    if "expectedVersion" in runtime:
+        require(android_runtime_version(runtime["expectedVersion"]) == runtime_version,
+                "Android preflight expected a different runtime version")
+    device = receipt_fields(receipt.get("device"), {"buildSha256", "abi", "androidApi"}, {"expectedBuildSha256"},
+                            "Android preflight device")
+    require(device["buildSha256"] == expected["deviceBuildSha256"],
+            "Android preflight uses a different system build")
+    require(device.get("expectedBuildSha256", expected["deviceBuildSha256"]) == expected["deviceBuildSha256"],
+            "Android preflight expected a different system build")
+    minimum_api = profile["minimumApi"]
+    api = device["androidApi"]
+    require(is_json_integer(api) and 0 < api <= 65535, "Invalid Android preflight API level")
+    require(api >= minimum_api, "Android preflight API level is below the diagnostic profile minimum")
+    require(device["abi"] in profile["abis"], "Android preflight ABI is not supported by the diagnostic profile")
+    return device["abi"]
+
+
+def check_android_discovery(value: object, expected_version: str, abi: str) -> None:
+    observed = fields(value, {"crashObserved", "openxr"}, "Android preflight observations")
+    require(observed["crashObserved"] is False, "Android preflight recorded a crash")
+    openxr = receipt_fields(observed["openxr"], {"abi", "stage", "result", "runtimeVersion"},
+                            {"primaryStereoRecommendedViewExtents"}, "Android OpenXR discovery")
+    require(openxr["stage"] == "discovered" and is_json_integer(openxr["result"]) and openxr["result"] == 0,
+            "Expected successful Android OpenXR discovery")
+    require(openxr["abi"] == abi, "Android preflight uses a different runtime ABI")
+    require(android_runtime_version(openxr["runtimeVersion"]) == expected_version,
+            "Android preflight uses a different runtime version")
+    if "primaryStereoRecommendedViewExtents" in openxr:
+        check_recommended_stereo_extents(openxr["primaryStereoRecommendedViewExtents"])
+
+
+def check_recommended_stereo_extents(value: object) -> None:
+    """Check cold view recommendations without using them as physical display evidence."""
+    require(isinstance(value, list) and len(value) == 2, "Invalid Android stereo view count")
+    for entry in value:
+        extent = fields(entry, {"width", "height"}, "Android stereo view extent")
+        require(all(is_json_integer(dimension) and 0 < dimension < 2**32 for dimension in extent.values()),
+                "Invalid Android stereo view extent")
+
+
+def check_android_apk_members(apk: BinaryIO, profile: dict, artifact: dict, abi: str) -> None:
+    """Match receipt digests to the named members of the already opened APK."""
+    images = artifact["openxrImages"]
+    members = (
+        ("provenance", PROVENANCE_ASSET, artifact["provenanceSha256"]),
+        ("diagnostic host", f"lib/{abi}/lib{profile['nativeLibrary']}.so", images["diagnosticHostSha256"]),
+        ("loader", f"lib/{abi}/{OPENXR_LOADER_NAME}", images["loaderSha256"]),
+    )
+    try:
+        with zipfile.ZipFile(apk) as archive:
+            archive_limits(archive)
+            for label, name, digest in members:
+                with archive.open(name) as member:
+                    actual = hashlib.file_digest(member, "sha256").hexdigest()
+                require(actual == digest, f"Android preflight {label} digest does not match the APK")
+    except (EOFError, KeyError, RuntimeError, zipfile.BadZipFile, zlib.error):
+        raise ValueError("Android diagnostic APK members could not be read") from None
+
+
+def apk_stamp(info: os.stat_result) -> tuple[int, int, int, int]:
+    require(stat.S_ISREG(info.st_mode) and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            "Android diagnostic APK is not a regular file")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+
+
+def check_android_apk(path: Path, profile: dict, artifact: dict, abi: str) -> None:
+    """Verify the whole APK and its selected images through the same opened file."""
+    stamp = apk_stamp(path.lstat())
+    require(0 < stamp[2] <= MAX_ARTIFACT_BYTES, "Android diagnostic APK exceeds the size limit or is empty")
+    with path.open("rb") as source:
+        require(apk_stamp(os.fstat(source.fileno())) == stamp, "Android diagnostic APK changed before verification")
+        digest = hashlib.sha256()
+        remaining = stamp[2]
+        while remaining and (chunk := source.read(min(remaining, 1024 * 1024))):
+            digest.update(chunk)
+            remaining -= len(chunk)
+        require(not remaining and not source.read(1), "Android diagnostic APK changed during verification")
+        require(digest.hexdigest() == artifact["apkSha256"], "Android diagnostic APK does not match the approved digest")
+        source.seek(0)
+        check_android_apk_members(source, profile, artifact, abi)
+        require(apk_stamp(os.fstat(source.fileno())) == stamp and apk_stamp(path.lstat()) == stamp,
+                "Android diagnostic APK changed during verification")
+
+
+def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_version: str,
+                            *, apk: Path | None = None) -> None:
+    """Bind a retired Android probe to the independently declared package, device build and runtime."""
+    require(0 < len(data) <= MAX_ANDROID_RECEIPT_BYTES, "Android preflight exceeds the size limit")
+    require(hashlib.sha256(data).hexdigest() == expected["receiptSha256"], "Android preflight receipt digest does not match")
+    receipt = decode_record(data)
+    require(isinstance(receipt, dict) and is_json_integer(receipt.get("schema")) and receipt["schema"] == 1,
+            "Unsupported Android preflight receipt schema")
+    require(receipt.get("status") == "diagnostic_complete" and receipt.get("stage") == "diagnostics",
+            "Expected a completed Android preflight")
+    require("error" not in receipt and "bundleError" not in receipt, "Android preflight reported a failure")
+    fields(receipt, ANDROID_RECEIPT_FIELDS, "Android preflight receipt")
+    cleanup = fields(receipt.get("cleanup"), {"status"}, "Android preflight cleanup")
+    require(in_set(cleanup["status"], {"stopped", "already_exited"}), "Android preflight process retirement is unconfirmed")
+    _, profile = android_profile(expected["profile"])
+    abi = check_android_target(receipt, expected, profile, runtime_version)
+    artifact = receipt["artifact"]
+    check_android_artifact(artifact, expected, profile, revision, abi)
+    check_android_discovery(receipt.get("observed"), runtime_version, abi)
+    if apk is not None:
+        check_android_apk(apk, profile, artifact, abi)
+
+
+def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: dict) -> frozenset[str]:
+    """Match a deployment receipt to the smoke run and return its setup-only artifact digests."""
+    identity = record["tuple"]
+    require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
+    product_artifacts = {identity["buildSha256"], identity["packageReceiptSha256"]}
+    require(product_artifacts.isdisjoint({expected["apkSha256"], expected["receiptSha256"]}),
+            "Android preflight artifacts cannot identify the qualified product")
+    provenance = record["provenance"]
+    observed_build = provenance.get("androidDeviceBuildSha256")
+    require(observed_build is not None, "Physical smoke record does not identify its Android system build")
+    require(observed_build == expected["deviceBuildSha256"],
+            "Android preflight and physical smoke use different system builds")
+    revision = provenance.get("sourceRevision")
+    require(revision is not None, "Device evidence does not record a source revision")
+    with path.open("rb") as source:
+        check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, identity["runtimeVersion"], apk=apk)
+    return frozenset({expected["apkSha256"], expected["receiptSha256"]})

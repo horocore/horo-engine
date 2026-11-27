@@ -123,3 +123,51 @@ filesystem error is checked before another probe can clear it. The source closur
 still uses the exact schema-v1 raw lowercase hex digest recipe; byte-oriented
 formatting does not add a digest prefix or invalidate compatible cache identities.
 A fixed-fixture golden digest regression protects this compatibility.
+
+## Headless terminal cook
+
+Use an explicit authorized project directory and cook target. Each
+`--runtime-prefab` selects one spawnable template by canonical asset ID.
+Omitting it cooks the project's static scenes without publishing templates.
+
+```sh
+horo-engine prefab cook --project /absolute/project --target headless-null --non-interactive --output json
+```
+
+The command scans current asset sidecars through the canonical registry,
+then uses the same prefab preparation, mutation exclusion, dependency keys,
+cache and publication as the application host. The active selector lives in
+`.horo/cooked/prefab/<target>`. Its JSON result includes the exact manifest
+digest and reports whether publication durability was confirmed. Progress
+and terminal output carry the cook operation identity once admission succeeds.
+A rejected source may include its canonical asset ID and project-relative path
+in terminal metadata. Native paths and untrusted error text remain redacted.
+
+The host resolves built-in headless contributions without package activation.
+Projects requiring additional cooker providers or package restore evidence
+need a host that explicitly supplies those capabilities. Complete required
+project migrations before running the command.
+
+## Headless migration planning
+
+```sh
+horo-engine prefab migration-plan --project /absolute/project --non-interactive --output json
+```
+
+The command reports the source and target contract baselines, whether the
+selected chain contains prefab source adoption, and its ordered definition
+IDs as a newline-delimited string. It uses the same compatibility, recovery
+inspection and migration registry as editor project-open. A compatible project
+returns an empty chain. Pending recovery or an unavailable chain returns a typed
+failure. Planning reads project metadata and recovery evidence without running
+transforms or modifying project files.
+
+Add `--verify` to run the complete selected chain when it includes prefab source
+adoption. The verified dry run builds a disposable candidate, stages the same
+root version and migration history as the publishing transaction, and runs the
+final target-contract validator. The project directory must allow creation of
+temporary staging. Canonical files and recovery journals remain untouched.
+Successful verification reports `verified: true`, a full changed-file count,
+and a bounded newline-delimited list of portable project-relative paths.
+`changedPathsOmitted` marks paths excluded by the output size or portability
+checks. A plan without prefab source adoption returns `verified: false`.

@@ -117,6 +117,10 @@ namespace Horo::Application::NavigationBakeDetail {
         [[nodiscard]] Result<void> Gather(const ServiceState &state, Attempt &attempt, const CancellationToken &cancel) {
             if (auto current = ValidateSourceCapture(attempt, cancel); current.HasError())
                 return current;
+            if (!attempt.request.authoredLinks.empty())
+                return Result<void>::Failure(
+                    MakeError(NavigationErrors::OperationUnsupported,
+                              "Captured authored navigation links require candidate topology projection and Physics clearance."));
             attempt.candidate = std::make_shared<NavigationBakePublication>();
             attempt.candidate->tiles.inputFingerprint = attempt.request.input->Fingerprint();
             attempt.candidate->tiles.provenance =

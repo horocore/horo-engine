@@ -32,6 +32,8 @@ namespace Horo::Diagnostics {
         std::uintmax_t maxInputBytes{64U * 1024U * 1024U};         /**< Aggregate uncompressed input bound. */
         std::size_t maxEntries{256};                               /**< Maximum allowlisted source records. */
         std::size_t maxMetadataEntries{64};                        /**< Maximum caller-vetted metadata records. */
+        std::vector<std::string>
+            summaryOnlyNamespaces; /**< At most eight category, subsystem, error-domain or code roots withheld from redacted entries. */
     };
 
     /** @brief Summary of a successfully committed diagnostic ZIP bundle. */
@@ -41,6 +43,15 @@ namespace Horo::Diagnostics {
         std::uintmax_t inputBytes{};        /**< Aggregate uncompressed allowlisted bytes. */
         std::size_t missingOptionalCount{}; /**< Optional inputs absent at generation time. */
     };
+
+    /**
+     * @brief Checks a new absolute bundle destination without collecting inputs or creating files.
+     * @param outputPath Destination whose existing ancestors must resolve to directories.
+     * @return Success or a stable invalid-request error for an occupied, linked, or uninspectable destination.
+     * @throws std::bad_alloc If path or error storage allocation fails.
+     * @note Generation repeats this check. This preflight does not reserve the destination against concurrent changes.
+     */
+    [[nodiscard]] Result<void> ValidateDiagnosticBundleDestination(const std::filesystem::path &outputPath);
 
     /**
      * @brief Creates an atomic portable ZIP containing only explicitly allowlisted files and metadata.

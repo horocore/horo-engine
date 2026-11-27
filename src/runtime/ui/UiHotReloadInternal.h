@@ -3,6 +3,8 @@
 #include "Horo/Runtime/Ui/UiHotReload.h"
 
 namespace Horo::Runtime::Ui::UiReloadDetail {
+    /** @brief Compares an action or control owner with the exact canvas and authored tree lineage. */
+    [[nodiscard]] bool MatchesActionOwner(const UiActionOwnerContext &owner, const UiElementTree &tree) noexcept;
     /** @brief Validates actual cooked provenance, owner evidence and complete canvas topology. */
     [[nodiscard]] Result<void> Validate(const UiRuntimeInstance &instance, std::span<const UiReloadCanvas> canvases);
     /** @brief Returns the complete tree namespace envelope, rejecting overlapping reserved ranges. */

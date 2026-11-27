@@ -2,7 +2,7 @@
 #include "Horo/Cinematic/SequencePlaybackRuntimeErrors.h"
 #include "Horo/Runtime/Camera/CameraErrors.h"
 #include "support/AllocationProbe.h"
-#include "support/CameraCutTestSupport.h"
+#include "support/CameraCutRuntimeTestFixture.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -13,41 +13,7 @@ namespace Horo::Cinematic {
 
         using namespace Tests::CameraCuts;
 
-        struct Fixture final {
-            std::unique_ptr<RuntimeScene> scene{Take(RuntimeScene::Create(SceneDefinition(), SceneRuntimeId{1}))};
-            CinematicRuntimeService runtime{Take(CinematicRuntimeService::Create({{1, 1}}))};
-            CameraService camera{Take(CameraService::Create({{1, 1}, scene->View().RuntimeId(), CameraViewDomain::Runtime}))};
-            std::array<CameraCutBinding, 2> bindings{CameraCutBinding{{1, 1}, {1}}, CameraCutBinding{{2, 1}, {2}}};
-            std::array<SequenceFrameCameraCutRequest, 64> crossings{};
-            std::optional<CinematicCameraPlayback> playback;
-            std::uint64_t frame{};
-
-            CameraCutActivation Settings(const CameraCutEndPolicy policy = CameraCutEndPolicy::HoldLastUntilPlayerEnd) const {
-                return {bindings, 8, policy, 1, {1, 1}};
-            }
-
-            void Start(const SequenceLoopMode loop = SequenceLoopMode::Once,
-                       const CameraCutEndPolicy policy = CameraCutEndPolicy::HoldLastUntilPlayerEnd) {
-                playback.emplace(
-                    Take(CinematicCameraPlayback::Activate(runtime, camera, Activation(loop), Settings(policy), scene->View())));
-                REQUIRE(runtime.Play(playback->Player()).HasValue());
-                REQUIRE(playback->Publish(scene->View()).HasValue());
-            }
-
-            void Advance(const SequenceTime delta) {
-                REQUIRE(playback->Evaluate(delta, scene->View(), {{}, {}, crossings}, {}).HasValue());
-            }
-
-            void Seek(const SequenceTime position) {
-                REQUIRE(runtime.Seek(playback->Player(), position).HasValue());
-                REQUIRE(playback->Publish(scene->View()).HasValue());
-            }
-
-            CameraSelectionSnapshot Commit() {
-                const auto base = Take(ResolveSceneCamera(scene->View(), *scene->View().Find({3})));
-                return Take(camera.Commit(++frame, base));
-            }
-        };
+        using Fixture = Tests::CameraCuts::RuntimeCameraFixture;
     }  // namespace
 
     TEST_CASE("Camera-only admission ignores blend windows while mixed scalar plans preserve restore validation",
@@ -140,7 +106,7 @@ namespace Horo::Cinematic {
         base.values.position.x = 100.0F;
         base.values.target.x = 100.0F;
         REQUIRE(fixture.playback->Cancel().HasValue());
-        CHECK(Take(fixture.camera.Commit(++fixture.frame, base)).selected.values.position.x == 100.0F);
+        CHECK(Take(fixture.camera.Commit(++fixture.frame, fixture.scene->View(), base)).selected.values.position.x == 100.0F);
     }
 
     TEST_CASE("Missing camera admission and target replacement never leave partial authority", "[unit][cinematic][camera]") {
@@ -170,23 +136,24 @@ namespace Horo::Cinematic {
         const auto right = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({2})));
         REQUIRE(fixture.camera.Submit(first, left).HasValue());
         REQUIRE(fixture.camera.Submit(second, right).HasValue());
-        const auto committed = Take(fixture.camera.Commit(1, std::nullopt));
+        const auto committed = Take(fixture.camera.Commit(1, fixture.scene->View(), std::nullopt));
         CHECK(committed.selected.camera == right.camera);
         REQUIRE(fixture.camera.Release(second).HasValue());
-        CHECK(Take(fixture.camera.Commit(1, std::nullopt)).selected.camera == right.camera);
-        CHECK(Take(fixture.camera.Commit(2, std::nullopt)).selected.camera == left.camera);
+        CHECK(Take(fixture.camera.Commit(1, fixture.scene->View(), std::nullopt)).selected.camera == right.camera);
+        CHECK(Take(fixture.camera.Commit(2, fixture.scene->View(), std::nullopt)).selected.camera == left.camera);
         CHECK(fixture.camera.Submit(second, right).HasError());
         fixture.camera.Shutdown();
-        CHECK(fixture.camera.Commit(3, right).HasError());
+        CHECK(fixture.camera.Commit(3, fixture.scene->View(), right).HasError());
         CHECK(committed.selected.camera == right.camera);
     }
 
     TEST_CASE("Camera contexts reject foreign scene ownership and suspend instead of inventing a camera", "[unit][cinematic][camera]") {
         Fixture fixture;
-        CHECK(fixture.camera.Commit(1, std::nullopt).ErrorValue().code.Value() == CameraErrors::CameraUnavailable.code.Value());
+        CHECK(fixture.camera.Commit(1, fixture.scene->View(), std::nullopt).ErrorValue().code.Value() ==
+              CameraErrors::CameraUnavailable.code.Value());
         auto invalid = Take(ResolveSceneCamera(fixture.scene->View(), *fixture.scene->View().Find({1})));
         invalid.camera.runtime = {99};
-        CHECK(fixture.camera.Commit(1, invalid).HasError());
+        CHECK(fixture.camera.Commit(1, fixture.scene->View(), invalid).HasError());
         auto context = fixture.camera.Context();
         context.view.generation++;
         CHECK(fixture.camera.Acquire({context, {1, 1}, 0}).HasError());

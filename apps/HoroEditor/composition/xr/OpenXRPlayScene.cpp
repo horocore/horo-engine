@@ -1,11 +1,68 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "EditorXrTrackingRoot.h"
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/Runtime/Render/RenderOriginScene.h"
+#include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRPlayFrameState.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace Horo::Application::Internal {
     using namespace XR;
     using namespace XR::OpenXRInternal;
+
+    /** @copydoc OpenXRPlayHost::QueryPlayPointing */
+    Result<OpenXRPlayPointingResult> OpenXRPlayHost::QueryPlayPointing(const OpenXRWorldUiPointerFrame &frame,
+                                                                       const std::span<Editor::EditorXrGeometryHit> hits) const {
+        using Hits = Result<OpenXRPlayPointingResult>;
+        const auto active = ReadPressedPointer(frame);
+        if (!active)
+            return Hits::Failure(MakeError(XRErrors::IdentityStale));
+        if (!scene_ || !scene_->geometry)
+            return Hits::Failure(MakeError(XRErrors::OperationUnavailable));
+        return scene_->geometry->QueryPointing(active->sample.ray, hits);
+    }
+
+    namespace {
+        /** @brief Checks that each mounted draw has an exact live entity and an authored object identity. */
+        bool ResolveMountedDrawOwners(const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::EntityRef> owners,
+                                      const std::span<Render::RenderMotionObjectId> objects) {
+            if (owners.size() != objects.size())
+                return false;
+            for (std::size_t index = 0; index < owners.size(); ++index) {
+                const auto entity = scene.Get(owners[index]);
+                if (entity.HasError() || !entity.Value().authoredObject)
+                    return false;
+                objects[index] = {entity.Value().authoredObject->value};
+            }
+            return true;
+        }
+
+        /** @brief Describes the exact selected queue's acquired/released color tuple from existing renderer policy. */
+        Render::RenderGraphLogicalState ProjectionAcquired(const Render::RenderQueueId queue) noexcept {
+            return {Render::RenderGraphSynchronizationAccess::ReadWrite, Render::RenderGraphSynchronizationOperation::ColorAttachment,
+                    Render::RenderGraphPipelineScope::Graphics, Render::RenderGraphTextureLayout::ColorAttachment, queue};
+        }
+
+        /** @brief Keeps the existing layout and access state while returning authority to the external image owner. */
+        Render::RenderGraphLogicalState NativeRelease(Render::RenderGraphLogicalState acquired) noexcept {
+            acquired.scope = Render::RenderGraphPipelineScope::External;
+            return acquired;
+        }
+
+        /** @brief Projects the actual selected writer into the viewport's cold motion/depth graph tuple. */
+        Editor::EditorVulkanXrViewportAccess::AuxiliaryPlan PairedTargets(const OpenXRProjectionWriter &writer,
+                                                                          const Render::RenderGraphLogicalState acquired) noexcept {
+            auto depth = acquired;
+            depth.operation = Render::RenderGraphSynchronizationOperation::DepthStencilAttachment;
+            depth.layout = Render::RenderGraphTextureLayout::DepthStencilAttachment;
+            return {{writer.motion, acquired, NativeRelease(acquired)},
+                    {writer.depth, depth, NativeRelease(depth)},
+                    writer.selection.eyeExtents};
+        }
+    }  // namespace
 
     class OpenXRPlayHost::SceneCandidate final : public Runtime::SceneActivationCandidate {
     public:
@@ -35,8 +92,11 @@ namespace Horo::Application::Internal {
                     state_->Retire(*host_);
                 return;
             }
+            host_->lastReferenceChange_.reset();
             state_->published = true;
             host_->input_.admitted = true;
+            const auto decision = state_->projection->plan.Decision(XRCapability::FixedFoveation);
+            host_->composition_.metrics.RecordFixedFoveationPlan(decision.state);
         }
 
         void Shutdown() noexcept override {
@@ -53,7 +113,8 @@ namespace Horo::Application::Internal {
 
     class OpenXRPlayHost::SceneParticipant final : public Runtime::SceneActivationParticipant {
     public:
-        explicit SceneParticipant(OpenXRPlayHost &host) : host_(&host) {}
+        SceneParticipant(OpenXRPlayHost &host, Editor::EditorMountedXrGeometryCapture mounted)
+            : host_(&host), mounted_(std::move(mounted)) {}
 
         Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &definition,
                                                                            const Runtime::RuntimeSceneView &scene) override {
@@ -82,15 +143,116 @@ namespace Horo::Application::Internal {
         }
 
     private:
+        /** @brief Retires an unpublished Play attempt until its candidate takes responsibility. */
+        class PreparationScope final {
+        public:
+            PreparationScope(OpenXRPlayHost &owner, const std::shared_ptr<SceneState> &state) noexcept : owner_(owner), state_(state) {}
+
+            PreparationScope(const PreparationScope &) = delete;
+            PreparationScope &operator=(const PreparationScope &) = delete;
+
+            ~PreparationScope() noexcept {
+                if (state_)
+                    state_->Retire(owner_);
+            }
+
+            void Accept() noexcept {
+                state_.reset();
+            }
+
+        private:
+            OpenXRPlayHost &owner_;
+            std::shared_ptr<SceneState> state_;
+        };
+
         /** @brief Prepares the exact Scene/native candidate under the existing host rollback scope. */
         [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareCurrent(const Runtime::RuntimeSceneDefinition &definition,
                                                                          const Runtime::RuntimeSceneView &candidate);
+        /** @brief Prepares geometry and calibration from the same mounted World occurrence. */
+        [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareMounted(const Runtime::RuntimeSceneView &candidate) const;
+        /** @brief Runs the common unpublished native preparation under the existing rollback owner. */
+        [[nodiscard]] Result<std::shared_ptr<SceneState>> PrepareState(std::shared_ptr<SceneState> state,
+                                                                       const NativeTrackingSpaceRequest &tracking) const;
         OpenXRPlayHost *host_;
+        Editor::EditorMountedXrGeometryCapture mounted_;
     };
 
+    /** @copydoc OpenXRPlayHost::SceneGeometry::ValidateSource */
+    Result<void> OpenXRPlayHost::SceneGeometry::ValidateSource() const {
+        if (revoked)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (authored)
+            return authored->ValidateSource();
+        if (!mounted || !sourceScene.IsCurrent())
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        const auto origin = mounted->origin.Get();
+        return origin.HasError() ? Result<void>::Failure(origin.ErrorValue()) : Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::IsMountedSourceCurrent */
+    bool OpenXRPlayHost::SceneGeometry::IsMountedSourceCurrent() const noexcept {
+        return !mounted || (!revoked && sourceScene.IsCurrent() && mounted->origin.IsCurrent());
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Update */
+    Result<void> OpenXRPlayHost::SceneGeometry::Update(const Runtime::RuntimeSceneView &scene) {
+        if (authored) {
+            const auto updated = authored->Update(scene);
+            if (updated.HasError())
+                return Result<void>::Failure(updated.ErrorValue());
+            sourceScene = scene;
+            return Result<void>::Success();
+        }
+        if (!scene.IsCurrent() || !sourceScene.SameIncarnation(scene))
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        return ValidateSource();
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Resources */
+    std::span<const Render::RenderMeshResourceView> OpenXRPlayHost::SceneGeometry::Resources() const noexcept {
+        return authored ? authored->Resources() : mounted->scene.meshResources;
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Instances */
+    std::span<const Render::RenderStaticMeshInstance> OpenXRPlayHost::SceneGeometry::Instances() const noexcept {
+        return authored ? authored->Instances() : mounted->scene.instances;
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::MotionObjects */
+    std::span<const Render::RenderMotionObjectId> OpenXRPlayHost::SceneGeometry::MotionObjects() const noexcept {
+        return authored ? authored->MotionObjects() : std::span<const Render::RenderMotionObjectId>{};
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::QueryPointing */
+    Result<OpenXRPlayPointingResult> OpenXRPlayHost::SceneGeometry::QueryPointing(const Math::Ray &ray,
+                                                                                  const std::span<Editor::EditorXrGeometryHit> hits) const {
+        using Hits = Result<OpenXRPlayPointingResult>;
+        const auto revision = sourceScene.StructuralRevision();
+        if (revision == 0)
+            return Hits::Failure(MakeError(XRErrors::IdentityStale));
+        if (const auto valid = ValidateSource(); valid.HasError())
+            return Hits::Failure(valid.ErrorValue());
+        const auto instances = Instances();
+        const auto count =
+            authored ? authored->QueryPointing(ray, hits)
+                     : Editor::XrSceneDetail::QueryPointingDraws(ray, instances, std::span{mountedObjects}.first(instances.size()),
+                                                                 Resources(), hits);
+        if (count.HasError())
+            return Hits::Failure(count.ErrorValue());
+        return Hits::Success({count.Value(), revision, static_cast<bool>(mounted)});
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneGeometry::Revoke */
+    void OpenXRPlayHost::SceneGeometry::Revoke() noexcept {
+        revoked = true;
+        if (authored)
+            authored->Revoke();
+    }
+
     /** @copydoc OpenXRPlayHost::MakeSceneParticipant */
-    std::unique_ptr<Runtime::SceneActivationParticipant> OpenXRPlayHost::MakeSceneParticipant() {
-        return std::make_unique<SceneParticipant>(*this);
+    std::unique_ptr<Runtime::SceneActivationParticipant> OpenXRPlayHost::MakeSceneParticipant(
+        Editor::EditorMountedXrGeometryCapture mounted) {
+        return std::make_unique<SceneParticipant>(*this, std::move(mounted));
     }
 
     /** @copydoc OpenXRPlayHost::UpdateScene */
@@ -120,27 +282,20 @@ namespace Horo::Application::Internal {
                     return activated;
                 return PrepareFrameResources(candidate, scene_->projection->color);
             }
-            case RendererTargets: {
-                auto device = Editor::EditorVulkanXrViewportAccess::Device(composition_.viewport);
-                if (device.HasError())
-                    return Result<void>::Failure(device.ErrorValue());
-                const Render::RenderGraphLogicalState acquired{Render::RenderGraphSynchronizationAccess::ReadWrite,
-                                                               Render::RenderGraphSynchronizationOperation::ColorAttachment,
-                                                               Render::RenderGraphPipelineScope::Graphics,
-                                                               Render::RenderGraphTextureLayout::ColorAttachment,
-                                                               device.Value().graphicsIdentity};
-                auto requiredFinal = acquired;
-                requiredFinal.scope = Render::RenderGraphPipelineScope::External;
-                return Editor::EditorVulkanXrViewportAccess::Prepare(composition_.viewport, scene_->geometry->Resources(),
-                                                                     scene_->projection->color, acquired, requiredFinal);
-            }
+            case RendererTargets:
+                return scene_->PrepareRenderer(*this, plan);
             case InputAndUi: {
                 input_.coordinator = std::make_unique<XRActionBindingCoordinator>(candidate, static_cast<IXRBindingNeutralizer &>(*this));
                 if (auto bound = composition_.session.BindInput(candidate, *input_.coordinator, *input_.router, *composition_.bindings);
                     bound.HasError())
                     return bound;
                 const auto &limits = scene_->projection->capabilities.Limits();
-                return tracking_.Bind(candidate, {limits.maximumDevices, 5, limits.maximumActions}, input_.origin);
+                const auto hands = plan.Decision(XRCapability::HandTracking).state;
+                const auto jointLimit = hands == XRFeatureDecisionState::Required || hands == XRFeatureDecisionState::OptionalEnabled
+                                            ? XRHandTrackingHardLimits::MaximumJoints
+                                            : 0U;
+                const auto poseLimit = 5U + (jointLimit ? XRHandTrackingHardLimits::MaximumHands : 0U);
+                return tracking_.Bind(candidate, {limits.maximumDevices, poseLimit, limits.maximumActions, jointLimit}, input_.origin);
             }
             case PlatformLoader:
             case InstanceSystem:
@@ -151,6 +306,57 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         }
         return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::PrewarmRenderer */
+    Result<void> OpenXRPlayHost::SceneState::PrewarmRenderer(OpenXRPlayHost &host, OpenXRProjectionDraft &draft) {
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        auto &viewport = host.composition_.viewport;
+        const auto &writer = draft.writer;
+        if (!writer || !Viewport::CanPrepareReduction(viewport, writer->depth.format))
+            return Result<void>::Success();
+        if (auto source = geometry->ValidateSource(); source.HasError())
+            return source;
+        const auto device = Viewport::Device(viewport);
+        if (device.HasError())
+            return Result<void>::Failure(device.ErrorValue());
+        const auto acquired = ProjectionAcquired(device.Value().graphicsIdentity);
+        auto ready = Viewport::PreparePairedTargets(viewport, geometry->Resources(), draft.color, acquired, NativeRelease(acquired),
+                                                    PairedTargets(*writer, acquired), geometry->Instances().size());
+        if (ready.HasValue()) {
+            prewarmedRenderer.emplace(std::move(ready).Value());
+            return Result<void>::Success();
+        }
+        // A failed paired allocation uses ordinary preparation; this private owner still retires every partial allocation.
+        draft.writer.reset();
+        return Viewport::Retire(viewport);
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::PrepareRenderer */
+    Result<void> OpenXRPlayHost::SceneState::PrepareRenderer(OpenXRPlayHost &host, const XRFeaturePlan &plan) {
+        using Viewport = Editor::EditorVulkanXrViewportAccess;
+        auto &viewport = host.composition_.viewport;
+        if (prewarmedRenderer)
+            return Viewport::IsPrepared(viewport, *prewarmedRenderer) ? Result<void>::Success()
+                                                                      : Result<void>::Failure(MakeError(XRErrors::CapabilityStale));
+        const auto device = Viewport::Device(viewport);
+        if (device.HasError())
+            return Result<void>::Failure(device.ErrorValue());
+        const auto acquired = ProjectionAcquired(device.Value().graphicsIdentity);
+        const auto prepare = [&](const Viewport::AuxiliaryPlan *auxiliary) {
+            return Viewport::Prepare(viewport, geometry->Resources(), projection->color, acquired, NativeRelease(acquired),
+                                     host.WantsMotionHistory(plan), auxiliary, geometry->Instances().size());
+        };
+        if (const auto &writer = projection->writer) {
+            const auto auxiliary = PairedTargets(*writer, acquired);
+            if (prepare(&auxiliary).HasValue())
+                return Result<void>::Success();
+            // The Scene retains the native writer children through normal teardown while using ordinary projection.
+            projection->writer.reset();
+            if (auto retired = Viewport::Retire(viewport); retired.HasError())
+                return retired;
+        }
+        return prepare(nullptr);
     }
 
     /** @copydoc OpenXRPlayHost::Release */
@@ -167,7 +373,21 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::Neutralize */
     void OpenXRPlayHost::Neutralize(const XRSessionId &, std::uint64_t) noexcept {
+        CancelAuthoredLocomotion();
         tracking_.Revoke();  // Input's ONE actual cutoff owns the neutral commit; callbacks cannot commit Gameplay input.
+    }
+
+    /** @copydoc OpenXRPlayHost::AdmitReferenceReplacement */
+    Result<void> OpenXRPlayHost::AdmitReferenceReplacement() const {
+        if (!lastReferenceChange_)
+            return Result<void>::Success();
+        const auto now = clock_.ReadRetiredSessionTime(discoveryAttempt_);
+        if (now.HasError())
+            return Result<void>::Failure(now.ErrorValue());
+        if (now.Value() < lastReferenceChange_->effectiveTime)
+            return Result<void>::Failure(
+                MakeError(XRErrors::OperationUnavailable, "Wait for the runtime reference-space change before restarting XR Play."));
+        return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareCurrent */
@@ -177,10 +397,19 @@ namespace Horo::Application::Internal {
         using Output = Result<std::shared_ptr<SceneState>>;
         if (auto lane = owner.Lane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
-        if (owner.scene_ || !owner.input_.port || !owner.input_.geometry || !owner.input_.router ||
-            candidate.DefinitionRevision() != definition.Revision())
+        if (owner.instanceLost_)
+            return Output::Failure(MakeError(XRErrors::RuntimeUnavailable, "Reopen the editor to select a fresh XR instance and device."));
+        if (owner.setupCleanupPending_)
+            return Output::Failure(MakeError(XRSessionErrors::SetupCleanupPending));
+        if (owner.scene_ || !owner.input_.port || !owner.input_.router || candidate.DefinitionRevision() != definition.Revision())
             return Output::Failure(MakeError(XRErrors::OperationIncompatible));
         const Operation operation{owner};
+        if (auto ready = owner.AdmitReferenceReplacement(); ready.HasError())
+            return Output::Failure(ready.ErrorValue());
+        if (mounted_)
+            return PrepareMounted(candidate);
+        if (!owner.input_.geometry)
+            return Output::Failure(MakeError(XRErrors::OperationIncompatible));
         auto geometry = owner.input_.geometry->Capture(definition.Revision(), candidate);
         if (geometry.HasError())
             return Output::Failure(geometry.ErrorValue());
@@ -192,56 +421,107 @@ namespace Horo::Application::Internal {
         auto origin = XRWorldOriginRevision::Create(sceneIdentity.value);
         if (origin.HasError())
             return Output::Failure(origin.ErrorValue());
-        owner.input_.origin = origin.Value();
-        owner.scene_ = std::make_shared<SceneState>();
-        owner.scene_->scene = sceneIdentity;
-        owner.scene_->geometry = std::move(geometry).Value();
 
-        struct PreparationScope final {
-            PreparationScope(OpenXRPlayHost &owner, std::shared_ptr<SceneState> prepared) noexcept
-                : host(owner), state(std::move(prepared)) {}
+        auto state = std::make_shared<SceneState>();
+        state->scene = sceneIdentity;
+        state->geometry.emplace(SceneGeometry{.authored = std::move(geometry).Value(), .sourceScene = candidate});
+        return PrepareState(std::move(state), {origin.Value(), XRSpaceKind::Local, root.Value()});
+    }
 
-            PreparationScope(const PreparationScope &) = delete;
-            PreparationScope &operator=(const PreparationScope &) = delete;
+    /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareMounted */
+    Result<std::shared_ptr<OpenXRPlayHost::SceneState>> OpenXRPlayHost::SceneParticipant::PrepareMounted(
+        const Runtime::RuntimeSceneView &candidate) const {
+        using Output = Result<std::shared_ptr<SceneState>>;
+        const auto root = host_->composition_.trackingRoot;
+        const auto captured = mounted_(candidate, root);
+        if (captured.HasError())
+            return Output::Failure(captured.ErrorValue());
+        const auto &[geometry, trackingRoot, originFromLocal, drawEntities] = captured.Value();
+        if (trackingRoot != root || !geometry || !candidate.IsCurrent() ||
+            geometry->scene.lightSceneDomain != candidate.RuntimeId().value || !geometry->view.IsValid())
+            return Output::Failure(MakeError(XRErrors::IdentityStale));
+        constexpr auto maximum = Editor::PreparedEditorXrGeometry::MaximumInstances;
+        if (geometry->scene.instances.size() > maximum || geometry->scene.meshResources.size() > maximum)
+            return Output::Failure(MakeError(XRErrors::CapacityExceeded));
+        if (!geometry->scene.IsValid())
+            return Output::Failure(MakeError(XRErrors::OperationInvalid));
+        const auto origin = geometry->origin.Get();
+        if (origin.HasError())
+            return Output::Failure(origin.ErrorValue());
+        const auto revision = XRWorldOriginRevision::Create(origin.Value().Binding().revision.Value());
+        if (revision.HasError())
+            return Output::Failure(revision.ErrorValue());
+        constexpr float localExtent = static_cast<float>(WorldStreaming::OriginFrame::MaximumLocalHalfExtentMillimeters) / 1000.0F;
+        const auto &offset = originFromLocal.translation;
+        if (originFromLocal.scale != Math::Vec3{1, 1, 1} || originFromLocal.TryToMatrix().HasError() ||
+            std::max({std::abs(offset.x), std::abs(offset.y), std::abs(offset.z)}) > localExtent)
+            return Output::Failure(MakeError(XRErrors::PoseInvalid, "Mounted World tracking placement must be finite and rigid."));
+        auto state = std::make_shared<SceneState>();
+        state->scene = candidate.RuntimeId();
+        auto &source = state->geometry.emplace(SceneGeometry{.mounted = geometry, .sourceScene = candidate});
+        if (!ResolveMountedDrawOwners(candidate, drawEntities, std::span{source.mountedObjects}.first(geometry->scene.instances.size())))
+            return Output::Failure(MakeError(XRErrors::IdentityStale, "Mounted XR draw owners do not match the candidate Scene."));
+        return PrepareState(std::move(state), {revision.Value(), XRSpaceKind::Local, originFromLocal});
+    }
 
-            OpenXRPlayHost &host;
-            std::shared_ptr<SceneState> state;
-            bool accepted{};
-
-            ~PreparationScope() noexcept {
-                if (!accepted)
-                    state->Retire(host);
-            }
-        };
-
-        PreparationScope rollback{owner, owner.scene_};
-
-        const auto fail = [&owner](const Error &error) {
-            owner.scene_->Retire(owner);
-            return Output::Failure(error);
-        };
-        // All Scene/view reads and geometry leases are captured before native/host preparation can call foreign code.
-        if (auto prepared = owner.scene_->PrepareResources(owner, {owner.input_.origin, XRSpaceKind::Local, root.Value()});
-            prepared.HasError())
-            return fail(prepared.ErrorValue());
-        rollback.accepted = true;
-        return Output::Success(owner.scene_);
+    /** @copydoc OpenXRPlayHost::SceneParticipant::PrepareState */
+    Result<std::shared_ptr<OpenXRPlayHost::SceneState>> OpenXRPlayHost::SceneParticipant::PrepareState(
+        std::shared_ptr<SceneState> state, const NativeTrackingSpaceRequest &tracking) const {
+        using Output = Result<std::shared_ptr<SceneState>>;
+        auto &owner = *host_;
+        owner.input_.origin = tracking.origin;
+        owner.scene_ = state;
+        PreparationScope rollback{owner, state};
+        if (auto prepared = state->PrepareResources(owner, tracking); prepared.HasError())
+            return Output::Failure(prepared.ErrorValue());
+        rollback.Accept();
+        return Output::Success(std::move(state));
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::PrepareResources */
     Result<void> OpenXRPlayHost::SceneState::PrepareResources(OpenXRPlayHost &host, const NativeTrackingSpaceRequest &tracking) {
-        if (auto prepared =
-                host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings, tracking);
+        const auto cancellation = preparationCancellation.Token();
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
+        const bool planeConsent = std::exchange(host.planesArmed_, false);
+        const bool anchorConsent = std::exchange(host.spatialAnchorArmed_, false);
+        const bool anchorStorageConsent = std::exchange(host.anchorStorageArmed_, false);
+        const bool gazeConsent = std::exchange(host.gazeArmed_, false);
+        gazeRenderingConsent = std::exchange(host.gazeRenderingArmed_, false) && gazeConsent;
+        passthroughGrant = std::exchange(host.passthroughArmed_, std::nullopt);
+        if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
+                                                                   tracking, gazeConsent);
             prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
+        host.composition_.session.SetPlaneCaptureConsent(planeConsent);
+        if (auto consent = host.composition_.session.SetSpatialAnchorConsent(anchorConsent, anchorStorageConsent, host.sessions_);
+            consent.HasError())
+            return consent;
         auto preparedProjection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
                                                                               *host.composition_.bindings);
         if (preparedProjection.HasError())
             return Result<void>::Failure(preparedProjection.ErrorValue());
-        projection.emplace(std::move(preparedProjection).Value());
+        auto draft = std::move(preparedProjection).Value();
+        if (geometry->mounted)
+            draft.writer.reset();  // Mounted geometry has no issued per-draw history identity.
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
+        if (auto warmed = PrewarmRenderer(host, draft); warmed.HasError())
+            return warmed;
+        if (auto staged = StageWriter(host, draft); staged.HasError())
+            return staged;
+        if (auto staged = StageFixedFoveation(host, draft); staged.HasError())
+            return staged;
+        const auto *provider = preparedWriter && preparedWriter->preparedProvider ? &*preparedWriter->preparedProvider : nullptr;
+        auto finalized = host.composition_.session.FinalizeProjection(std::move(draft), provider);
+        if (finalized.HasError())
+            return Result<void>::Failure(finalized.ErrorValue());
+        projection.emplace(std::move(finalized).Value());
         const auto &facts = *projection;
-        auto activatedSession =
-            host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(), facts.plan);
+        auto activatedSession = host.sessions_->Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
+                                                         facts.plan, cancellation);
         if (activatedSession.HasError())
             return Result<void>::Failure(activatedSession.ErrorValue());
         activated = true;
@@ -249,19 +529,73 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (auto finished = host.FinishFrameResources(activatedSession.Value(), facts.capabilities); finished.HasError())
             return Result<void>::Failure(finished.ErrorValue());
+        auto observedReferences = host.composition_.session.References(session);
+        if (observedReferences.HasError())
+            return Result<void>::Failure(observedReferences.ErrorValue());
+        references = std::move(observedReferences).Value();
+        auto observedWorld = host.composition_.session.WorldSpace(session);
+        if (observedWorld.HasError())
+            return Result<void>::Failure(observedWorld.ErrorValue());
+        worldReference = std::move(observedWorld).Value();
+        if (geometry->mounted) {
+            if (!tracking.worldFromBase)
+                return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
+            if (auto calibrated = CalibrateMounted(host, *tracking.worldFromBase); calibrated.HasError())
+                return calibrated;
+        }
         if (auto valid = Validate(host); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::SceneState::CalibrateMounted */
+    Result<void> OpenXRPlayHost::SceneState::CalibrateMounted(const OpenXRPlayHost &host, const Math::Transform &placement) {
+        if (auto current = geometry->ValidateSource(); current.HasError())
+            return current;
+        const auto now = host.clock_.RuntimeNow();
+        if (now.HasError())
+            return Result<void>::Failure(now.ErrorValue());
+        const auto sample = host.composition_.session.ObserveReferenceCalibration(references.local, worldReference, now.Value());
+        if (sample.HasError())
+            return Result<void>::Failure(sample.ErrorValue());
+        const auto &observed = sample.Value().worldFromReference;
+        const auto expectedRotation = placement.rotation.TryNormalized();
+        const auto observedRotation = observed.rotation.TryNormalized();
+        if (expectedRotation.HasError() || observedRotation.HasError())
+            return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
+        const auto &a = expectedRotation.Value();
+        const auto &b = observedRotation.Value();
+        const Math::Vec4 expected{a.x, a.y, a.z, a.w};
+        const Math::Vec4 actual{b.x, b.y, b.z, b.w};
+        const float hemisphere = Math::Dot(expected, actual) < 0.0F ? -1.0F : 1.0F;
+        // Allow fixed-point millimeter resolution and fp32 error in the native rigid inverse at large local offsets.
+        const auto translationTolerance =
+            std::max(0.001F, Math::Length(placement.translation) * 8.0F * std::numeric_limits<float>::epsilon());
+        if (Math::LengthSquared(observed.translation - placement.translation) > translationTolerance * translationTolerance ||
+            Math::LengthSquared(expected - actual * hemisphere) > 1.0e-8F)
+            return Result<void>::Failure(
+                MakeError(XRErrors::PoseInvalid, "Native reference relation disagrees with mounted World placement."));
+        if (auto current = geometry->ValidateSource(); current.HasError())
+            return current;
+        mountedCalibration = sample.Value();
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::SceneState::Validate */
     Result<void> OpenXRPlayHost::SceneState::Validate(const OpenXRPlayHost &host) const {
         if (std::this_thread::get_id() != host.lane_ || host.pendingRevoke_ || host.pendingDetach_ || host.scene_.get() != this ||
-            retiring || !geometry || !projection || !session.IsValid() || !host.input_.port || !host.input_.geometry ||
-            host.sessions_.Snapshot().session != session || !host.input_.coordinator || !host.input_.coordinator->Current())
+            retiring || !geometry || !projection || !session.IsValid() || !host.input_.port ||
+            host.sessions_->Snapshot().session != session || !host.input_.coordinator || !host.input_.coordinator->Current())
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (auto source = geometry->ValidateSource(); source.HasError())
             return source;
+        if (geometry->mounted) {
+            if (!mountedCalibration || mountedCalibration->reference != references.local || mountedCalibration->world != worldReference ||
+                mountedCalibration->world.worldOriginRevision != host.input_.origin)
+                return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        } else if (!host.input_.geometry) {
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        }
         return host.native_.Validate(session);
     }
 
@@ -285,6 +619,16 @@ namespace Horo::Application::Internal {
         if (!host.scene_->nativeRetired) {
             if (const auto resources = FrameState::RetireResources(host, candidate); resources.HasError() || !resources.Value())
                 return resources;
+            if (auto &writer = host.scene_->preparedWriter) {
+                if (const auto closed = writer->Close(host.composition_.frontend); closed.HasError() || !closed.Value())
+                    return closed;
+                writer.reset();
+            }
+            if (auto &color = host.scene_->preparedColor) {
+                if (const auto closed = color->owner.Close(); closed.HasError() || !closed.Value())
+                    return closed;
+                color.reset();
+            }
             const auto retained = host.composition_.session.RetainedSession();
             if (auto retired =
                     retained ? host.composition_.session.RetireSession(candidate) : host.composition_.session.RetirePreparation();
@@ -296,10 +640,11 @@ namespace Horo::Application::Internal {
             return Result<bool>::Failure(finished.ErrorValue());
         host.retired_ = candidate;  // Actual native/graph/image cleanup succeeded, never a request/Scene Shutdown receipt.
         if (host.scene_->activated) {
-            auto canonical = RuntimeInternal::XRSessionHostControl::Retire(host.sessions_, host.frames_, host, candidate);
+            auto canonical = RuntimeInternal::XRSessionHostControl::Retire(*host.sessions_, host.frames_, host, candidate);
             if (canonical.HasError())
                 return Result<bool>::Failure(canonical.ErrorValue());
         }
+        host.tracking_.Close(candidate);
         host.input_.coordinator.reset();
         host.input_.origin = {};
         host.retiredScene_ = host.scene_->scene;

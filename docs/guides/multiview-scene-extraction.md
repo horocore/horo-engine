@@ -110,6 +110,143 @@ pipeline routing. Routing contributes to the pipeline state digest; the existing
 SingleView digest retains its previous reserved-zero encoding. OpenGL and Metal
 reject this new workload/routing until they implement and advertise it explicitly.
 
+## Projection history for runtime frame synthesis
+
+The selected Vulkan Play graph stages its actual immutable view/geometry
+extraction when the optional native frame-synthesis route needs a producer.
+Object correspondence comes from the prepared Scene's stable authored
+identities, independently of instance or draw order, and must match the
+retained mesh generation. Each eye receives its own previous unjittered
+world-to-clip transform. A predecessor is absent when either frame culled
+the object in that eye or when sequence, prediction, origin, view, or renderer
+evidence is incompatible. Bounded storage retains only one candidate and one
+successful projection. The app commits the candidate only after native
+compositor projection succeeds.
+
+The Vulkan motion cook and multiview graph admit a separate multipass shader
+with one signed floating-point color attachment and sampled hardware depth.
+Uniform packing requires a genuine predecessor for each eye that draws the
+object. The shader projects the same local geometry through each eye's current
+and previous transforms and computes signed XYZ displacement in target-image
+NDC. Current position drives fixed-function depth in the same pass. Invalid
+previous samples keep current depth and write alpha zero so foreground geometry
+still occludes farther geometry. This alpha is an engine validity marker.
+
+The OpenXR Vulkan image bridge can import sampled floating motion and depth
+allocations for an enabled native route. It checks both observed eye rectangles
+against the exact retained attempt and packs separate array layers within the
+smallest combined allocation. Imported registrations retire through the same
+queue and final attachment layouts as projection images. They expose a typed
+frame-registration input only for the current live native acquisition.
+
+The OpenXR frame coordinator borrows those two owners and attempts both
+acquisitions with zero-time waits against the same canonical frame. It
+registers them atomically after the same Renderer submission accepts both
+auxiliary targets and projection color. A timeout or omitted pair retains
+native cleanup on those swapchains without extending the ordinary projection
+image set. The next optional attempt waits for this native debt. When the
+Renderer accepted a pair but the compositor uses color only, both exact
+auxiliary releases still precede native frame end.
+
+The native provider registry admits the actual selected EXT or FB route only
+with an enabled renderer feature plan and the exact active native attempt.
+Its compositor adapter borrows both released owners, checks the preceding
+projection and exact per-eye evidence, and attaches the corresponding OpenXR
+extension structure to every view. Missing optional evidence uses the same
+single color projection. A native end failure retains the original frame fault.
+
+The selected host loads the optional offline pair from
+`shaders/runtime/multiview-motion-vulkan.horoshdr` and
+`shaders/runtime/multiview-motion-vulkan.reflection.json` under its packaged
+asset root. Cook this prefix with `HoroEditorVulkanShaderCook` and
+`--multiview-motion`. During opted-in Play preparation, the renderer builds
+the resident pipeline using the intersection of advertised OpenXR formats and
+the selected Vulkan device's sampled attachment support. Missing or failed
+motion packages leave the ordinary projection available.
+
+Before optional submission, XRRuntime now requires completed renderer
+classification covering the full motion and depth rectangle of both eyes
+with zero unresolved samples. The report must name the exact current and
+predecessor projections, image generations, and eye layers. Missing, stale,
+or incomplete evidence leaves the projection in color-only mode.
+
+The selected optional path can retain two owned sampled eye-depth
+attachments in alternating projection graphs. It publishes the newest
+depth only after the renderer has observed completion and the same native
+projection ends successfully. The next compatible frame may borrow that
+texture and its actual depth-attachment state for a graph-synchronized
+sampled read. Missing preparation, a skipped or aborted projection, or
+incompatible history leaves no previous-depth borrow.
+
+The optional coverage program is a separate offline pair under
+`shaders/runtime/multiview-coverage-vulkan` with the same
+`.horoshdr` and `.reflection.json` extensions. Cook it with
+`HoroEditorVulkanShaderCook` and `--multiview-coverage`. The viewport
+records coverage only when compatible previous depth exists for both eyes.
+The owner can consume one queue-observed result for the exact current
+frame and its predecessor. Play sizes coverage bindings from the render
+instances present during scene preparation. Missing coverage assets or
+scene growth beyond that capacity preserve color and internal depth
+projection.
+
+Before the native cutoff, optional composition still requires classification
+of the actual coverage pixels and the provider-specific invalid-pixel
+encoding. A completed graphics pass reports execution of the coverage
+program. EXT ignores the engine validity alpha, and FB consumes the RGB
+vector.
+[OpenXR frame synthesis contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisInfoEXT.html)
+
+The Linux native coverage regression uses the regular Vulkan backend and
+finite readback after graphics completion. Cook `multiview_mesh.hlsl` with
+`--multiview` and `multiview_motion.hlsl` with `--multiview-coverage`.
+Point `HORO_NATIVE_MULTIVIEW_PAYLOAD` and `HORO_NATIVE_MULTIVIEW_REFLECTION`
+at the first cook's stage package and reflection. Set
+`HORO_NATIVE_COVERAGE_PAYLOAD` and `HORO_NATIVE_COVERAGE_REFLECTION` to the
+second cook's equivalent files. In the Vulkan and OpenXR Editor test build, run
+`HoroRenderVulkanTests '[vulkan][multiview][coverage][native-smoke]'`.
+The regression checks packed pixels from two eyes at known depths and rejects
+a stale completion. The same native qualification exercises the full-eye
+graph when the separately cooked motion and reduction programs are supplied.
+
+The Linux Editor test `HoroRenderVulkanTests '[native-quad]'` uses the
+installed OpenXR Play path with a scripted runtime, a real Vulkan queue and a
+four-layer swapchain. Set `HORO_XR_PLAY_NATIVE_COOK_ROOT` to the directory with
+the canonical `viewport`, `shadow` and `multiview` cook pairs. The test verifies
+two consecutive submissions, each view's active rectangle and array layer, and
+the release of the same allocation after each completed frame.
+
+The `[native-loss]` case uses the same cooks. It delivers scripted OpenXR
+session loss after Vulkan submission, observes retirement of the old image
+without presenting the lost prediction to OpenXR, and submits four views from
+a replacement Play session. The test covers runtime session loss using the
+Vulkan queue. Headset and driver-loss qualification require separate evidence.
+
+The opt-in environment lighting program is cooked from
+`assets/shaders/runtime/multiview_environment_mesh.hlsl` using
+`HoroEditorVulkanShaderCook` with `--multiview-environment`. Its
+`.horoshdr` and `.reflection.json` files have a separate artifact identity.
+For native verification, point `HORO_NATIVE_MULTIVIEW_ENVIRONMENT_PAYLOAD`
+and `HORO_NATIVE_MULTIVIEW_ENVIRONMENT_REFLECTION` at this pair and run
+`HoroRenderVulkanTests '[vulkan][multiview][environment][native-smoke]'`
+in the Vulkan and OpenXR Editor test build. It submits the same two-eye
+geometry with explicit lighting and with a withdrawn contribution.
+
+The closed reduction stage is available through the same offline cooker. Cook
+`assets/shaders/runtime/multiview_coverage_reduce.hlsl` with
+`--multiview-coverage-reduction`. Its two input views and two exact active
+rectangles map to one pair of visited and unresolved counters per eye.
+Every covered pixel contributes once. Only the depth-consistent code
+resolves a sample. Place the matching pair under
+`shaders/runtime/multiview-coverage-reduction-vulkan` in the installed asset
+root. Play resets the counter storage per submission and retains the exact
+paired mask through graphics completion. For native qualification also set
+`HORO_NATIVE_MOTION_PAYLOAD`, `HORO_NATIVE_MOTION_REFLECTION`,
+`HORO_NATIVE_REDUCTION_PAYLOAD`, and `HORO_NATIVE_REDUCTION_REFLECTION` to the
+matching output files. The paired graph test checks asymmetric active areas,
+unresolved samples, reset across successive submissions, and exact completion.
+Renderer completion supplies coverage evidence. Native provider admission still
+requires the matching runtime encoding and auxiliary image lifecycle.
+
 ## Public contract migration and evidence
 
 The additive headers are owned by RenderApi or XRApi in the ownership registry.

@@ -368,17 +368,19 @@ namespace Horo::Assets {
         }
 
         /** @brief Admits the optional authoritative cook row only after its output identity was allocated. */
-        [[nodiscard]] Result<std::optional<OperationId>> BeginCookOperation(const AssetCookRequest &request,
-                                                                            const std::size_t recordCount) {
+        [[nodiscard]] Result<std::optional<OperationId>> BeginCookOperation(const AssetCookRequest &request, std::string title,
+                                                                            std::string phase,
+                                                                            std::optional<std::size_t> recordCount = std::nullopt) {
             if (request.operationStore == nullptr)
                 return Result<std::optional<OperationId>>::Success(std::nullopt);
-            auto operation = request.operationStore->Begin(OperationDescriptor{.kind = OperationKind::Cook,
-                                                                               .title = "Cook assets",
-                                                                               .phase = "prepare",
-                                                                               .message = std::format("{} assets", recordCount),
-                                                                               .progress = 0.0F,
-                                                                               .cancellable = static_cast<bool>(request.requestCancel),
-                                                                               .requestCancel = request.requestCancel});
+            auto operation = request.operationStore->Begin(
+                OperationDescriptor{.kind = OperationKind::Cook,
+                                    .title = std::move(title),
+                                    .phase = std::move(phase),
+                                    .message = recordCount ? std::format("{} assets", *recordCount) : std::string{},
+                                    .progress = 0.0F,
+                                    .cancellable = static_cast<bool>(request.requestCancel),
+                                    .requestCancel = request.requestCancel});
             if (!operation.has_value())
                 return Result<std::optional<OperationId>>::Failure(MakeError(CookErrors::OperationAdmissionFailed));
             return Result<std::optional<OperationId>>::Success(operation);
@@ -510,47 +512,104 @@ namespace Horo::Assets {
                 operation.RecordError(published.ErrorValue());
             return published;
         }
+
+        /** @brief Performs side-effect-free request admission shared by direct and prepared cooks. */
+        [[nodiscard]] Result<void> ValidateCookRequest(const AssetCookRequest &request, const bool hasCatalog,
+                                                       const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(Error{CookErrors::Cancelled.code});
+            if (!HasValidCookComposition(request, hasCatalog))
+                return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
+            return ValidatePinnedInputs(request, cancellation);
+        }
+
+        /** @brief Executes the real cook pipeline once after request validation and operation admission. */
+        [[nodiscard]] Result<AssetCookReport> RunCook(JobSystem &jobs, const CookerCatalogSnapshot &catalog,
+                                                      const AssetCookRequest &request, const CancellationToken &cancellation,
+                                                      CookOperationScope &operation) {
+            const auto records = request.registry.Records();
+            if (request.buildOutputStore != nullptr) {
+                operation.Publish(BuildOutputRecord{
+                    .timestampUtc = std::chrono::system_clock::now(),
+                    .stage = "prepare",
+                    .code = DiagnosticCode{"asset.cook.started"},
+                    .message = std::format("Cooking {} assets", records.size()),
+                });
+            }
+            auto result = request.dependentPhase ? CookDependentRecords(jobs, catalog, request, cancellation, operation)
+                                                 : CookRegistryRecords(jobs, catalog, request, records, cancellation, operation);
+            if (result.HasError())
+                operation.RecordError(result.ErrorValue());
+            return result;
+        }
     }  // namespace
 
+    /** @copydoc AssetCookActivity::AssetCookActivity */
+    AssetCookActivity::AssetCookActivity(std::unique_ptr<Detail::CookOperationScope> scope) noexcept : scope_(std::move(scope)) {}
+
+    /** @copydoc AssetCookActivity::AssetCookActivity */
+    AssetCookActivity::AssetCookActivity(AssetCookActivity &&other) noexcept = default;
+
+    /** @copydoc AssetCookActivity::~AssetCookActivity */
+    AssetCookActivity::~AssetCookActivity() = default;
+
+    /** @copydoc AssetCookActivity::Begin */
+    Result<AssetCookActivity> AssetCookActivity::Begin(const AssetCookRequest &request, const CancellationToken &cancellation,
+                                                       std::string title, std::string phase) {
+        auto scope = std::make_unique<CookOperationScope>(request.operationStore, request.buildOutputStore, cancellation, request.progress);
+        auto session = BeginOutputSession(request.buildOutputStore);
+        if (session.HasError())
+            return Result<AssetCookActivity>::Failure(session.ErrorValue());
+        auto id = BeginCookOperation(request, std::move(title), phase);
+        if (id.HasError())
+            return Result<AssetCookActivity>::Failure(id.ErrorValue());
+        scope->SetIdentities(session.Value().value_or(BuildOutputSessionId{}), id.Value(), phase);
+        return Result<AssetCookActivity>::Success(AssetCookActivity{std::move(scope)});
+    }
+
+    /** @copydoc AssetCookActivity::Update */
+    void AssetCookActivity::Update(std::string phase, std::string message, const float progress) {
+        if (scope_)
+            scope_->Update(std::move(phase), std::move(message), progress);
+    }
+
+    /** @copydoc AssetCookActivity::FailPreparation */
+    void AssetCookActivity::FailPreparation(Error error, BuildOutputRecord record) noexcept {
+        if (scope_)
+            scope_->FailPreparation(std::move(error), std::move(record));
+    }
+
+    /** @copydoc AssetCookService::AssetCookService */
     AssetCookService::AssetCookService(JobSystem &jobs, std::shared_ptr<const CookerCatalogSnapshot> catalog)
         : jobs_(jobs), catalog_(std::move(catalog)) {}
 
+    /** @copydoc AssetCookService::Cook */
     Result<AssetCookReport> AssetCookService::Cook(const AssetCookRequest &request, const CancellationToken &cancellation) {
-        if (cancellation.IsCancellationRequested())
-            return Result<AssetCookReport>::Failure(Error{CookErrors::Cancelled.code});
-
-        if (!HasValidCookComposition(request, static_cast<bool>(catalog_)))
-            return Result<AssetCookReport>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        if (auto unchanged = ValidatePinnedInputs(request, cancellation); unchanged.HasError())
-            return Result<AssetCookReport>::Failure(unchanged.ErrorValue());
-
-        auto records = request.registry.Records();
-
-        Result<std::optional<BuildOutputSessionId>> outputSession = BeginOutputSession(request.buildOutputStore);
-        if (outputSession.HasError())
-            return Result<AssetCookReport>::Failure(outputSession.ErrorValue());
-        auto operationId = BeginCookOperation(request, records.size());
+        if (auto validated = ValidateCookRequest(request, static_cast<bool>(catalog_), cancellation); validated.HasError())
+            return Result<AssetCookReport>::Failure(validated.ErrorValue());
+        auto session = BeginOutputSession(request.buildOutputStore);
+        if (session.HasError())
+            return Result<AssetCookReport>::Failure(session.ErrorValue());
+        auto operationId = BeginCookOperation(request, "Cook assets", "prepare", request.registry.Records().size());
         if (operationId.HasError())
             return Result<AssetCookReport>::Failure(operationId.ErrorValue());
-        CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation,
-                                     outputSession.Value().value_or(BuildOutputSessionId{}), operationId.Value()};
+        CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation, request.progress};
+        operation.SetIdentities(session.Value().value_or(BuildOutputSessionId{}), operationId.Value(), "prepare");
+        return RunCook(jobs_, *catalog_, request, cancellation, operation);
+    }
 
-        if (request.buildOutputStore != nullptr) {
-            const auto now = std::chrono::system_clock::now();
-            operation.Publish(BuildOutputRecord{
-                .timestampUtc = now,
-                .stage = "prepare",
-                .code = DiagnosticCode{"asset.cook.started"},
-                .message = std::format("Cooking {} assets", records.size()),
-            });
+    /** @copydoc AssetCookService::CookPrepared */
+    Result<AssetCookReport> AssetCookService::CookPrepared(const AssetCookRequest &request, AssetCookActivity activity) {
+        auto scope = std::move(activity.scope_);
+        if (!scope || !scope->CanCook(request.operationStore, request.buildOutputStore))
+            return Result<AssetCookReport>::Failure(MakeError(CookErrors::OperationAdmissionFailed));
+        const auto &cancellation = scope->Cancellation();
+        if (auto validated = ValidateCookRequest(request, static_cast<bool>(catalog_), cancellation); validated.HasError()) {
+            scope->RecordError(validated.ErrorValue());
+            return Result<AssetCookReport>::Failure(validated.ErrorValue());
         }
-
-        auto result = request.dependentPhase ? CookDependentRecords(jobs_, *catalog_, request, cancellation, operation)
-                                             : CookRegistryRecords(jobs_, *catalog_, request, records, cancellation, operation);
-        if (result.HasError())
-            operation.RecordError(result.ErrorValue());
-        return result;
+        scope->Update("prepare", "Cooking assets", 0.15F);
+        return RunCook(jobs_, *catalog_, request, cancellation, *scope);
     }
 
 }  // namespace Horo::Assets

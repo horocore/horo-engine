@@ -1,5 +1,7 @@
 #include "EditorPlaySaveHostInternal.h"
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 
 namespace Horo::Application::Internal {
     /** @copydoc PlaySaveGeneration::PlaySaveGeneration */
@@ -71,6 +73,7 @@ namespace Horo::Application::Internal {
                                                          std::optional<Runtime::SaveManagerCommand> selection) {
         if (storageWork)
             return Result<void>::Failure(MakeError(Runtime::SaveErrors::OperationInProgress));
+        const Log::ScopedLogContext privacy{Log::LogContextSnapshot::Isolated({})};
         auto work = std::make_shared<PlaySaveStorageWork>();
         const JobDescriptor descriptor{.parentCancellation =
                                            action == PlaySaveStorageAction::Cleanup ? CancellationToken{} : cancellation.Token()};
@@ -79,7 +82,8 @@ namespace Horo::Application::Internal {
                                                        selection = std::move(selection)](const CancellationToken &token) mutable {
             auto result =
                 RunPlaySaveStorageAction(action, std::move(config), std::move(schema), std::move(storage), std::move(selection), token);
-            const auto failed = result.HasError() ? std::optional<Error>{result.ErrorValue()} : std::nullopt;
+            const auto failed =
+                result.HasError() ? std::optional<Error>{Runtime::RedactSaveDiagnosticError(result.ErrorValue())} : std::nullopt;
             {
                 std::lock_guard lock(work->publication);
                 work->result.emplace(std::move(result));
@@ -105,8 +109,10 @@ namespace Horo::Application::Internal {
             storage->CloseAdmission();
         dirty = true;
         const auto consumed = ConsumeStorage(*work, job);
-        if (consumed.HasError() && storageAction == PlaySaveStorageAction::Cleanup)
-            LOG_WARN("editor.play.save", "Sandbox cleanup failed: %s", consumed.ErrorValue().message.c_str());
+        if (consumed.HasError() && storageAction == PlaySaveStorageAction::Cleanup) {
+            const Log::ScopedLogContext privacy{Log::LogContextSnapshot::Isolated({})};
+            LOG_WARN("editor.play.save", "Sandbox cleanup failed.");
+        }
         return consumed;
     }
 

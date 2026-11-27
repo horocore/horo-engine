@@ -290,6 +290,27 @@ Credentials are:
 
 Credential prompts identify the requesting operation and capability.
 
+On Windows the native platform backend stores generic credentials in Windows
+Credential Manager, under Horo's namespace and the current user on this machine.
+The host supplies opaque references and decides their lifetime. The backend
+rejects storage when the logon session disallows machine-local persistence.
+Linux builds with libsecret use the current desktop user's unlocked default
+Secret Service collection. They require a persistent collection and bound
+service calls on the worker lane. The desktop session owns keyring setup and
+unlock.
+On macOS the native backend binds opaque references to generic passwords in the
+current user's unlocked default Keychain. Lookup, replacement, and deletion use
+that same Keychain and Horo's service namespace. macOS controls authorization
+for the calling application.
+Platforms without a native backend expose an unavailable result at host
+composition.
+
+The session vault revokes its owned entries on teardown and applies monotonic
+session expiry. A host that asks the user to retain a credential enrolls it
+through the persistent store instead. The host saves only the returned opaque
+reference after successful enrollment. The store resolves that same reference
+after restart and revokes it by removing the exact native entry.
+
 ## Network Access
 
 Network clients declare destination policy, protocol, timeout, size limits, and

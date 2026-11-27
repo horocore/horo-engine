@@ -1,5 +1,7 @@
 #include "Horo/Navigation/NavigationVelocityPipeline.h"
 
+#include "NavigationCrowdOutcomeValidation.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -12,38 +14,46 @@ namespace Horo::Navigation {
             return std::hypot(static_cast<double>(value.x), static_cast<double>(value.y), static_cast<double>(value.z));
         }
 
-        /** @brief Validate the authored planar solver envelope before advancing movement. */
-        bool ValidEnvelope(const NavigationAvoidanceRequest &request, const float step) noexcept {
-            return std::isfinite(request.maximumSpeedMetersPerSecond) && request.maximumSpeedMetersPerSecond > 0 &&
-                   std::isfinite(request.maximumAccelerationMetersPerSecondSquared) &&
-                   request.maximumAccelerationMetersPerSecondSquared > 0 && std::isfinite(request.horizonSeconds) &&
-                   request.horizonSeconds > 0 && std::isfinite(step) && step > 0 && request.stepSeconds == step;
+        /** @brief Reduces route speed and the solver speed budget, retaining room to brake within this tick's envelope. */
+        void ApplyDensityPolicy(NavigationAvoidanceRequest &request, const NavigationCrowdAgentFact &agent) noexcept {
+            if (agent.densitySpeedScale == 1.0F)
+                return;
+            request.preferredVelocity = request.preferredVelocity * agent.densitySpeedScale;
+            const auto maximum = static_cast<double>(request.maximumSpeedMetersPerSecond);
+            const auto speed = std::hypot(static_cast<double>(agent.velocity.x), static_cast<double>(agent.velocity.z));
+            const auto braking = static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds;
+            const auto limit = std::clamp(speed - braking, maximum * agent.densitySpeedScale, maximum);
+            request.maximumSpeedMetersPerSecond = std::max(std::numeric_limits<float>::denorm_min(), static_cast<float>(limit));
         }
 
-        /** @brief Validate a worker sample against its captured finite planar envelope before publication.
-         * @param outcome Worker-produced sample or explicit stop.
-         * @param request Owner-issued speed and acceleration limits.
-         * @param capturedVelocity Velocity at the immutable capture.
-         * @return True only for a bounded sample or a well-formed explicit stop.
-         */
-        bool ValidOutcome(const NavigationAvoidanceOutcome &outcome, const NavigationAvoidanceRequest &request,
-                          const Math::Vec3 capturedVelocity) noexcept {
-            using enum NavigationAvoidanceDisposition;
-            using enum NavigationAvoidanceStopReason;
-            if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
-                ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
-                (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > NoFeasibleSample ||
-                (outcome.disposition == Sampled && outcome.stopReason != None) ||
-                (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
-                return false;
-            if (const auto planarDelta = std::hypot(static_cast<double>(outcome.desiredVelocity.x) - capturedVelocity.x,
-                                                    static_cast<double>(outcome.desiredVelocity.z) - capturedVelocity.z);
-                outcome.disposition == Sampled &&
-                planarDelta > static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds + 0.00001)
-                return false;
-            return true;
-        }
     }  // namespace
+
+    /** @copydoc Detail::ValidCrowdEnvelope */
+    bool Detail::ValidCrowdEnvelope(const NavigationAvoidanceRequest &request, const float step) noexcept {
+        return std::isfinite(request.maximumSpeedMetersPerSecond) && request.maximumSpeedMetersPerSecond > 0 &&
+               std::isfinite(request.maximumAccelerationMetersPerSecondSquared) && request.maximumAccelerationMetersPerSecondSquared > 0 &&
+               std::isfinite(request.horizonSeconds) && request.horizonSeconds > 0 && std::isfinite(step) && step > 0 &&
+               request.stepSeconds == step;
+    }
+
+    /** @copydoc Detail::ValidCrowdOutcome */
+    bool Detail::ValidCrowdOutcome(const NavigationAvoidanceOutcome &outcome, const NavigationAvoidanceRequest &request,
+                                   const Math::Vec3 capturedVelocity) noexcept {
+        using enum NavigationAvoidanceDisposition;
+        using enum NavigationAvoidanceStopReason;
+        if (!Math::IsFinite(outcome.desiredVelocity) || outcome.desiredVelocity.y != 0 ||
+            ComputeMotionMagnitude(outcome.desiredVelocity) > static_cast<double>(request.maximumSpeedMetersPerSecond) + 0.00001 ||
+            (outcome.disposition != Sampled && outcome.disposition != CollisionSafeStop) || outcome.stopReason > BudgetDeferred ||
+            (outcome.disposition == Sampled && outcome.stopReason != None) ||
+            (outcome.disposition == CollisionSafeStop && (outcome.desiredVelocity != Math::Vec3{} || outcome.stopReason == None)))
+            return false;
+        if (const auto planarDelta = std::hypot(static_cast<double>(outcome.desiredVelocity.x) - capturedVelocity.x,
+                                                static_cast<double>(outcome.desiredVelocity.z) - capturedVelocity.z);
+            outcome.disposition == Sampled &&
+            planarDelta > static_cast<double>(request.maximumAccelerationMetersPerSecondSquared) * request.stepSeconds + 0.00001)
+            return false;
+        return true;
+    }
 
     /** @copydoc NavigationVelocityPipeline::Create */
     Result<std::unique_ptr<NavigationVelocityPipeline>> NavigationVelocityPipeline::Create(NavigationMovementController &movement,
@@ -97,12 +107,15 @@ namespace Horo::Navigation {
             if (!current.path.tick || feedback_->tick != current.path.tick - 1 || feedback_->operation != movement_->Status().id)
                 return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
             const auto progress = ComputeMotionMagnitude(feedback_->achievedDisplacement);
-            const bool stalled = feedback_->blocked && progress <= policy_.minimumProgressMeters && publication_ &&
-                                 publication_->intent.state == NavigationMovementState::Following &&
-                                 publication_->preferredVelocity != Math::Vec3{};
-            nextBlocked = stalled ? std::min(blockedTicks_ + 1, policy_.blockedTicksBeforeRepath) : 0;
-            repath = nextBlocked >= policy_.blockedTicksBeforeRepath &&
-                     (!lastRepathTick_.has_value() || current.path.tick - *lastRepathTick_ >= policy_.repathCooldownTicks);
+            if (publication_ && publication_->stopReason != NavigationAvoidanceStopReason::CadenceHold &&
+                publication_->stopReason != NavigationAvoidanceStopReason::BudgetDeferred) {
+                const bool stalled = feedback_->blocked && progress <= policy_.minimumProgressMeters && publication_ &&
+                                     publication_->intent.state == NavigationMovementState::Following &&
+                                     publication_->preferredVelocity != Math::Vec3{};
+                nextBlocked = stalled ? std::min(blockedTicks_ + 1, policy_.blockedTicksBeforeRepath) : 0;
+                repath = nextBlocked >= policy_.blockedTicksBeforeRepath &&
+                         (!lastRepathTick_.has_value() || current.path.tick - *lastRepathTick_ >= policy_.repathCooldownTicks);
+            }
             observation.feedback = NavigationMovementFeedback{feedback_->operation,
                                                               feedback_->path,
                                                               feedback_->tick,
@@ -129,7 +142,7 @@ namespace Horo::Navigation {
             snapshot.CaptureTick() != current.path.tick || (lastTick_.has_value() && current.path.tick <= *lastTick_) ||
             request.agentIndex >= snapshot.Agents().size() || snapshot.Agents()[request.agentIndex].handle != agent_)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
-        if (current.feedback || !ValidEnvelope(request, current.stepSeconds))
+        if (current.feedback || !Detail::ValidCrowdEnvelope(request, current.stepSeconds))
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         if (current.position != snapshot.Agents()[request.agentIndex].position)
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
@@ -150,8 +163,12 @@ namespace Horo::Navigation {
         request.preferredVelocity = preferred.Value().desiredVelocity;
         if (const auto speed = ComputeMotionMagnitude(request.preferredVelocity); speed > request.maximumSpeedMetersPerSecond)
             request.preferredVelocity = request.preferredVelocity * static_cast<float>(request.maximumSpeedMetersPerSecond / speed);
-        pending_ =
-            NavigationVelocityWork{++sequence_, preferred.Value(), request, binding_, snapshot.DynamicRevision(), characterRevision_};
+        ApplyDensityPolicy(request, snapshot.Agents()[request.agentIndex]);
+        using enum NavigationCrowdRecovery;
+        const auto progress = feedback.blockedTicks != 0 ? Stalled : Clear;
+        const auto recovery = feedback.repath ? RepathRequested : progress;
+        pending_ = NavigationVelocityWork{++sequence_,        preferred.Value(), request, binding_, snapshot.DynamicRevision(),
+                                          characterRevision_, recovery};
         pendingCapture_ = snapshot;
         lastTick_ = current.path.tick;
         blockedTicks_ = feedback.blockedTicks;
@@ -189,7 +206,7 @@ namespace Horo::Navigation {
             return Return::Failure(MakeError(NavigationErrors::StaleSnapshot));
         if (const auto valid = movement_->ValidateIntentAtSafePoint(pending_->preferred, observation); valid.HasError())
             return Return::Failure(valid.ErrorValue());
-        if (!ValidOutcome(outcome, pending_->request, current.Agents()[pending_->request.agentIndex].velocity))
+        if (!Detail::ValidCrowdOutcome(outcome, pending_->request, current.Agents()[pending_->request.agentIndex].velocity))
             return Return::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
         auto intent = pending_->preferred;
         intent.desiredVelocity = intent.state == NavigationMovementState::Following && intent.desiredVelocity != Math::Vec3{}
@@ -200,7 +217,8 @@ namespace Horo::Navigation {
                                                      characterRevision_,
                                                      outcome.disposition,
                                                      outcome.stopReason,
-                                                     pending_->request.preferredVelocity};
+                                                     pending_->request.preferredVelocity,
+                                                     pending_->recovery};
         publishedStepSeconds_ = pending_->request.stepSeconds;
         pending_.reset();
         pendingCapture_.reset();
@@ -219,7 +237,8 @@ namespace Horo::Navigation {
             publication.intent.tick != publication_->intent.tick || publication.intent.state != publication_->intent.state ||
             publication.intent.desiredVelocity != publication_->intent.desiredVelocity ||
             publication.disposition != publication_->disposition || publication.stopReason != publication_->stopReason ||
-            publication.preferredVelocity != publication_->preferredVelocity || current.stepSeconds != publishedStepSeconds_)
+            publication.preferredVelocity != publication_->preferredVelocity || publication.recovery != publication_->recovery ||
+            current.stepSeconds != publishedStepSeconds_)
             return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         return movement_->ValidateIntentAtSafePoint(publication.intent, current);
     }
@@ -297,6 +316,17 @@ namespace Horo::Navigation {
         feedback_.reset();
         blockedTicks_ = 0;
         lastRepathTick_.reset();
+    }
+
+    /** @copydoc NavigationVelocityPipeline::SuspendAtSafePoint */
+    Result<void> NavigationVelocityPipeline::SuspendAtSafePoint(const NavigationMovementObservation &current) {
+        if (std::this_thread::get_id() != ownerThread_ || retired_)
+            return Result<void>::Failure(MakeError(NavigationErrors::AdmissionRejected));
+        if (const auto reset = movement_->ResetMotionAtSafePoint(current); reset.HasError())
+            return reset;
+        movement_->CollectRetiredAtSafePoint();
+        ClearMotionHistory();
+        return Result<void>::Success();
     }
 
     /** @copydoc NavigationVelocityPipeline::Retire */

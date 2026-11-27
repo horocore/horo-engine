@@ -3,6 +3,8 @@
  */
 #pragma once
 
+#include "EditorVulkanXrViewportAccess.h"
+#include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "OpenXRFrameCompositor.h"
@@ -11,6 +13,67 @@
 #include "VulkanEditorGraphicsBridge.h"
 
 namespace Horo::Application::Internal {
+    /** @brief Physically owned pair of auxiliary swapchains, transferable from the private Scene to its frame owner. */
+    struct OpenXRPlayHost::WriterPair final {
+        struct Target final {
+            XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
+            XR::OpenXRInternal::OpenXRSwapchain owner;
+            std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
+            std::array<Render::RenderTextureViewHandle, 2> views{};
+
+            Target(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                   const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
+                   Render::Detail::VulkanExternalViewDispatch dispatch);
+        };
+
+        Target motion;
+        Target depth;
+        std::optional<XR::OpenXRInternal::NativePreparedReprojectionProvider> preparedProvider;
+        std::optional<XR::OpenXRInternal::NativeReprojectionProvider> provider;
+        std::optional<XR::OpenXRInternal::OpenXRReprojectionFrameImages> coordinated;
+        std::optional<XR::OpenXRInternal::NativeReprojectionFramePair> nativePair;
+        XR::XRFrameId frame;
+        std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> ready;
+        bool nativeSubmitted{};
+        bool available{};
+
+        WriterPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                   const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
+                   Render::Detail::VulkanExternalViewDispatch views);
+
+        /** @brief Stages both actual auxiliary allocations without issuing session/target ownership. */
+        Result<void> Stage(const XR::OpenXRInternal::NativeSessionPreparation &session, const OpenXRProjectionWriter &plan,
+                           PFN_xrGetInstanceProcAddr getProc);
+        /** @brief Adopts the exact prepared allocations once into the issued session. */
+        Result<void> Adopt(const XR::XRSessionId &session);
+        /** @brief Creates the same allocations directly for a writer without a prepared reducer. */
+        Result<void> Prepare(const XR::XRSessionId &session, const OpenXRProjectionWriter &plan, PFN_xrGetInstanceProcAddr getProc);
+        /** @brief Acquires both images at zero timeout; an incomplete pair retains exact retirement debt. */
+        Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> Acquire(Render::RenderFrontend &frontend,
+                                                                                             const XR::XRFrameId &candidate,
+                                                                                             const OpenXRProjectionWriter &plan);
+        /** @brief Imports the canonical pair and creates only the frontend eye-view borrows. */
+        Result<std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages>> AcquireCoordinated(
+            Render::RenderFrontend &frontend, const XR::XRFrameId &candidate, const XR::XRSwapchainImageId &projection);
+        /** @brief Progresses omitted native debts without delaying an ordinary projection. */
+        void PollOmitted(Render::RenderFrontend &frontend);
+        /** @brief Retires all touched auxiliary images before the ordinary projection may finish. */
+        Result<bool> Retire(Render::RenderFrontend &frontend);
+        /** @brief Closes every native child; only a supplied lost session allows destructive lost retirement. */
+        Result<bool> Close(Render::RenderFrontend &frontend, std::optional<XR::XRSessionId> lostSession = {});
+    };
+
+    struct OpenXRPlayHost::ColorPair final {
+        XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
+        XR::OpenXRInternal::OpenXRSwapchain owner;
+
+        ColorPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                  const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
+                  Render::Detail::VulkanExternalViewDispatch viewDispatch)
+            : images(host.composition_.frontend, graphics, binding, device.graphicsIdentity, viewDispatch),
+              owner(host.native_, images, host.composition_.metrics.swapchain) {}
+    };
+
     /** @brief Candidate-owned physical image/compositor children of the SAME selected native and render owners.
      * @details Native failures keep this storage retained by the App. Scene Shutdown may revoke its typed
      * publication, but cannot drop these children, outgoing native dependencies or queued image leases.
@@ -19,26 +82,67 @@ namespace Horo::Application::Internal {
     struct OpenXRPlayHost::FrameState final : XR::OpenXRInternal::IOpenXRCompositionSpace {
         OpenXRPlayHost &host;
         const XR::XRSessionId session;
-        XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
-        XR::OpenXRInternal::OpenXRSwapchain color;
+        std::shared_ptr<ColorPair> colorStorage;
+        XR::OpenXRInternal::OpenXRVulkanSwapchainImages &images;
+        XR::OpenXRInternal::OpenXRSwapchain &color;
         XR::OpenXRInternal::OpenXRFrameCompositor compositor;
+        XR::OpenXRInternal::NativeProjectionResolution resolution;
+
+        std::shared_ptr<WriterPair> writer;
         Render::RenderTextureDescriptor allocation;
         std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> acquisition;
-        std::array<Render::RenderTextureViewHandle, 2> eyeViews{};
+        std::array<Render::RenderTextureViewHandle, MaximumProjectionViews> eyeViews{};
         std::optional<XR::XRViewRenderPlan> plan;
+
+        /** @brief Exact renderer alpha intent and installed World mapping for the bound native prediction. */
+        struct PassthroughFrame final {
+            XR::XRPassthroughScope scope;
+            Render::MultiviewPublication publication;
+            XR::XRPoseSample referenceToWorld;
+        };
+
+        std::optional<PassthroughFrame> passthrough;
+        std::optional<Render::MultiviewMotionFrame> motionFrame;
+        std::optional<XR::XRLightEstimateScope> nativeLightingScope; /**< Exact authorization for pixels in this projection. */
+        std::optional<XR::XRFrameId> coverageFrame;
+        OpenXRPlayCoverageStatus coverageStatus{OpenXRPlayCoverageStatus::Unobserved};
+        std::optional<Editor::EditorVulkanXrViewportAccess::CoverageReduction> reduction;
+        std::optional<XR::XRObservedReprojectionHistory> synthesisHistory;
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
+        std::optional<XR::OpenXRInternal::NativePresentationViews> lastProjectedViews;
+
+        struct GazeProfileEvidence {
+            XR::XRRuntimeTime sample;
+            XR::XRTrackingSnapshotRevision cutoff;
+            [[nodiscard]] bool operator==(const GazeProfileEvidence &) const noexcept = default;
+        };
+
+        struct RenderingGazeSample {
+            XR::XRPoseSample pose;
+            GazeProfileEvidence evidence;
+        };
+
+        std::optional<GazeProfileEvidence> gazeProfile;
+        bool gazeProfileUnsupported{};
+
+        [[nodiscard]] const XR::XRTrackingSnapshot *GazeCutoff() const noexcept;
+        [[nodiscard]] std::optional<RenderingGazeSample> RenderingGaze() const;
+        [[nodiscard]] bool GazeProfileCurrent() const;
+        [[nodiscard]] Result<void> RestoreFixedGazeProfile();
+        [[nodiscard]] Result<void> UpdateGazeProfile();
+        std::optional<Editor::EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
+        bool canvasBound{};
         bool guiFinished{};
-        bool submitted{};
         bool acquisitionRecorded{};
         bool rendered{};
         bool clockBound{};
+        bool completionTimingObserved{};
+        bool vignetteBound{};
 
-        FrameState(OpenXRPlayHost &owner, const XR::XRSessionId &candidate, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
-                   const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
-                   Render::Detail::VulkanExternalViewDispatch viewDispatch, const Render::RenderTextureDescriptor &descriptor)
-            : host(owner), session(candidate),
-              images(owner.composition_.frontend, graphics, binding, device.graphicsIdentity, viewDispatch), color(owner.native_, images),
+        FrameState(OpenXRPlayHost &owner, const XR::XRSessionId &candidate, std::shared_ptr<ColorPair> storage,
+                   const Render::RenderTextureDescriptor &descriptor)
+            : host(owner), session(candidate), colorStorage(std::move(storage)), images(colorStorage->images), color(colorStorage->owner),
               compositor(owner.native_, owner.frames_, *this), allocation(descriptor) {}
 
         /** @brief Preserves the original frame failure while retaining any failed canonical abort debt. */
@@ -52,14 +156,23 @@ namespace Horo::Application::Internal {
         Result<bool> StartPrediction() {
             using Output = Result<bool>;
             auto state = host.frames_.Snapshot();
-            if (!host.sessions_.Snapshot().admitsFrames)
+            if (writer && writer->frame.IsValid())
+                return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+            if (!host.sessions_->Snapshot().admitsFrames)
                 return Output::Success(false);  // Real native Ready/Running events, never Scene publication, admit waits.
             rendered = false;
-            submitted = false;
+            completionTimingObserved = false;
+            vignetteBound = false;
+            encoded.reset();
             acquisitionRecorded = false;
             guiFinished = false;
             views.reset();
             plan.reset();
+            passthrough.reset();
+            motionFrame.reset();
+            nativeLightingScope.reset();
+            reduction.reset();
+            synthesisHistory.reset();
             const auto waited = compositor.Wait();
             if (waited.HasError())
                 return Output::Failure(waited.ErrorValue());
@@ -76,6 +189,7 @@ namespace Horo::Application::Internal {
                 }
                 if (auto ended = compositor.EndEmpty(state.frame); ended.HasError())
                     return Output::Failure(ended.ErrorValue());
+                CompleteMotion(false);
                 return Output::Success(false);
             }
             return Output::Success(true);
@@ -85,10 +199,8 @@ namespace Horo::Application::Internal {
         Result<bool> CheckDeadline() {
             using Output = Result<bool>;
             const auto state = host.frames_.Snapshot();
-            const auto now = host.clock_.PresentationNow();
-            if (now.HasError())
-                return Fail(now.ErrorValue());
-            const auto pacing = compositor.ObservePacing(state.frame, now.Value());
+            const auto pacing = ObservePacing(state.frame);
+            host.composition_.metrics.RecordCpuDeadline(pacing.HasValue() ? std::optional{pacing.Value().deadline} : std::nullopt);
             if (pacing.HasError())
                 return Fail(pacing.ErrorValue());
             if (pacing.Value().deadline != XR::OpenXRInternal::NativeFrameDeadline::WithinBudget) {
@@ -101,8 +213,16 @@ namespace Horo::Application::Internal {
             return Output::Success(true);
         }
 
-        /** @brief Captures actual runtime views once for the current canonical native prediction. */
-        Result<void> LocateViews() {
+        /** @brief Resolves presentation time against this exact retained frame. */
+        [[nodiscard]] Result<XR::OpenXRInternal::NativeFramePacingObservation> ObservePacing(const XR::XRFrameId &frame) const {
+            const auto now = host.clock_.PresentationNow();
+            if (now.HasError())
+                return Result<XR::OpenXRInternal::NativeFramePacingObservation>::Failure(now.ErrorValue());
+            return compositor.ObservePacing(frame, now.Value());
+        }
+
+        /** @brief Captures the late presentation-only views for the exact begun prediction. */
+        Result<void> LocatePresentationViews() {
             const auto state = host.frames_.Snapshot();
             const auto time = host.clock_.PresentationTime(state.predictedDisplayTime);
             if (time.HasError())
@@ -116,65 +236,89 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Zero-time acquires/imports the same native image and creates its bounded eye views before native admission. */
-        Result<bool> AcquireEyeImages() {
+        /** @brief Acquires and retains the next native borrow without claiming render completion. */
+        static Result<bool> WaitAndImport(XR::OpenXRInternal::OpenXRSwapchain &owner,
+                                          std::optional<XR::OpenXRInternal::NativeSwapchainAcquisition> &image);
+        /** @brief Retains every successfully created eye view for retryable retirement. */
+        static Result<void> PrepareEyeViews(Render::RenderFrontend &frontend, const XR::OpenXRInternal::NativeSwapchainAcquisition &image,
+                                            const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureAspect aspect,
+                                            std::span<Render::RenderTextureViewHandle> views);
+        /** @brief Releases the caller's view handles while retaining canonical queue pins. */
+        static Result<void> ReleaseEyeViews(Render::RenderFrontend &frontend, std::span<Render::RenderTextureViewHandle> views);
+        /** @brief Zero-time observes native wait/queue retirement before releasing the exact allocation. */
+        static Result<bool> RetireImage(Render::RenderFrontend &frontend, XR::OpenXRInternal::OpenXRSwapchain &owner,
+                                        std::span<Render::RenderTextureViewHandle> views);
+
+        /** @brief Prepares one image and locates its presentation views after the last potentially deferred step. */
+        Result<bool> PrepareProjectionInputs() {
             using Output = Result<bool>;
             const auto state = host.frames_.Snapshot();
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Available) {
-                if (auto acquired = color.Acquire(); acquired.HasError())
-                    return Result<bool>::Failure(acquired.ErrorValue());
-            }
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Acquired) {
-                const auto ready = color.Wait(0);
-                if (ready.HasError())
-                    return Result<bool>::Failure(ready.ErrorValue());
-                if (!ready.Value())
-                    return Output::Success(false);  // Zero-time native readiness; retain exact wait/frame/acquisition for next event loop.
-            }
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Ready) {
-                auto imported = color.Import();
-                if (imported.HasError())
-                    return Result<bool>::Failure(imported.ErrorValue());
-                acquisition.emplace(std::move(imported).Value());
-                if (host.frames_.Acquire(state.frame, acquisition->image) != XR::XRFrameStatus::Ok)
-                    return Result<bool>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-                acquisitionRecorded = true;
-                for (std::uint32_t eye = 0; eye < eyeViews.size(); ++eye) {
-                    auto view = host.composition_.frontend.CreateTextureView(
-                        {.texture = acquisition->texture, .format = allocation.format, .baseLayer = eye, .layerCount = 1});
-                    if (view.HasError())
-                        return Result<bool>::Failure(view.ErrorValue());
-                    eyeViews[eye] = view.Value().handle;
-                    if (auto processed = host.composition_.frontend.ProcessResourceRequests(); processed.HasError())
-                        return Result<bool>::Failure(processed.ErrorValue());
-                    if (auto ready = host.composition_.frontend.ResourceOperationResult(view.Value().operation); ready.HasError())
-                        return Result<bool>::Failure(ready.ErrorValue());
-                }
-            }
+            if (acquisitionRecorded)
+                return Output::Success(true);
+            if (state.phase != XR::XRFramePhase::Begun || !state.renderAdmitted)
+                return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+            const auto imported = WaitAndImport(color, acquisition);
+            if (imported.HasError() || !imported.Value())
+                return imported;
+            const auto activeViews = std::span{eyeViews}.first(allocation.layerCount);
+            if (auto ready =
+                    PrepareEyeViews(host.composition_.frontend, *acquisition, allocation, Render::RenderTextureAspect::Color, activeViews);
+                ready.HasError())
+                return Output::Failure(ready.ErrorValue());
+            // Keep the sole native view locate beside render binding, after the zero-time image retry path.
+            if (const auto located = LocatePresentationViews(); located.HasError())
+                return Output::Failure(located.ErrorValue());
+            if (host.frames_.Acquire(state.frame, acquisition->image) != XR::XRFrameStatus::Ok)
+                return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+            acquisitionRecorded = true;
             return Output::Success(true);
+        }
+
+        /** @brief Checks the located relation against the exact bound native references and frame prediction. */
+        Result<XR::XRPoseSample> ReferencePose(const SceneState &scene, const XR::XRFrameSnapshot &frame,
+                                               const XR::XRWorldOriginRevision origin) const {
+            const auto &reference = views->referenceToWorld;
+            const bool selectedBase =
+                reference.source == scene.references.local || (scene.references.stage && reference.source == *scene.references.stage);
+            if (session != frame.frame.session || session != scene.references.session || reference.source != views->reference ||
+                !selectedBase || reference.target != scene.worldReference ||
+                reference.time.renderPrediction != frame.predictedDisplayTime ||
+                reference.purpose != XR::XRPosePurpose::PresentationPrediction)
+                return Result<XR::XRPoseSample>::Failure(MakeError(XR::XRErrors::IdentityStale));
+            return XR::XRPoseSample::Create(reference, session, origin);
+        }
+
+        /** @brief Applies the Scene's committed Character placement to the validated eye relation. */
+        Result<XR::XRPoseSample> GameplayReferencePose(const SceneState &scene, const XR::XRPoseSample &nativeReference) const {
+            if (scene.locomotion && scene.locomotion->worldPlacement)
+                return XR::PlaceXRWorldPose(views->referenceToWorld, *scene.locomotion->worldPlacement);
+            return Result<XR::XRPoseSample>::Success(nativeReference);
         }
 
         /** @brief Converts the validated same-frame view plan and calibrated reference into the existing scene contract. */
         Result<XR::XRMultiviewScene> ConvertScene(const XR::XRViewRenderPlan &viewPlan, const XR::XRViewConfigurationId &configuration,
                                                   XR::XRViewConfigurationRevision revision, XR::XRWorldOriginRevision origin,
+                                                  const XR::XRPoseSample &reference,
                                                   const Render::MultiviewPublication &publication) const {
             const auto &support = host.composition_.frontend.Capabilities().support;
             const std::array acquiredImages{acquisition->image};
-            auto reference = XR::XRPoseSample::Create(views->referenceToWorld, session, origin);
-            if (reference.HasError())
-                return Result<XR::XRMultiviewScene>::Failure(reference.ErrorValue());
-            const std::array references{reference.Value(), reference.Value()};
+            const std::array references{reference, reference, reference, reference};
+            const auto viewCount = static_cast<std::uint32_t>(viewPlan.Views().size());
+            constexpr auto maximumInstances = Render::MultiviewExtractionLimits::HardMaximumInstances;
+            const Render::MultiviewExtractionLimits limits{.maximumViews = viewCount,
+                                                           .maximumCullTests = maximumInstances * viewCount,
+                                                           .maximumExpandedDraws = maximumInstances * viewCount};
             const XR::XRMultiviewOwnerState
                 owner{session, configuration, revision, origin, acquiredImages, publication, Render::ResolveMultiviewCapabilities(support)};
             return XR::XRMultiviewScene::Create({viewPlan,
-                                                 references,
+                                                 std::span{references}.first(viewCount),
                                                  {},
                                                  publication,
                                                  Math::ClipDepthRange::ZeroToOne,
-                                                 0.1F,
-                                                 1000.0F,
+                                                 ProjectionDepth.nearMeters,
+                                                 ProjectionDepth.farMeters,
                                                  Render::MultiviewExecutionPolicy::Multipass,
-                                                 {}},
+                                                 limits},
                                                 owner);
         }
 
@@ -182,33 +326,38 @@ namespace Horo::Application::Internal {
          * @pre The same canonical tail has accepted GUI completion or explicit scene retirement; no normal-frame wait.
          */
         Result<bool> RetireImageReferences() {
-            for (auto &view : eyeViews) {
-                if (!view.IsValid())
-                    continue;
-                if (auto released = host.composition_.frontend.ReleaseTextureView(view); released.HasError())
-                    return Result<bool>::Failure(released.ErrorValue());
-                view = {};
+            if (writer) {
+                const auto retired = writer->Retire(host.composition_.frontend);
+                if (retired.HasError() || !retired.Value())
+                    return retired;
             }
-            if (color.Phase() == XR::OpenXRInternal::NativeSwapchainPhase::Acquired) {
-                auto ready = color.Wait(0);
-                if (ready.HasError())
-                    return Result<bool>::Failure(ready.ErrorValue());
-                if (!ready.Value())
-                    return Result<bool>::Success(false);
-            }
-            if (color.Phase() != XR::OpenXRInternal::NativeSwapchainPhase::Available) {
-                const auto released = color.PollRelease();
-                if (released.HasError())
-                    return Result<bool>::Failure(released.ErrorValue());
-                if (!released.Value())
-                    return Result<bool>::Success(false);
-            }
-            return Result<bool>::Success(true);
+            return RetireImage(host.composition_.frontend, color, eyeViews);
         }
 
         Result<XrSpace> Borrow(const XR::XRCoordinateSpace &space) const override {
             return host.composition_.session.BorrowPresentationReference(space);
         }
+
+        /** @brief Ends a fully released projection, adding the underlay only for the exact live alpha proof. */
+        [[nodiscard]] Result<void> EndRenderedProjection(const XR::XRFrameId &frame);
+
+        /** @brief Converts the same encoded projection into a canonical submission only after native queue acceptance. */
+        [[nodiscard]] Result<bool> AdmitRecordedProjection(const XR::XRFrameId &frame);
+
+        /** @brief Registers the actual current pair only with complete same-signal coverage and committed history. */
+        [[nodiscard]] bool SubmitSynthesis(const XR::XRFrameId &frame, std::span<const XR::XRSwapchainImageId> projection);
+
+        /** @brief Compiles exact released subimages and renderer counts into one native End. */
+        [[nodiscard]] Result<void> EndSynthesis(const XR::XRFrameId &frame,
+                                                std::span<const XR::OpenXRInternal::NativeProjectionTarget> projection);
+
+        /** @brief Consumes exact queue-observed coverage before this frame's paired writer releases its image references. */
+        void ObserveCoverage(const XR::XRFrameId &frame) noexcept;
+        /** @brief Samples time once after Poll proves the exact queue-accepted projection completed. */
+        void ObserveRenderCompletion(const XR::XRFrameId &frame);
+
+        /** @brief Reports the exact compositor result to the existing selected viewport after successful native end. */
+        void CompleteMotion(bool projected) noexcept;
 
         /** @brief Retires only the exact candidate's frame/image/queue children through the same host.
          * @param host Same retained owner. @param candidate Exact retained Scene candidate.
@@ -218,9 +367,11 @@ namespace Horo::Application::Internal {
         /** @brief Retires graphics after native stopping or the exact captured Lost state permits recovery. */
         [[nodiscard]] static Result<bool> RetireGraphics(OpenXRPlayHost &host, bool lost);
         /** @brief Polls the same submitted queue debt and releases exact eye views during explicit Lost recovery.
-         * @return Original poll/view-release error, retaining every unreleased view for retry. No completion is manufactured.
+         * @return False while recording remains open, original poll/release error or successful view revocation.
          */
-        [[nodiscard]] Result<void> RetireViewsAfterLoss();
+        [[nodiscard]] Result<bool> RetireViewsAfterLoss();
+
+        static constexpr XR::OpenXRInternal::NativeProjectionDepth ProjectionDepth{};
     };
 
 }  // namespace Horo::Application::Internal

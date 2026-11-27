@@ -57,6 +57,14 @@ namespace Horo::Packages {
         std::vector<PackagePlatform> platforms;
         std::vector<LockedPackageReference> dependencies;
         std::vector<std::string> contributions;
+        [[nodiscard]] bool operator==(const LockedPackage &) const = default;
+    };
+
+    /** @brief Exact effects of withdrawing one root from the locked dependency graph, before checking project and runtime references. */
+    struct PackageRemovalGraphPreview final {
+        bool directRoot{};
+        std::vector<LockedPackageReference> removed;    /**< Packages unreachable from every remaining root, in package-ID order. */
+        std::vector<LockedPackageReference> requiredBy; /**< Retained packages with a direct edge to the requested package. */
     };
 
     /** @brief Strict schema-v1 package lockfile detached from cache, trust and transport state. */
@@ -103,8 +111,23 @@ namespace Horo::Packages {
         [[nodiscard]] std::span<const LockedPackageReference> Roots() const noexcept;
         /** @brief Returns the exact graph in package-ID order. @return Borrowed immutable lock entries. */
         [[nodiscard]] std::span<const LockedPackage> Packages() const noexcept;
+        /** @brief Computes what would be pruned if this direct root were withdrawn from the same exact locked graph.
+         * @param package Identity present in this lockfile. A transitive-only target cannot be withdrawn directly.
+         * @return Deterministic package removals and remaining dependents, or a typed failure for a missing package.
+         * @post Does not resolve new versions, change metadata, or authorize removal. */
+        [[nodiscard]] Result<PackageRemovalGraphPreview> PreviewRemoval(const HoroPackageId &package) const;
 
     private:
+        friend struct PackageRemovalPlan;
+
+        /** @brief Projects retained lock entries after withdrawing a direct request without resolving or fetching new artifacts.
+         * @param package Withdrawn request identity. A missing locked root leaves the graph intact.
+         * @param requestHash Canonical digest of the amended portable request.
+         * @param removed Exact removals from the current graph preview in package-ID order.
+         * @return Exact retained lock graph. Callers must bind it to the amended request before publication. */
+        [[nodiscard]] ValidatedPackageLockfileV1 WithRootWithdrawn(const HoroPackageId &package, const Sha256Digest &requestHash,
+                                                                   std::span<const LockedPackageReference> removed) const;
+
         ValidatedPackageLockfileV1(const Sha256Digest &requestHash, std::vector<LockedPackageReference> roots,
                                    std::vector<LockedPackage> packages);
 

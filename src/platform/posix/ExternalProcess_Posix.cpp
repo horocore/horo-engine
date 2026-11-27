@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include "../ExternalProcessBytePump.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/PlatformErrors.h"
@@ -18,60 +19,16 @@
 #include <span>
 #include <spawn.h>
 #include <string_view>
+#include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 
 extern char **environ;  // NOSONAR(cpp:S5421) environ is provided by the POSIX runtime.
 
 namespace Horo {
     namespace {
-        class LineDecoder final {
-        public:
-            LineDecoder(const ProcessOutputStream stream, const std::size_t maximum, const std::size_t outputBudget,
-                        const std::function<void(ProcessOutputLine)> &callback)
-                : stream_(stream), maximum_(std::max<std::size_t>(maximum, 1U)), outputBudget_(outputBudget), callback_(&callback) {}
-
-            void Append(const std::span<const char> bytes) {
-                for (const char value : bytes) {
-                    if (received_ >= outputBudget_) {
-                        truncated_ = true;
-                        continue;
-                    }
-                    ++received_;
-                    if (value == '\n')
-                        Emit();
-                    else if (value != '\r') {
-                        if (pending_.size() < maximum_)
-                            pending_.push_back(value);
-                        else
-                            truncated_ = true;
-                    }
-                }
-            }
-
-            void Finish() {
-                if (!pending_.empty() || truncated_)
-                    Emit();
-            }
-
-        private:
-            void Emit() {
-                if (*callback_)
-                    (*callback_)(ProcessOutputLine{stream_, std::move(pending_), truncated_});
-                pending_.clear();
-                truncated_ = false;
-            }
-
-            ProcessOutputStream stream_;
-            std::size_t maximum_;
-            std::size_t outputBudget_;
-            std::size_t received_{};
-            const std::function<void(ProcessOutputLine)> *callback_;
-            std::string pending_;
-            bool truncated_{false};
-        };
-
         [[nodiscard]] std::vector<std::string> BuildEnvironment(const ProcessEnvironment &overlay, const bool probeLease) {
             std::map<std::string, std::string, std::less<>> values;
             if (overlay.base == ProcessEnvironmentBase::InheritWithOverrides) {
@@ -105,17 +62,20 @@ namespace Horo {
         enum class PipeDrainState {
             Closed,
             WriterPending,
-            Retry
+            Retry,
+            Rejected
         };
 
         /** @brief Distinguishes an open writer from a finite unread tail or interrupted read. */
-        PipeDrainState Drain(const int descriptor, bool &open, LineDecoder &decoder) {
+        PipeDrainState Drain(const int descriptor, bool &open, PlatformInternal::ProcessOutputCapture &decoder) {
             using enum PipeDrainState;
             std::array<char, 4096> buffer{};
             for (std::size_t reads = 0; reads < 16; ++reads) {
                 const ssize_t count = ReadPipeChunk(descriptor, buffer);
                 if (count > 0) {
-                    decoder.Append(std::span<const char>{buffer.data(), static_cast<std::size_t>(count)});
+                    const auto bytes = std::span<const char>{buffer.data(), static_cast<std::size_t>(count)};
+                    if (!decoder.Append(bytes))
+                        return Rejected;
                     continue;
                 }
                 if (count == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
@@ -143,6 +103,79 @@ namespace Horo {
             posix_spawn_file_actions_addclose(&actions, probeSource);
         }
 
+        /** @brief Owns raw stdin endpoints and prevents SIGPIPE on the worker without changing process signal policy. */
+        class ProcessInputSocket final {
+        public:
+            ProcessInputSocket() = default;
+            ProcessInputSocket(const ProcessInputSocket &) = delete;
+            ProcessInputSocket &operator=(const ProcessInputSocket &) = delete;
+
+            ~ProcessInputSocket() {
+                for (const int endpoint : endpoints_)
+                    if (endpoint >= 0)
+                        close(endpoint);
+            }
+
+            /** @brief Creates a close-on-exec stream with a blocking child and nonblocking parent endpoint. */
+            [[nodiscard]] bool Open() noexcept {
+#ifdef SOCK_CLOEXEC
+                constexpr int socketType = SOCK_STREAM | SOCK_CLOEXEC;
+#else
+                constexpr int socketType = SOCK_STREAM;
+#endif
+                if (socketpair(AF_UNIX, socketType, 0, endpoints_.data()) != 0)
+                    return false;
+                for (int &endpoint : endpoints_) {
+                    const int reserved = fcntl(endpoint, F_DUPFD_CLOEXEC, 4);
+                    if (reserved < 0)
+                        return false;
+                    close(endpoint);
+                    endpoint = reserved;
+                }
+#ifdef SO_NOSIGPIPE
+                const int suppress = 1;
+                if (setsockopt(endpoints_[0], SOL_SOCKET, SO_NOSIGPIPE, &suppress, sizeof(suppress)) != 0)
+                    return false;
+#endif
+                return fcntl(endpoints_[0], F_SETFL, O_NONBLOCK) == 0;
+            }
+
+            /** @brief Redirects only explicit child stdin and leaves other process modes unchanged. */
+            [[nodiscard]] int Stage(posix_spawn_file_actions_t &actions) const noexcept {
+                if (endpoints_[1] < 0)
+                    return 0;
+                return posix_spawn_file_actions_adddup2(&actions, endpoints_[1], STDIN_FILENO);
+            }
+
+            /** @brief Drops the parent's extra reference to the child's endpoint after spawn. */
+            void ReleaseChild() noexcept {
+                if (endpoints_[1] >= 0)
+                    close(std::exchange(endpoints_[1], -1));
+            }
+
+            /** @brief Writes a bounded chunk and retains unwritten bytes for the next pump step. */
+            [[nodiscard]] bool Write(PlatformInternal::ProcessInputPump &input) const noexcept {
+                if (!input.Refill())
+                    return false;
+                const auto bytes = input.Pending();
+                if (bytes.empty())
+                    return true;
+#ifdef MSG_NOSIGNAL
+                constexpr int flags = MSG_NOSIGNAL;
+#else
+                constexpr int flags = 0;
+#endif
+                const auto sent = send(endpoints_[0], bytes.data(), bytes.size(), flags);
+                if (sent < 0)
+                    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+                input.Written(static_cast<std::size_t>(sent));
+                return true;
+            }
+
+        private:
+            std::array<int, 2> endpoints_{-1, -1};
+        };
+
         /** @brief Keeps argv pointers backed by owned storage until posix_spawnp returns. */
         void BuildSpawnArguments(const ExternalProcessRequest &request, std::vector<std::string> &storage, std::vector<char *> &arguments) {
             storage.reserve(request.arguments.size() + 1U);
@@ -153,13 +186,75 @@ namespace Horo {
             arguments.push_back(nullptr);
         }
 
+        /** @brief Owns partially initialized spawn attributes through argument preparation and launch failures. */
+        class SpawnAttributes final {
+        public:
+            SpawnAttributes() = default;
+
+            ~SpawnAttributes() {
+                if (initialization_ == 0)
+                    posix_spawnattr_destroy(&attributes_);
+            }
+
+            SpawnAttributes(const SpawnAttributes &) = delete;
+            SpawnAttributes &operator=(const SpawnAttributes &) = delete;
+
+            /** @brief Establishes child-owned control signals independently of the host's presentation policy.
+             * @return Zero or the native setup error; a failure must prevent spawning.
+             */
+            [[nodiscard]] int Configure() noexcept {
+                if (initialization_ != 0)
+                    return initialization_;
+                sigset_t defaults{};
+                sigset_t unblocked{};
+                if (sigemptyset(&defaults) != 0 || sigemptyset(&unblocked) != 0)
+                    return errno;
+                for (const int controlSignal : {SIGINT, SIGTERM, SIGPIPE})
+                    if (sigaddset(&defaults, controlSignal) != 0)
+                        return errno;
+                int status = posix_spawnattr_setflags(&attributes_, static_cast<short>(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK |
+                                                                                       POSIX_SPAWN_SETSIGDEF));
+                if (status == 0)
+                    status = posix_spawnattr_setpgroup(&attributes_, 0);
+                if (status == 0)
+                    status = posix_spawnattr_setsigmask(&attributes_, &unblocked);
+                if (status == 0)
+                    status = posix_spawnattr_setsigdefault(&attributes_, &defaults);
+                return status;
+            }
+
+            /** @brief Borrows the initialized native attributes for the synchronous spawn call. */
+            [[nodiscard]] const posix_spawnattr_t *Get() const noexcept {
+                return &attributes_;
+            }
+
+        private:
+            posix_spawnattr_t attributes_{};
+            const int initialization_{posix_spawnattr_init(&attributes_)};
+        };
+
         Result<pid_t> SpawnProcess(const ExternalProcessRequest &request, const std::array<int, 2> &stdoutPipe,
-                                   const std::array<int, 2> &stderrPipe, const std::optional<int> maintenanceDescriptor) {
+                                   const std::array<int, 2> &stderrPipe, const ProcessInputSocket &input,
+                                   const std::optional<int> maintenanceDescriptor) {
+            // Finish allocating borrowed argv/environment storage before acquiring native staging resources.
+            std::vector<std::string> argumentStorage;
+            std::vector<char *> arguments;
+            BuildSpawnArguments(request, argumentStorage, arguments);
+            std::vector<std::string> environmentStorage = BuildEnvironment(request.environment, maintenanceDescriptor.has_value());
+            std::vector<char *> environment;
+            for (std::string &entry : environmentStorage)
+                environment.push_back(entry.data());
+            environment.push_back(nullptr);
+
             const int probeSource = maintenanceDescriptor.has_value() ? fcntl(*maintenanceDescriptor, F_DUPFD_CLOEXEC, 64) : -1;
             if (maintenanceDescriptor.has_value() && probeSource < 0)
                 return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
             posix_spawn_file_actions_t actions;
-            posix_spawn_file_actions_init(&actions);
+            if (const int initialized = posix_spawn_file_actions_init(&actions); initialized != 0) {
+                if (probeSource >= 0)
+                    close(probeSource);
+                return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed, std::strerror(initialized)));
+            }
             posix_spawn_file_actions_adddup2(&actions, stdoutPipe[1], STDOUT_FILENO);
             posix_spawn_file_actions_adddup2(&actions, stderrPipe[1], STDERR_FILENO);
             posix_spawn_file_actions_addclose(&actions, stdoutPipe[0]);
@@ -180,25 +275,14 @@ namespace Horo {
             }
 #endif
 
-            posix_spawnattr_t attributes;
-            posix_spawnattr_init(&attributes);
-            posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
-            posix_spawnattr_setpgroup(&attributes, 0);
-
-            std::vector<std::string> argumentStorage;
-            std::vector<char *> arguments;
-            BuildSpawnArguments(request, argumentStorage, arguments);
-
-            std::vector<std::string> environmentStorage = BuildEnvironment(request.environment, probeSource >= 0);
-            std::vector<char *> environment;
-            for (std::string &entry : environmentStorage)
-                environment.push_back(entry.data());
-            environment.push_back(nullptr);
+            SpawnAttributes attributes;
+            const int inputConfigured = input.Stage(actions);
+            const int configured = inputConfigured == 0 ? attributes.Configure() : inputConfigured;
 
             pid_t process{};
-            const int spawned =
-                posix_spawnp(&process, request.executable.c_str(), &actions, &attributes, arguments.data(), environment.data());
-            posix_spawnattr_destroy(&attributes);
+            const int spawned = configured == 0 ? posix_spawnp(&process, request.executable.c_str(), &actions, attributes.Get(),
+                                                               arguments.data(), environment.data())
+                                                : configured;
             posix_spawn_file_actions_destroy(&actions);
             if (probeSource >= 0)
                 close(probeSource);
@@ -208,7 +292,8 @@ namespace Horo {
         }
 
         [[nodiscard]] Result<pid_t> SpawnCapturedProcess(const ExternalProcessRequest &request, std::array<int, 2> &stdoutPipe,
-                                                         std::array<int, 2> &stderrPipe, const std::optional<int> maintenanceDescriptor) {
+                                                         std::array<int, 2> &stderrPipe, ProcessInputSocket &input,
+                                                         const std::optional<int> maintenanceDescriptor) {
             if (pipe(stdoutPipe.data()) != 0 || pipe(stderrPipe.data()) != 0) {
                 const int failure = errno;
                 for (const int descriptor : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]})
@@ -217,7 +302,8 @@ namespace Horo {
                 return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(failure)));
             }
 
-            auto spawned = SpawnProcess(request, stdoutPipe, stderrPipe, maintenanceDescriptor);
+            auto spawned = SpawnProcess(request, stdoutPipe, stderrPipe, input, maintenanceDescriptor);
+            input.ReleaseChild();
             close(stdoutPipe[1]);
             close(stderrPipe[1]);
             if (spawned.HasError()) {
@@ -309,19 +395,22 @@ namespace Horo {
 
         std::array<int, 2> stdoutPipe{-1, -1};
         std::array<int, 2> stderrPipe{-1, -1};
-        auto spawnedResult = SpawnCapturedProcess(request, stdoutPipe, stderrPipe, maintenanceDescriptor);
+        ProcessInputSocket inputSocket;
+        if (request.byteChannel && !inputSocket.Open())
+            return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(errno)));
+        auto spawnedResult = SpawnCapturedProcess(request, stdoutPipe, stderrPipe, inputSocket, maintenanceDescriptor);
         if (spawnedResult.HasError()) {
             return Result<ExternalProcessResult>::Failure(spawnedResult.ErrorValue());
         }
         const pid_t process = spawnedResult.Value();
 
-        LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.maximumOutputBytes,
-                                   request.onOutput};
-        LineDecoder standardError{ProcessOutputStream::StandardError, request.maximumLineBytes, request.maximumOutputBytes,
-                                  request.onOutput};
+        PlatformInternal::ProcessOutputCapture standardOutput{ProcessOutputStream::StandardOutput, request};
+        PlatformInternal::ProcessOutputCapture standardError{ProcessOutputStream::StandardError, request};
         bool stdoutOpen = true;
         bool stderrOpen = true;
         bool childExited = false;
+        bool ioFailed = false;
+        PlatformInternal::ProcessInputPump input{request.byteChannel};
         int status{};
         const auto started = std::chrono::steady_clock::now();
         ProcessMonitorState monitor{
@@ -339,6 +428,11 @@ namespace Horo {
             // whereas pending bytes, EOF and the reserved zombie leader do not.
             const auto stdoutState = stdoutOpen ? Drain(stdoutPipe[0], stdoutOpen, standardOutput) : Closed;
             const auto stderrState = stderrOpen ? Drain(stderrPipe[0], stderrOpen, standardError) : Closed;
+            const bool writing = !childExited && !monitor.terminationRequested && !cancellation.IsCancellationRequested();
+            if (stdoutState == Rejected || (writing && !inputSocket.Write(input))) {
+                ioFailed = true;
+                break;
+            }
             const bool complete = childExited && !stdoutOpen && !stderrOpen;
             const bool descendantWriter = childExited && (stdoutState == WriterPending || stderrState == WriterPending);
             if (!complete)
@@ -352,8 +446,11 @@ namespace Horo {
         close(stderrPipe[0]);
         standardOutput.Finish();
         standardError.Finish();
-        static_cast<void>(waitpid(process, &status, 0));
+        while (waitpid(process, &status, 0) < 0 && errno == EINTR) {
+        }
 
+        if (ioFailed)
+            return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
         return Result<ExternalProcessResult>::Success(BuildExternalProcessResult(status, monitor));
     }
 

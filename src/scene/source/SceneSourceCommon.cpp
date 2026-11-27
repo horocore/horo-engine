@@ -39,6 +39,16 @@ namespace Horo::SceneSource::Detail {
         .userActionable = true,
     };
 
+    const ErrorCodeDescriptor SceneChildReferencesUnsupported{
+        .domain = ScenePersistenceDomain,
+        .code = ErrorCode{"scene_persistence.child_references_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "This Scene source consumer cannot admit the declared child composition.",
+        .remediationHint = "Use a child-aware Scene projection with the declared composition mode.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
     [[nodiscard]] Error PersistenceError(const ErrorCodeDescriptor &descriptor, std::string message) {
         return MakeError(descriptor, std::move(message));
     }
@@ -332,6 +342,7 @@ namespace Horo::SceneSource {
     /** @copydoc SceneSourceErrorDomain */
     ModuleErrorDomainDescriptor SceneSourceErrorDomain() {
         return {.id = Detail::ScenePersistenceDomain,
-                .descriptors = {&Detail::ScenePathInvalid, &Detail::SceneReadFailed, &Detail::SceneInvalid}};
+                .descriptors = {&Detail::ScenePathInvalid, &Detail::SceneReadFailed, &Detail::SceneInvalid,
+                                &Detail::SceneChildReferencesUnsupported}};
     }
 }  // namespace Horo::SceneSource

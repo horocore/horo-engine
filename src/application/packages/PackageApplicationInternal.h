@@ -2,6 +2,7 @@
 #include "Horo/Application/PackageApplication.h"
 
 #include <mutex>
+#include <variant>
 
 namespace Horo::Application {
     namespace PackageOperations {
@@ -14,6 +15,11 @@ namespace Horo::Application {
     }  // namespace PackageOperations
 
     struct PackageApplication::Impl final {
+        using ActivationRequest =
+            std::variant<std::span<const Packages::EnabledPackageExtension>, std::span<const Packages::EnabledPackageModule>>;
+        using ActivationSelection =
+            std::variant<std::vector<Packages::EnabledPackageExtension>, std::vector<Packages::EnabledPackageModule>>;
+
         Impl(JobSystem &scheduler, Packages::PackageRestoreService &restores, Packages::PackageInstallService &installs,
              Packages::PackageLifecycleService &activations, PackageApplicationConfiguration settings)
             : jobs(scheduler), restore(restores), install(installs), lifecycle(activations), configuration(std::move(settings)) {}
@@ -24,9 +30,18 @@ namespace Horo::Application {
         void Finish(Result<void> result, bool cancelled = false);
         [[nodiscard]] Result<PackageOperationId> BeginRestore(PackageOperationKind kind, const CancellationToken &parent);
         void SubmitInstall(std::shared_ptr<const Packages::PackageRestoreGraph> graph);
+        /** @brief Queues serialized package mutation and retains its result until the job is terminal. */
+        void SubmitMutation(PackageOperationPhase phase, PackageRemovalWork work);
         [[nodiscard]] Result<void> PublishPlan(std::shared_ptr<const Packages::PackageRestoreGraph> graph);
+        /** @brief Derives reverse dependency evidence from the same exact locked plans shown to callers. */
+        static void IndexPlanDependents(PackagePlanSnapshot &plan);
+        /** @brief Owns one complete typed selection before staging or waiting for a quiescent boundary. */
+        [[nodiscard]] Result<PackageOperationId> BeginActivation(PackageOperationKind kind, const ActivationRequest &request,
+                                                                 const CancellationToken &parent);
         void PumpRestore();
-        void PumpInstall();
+        void PumpMutation();
+        /** @brief Projects the durable mutation result into the remaining application operation. */
+        void FinishMutation(Result<void> result);
         void PumpActivation(Packages::PackageActivationBoundary boundary);
         JobSystem &jobs;
         Packages::PackageRestoreService &restore;
@@ -38,11 +53,13 @@ namespace Horo::Application {
         std::shared_ptr<const PackagePlanSnapshot> plan;
         bool closing{};
         bool closed{};
+        bool pumping{};
+        bool metadataWithdrawn{};
         std::optional<PackageOperationSnapshot> operation;
         CancellationSource cancellation;
         std::optional<Packages::PackageRestoreOperationHandle> restoreOperation;
-        std::optional<JobHandle> installJob;
+        std::optional<JobHandle> mutationJob;
         std::shared_ptr<PackageOperations::Completion> completion;
-        std::vector<Packages::EnabledPackageExtension> enabled;
+        std::optional<ActivationSelection> activation;
     };
 }  // namespace Horo::Application

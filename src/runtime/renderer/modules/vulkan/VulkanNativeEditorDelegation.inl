@@ -48,20 +48,78 @@ Result<void> ExecuteGui(const GuiCompositionRequest &request, Detail::IVulkanGui
 
 /** @copydoc IVulkanEditorGraphicsPort::WriteFrameBuffer */
 Result<void> WriteFrameBuffer(const FrameToken frame, const std::uint64_t instance, const std::span<const std::byte> bytes) override {
-    if (!graph_.CanWriteFrameInputs(frame))
-        return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
-    const auto completion = resources_.BufferCompletion(instance);
-    if (completion.HasError())
-        return Result<void>::Failure(completion.ErrorValue());
-    if (completion.Value().IsValid()) {
-        const auto retired = graph_.ObserveSubmission(
-            {.completion = completion.Value(), .expectedDeviceIncarnation = resourceCapabilities_.deviceIncarnation});
-        if (retired.HasError())
-            return Result<void>::Failure(retired.ErrorValue());
-        if (!retired.Value())
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
-    }
-    return resources_.WriteHostFrameBuffer(instance, bytes);
+    return graph_.WriteFrameBuffer(frame, instance, bytes);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ObservePreparationBuffer */
+Result<bool> ObservePreparationBuffer(const std::uint64_t instance) override {
+    return graph_.ObservePreparationBuffer(instance);
+}
+
+bool SupportsStereoCoverageReadback() const noexcept override {
+    return graph_.SupportsStereoCoverageReadback();
+}
+
+Result<bool> ReadCompletedStereoCoverage(std::uint64_t instance, RenderTimelinePoint completion,
+                                         std::span<std::byte> destination) override {
+    return graph_.ReadCompletedStereoCoverage(instance, completion, destination);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ReadCompletedColor */
+Result<bool> ReadCompletedColor(std::uint64_t instance, RenderTimelinePoint completion, std::span<std::byte> destination) override {
+    return graph_.ReadCompletedColor(instance, completion, destination);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::SupportsColorReadback */
+bool SupportsColorReadback() const noexcept override {
+    return graph_.SupportsStereoCoverageReadback();
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::SupportsStereoCoverageReduction */
+bool SupportsStereoCoverageReduction(RenderQueueId queue) const noexcept override {
+    return graph_.SupportsStereoCoverageReduction(queue);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::PrepareStereoCoverageReduction */
+Result<std::shared_ptr<IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+    const Detail::VulkanStereoCoveragePreparation &request) override {
+    return graph_.PrepareStereoCoverageReduction(request);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ReadCompletedStereoCoverageReduction */
+Result<bool> ReadCompletedStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                  RenderGraphStereoCoverageReduction::Tallies &destination) override {
+    return graph_.ReadCompletedStereoCoverageReduction(instance, completion, destination);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::WritePreparationUniform */
+Result<void> WritePreparationUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) override {
+    return graph_.WritePreparationUniform(instance, bytes);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::WasSubmissionAccepted */
+Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const override {
+    return graph_.WasSubmissionAccepted(signal, deviceIncarnation);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::SupportsGraphGpuDuration */
+Result<bool> SupportsGraphGpuDuration(RenderQueueId queue) const override {
+    return graph_.SupportsGraphGpuDuration(queue);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ArmGraphGpuDuration */
+Result<bool> ArmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) override {
+    return graph_.ArmGraphGpuDuration(frame, signal);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::DisarmGraphGpuDuration */
+void DisarmGraphGpuDuration(FrameToken frame, RenderTimelinePoint signal) noexcept override {
+    graph_.DisarmGraphGpuDuration(frame, signal);
+}
+
+/** @copydoc IVulkanEditorGraphicsPort::ObserveGraphGpuDuration */
+Result<Detail::VulkanGraphGpuDuration> ObserveGraphGpuDuration(RenderTimelinePoint signal, std::uint64_t incarnation) override {
+    return graph_.ObserveGraphGpuDuration(signal, incarnation);
 }
 
 /** @copydoc IVulkanEditorGraphicsPort::AttachDeviceChild */

@@ -33,6 +33,10 @@ namespace Horo::Editor {
 
         void OnAttach(PanelContext &ctx) override;
         void OnDetach() override;
+        /** @brief Releases hidden rename/search focus.
+         * @param command Current frame intent, preserved without publishing a rename.
+         */
+        void OnPresentationHidden(EditorWorkspaceViewCommandData &command) override;
 
         void DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, ImU32 color) override;
 
@@ -52,6 +56,8 @@ namespace Horo::Editor {
         };
 
         void BeginRename(HierarchyNodeId id);
+        /** @brief Cancels this panel's rename/search input ownership and deferred focus requests. */
+        void ResetTransientInput() noexcept;
         [[nodiscard]] PanelInteractionState DrawSearch(float panelWidth, float uiScale, const EditorGuiContext &context);
         void UpdateFocusedInputContext(bool searchActive);
         void HandleRenameShortcut(const PanelInteractionState &interaction);

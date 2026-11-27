@@ -1,4 +1,4 @@
-#include "CanonicalPhysicsStateBodyControl.h"
+#include "state/canonical/binding/CanonicalPhysicsStateBodyControl.h"
 
 #include <Jolt/Core/FPException.h>
 #include <array>

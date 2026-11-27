@@ -1,5 +1,6 @@
 #include "Horo/Application/PackageApplication.h"
 
+#include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
 #include <limits>
@@ -25,6 +26,8 @@ namespace Horo::Application {
             return lane;
         if (closing)
             return Result<void>::Failure(Failure("packages.application.closed"));
+        if (metadataWithdrawn)
+            return Result<void>::Failure(Failure("packages.application.plan_stale"));
         if (operation && operation->outcome == PackageOperationOutcome::Running)
             return Result<void>::Failure(Failure("packages.application.busy"));
         if (const auto current = configuration.validateAdmission(); current.HasError())
@@ -44,9 +47,9 @@ namespace Horo::Application {
         if (const auto active = lifecycle.Active())
             operation->activeGeneration = active->generation;
         restoreOperation.reset();
-        installJob.reset();
+        mutationJob.reset();
         completion.reset();
-        enabled.clear();
+        activation.reset();
         return Result<PackageOperationId>::Success(operation->id);
     }
 
@@ -63,6 +66,7 @@ namespace Horo::Application {
         if (result.HasError())
             operation->diagnostic = std::move(result).ErrorValue();
         ++operation->revision;
+        activation.reset();
     }
 
     /** @copydoc PackageApplication::Create */
@@ -81,6 +85,13 @@ namespace Horo::Application {
             if (valid.HasError())
                 return Result<std::unique_ptr<PackageApplication>>::Failure(valid.ErrorValue());
         }
+        if (configuration.portableRequest) {
+            if (!configuration.lockedPlan)
+                return Result<std::unique_ptr<PackageApplication>>::Failure(Failure("packages.application.plan_unavailable"));
+            const auto valid = configuration.portableRequest->ValidateLock(*configuration.lockedPlan);
+            if (valid.HasError())
+                return Result<std::unique_ptr<PackageApplication>>::Failure(valid.ErrorValue());
+        }
         auto owner = std::make_unique<PackageApplication>(ConstructionKey{}, std::make_unique<Impl>(jobs, restore, install, lifecycle,
                                                                                                     std::move(configuration)));
         if (owner->impl_->configuration.lockedPlan) {
@@ -88,6 +99,7 @@ namespace Horo::Application {
             plan->revision = 1;
             for (const auto &entry : owner->impl_->configuration.lockedPlan->Packages())
                 plan->packages.push_back({.locked = entry});
+            Impl::IndexPlanDependents(*plan);
             owner->impl_->plan = std::move(plan);
         }
         return Result<std::unique_ptr<PackageApplication>>::Success(std::move(owner));
@@ -139,11 +151,33 @@ namespace Horo::Application {
             Finish(Result<void>::Failure(Failure("packages.application.graph_unavailable")));
             return;
         }
-        auto completed = std::make_shared<PackageOperations::Completion>();
+        const auto retained = lifecycle.MissingRetainedPackages(*graph);
+        if (retained.HasError()) {
+            Finish(Result<void>::Failure(retained.ErrorValue()));
+            return;
+        }
+        if (!retained.Value().empty()) {
+            std::string detail{"Packages still in use:"};
+            for (const auto &package : retained.Value()) {
+                detail += ' ';
+                detail += package.Value();
+            }
+            Finish(Result<void>::Failure(MakeError(Packages::PackageLifecycleErrors::PackageInUse, std::move(detail))));
+            return;
+        }
         auto *authority = &install;
+        SubmitMutation(PackageOperationPhase::Installing, [authority, graph = std::move(graph)](const CancellationToken &token) {
+            return authority->Install(graph, token);
+        });
+    }
+
+    /** @copydoc PackageApplication::Impl::SubmitMutation */
+    void PackageApplication::Impl::SubmitMutation(const PackageOperationPhase phase, PackageRemovalWork work) {
+        auto completed = std::make_shared<PackageOperations::Completion>();
         auto submitted = jobs.SubmitResult({.parentCancellation = cancellation.Token(), .resource = JobResource::Io},
-                                           [authority, graph = std::move(graph), completed](const CancellationToken &token) {
-            auto result = authority->Install(graph, token);
+                                           [queued = std::move(work), completed](const CancellationToken &token) mutable {
+            auto work = std::move(queued);
+            auto result = work(token);
             std::lock_guard guard(completed->mutex);
             completed->result = std::move(result);
             return Result<void>::Success();
@@ -152,38 +186,88 @@ namespace Horo::Application {
             Finish(Result<void>::Failure(submitted.ErrorValue()));
         else {
             completion = std::move(completed);
-            installJob = std::move(submitted).Value();
-            operation->phase = PackageOperationPhase::Installing;
+            mutationJob = std::move(submitted).Value();
+            operation->phase = phase;
             ++operation->revision;
         }
+    }
+
+    /** @copydoc PackageApplication::Remove */
+    Result<PackageOperationId> PackageApplication::Remove(const Packages::HoroPackageId &package,
+                                                          const std::shared_ptr<const PackagePlanSnapshot> &reviewed,
+                                                          const CancellationToken &cancellation) {
+        using Operation = Result<PackageOperationId>;
+        if (auto admission = impl_->CheckAdmission(); admission.HasError())
+            return Operation::Failure(admission.ErrorValue());
+        if (!reviewed || reviewed != impl_->plan)
+            return Operation::Failure(Failure("packages.application.plan_stale"));
+        if (!impl_->configuration.prepareRemoval || !impl_->configuration.portableRequest)
+            return Operation::Failure(Failure("packages.application.removal_unavailable"));
+        auto plan = Packages::PackageRemovalPlan::Prepare(*impl_->configuration.portableRequest, *impl_->configuration.lockedPlan, package);
+        if (plan.HasError())
+            return Operation::Failure(plan.ErrorValue());
+        auto reservation = impl_->lifecycle.ReserveRemoval(plan.Value().graph.removed);
+        if (reservation.HasError())
+            return Operation::Failure(reservation.ErrorValue());
+        auto work = impl_->configuration.prepareRemoval(package, std::move(reservation).Value());
+        if (work.HasError())
+            return Operation::Failure(work.ErrorValue());
+        auto admitted = impl_->Admit(PackageOperationKind::Remove, cancellation);
+        if (admitted.HasValue())
+            impl_->SubmitMutation(PackageOperationPhase::Removing, std::move(work).Value());
+        return admitted;
+    }
+
+    /** @copydoc PackageApplication::RemovalPublished */
+    bool PackageApplication::RemovalPublished() const noexcept {
+        return std::this_thread::get_id() == impl_->owner && impl_->metadataWithdrawn;
+    }
+
+    /** @copydoc PackageApplication::Impl::BeginActivation */
+    Result<PackageOperationId> PackageApplication::Impl::BeginActivation(PackageOperationKind kind, const ActivationRequest &request,
+                                                                         const CancellationToken &parent) {
+        if (const auto valid = CheckAdmission(); valid.HasError())
+            return Result<PackageOperationId>::Failure(valid.ErrorValue());
+        const auto count = std::visit([](auto selected) {
+            return selected.size();
+        }, request);
+        if (count > configuration.maximumEnabledDescriptors)
+            return Result<PackageOperationId>::Failure(Failure("packages.application.capacity"));
+        auto selection = std::visit([](auto selected) -> ActivationSelection {
+            using Entries = std::vector<typename decltype(selected)::value_type>;
+            return ActivationSelection{std::in_place_type<Entries>, selected.begin(), selected.end()};
+        }, request);
+        const auto installed = install.InstalledRecord();
+        const bool needsAvailability =
+            count != 0 && (!installed || installed->Graph()->requestHash != configuration.restore.expectedRequestHash);
+        auto admitted = needsAvailability ? BeginRestore(kind, parent) : Admit(kind, parent);
+        if (admitted.HasValue() && operation->outcome == PackageOperationOutcome::Running) {
+            activation = std::move(selection);
+            if (!needsAvailability)
+                operation->phase = PackageOperationPhase::Activating;
+        }
+        return admitted;
     }
 
     /** @copydoc PackageApplication::Activate */
     Result<PackageOperationId> PackageApplication::Activate(const std::span<const Packages::EnabledPackageExtension> enabled,
                                                             const CancellationToken &cancellation) {
-        if (const auto valid = impl_->CheckAdmission(); valid.HasError())
-            return Result<PackageOperationId>::Failure(valid.ErrorValue());
-        if (enabled.size() > impl_->configuration.maximumEnabledDescriptors)
-            return Result<PackageOperationId>::Failure(Failure("packages.application.capacity"));
-        std::vector<Packages::EnabledPackageExtension> owned(enabled.begin(), enabled.end());
-        const auto installed = impl_->install.InstalledRecord();
-        const bool needsAvailability =
-            !owned.empty() && (!installed || installed->Graph()->requestHash != impl_->configuration.restore.expectedRequestHash);
-        auto admitted = needsAvailability ? impl_->BeginRestore(PackageOperationKind::Activate, cancellation)
-                                          : impl_->Admit(PackageOperationKind::Activate, cancellation);
-        if (admitted.HasValue() && impl_->operation->outcome == PackageOperationOutcome::Running) {
-            impl_->enabled = std::move(owned);
-            if (!needsAvailability)
-                impl_->operation->phase = PackageOperationPhase::Activating;
-        }
-        return admitted;
+        return impl_->BeginActivation(PackageOperationKind::Activate, enabled, cancellation);
+    }
+
+    /** @copydoc PackageApplication::ActivateModules */
+    Result<PackageOperationId> PackageApplication::ActivateModules(const std::span<const Packages::EnabledPackageModule> enabled,
+                                                                   const CancellationToken &cancellation) {
+        return impl_->BeginActivation(PackageOperationKind::Activate, enabled, cancellation);
     }
 
     /** @copydoc PackageApplication::Disable */
     Result<PackageOperationId> PackageApplication::Disable(const CancellationToken &cancellation) {
-        auto result = Activate({}, cancellation);
-        if (result.HasValue())
-            impl_->operation->kind = PackageOperationKind::Disable;
-        return result;
+        if (const auto lane = impl_->CheckLane(); lane.HasError())
+            return Result<PackageOperationId>::Failure(lane.ErrorValue());
+        const auto active = impl_->lifecycle.Active();
+        if (active && !active->modules.empty())
+            return impl_->BeginActivation(PackageOperationKind::Disable, std::span<const Packages::EnabledPackageModule>{}, cancellation);
+        return impl_->BeginActivation(PackageOperationKind::Disable, std::span<const Packages::EnabledPackageExtension>{}, cancellation);
     }
 }  // namespace Horo::Application

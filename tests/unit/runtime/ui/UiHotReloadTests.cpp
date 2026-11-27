@@ -32,6 +32,66 @@ namespace Horo::Runtime::Ui::ReloadTests {
             return activation.Value();
         }
 
+        TEST_CASE("Canvas inspection rejects replaced, invalid route and stopped publications", "[runtime_ui][reload][inspection]") {
+            auto allocator = std::move(UiElementSlotAllocator::Create(Owner())).Value();
+            auto publisher = Publisher(allocator);
+            const auto old = publisher.Acquire().Value();
+            const auto canvas = Canvas(publisher).id;
+            const auto snapshot = publisher.Inspect(old, canvas);
+            REQUIRE(snapshot.HasValue());
+            CHECK(snapshot.Value().canvas == Canvas(publisher).tree.Canvas());
+            CHECK(snapshot.Value().tree == Revision<UiRuntimeTreeRevision>(1));
+            CHECK(publisher.Inspect(old, Stable<UiCanvasId>(50)).ErrorValue().code.Value() ==
+                  UiErrors::CanvasReferenceInvalid.code.Value());
+            const auto unknownRoute = UiRouteInstanceId{Owner(), 20, 1};
+            CHECK(publisher.Inspect(old, canvas, {}, unknownRoute).ErrorValue().code.Value() == UiErrors::RouteOperationStale.code.Value());
+            auto prepared = Prepare(publisher, allocator, 2);
+            Publish(publisher, prepared);
+            CHECK(publisher.Inspect(old, canvas).ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
+            const auto current = publisher.Acquire().Value();
+            CHECK(publisher.Inspect(current, canvas).Value().tree == Revision<UiRuntimeTreeRevision>(2));
+            publisher.Shutdown();
+            CHECK(publisher.Inspect(current, canvas).ErrorValue().code.Value() == UiErrors::InstanceStateInvalid.code.Value());
+            CHECK(snapshot.Value().tree == Revision<UiRuntimeTreeRevision>(1));
+        }
+
+        TEST_CASE("Canvas inspection reads the selected live route router", "[runtime_ui][reload][inspection]") {
+            auto allocator = std::move(UiElementSlotAllocator::Create(Owner())).Value();
+            auto publisher = Publisher(allocator);
+            auto &canvas = Canvas(publisher);
+            REQUIRE(canvas.routes->Push(Stable<UiRouteId>(9)).Value().IsCommitted());
+            const auto route = canvas.routes->Top()->id;
+            const auto &tree = canvas.tree;
+            UiActionOwnerContext owner{tree.Instance(),       tree.Canvas(),
+                                       tree.SourceDocument(), tree.SourceDocumentRevision(),
+                                       tree.Revision(),       Revision<UiInteractionRevision>(1)};
+            bool stale{};
+            SECTION("current route action owner") {}
+            SECTION("route action owner from a different tree revision") {
+                owner.treeRevision = Revision<UiRuntimeTreeRevision>(2);
+                stale = true;
+            }
+            auto router = UiActionRouter::Create({owner, 2});
+            REQUIRE(router.HasValue());
+            REQUIRE(canvas.routes->AttachActions(route, std::move(router).Value()).HasValue());
+            const auto request = canvas.routes->Actions(route)->Enqueue({owner, tree.Root().Value().handle},
+                                                                        UiButtonActionCommand{Stable<UiActionId>(15), {}});
+            REQUIRE(request.HasValue());
+            const auto lease = publisher.Acquire().Value();
+            const auto captured = publisher.Inspect(lease, canvas.id, {}, route);
+            if (stale) {
+                REQUIRE(captured.HasError());
+                CHECK(captured.ErrorValue().code.Value() == UiErrors::ActionSourceStale.code.Value());
+                return;
+            }
+            REQUIRE(captured.HasValue());
+            REQUIRE(captured.Value().actions);
+            REQUIRE(captured.Value().actions->actions.size() == 1);
+            CHECK(captured.Value().actions->actions.front().request == request.Value());
+            CHECK(captured.Value().route == route);
+            CHECK_FALSE(publisher.Inspect(lease, canvas.id).Value().actions);
+        }
+
         TEST_CASE("UI reload preserves compatible draft focus route and scroll through actual owners", "[runtime_ui][reload]") {
             auto allocator = std::move(UiElementSlotAllocator::Create(Owner())).Value();
             auto publisher = Publisher(allocator);
@@ -158,6 +218,54 @@ namespace Horo::Runtime::Ui::ReloadTests {
             CHECK(refused.Value().rejection == UiRouteOperationRejection::GuardMismatch);
             CHECK(publisher.ApplyPresentation(current.id, receipt).HasError());
             CHECK_FALSE(publisher.InputEligible(current.id, receipt.view));
+        }
+
+        TEST_CASE("World presentation withdrawal cancels capture before a later receipt restores the plane", "[runtime_ui][reload][world]") {
+            auto allocator = std::move(UiElementSlotAllocator::Create(Owner())).Value();
+            auto publisher = Publisher(allocator);
+            auto &canvas = Canvas(publisher);
+            const UiWorldCanvasProjection plane{{}, {2, 0, 0}, {0, 2, 0}};
+            auto &tracker = canvas.presentations.front();
+            UiPresentationReceipt receipt{tracker.View(),
+                                          tracker.Canvas(),
+                                          canvas.layout->Descriptor().interaction,
+                                          Revision<UiRenderSnapshotRevision>(1),
+                                          UiPresentationOutcome::Presented,
+                                          UiPresentationReason::None,
+                                          plane};
+            REQUIRE(publisher.ApplyPresentation(canvas.id, receipt).Value());
+            const UiEventRoute route{canvas.tree.Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), canvas.tree.Revision(),
+                                     receipt.interactionRevision, canvas.controls.front().control.Element(), {}};
+            const UiPointerCaptureRequest request{{Owner(), 7, 1}, UiPointerId::Create(1).Value(), UiPointerButton::Primary, receipt.view,
+                                                  route};
+            auto acquired = canvas.captures->Capture(request, canvas.tree, tracker);
+            REQUIRE(acquired.HasValue());
+            auto token = std::move(acquired).Value();
+
+            receipt.snapshotRevision = Revision<UiRenderSnapshotRevision>(2);
+            REQUIRE(publisher.ApplyPresentation(canvas.id, receipt).HasValue());
+            CHECK(token.IsActive());
+            receipt.outcome = UiPresentationOutcome::Failed;
+            receipt.reason = UiPresentationReason::ExecutionFailure;
+            receipt.worldProjection.reset();
+            CHECK(publisher.ApplyPresentation(canvas.id, receipt).HasError());  // Duplicate revision.
+            CHECK(token.IsActive());
+            REQUIRE(tracker.WorldProjection());
+
+            receipt.snapshotRevision = Revision<UiRenderSnapshotRevision>(3);
+            const auto withdrawn = publisher.ApplyPresentation(canvas.id, receipt);
+            REQUIRE(withdrawn.HasValue());
+            CHECK_FALSE(withdrawn.Value());
+            CHECK_FALSE(tracker.WorldProjection());
+            CHECK(token.CancellationReason() == UiPointerCaptureCancellationReason::Suspended);
+
+            receipt.snapshotRevision = Revision<UiRenderSnapshotRevision>(4);
+            receipt.outcome = UiPresentationOutcome::Presented;
+            receipt.reason = UiPresentationReason::None;
+            receipt.worldProjection = plane;
+            REQUIRE(publisher.ApplyPresentation(canvas.id, receipt).HasValue());
+            CHECK_FALSE(token.IsActive());
+            CHECK(canvas.captures->Capture(request, canvas.tree, tracker).HasValue());
         }
 
         TEST_CASE("UI reload modal and route high water reject deep ABA and overflow without mutation", "[runtime_ui][reload][aba]") {

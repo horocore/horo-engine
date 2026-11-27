@@ -2,6 +2,7 @@
 #include "CliHostInterrupts.h"
 #include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Cli/CliOutputPresenter.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Math/SceneMath.h"
@@ -10,12 +11,15 @@
 #include "Horo/Platform/NativeFileSystemErrors.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 #include "Horo/Scene/SceneSource.h"
+#include "Horo/Security/CredentialStore.h"
 #include "Horo/Security/SecurityErrors.h"
 #include "NavigationCliHost.h"
 #include "ProjectProtocolIdentity.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <sstream>
+#include <stdexcept>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -26,6 +30,21 @@ namespace Horo::Application::Internal {
             return std::move(*translated);
         }
     }  // namespace
+
+    TEST_CASE("Native CLI admits portable removal blockers without disclosing other error details", "[packages][cli][errors]") {
+        const auto translator = Translator();
+        Error blocked{ErrorCode{"packages.request.removal_blocked"}, ErrorDomainId{"horo.packages.request"}, ErrorSeverity::Error,
+                      "A locked dependency cannot be removed directly."};
+        blocked.diagnostics.emplace_back(DiagnosticCode{"packages.request.removal_required_by"}, DiagnosticSeverity::Error,
+                                         "com.game.root 1.2.0 requires com.shared.data", SourceLocation{"packages.lock"}, "com.game.root");
+        const auto review = translator.Translate(blocked, Hosts::ErrorDetail::HostPolicy);
+        REQUIRE(review.has_value());
+        REQUIRE(review->Failure().diagnostics.size() == 1);
+        CHECK(review->Failure().diagnostics.front().path == "com.game.root");
+        const auto publicReview = translator.Translate(blocked);
+        REQUIRE(publicReview.has_value());
+        CHECK(publicReview->Failure().diagnostics.front().path.empty());
+    }
 
     TEST_CASE("Native navigation host preserves validation cancellation and infrastructure exit categories", "[navigation][cli][errors]") {
         using enum Hosts::ExitCategory;
@@ -99,6 +118,64 @@ namespace Horo::Application::Internal {
         REQUIRE(io.has_value());
         CHECK(io->Category() == Hosts::ExitCategory::Operation);
         CHECK(io->Json().find("PRIVATE PROJECT LOCATION") == std::string::npos);
+    }
+
+    TEST_CASE("Production CLI error presentation keeps credential provider failures typed and redacted", "[cli][security]") {
+        class FailingProvider final : public Security::CredentialProvider {
+        public:
+            Result<Security::SecureBytes> Resolve(const CredentialReference &, std::uint64_t) override {
+                if (throws)
+                    throw std::runtime_error("fixture-provider-detail");
+                return Result<Security::SecureBytes>::Failure(MakeError(SecurityErrors::CredentialExpired, "fixture-provider-detail"));
+            }
+
+            bool throws{};
+        };
+
+        ConfigurationSchema schema;
+        const SettingKey key{"fixture.credential"};
+        REQUIRE(schema
+                    .Register({.key = key,
+                               .type = SettingValueType::CredentialReference,
+                               .defaultValue = CredentialReference{},
+                               .scope = SettingScope::User,
+                               .reloadPolicy = ReloadPolicy::NextOperation,
+                               .sensitivity = SettingSensitivity::SecretReference})
+                    .HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        const auto reference = CredentialReference::Parse("cred:v1:" + std::string(48, 'a'));
+        REQUIRE(reference.HasValue());
+        ConfigurationResolutionRequest inputs;
+        inputs.user.emplace(key, ConfigurationInputValue{.value = reference.Value()});
+        const auto snapshot = ConfigurationResolver::Resolve(schema, inputs);
+        REQUIRE(snapshot.HasValue());
+
+        FailingProvider provider;
+        using namespace Cli;
+        const CliCommandDescriptor descriptor{.path = {{"project", "validate"}},
+                                              .output = {.id = "horo.project.validation",
+                                                         .version = 1,
+                                                         .formats =
+                                                             CliOutputFormat::Human | CliOutputFormat::Json | CliOutputFormat::JsonLines}};
+        for (const bool thrown : {false, true}) {
+            provider.throws = thrown;
+            const auto resolved = Security::ResolveConfigurationCredential(snapshot.Value(), key, &provider, 0);
+            REQUIRE(resolved.HasError());
+            const auto &expected = thrown ? SecurityErrors::CredentialBackendUnavailable : SecurityErrors::CredentialExpired;
+            CHECK(resolved.ErrorValue().code.Value() == expected.code.Value());
+            CHECK(resolved.ErrorValue().message.find("fixture-provider-detail") == std::string::npos);
+            for (const auto format : {CliProgressOutputMode::Human, CliProgressOutputMode::Json, CliProgressOutputMode::JsonLines}) {
+                std::ostringstream output;
+                std::ostringstream diagnostics;
+                CliOutputPresenter presenter(descriptor, {1}, Translator(), output, diagnostics, format, false);
+                const auto result = presenter.Complete(CliTerminalResult::Failure({.invocation = {1}}, resolved.ErrorValue()));
+                const auto expectedExit = thrown ? Hosts::ExitCategory::Operation : Hosts::ExitCategory::Permission;
+                CHECK(result.exitCode == static_cast<int>(expectedExit));
+                const auto streams = output.str() + diagnostics.str();
+                CHECK(streams.find("fixture-provider-detail") == std::string::npos);
+                CHECK(streams.find(reference.Value().Value()) == std::string::npos);
+            }
+        }
     }
 
     TEST_CASE("Native navigation host refuses undeclared roots and causes without weakening the registry", "[navigation][cli][errors]") {

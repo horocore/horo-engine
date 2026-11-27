@@ -99,8 +99,10 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::PreparePrograms(const EditorViewportColorInputs &inputs) {
         for (std::size_t i = 0; i < programs_.size(); ++i) {
             const bool look = i == 0 && selection_->Mode() == ColorLookMode::Enabled;
-            const auto stage = look ? ColorOutputShaderStage::SceneToDisplayLinearWithLook : static_cast<ColorOutputShaderStage>(i);
-            const auto manifest = MakeColorOutputShaderManifest(stage, Internal::ColorOutputMetalCookTarget());
+            const auto stage =
+                look ? ColorOutputShaderStage::SceneToDisplayLinearWithLook : SelectColorOutputShaderStage(i, accessibilityEncoder_);
+            const auto target = manualOnly_ ? Internal::ColorOutputVulkanManualCookTarget() : Internal::ColorOutputMetalCookTarget();
+            const auto manifest = MakeColorOutputShaderManifest(stage, target);
             if (manifest.HasError())
                 return Result<void>::Failure(manifest.ErrorValue());
             const EditorViewportColorProgram input{manifest.Value(), inputs.package->programs[look ? 2 : i]};
@@ -116,10 +118,20 @@ namespace Horo::Editor {
             for (std::size_t i = 0; i < tables_.size(); ++i) {
                 const auto *d = input.Table(i);
                 Require(d != nullptr);
+                const auto bytes = input.TableUpload(i);
+                if (manualOnly_) {
+                    auto &staging = tableStaging_[i];
+                    staging.extent = d->extent;
+                    staging.bytes = bytes.size();
+                    staging.format = d->format;
+                    Take(OwnCreation(frontend_->CreateBuffer({bytes.size(), RenderBufferUsage::CopySource, RenderBufferAccess::HostVisible},
+                                                             bytes),
+                                     staging.source));
+                }
                 Take(OwnCreation(frontend_->CreateTexture({.extent = d->extent,
                                                            .format = d->format,
                                                            .usage = RenderTextureUsage::Sampled | RenderTextureUsage::CopyDestination},
-                                                          input.TableUpload(i)),
+                                                          manualOnly_ ? std::span<const std::byte>{} : bytes),
                                  tables_[i]));
                 Take(DrainCreations());
                 Take(OwnCreation(frontend_->CreateTextureView({.texture = tables_[i], .format = d->format}), tableViews_[i]));
@@ -155,11 +167,11 @@ namespace Horo::Editor {
         try {
             const std::array<MeshVertex, 3> vertices{};
             const std::array<std::uint32_t, 3> indices{0, 1, 2};
-            Take(OwnCreation(frontend_->CreateBuffer({sizeof(vertices), Vertex | CopyDestination, RenderBufferAccess::DeviceLocal},
+            const auto access = manualOnly_ ? RenderBufferAccess::HostVisible : RenderBufferAccess::DeviceLocal;
+            Take(OwnCreation(frontend_->CreateBuffer({sizeof(vertices), Vertex | CopyDestination, access},
                                                      std::as_bytes(std::span{vertices})),
                              geometry_[0]));
-            Take(OwnCreation(frontend_->CreateBuffer({sizeof(indices), Index | CopyDestination, RenderBufferAccess::DeviceLocal},
-                                                     std::as_bytes(std::span{indices})),
+            Take(OwnCreation(frontend_->CreateBuffer({sizeof(indices), Index | CopyDestination, access}, std::as_bytes(std::span{indices})),
                              geometry_[1]));
             Take(DrainCreations());
             Take(OwnCreation(frontend_->CreateMesh({.vertexBuffer = geometry_[0],
@@ -184,11 +196,19 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::PrepareSelection(const EditorViewportColorInputs &inputs) {
         if (!inputs.package || !inputs.package->analytic.program)
             return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+        if (const auto &matrix = inputs.displayAccessibility; matrix.has_value()) {
+            if (!matrix->IsValid())
+                return Result<void>::Failure(MakeError(Accessibility::VisualAccessibilityErrors::InvalidSettings));
+            if (!inputs.package->accessibilityEncoder)
+                return Result<void>::Failure(
+                    MakeError(ColorPipelineErrors::UnsupportedOutput, "The composed viewport requires the accessibility SDR encoder."));
+        }
         const auto selected = PrepareColorTransformSelection(inputs.package->analytic.program, inputs.lookMode, inputs.look, inputs.grading,
                                                              inputs.maximumTransformBytes);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
-        if (inputs.lookMode == ColorLookMode::Enabled && !inputs.package->LookProgram())
+        if (inputs.lookMode == ColorLookMode::Enabled &&
+            (inputs.package->target.backend == ShaderTargetBackend::Vulkan || !inputs.package->LookProgram()))
             return Result<void>::Failure(MakeError(ColorPipelineErrors::InvalidTransform));
         selection_ = selected.Value();
         return Result<void>::Success();
@@ -198,10 +218,9 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::ValidateInitialization() {
         if (status_ != EditorViewportColorStatus::Unavailable || kernel_ || !port_.bufferReadiness || !port_.writeUniform)
             return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
-        const auto frames = frontend_->Capabilities().support.limits.maxFramesInFlight;
-        if (frames < 2 || frames > SlotCount)
-            return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
-        activeSlots_ = frames;
+        if (activeSlots_ < 2 || activeSlots_ > SlotCount)
+            return Result<void>::Failure(
+                MakeError(ExposureGpuErrors::Unsupported, "The selected color pipeline requires two to four frame slots."));
         return Result<void>::Success();
     }
 
@@ -211,17 +230,28 @@ namespace Horo::Editor {
             return valid;
         if (const auto selected = PrepareSelection(inputs); selected.HasError())
             return selected;
-        status_ = EditorViewportColorStatus::Preparing;
-        const auto kernel = frontend_->RealizeExposureGpuKernel(inputs.exposure);
-        if (kernel.HasError()) {
-            status_ = EditorViewportColorStatus::Unavailable;
-            return Result<void>::Failure(kernel.ErrorValue());
+        manualOnly_ = inputs.package->target.backend == ShaderTargetBackend::Vulkan;
+        if (manualOnly_ && settings_.mode != ExposureMode::Manual) {
+            manualOnly_ = false;
+            selection_.reset();
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
         }
-        kernel_ = kernel.Value();
+        accessibilityEncoder_ = inputs.package->accessibilityEncoder;
+        displayAccessibility_ = inputs.displayAccessibility.value_or(Accessibility::ColorMatrix{});
+        status_ = EditorViewportColorStatus::Preparing;
         try {
+            if (!manualOnly_) {
+                const auto kernel = frontend_->RealizeExposureGpuKernel(inputs.exposure);
+                if (kernel.HasError()) {
+                    status_ = EditorViewportColorStatus::Unavailable;
+                    return Result<void>::Failure(kernel.ErrorValue());
+                }
+                kernel_ = kernel.Value();
+            }
             Take(PreparePrograms(inputs));
             Take(PrepareTables(*inputs.package->analytic.program));
-            Take(PrepareStorage());
+            if (!manualOnly_)
+                Take(PrepareStorage());
             Take(PrepareGeometry());
             Take(PrepareLook());
             status_ = EditorViewportColorStatus::Ready;
@@ -240,8 +270,10 @@ namespace Horo::Editor {
             auto &program = programs_[role];
             if (const auto retained = std::ranges::any_of(slots_,
                                                           [role](const auto &slot) {
-                return std::ranges::any_of(slot.bindings[role], [](const auto &binding) {
-                    return binding != nullptr;
+                return std::ranges::any_of(slot.bindings, [role](const auto &source) {
+                    return std::ranges::any_of(source[role], [](const auto &binding) {
+                        return binding != nullptr;
+                    });
                 });
             });
                 retained)
@@ -267,17 +299,18 @@ namespace Horo::Editor {
         std::optional<Error> first;
         bool bindingsRetained = false;
         for (auto &slot : slots_)
-            for (std::size_t role = 0; role < 2; ++role)
-                for (auto &binding : slot.bindings[role]) {
-                    if (!binding)
-                        continue;
-                    const auto released = programs_[role].materials->Release(binding->Id());
-                    Remember(first, released);
-                    if (released.HasValue())
-                        binding.reset();
-                    else
-                        bindingsRetained = true;
-                }
+            for (auto &source : slot.bindings)
+                for (std::size_t role = 0; role < source.size(); ++role)
+                    for (auto &binding : source[role]) {
+                        if (!binding)
+                            continue;
+                        const auto released = programs_[role].materials->Release(binding->Id());
+                        Remember(first, released);
+                        if (released.HasValue())
+                            binding.reset();
+                        else
+                            bindingsRetained = true;
+                    }
         for (auto &slot : slots_) {
             RetireOwned(slot.histogram, first);
             if (bindingsRetained)
@@ -314,6 +347,8 @@ namespace Horo::Editor {
         RetireOwned(lookView_, first);
         if (!lookView_.IsValid())
             RetireOwned(lookTexture_, first);
+        for (auto &staging : tableStaging_)
+            RetireOwned(staging.source, first);
         return Outcome(first);
     }
 
@@ -329,13 +364,19 @@ namespace Horo::Editor {
         if (first)
             return Outcome(first);
         kernel_.reset();
+        manualOnly_ = false;
+        accessibilityEncoder_ = false;
+        displayAccessibility_ = {};
+        accessibilityPreview_.reset();
+        candidateAccessibility_ = {};
         selection_.reset();
         previous_ = {};
         creationCount_ = 0;
         acceptedStateCount_ = 0;
         pendingStateCount_ = 0;
         tablesUsed_ = false;
-        boundScene_ = {};
+        sceneBindings_ = {};
+        activeSceneBinding_ = 0;
         boundDisplay_ = {};
         status_ = EditorViewportColorStatus::Closed;
         return Result<void>::Success();

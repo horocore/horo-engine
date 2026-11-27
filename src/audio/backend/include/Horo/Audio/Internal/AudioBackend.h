@@ -1,17 +1,66 @@
 #pragma once
 
 /** @file AudioBackend.h
- * @brief Non-installed, equal-peer backend protocol for Audio control and native output adapters.
+ * @brief Non-installed, equal-peer protocol for Audio control and native endpoint adapters.
  */
 
 #include "Horo/Audio/AudioBackendCapabilities.h"
 #include "Horo/Audio/AudioCallbackEvents.h"
 #include "Horo/Audio/AudioDeviceNegotiation.h"
+#include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioPlanarBlock.h"
+
+#include <array>
+#include <utility>
+#include <vector>
 
 namespace Horo::Audio::Backend {
     struct AudioCallbackViolation;
     struct AudioCallbackViolationDrain;
+
+    /** @brief Changed recording default, including withdrawal when the current endpoint is absent. */
+    struct AudioCaptureDefaultChange final {
+        AudioDefaultDeviceRole role;
+        std::optional<AudioCaptureDeviceId> previous;
+        std::optional<AudioCaptureDeviceId> current;
+    };
+
+    /** @brief Observed microphone authorization transition; it does not authorize a capture purpose. */
+    struct AudioCapturePermissionChange final {
+        AudioCapturePermission previous;
+        AudioCapturePermission current;
+    };
+
+    /** @brief One refresh's owned catalog and changes, all correlated to snapshot.revision. */
+    struct AudioCaptureDiscovery final {
+        AudioCaptureDeviceSnapshot snapshot;
+        std::vector<AudioCaptureDeviceChange> changes;
+        std::array<std::optional<AudioCaptureDefaultChange>, 3> defaultChanges{}; /**< Console, Multimedia, Communications. */
+        std::optional<AudioCapturePermissionChange> permissionChange;
+
+        /** @brief Describes the exact difference between two validated successive recording catalogs.
+         * @param before Previous committed catalog. @param after Candidate at a newer revision.
+         * @return Owned validated discovery or typed failure. The caller commits native bindings only on success.
+         */
+        [[nodiscard]] static Result<AudioCaptureDiscovery> Between(const AudioCaptureDeviceSnapshot &before,
+                                                                   const AudioCaptureDeviceSnapshot &after) {
+            auto changes = DescribeAudioCaptureDeviceChanges(before, after);
+            if (changes.HasError())
+                return Result<AudioCaptureDiscovery>::Failure(changes.ErrorValue());
+            AudioCaptureDiscovery discovery{after, std::move(changes).Value()};
+            const std::array roles{AudioDefaultDeviceRole::Console, AudioDefaultDeviceRole::Multimedia,
+                                   AudioDefaultDeviceRole::Communications};
+            const std::array previous{before.defaults.console, before.defaults.multimedia, before.defaults.communications};
+            const std::array current{after.defaults.console, after.defaults.multimedia, after.defaults.communications};
+            for (std::size_t i = 0; i < roles.size(); ++i) {
+                if (previous[i] != current[i])
+                    discovery.defaultChanges[i] = AudioCaptureDefaultChange{roles[i], previous[i], current[i]};
+            }
+            if (before.permission != after.permission)
+                discovery.permissionChange = AudioCapturePermissionChange{before.permission, after.permission};
+            return Result<AudioCaptureDiscovery>::Success(std::move(discovery));
+        }
+    };
 
     /** @brief Runtime-local, non-wrapping operation identity; sequence zero is invalid. */
     struct OperationId final {
@@ -26,11 +75,7 @@ namespace Horo::Audio::Backend {
         Exclusive
     };
     /** @brief Preserved host policy hint; explicit format/period bounds remain the admission authority. */
-    enum class LatencyClass : std::uint8_t {
-        Interactive,
-        Balanced,
-        PowerSaving
-    };
+    using LatencyClass = AudioLatencyProfile;
     /** @brief Control-published intent for the currently retained render epoch. */
     enum class RenderPhase : std::uint8_t {
         Priming,
@@ -95,7 +140,7 @@ namespace Horo::Audio::Backend {
         RenderPort render;
     };
 
-    /** @brief Publishes Quiescing intent; completion requires the matching render-core acknowledgement. */
+    /** @brief Publishes Quiescing for an attached epoch in Priming or Rendering; requires the matching acknowledgement. */
     struct Quiesce final {
         AudioDeviceEpoch epoch;
     };
@@ -124,6 +169,12 @@ namespace Horo::Audio::Backend {
         AudioNegotiatedDeviceFormat format;
         AudioDeviceTimingReport timing;
         AccessMode access{AccessMode::Shared};
+    };
+
+    /** @brief Backend estimate for a newly submitted sample at one exact output epoch. */
+    struct PlaybackLatencyEstimate final {
+        AudioDeviceEpoch epoch;
+        AudioDurationObservation latency;
     };
 
     /** @brief Native start succeeded, not Runtime Active. */
@@ -186,9 +237,9 @@ namespace Horo::Audio::Backend {
         BackendFailure
     };
 
-    /** @brief Loss fact for the exact device generation, never an instruction to choose a replacement. */
+    /** @brief Loss fact for the exact opened output epoch, never an instruction to choose a replacement. */
     struct DeviceLost final {
-        AudioDeviceId device;
+        AudioDeviceEpoch epoch;
         DeviceLossCause cause{DeviceLossCause::BackendFailure};
     };
     /** @brief Native interruption edge; an end does not authorize automatic resume. */
@@ -199,7 +250,7 @@ namespace Horo::Audio::Backend {
 
     /** @brief Interruption fact reconciled against control-owned suspend/recovery policy. */
     struct DeviceInterruption final {
-        AudioDeviceId device;
+        AudioDeviceEpoch epoch;
         InterruptionState state{InterruptionState::Began};
     };
 
@@ -237,6 +288,16 @@ namespace Horo::Audio::Backend {
         /** @brief Returns the fixed runtime generation. @return Non-zero Horo runtime owner. */
         [[nodiscard]] virtual AudioRuntimeId Owner() const noexcept = 0;
 
+        /** @brief Refreshes recording discovery on the control owner without opening a device or requesting consent.
+         * @return Complete inventory and its changes, or a typed unsupported or native failure.
+         * @details Each peer owns its capture identities independently of playback. This operation may allocate
+         * and wait for a bounded native control response. It must never run on an audio callback.
+         * A peer may retain an observer until the normal Close operation.
+         */
+        [[nodiscard]] virtual Result<AudioCaptureDiscovery> DiscoverCapture() {
+            return Result<AudioCaptureDiscovery>::Failure(MakeError(AudioErrors::OperationUnsupported));
+        }
+
         /**
          * @brief Accepts a bounded owned request without waiting for native completion.
          * @param request Valid typed operation; backend owns a complete copy after successful admission.
@@ -263,6 +324,16 @@ namespace Horo::Audio::Backend {
          * @return Success or stale/invalid-transition error; never activates the parent runtime itself.
          */
         [[nodiscard]] virtual Result<void> CommitRendering(const AudioDeviceEpoch &epoch) = 0;
+
+        /** @brief Queries the current output's submission-to-playback estimate on the control owner.
+         * @param epoch Exact committed output epoch.
+         * @return Estimated BackendApi evidence, or empty while unsupported, unready, lost or foreign.
+         * @post Does not change native admission, wait for a render callback, or promise hardware latency.
+         */
+        [[nodiscard]] virtual std::optional<PlaybackLatencyEstimate> ReadPlaybackLatency(const AudioDeviceEpoch &epoch) noexcept {
+            (void)epoch;
+            return std::nullopt;
+        }
 
         /**
          * @brief Requests cancellation of Probe, Enumerate, Open or Start without blocking.

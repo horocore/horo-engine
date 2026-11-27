@@ -5,7 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
+#include <chrono>
 #include <exception>
 #include <limits>
 #include <new>
@@ -20,6 +20,8 @@ namespace Horo::Audio {
         std::uint64_t generation{1};
         /** @brief Reaps a proved terminal job; returns whether its storage is still in use. */
         bool Reap();
+        /** @brief Reconciles completed work before admitting replacement of an active predecessor. */
+        bool CanReplace();
         /** @brief Tests whether this idle stream needs a prioritized lookahead fill. */
         bool NeedsFill() const;
         /** @brief Selects the highest-priority eligible slot, retaining stable ties. */
@@ -27,6 +29,11 @@ namespace Horo::Audio {
     };
 
     namespace {
+        /** @brief Saturating addition for telemetry that cannot wrap into misleading zero. */
+        std::uint64_t SaturatingAdd(const std::uint64_t value, const std::uint64_t delta = 1) noexcept {
+            return value > std::numeric_limits<std::uint64_t>::max() - delta ? std::numeric_limits<std::uint64_t>::max() : value + delta;
+        }
+
         [[nodiscard]] bool Terminal(const JobState state) noexcept {
             using enum JobState;
             return state == Succeeded || state == Failed || state == Cancelled;
@@ -51,16 +58,13 @@ namespace Horo::Audio {
         }
 
         /** @brief Validates admission and computes its bounded storage charge. */
-        [[nodiscard]] bool ValidRequest(const AudioStreamRequest &request, const AudioStreamingLimits &limits,
-                                        std::size_t &chargedBytes) noexcept {
+        [[nodiscard]] bool ValidRequest(const AudioStreamRequest &request, std::size_t &chargedBytes) noexcept {
             const auto &spec = request.decoder;
             const std::size_t channels = spec.outputFormat.layout.orderedChannels.size();
             if (!request.asset.IsValid() || !ValidDecoderSpec(spec) || !ValidBufferPolicy(request))
                 return false;
             const std::uint64_t samples = (static_cast<std::uint64_t>(request.ringFrames) + spec.maximumFramesPerDecode) * channels;
             const std::uint64_t bytes = samples * sizeof(AudioSample) + spec.requiredWorkingBytes + request.maximumPackageBytes;
-            if (bytes > limits.maximumBytes)
-                return false;
             chargedBytes = static_cast<std::size_t>(bytes);
             return true;
         }
@@ -99,28 +103,6 @@ namespace Horo::Audio {
             return Result<void>::Success();
         }
 
-        /** @brief Rejects invalid decoded blocks and canonicalizes silence before publication. */
-        Result<void> NormalizeSamples(const std::span<AudioSample> samples) {
-            for (auto &sample : samples) {
-                if (!std::isfinite(sample))
-                    return Result<void>::Failure(MakeError(AudioErrors::StreamReadFailed));
-                if (sample == 0.0F || std::fpclassify(sample) == FP_SUBNORMAL)
-                    sample = 0.0F;
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Copies one validated block and publishes data with its exact terminal cursor. */
-        void PublishBlock(AudioStreamState &state, const std::uint64_t written, const AudioStreamDecodedBlock progress) {
-            const std::size_t channels = state.request.decoder.outputFormat.layout.orderedChannels.size();
-            for (std::uint32_t frame = 0; frame < progress.frames; ++frame) {
-                const std::size_t destination = static_cast<std::size_t>((written + frame) % state.request.ringFrames) * channels;
-                std::copy_n(state.decodeBuffer.data() + static_cast<std::size_t>(frame) * channels, channels,
-                            state.ring.data() + destination);
-            }
-            state.transport.produced.store((written + progress.frames) | (progress.endOfStream ? EndMarker : 0), std::memory_order_seq_cst);
-        }
-
         /** @brief Commit a callback-requested position on the sole worker before acknowledging ring reuse. */
         Result<void> ApplyPosition(AudioStreamState &state, const CancellationToken &cancellation) {
             if (const auto target = state.transport.seekTarget.load(); target != std::numeric_limits<std::uint64_t>::max()) {
@@ -156,7 +138,11 @@ namespace Horo::Audio {
         /** @brief Decode, normalize and publish one admitted block, observing cancellation before sample publication. */
         Result<void> DecodePublish(AudioStreamState &state, const std::uint64_t written, const std::uint32_t frames,
                                    const CancellationToken &cancellation) {
+            const auto started = std::chrono::steady_clock::now();
             auto decoded = state.decoder->Decode(state.decodeBuffer, state.scratch, frames);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+            state.decodeNanoseconds.store(
+                SaturatingAdd(state.decodeNanoseconds.load(), static_cast<std::uint64_t>(std::max<std::int64_t>(0, elapsed))));
             if (cancellation.IsCancellationRequested() || state.stopped.load(std::memory_order_seq_cst))
                 return JobCancelled();
             if (decoded.HasError())
@@ -166,11 +152,10 @@ namespace Horo::Audio {
             if (state.workerLoop.enabled)
                 progress.endOfStream = false;
             const std::size_t channels = state.request.decoder.outputFormat.layout.orderedChannels.size();
-            if (auto normalized =
-                    NormalizeSamples(std::span(state.decodeBuffer).first(static_cast<std::size_t>(progress.frames) * channels));
-                normalized.HasError())
-                return normalized;
-            PublishBlock(state, written, progress);
+            const auto samples = std::span{state.decodeBuffer}.first(static_cast<std::size_t>(progress.frames) * channels);
+            if (!AudioStreamState::ValidSamples(samples))
+                return Result<void>::Failure(MakeError(AudioErrors::StreamReadFailed));
+            state.PublishBlock(written, progress, samples);
             return Result<void>::Success();
         }
 
@@ -192,86 +177,42 @@ namespace Horo::Audio {
             return DecodePublish(state, written, admitted.Value(), cancellation);
         }
 
-        /** @brief Checks callback arguments without touching worker-owned data. */
-        bool ValidOutput(const AudioStreamState *state, const std::span<AudioSample *const> planes, const std::uint32_t frames) noexcept {
-            return state != nullptr && frames != 0 && frames <= MaximumAudioCallbackFrames &&
-                   planes.size() == state->request.decoder.outputFormat.layout.orderedChannels.size() &&
-                   std::ranges::all_of(planes, [](const auto *plane) {
-                return plane != nullptr;
-            });
-        }
-
-        /** @brief Copies acquired ring samples and pads the remainder with positive zero. */
-        void CopyOutput(const AudioStreamState &state, const std::span<AudioSample *const> planes, const std::uint64_t read,
-                        const std::uint32_t available, const std::uint32_t frames) noexcept {
-            for (std::uint32_t frame = 0; frame < available; ++frame) {
-                const auto offset = static_cast<std::size_t>((read + frame) % state.request.ringFrames) * planes.size();
-                for (std::size_t channel = 0; channel < planes.size(); ++channel)
-                    planes[channel][frame] = state.ring[offset + channel];
-            }
-            for (auto *plane : planes)
-                std::fill_n(plane + available, frames - available, 0.0F);
-        }
-
-        /** @brief Records saturating counters on the single callback consumer and applies its underrun policy. */
-        void RecordUnderrun(AudioStreamState &state, const std::uint32_t missing) noexcept {
-            const auto oldFrames = state.underrunFrames.load(std::memory_order_seq_cst);
-            state.underrunFrames.store(oldFrames > std::numeric_limits<std::uint64_t>::max() - missing
-                                           ? std::numeric_limits<std::uint64_t>::max()
-                                           : oldFrames + missing,
-                                       std::memory_order_seq_cst);
-            const auto oldCallbacks = state.underrunCallbacks.load(std::memory_order_seq_cst);
-            state.underrunCallbacks.store(oldCallbacks == std::numeric_limits<std::uint64_t>::max() ? oldCallbacks : oldCallbacks + 1,
-                                          std::memory_order_seq_cst);
-            if (state.request.underrunPolicy == AudioStreamUnderrunPolicy::StopWithSilence)
-                state.stopped.store(true, std::memory_order_seq_cst);
-        }
-
         /** @brief Checks service storage and join bounds before allocation. */
         bool ValidLimits(const AudioStreamingLimits &limits) noexcept {
             return limits.maximumStreams != 0 && limits.maximumStreams <= 65'536 && limits.maximumConcurrentFills != 0 &&
                    limits.maximumConcurrentFills <= limits.maximumStreams && limits.maximumBytes != 0 &&
                    limits.maximumBytes <= (256U << 20U) && limits.joinTimeoutMilliseconds != 0;
         }
+
+        /** @brief Distinguishes a live producer wait from the package scheduler's current state. */
+        AudioStreamStarvationCause SourceWaitCause(const AudioStreamState &state, const bool filling) noexcept {
+            using enum AudioStreamStarvationCause;
+            if (state.IsLivePcm())
+                return AwaitingLiveInput;
+            if (state.transport.fillsSuspended.load())
+                return Suspended;
+            if (state.schedulerRejected)
+                return SchedulerRejected;
+            return filling ? WorkerPending : AwaitingPump;
+        }
+
+        /** @brief Project current control observations; this does not infer historical callback causality. */
+        AudioStreamStarvationCause StarvationCause(const AudioStreamState &state, const bool filling, const std::uint64_t buffered,
+                                                   const bool ended, const bool ready) noexcept {
+            using enum AudioStreamStarvationCause;
+            if (state.failed)
+                return Failed;
+            if (state.cancelled)
+                return Cancelled;
+            if (state.stopped.load())
+                return Stopped;
+            if (!ready)
+                return Positioning;
+            if (buffered != 0 || ended)
+                return None;
+            return SourceWaitCause(state, filling);
+        }
     }  // namespace
-
-    /** @copydoc AudioStreamRenderPort::~AudioStreamRenderPort */
-    AudioStreamRenderPort::~AudioStreamRenderPort() {
-        if (retained_ && state_ != nullptr) {
-            state_->retainedPort = false;
-            state_->portIssued = false;
-        }
-    }
-
-    /** @copydoc AudioStreamRenderPort::Render */
-    AudioStreamRenderResult AudioStreamRenderPort::Render(const std::span<AudioSample *const> planes,
-                                                          const std::uint32_t frames) const noexcept {
-        AudioStreamRenderResult result;
-        if (!ValidOutput(state_, planes, frames))
-            return result;
-        if (!state_->transport.positionReady.load()) {
-            for (auto *plane : planes)
-                std::fill_n(plane, frames, 0.0F);
-            return {.silentFrames = frames, .stopped = state_->stopped.load()};
-        }
-        const bool stopped = state_->stopped.load(std::memory_order_seq_cst);
-        const std::uint64_t read = state_->transport.consumed.load(std::memory_order_seq_cst);
-        const std::uint64_t publication = state_->transport.produced.load(std::memory_order_seq_cst);
-        const std::uint64_t written = publication & CursorMask;
-        const auto available = stopped || written < read ? 0U : static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, written - read));
-        CopyOutput(*state_, planes, read, available, frames);
-        state_->transport.consumed.store(read + available, std::memory_order_seq_cst);
-
-        const bool ended = (publication & EndMarker) != 0 && read + available == written;
-        const std::uint32_t missing = frames - available;
-        if (missing != 0 && !stopped && !ended)
-            RecordUnderrun(*state_, missing);
-        result.availableFrames = available;
-        result.silentFrames = missing;
-        result.ended = ended;
-        result.stopped = state_->stopped.load(std::memory_order_seq_cst);
-        return result;
-    }
 
     /** @copydoc AudioStreamingService::AudioStreamingService */
     AudioStreamingService::AudioStreamingService(ConstructionKey, JobSystem &jobs, AudioStreamPackageSource source,
@@ -281,7 +222,15 @@ namespace Horo::Audio {
     /** @copydoc AudioStreamingService::Create */
     Result<std::unique_ptr<AudioStreamingService>> AudioStreamingService::Create(JobSystem &jobs, AudioStreamPackageSource source,
                                                                                  const AudioStreamingLimits limits) {
-        if (!source.context.IsValid() || source.open == nullptr || !ValidLimits(limits))
+        if (!source.context.IsValid() || source.open == nullptr)
+            return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+        return CreateService(jobs, std::move(source), limits);
+    }
+
+    /** @copydoc AudioStreamingService::CreateService */
+    Result<std::unique_ptr<AudioStreamingService>> AudioStreamingService::CreateService(JobSystem &jobs, AudioStreamPackageSource source,
+                                                                                        const AudioStreamingLimits limits) {
+        if (!ValidLimits(limits))
             return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         try {
             return Result<std::unique_ptr<AudioStreamingService>>::Success(
@@ -299,23 +248,94 @@ namespace Horo::Audio {
 
     /** @copydoc AudioStreamingService::Admit */
     Result<AudioStreamHandle> AudioStreamingService::Admit(const AudioStreamRequest &request) {
+        return AdmitWithSource(request, source_);
+    }
+
+    /** @copydoc AudioStreamingService::AdmitLivePcm */
+    Result<AudioStreamHandle> AudioStreamingService::AdmitLivePcm(const AudioLivePcmRequest &request) {
+        using Output = Result<AudioStreamHandle>;
+        if (closed_ || request.ringFrames == 0 || request.ringFrames > MaximumAudioCallbackFrames * 64ULL ||
+            !ValidateAudioProcessingFormat(request.format)) {
+            invalidRequests_ = SaturatingAdd(invalidRequests_);
+            return Output::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+        }
+        const auto bytes = request.ringFrames * request.format.layout.orderedChannels.size() * sizeof(AudioSample);
+        try {
+            const AudioStreamRequest storage{.decoder = {.outputFormat = request.format}, .ringFrames = request.ringFrames};
+            return Reserve(storage, {}, bytes);
+        } catch (const std::bad_alloc &) {
+            budgetRejections_ = SaturatingAdd(budgetRejections_);
+            return Output::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+        }
+    }
+
+    /** @copydoc AudioStreamingService::StageReplacement */
+    Result<AudioStreamHandle> AudioStreamingService::StageReplacement(const AudioStreamHandle previous, AudioStreamPackageSource source,
+                                                                      const AudioStreamRequest &request) {
+        const auto *old = Find(previous);
+        if (!old || !slots_[previous.slot - 1].CanReplace())
+            return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::HandleStale));
+        if (old->request.asset != request.asset || old->request.decoder.outputFormat != request.decoder.outputFormat ||
+            !source.context.IsValid() || source.open == nullptr || !source.ownerLease)
+            return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
+        auto admitted = AdmitWithSource(request, std::move(source));
+        if (admitted.HasValue()) {
+            auto *candidate = Find(admitted.Value());
+            candidate->replacementOf = previous;
+            candidate->staged = true;
+        }
+        return admitted;
+    }
+
+    /** @copydoc AudioStreamingService::CommitReplacement */
+    Result<void> AudioStreamingService::CommitReplacement(const AudioStreamHandle previous, const AudioStreamHandle candidate) {
+        if (!Find(previous) || !slots_[previous.slot - 1].CanReplace())
+            return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
+        auto *state = Find(candidate);
+        if (!state || !state->staged || state->replacementOf != previous)
+            return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
+        (void)slots_[candidate.slot - 1].Reap();
+        const auto snapshot = Snapshot(candidate).Value();
+        if (snapshot.failure)
+            return Result<void>::Failure(*snapshot.failure);
+        if (snapshot.failed || snapshot.cancelled || snapshot.stopped ||
+            (snapshot.bufferedFrames < state->request.lookaheadFrames && !snapshot.sourceEnded) || snapshot.bufferedFrames == 0)
+            return Result<void>::Failure(MakeError(AudioErrors::RuntimeInactive));
+        state->staged = false;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AudioStreamingService::AdmitWithSource */
+    Result<AudioStreamHandle> AudioStreamingService::AdmitWithSource(const AudioStreamRequest &request, AudioStreamPackageSource source) {
         std::size_t bytes = 0;
-        if (closed_ || !ValidRequest(request, limits_, bytes))
+        if (closed_ || !source.open || !ValidRequest(request, bytes)) {
+            invalidRequests_ = SaturatingAdd(invalidRequests_);
             return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
-        if (bytes > limits_.maximumBytes - reservedBytes_)
+        }
+        return Reserve(request, std::move(source), bytes);
+    }
+
+    /** @copydoc AudioStreamingService::Reserve */
+    Result<AudioStreamHandle> AudioStreamingService::Reserve(const AudioStreamRequest &request, AudioStreamPackageSource source,
+                                                            const std::size_t bytes) {
+        if (bytes > limits_.maximumBytes - reservedBytes_) {
+            budgetRejections_ = SaturatingAdd(budgetRejections_);
             return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+        }
         for (std::uint32_t index = 0; index < limits_.maximumStreams; ++index) {
             auto &slot = slots_[index];
             if (slot.state != nullptr || slot.generation == 0)
                 continue;
             try {
-                slot.state = std::make_unique<AudioStreamState>(request, bytes);
+                slot.state = std::make_unique<AudioStreamState>(request, std::move(source), bytes);
             } catch (const std::bad_alloc &) {
+                budgetRejections_ = SaturatingAdd(budgetRejections_);
                 return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
             }
             reservedBytes_ += bytes;
             return Result<AudioStreamHandle>::Success({index + 1, slot.generation});
         }
+        budgetRejections_ = SaturatingAdd(budgetRejections_);
         return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
     }
 
@@ -348,7 +368,7 @@ namespace Horo::Audio {
         auto *state = Find(handle);
         if (state == nullptr)
             return Result<AudioStreamRenderPort>::Failure(MakeError(AudioErrors::HandleStale));
-        if (state->portIssued)
+        if (state->portIssued || state->staged)
             return Result<AudioStreamRenderPort>::Failure(MakeError(AudioErrors::VoiceAdmissionClosed));
         state->portIssued = true;
         state->retainedPort = retained;
@@ -360,6 +380,8 @@ namespace Horo::Audio {
         const auto *state = Find(handle);
         if (state == nullptr)
             return Result<AudioStreamDecoderSpec>::Failure(MakeError(AudioErrors::HandleStale));
+        if (state->IsLivePcm())
+            return Result<AudioStreamDecoderSpec>::Failure(MakeError(AudioErrors::OperationUnsupported));
         return Result<AudioStreamDecoderSpec>::Success(state->request.decoder);
     }
 
@@ -387,9 +409,16 @@ namespace Horo::Audio {
         return false;
     }
 
+    /** @copydoc AudioStreamingService::Slot::CanReplace */
+    bool AudioStreamingService::Slot::CanReplace() {
+        (void)Reap();
+        return state && !state->staged && !state->failed && !state->cancelled && !state->stopped.load() &&
+               !state->cancellation.Token().IsCancellationRequested();
+    }
+
     /** @copydoc AudioStreamingService::Slot::NeedsFill */
     bool AudioStreamingService::Slot::NeedsFill() const {
-        if (!state || fill || !state->FillAdmitted())
+        if (!state || fill || state->IsLivePcm() || !state->FillAdmitted())
             return false;
         if (state->transport.seekTarget.load() != std::numeric_limits<std::uint64_t>::max())
             return true;
@@ -433,11 +462,15 @@ namespace Horo::Audio {
             auto *state = selected->state.get();
             JobDescriptor descriptor;
             descriptor.parentCancellation = state->cancellation.Token();
-            auto submitted = jobs_.SubmitResult(std::move(descriptor), [state, source = source_](const CancellationToken &token) {
+            auto submitted = jobs_.SubmitResult(descriptor, [state, source = state->source](const CancellationToken &token) {
                 return Fill(*state, source, token);
             });
-            if (submitted.HasError())
+            if (submitted.HasError()) {
+                state->fillSubmissionRejections = SaturatingAdd(state->fillSubmissionRejections);
+                state->schedulerRejected = true;
                 break;  // Scheduler overload is retried by the next control pump.
+            }
+            state->schedulerRejected = false;
             selected->fill.emplace(std::move(submitted).Value());
             ++active;
         }
@@ -474,6 +507,8 @@ namespace Horo::Audio {
             slot.fill.reset();
         }
         reservedBytes_ -= state->chargedBytes;
+        if (state->IsLivePcm())
+            slot.state->ScrubLivePcm();
         slot.state.reset();
         if (slot.generation == std::numeric_limits<std::uint64_t>::max())
             slot.generation = 0;
@@ -482,7 +517,7 @@ namespace Horo::Audio {
         return Result<void>::Success();
     }
 
-    /** @copydoc AudioStreamingService::Snapshot */
+    /** @copydoc AudioStreamingService::Snapshot(AudioStreamHandle) const */
     Result<AudioStreamSnapshot> AudioStreamingService::Snapshot(const AudioStreamHandle handle) const {
         const auto *state = Find(handle);
         if (state == nullptr)
@@ -495,7 +530,17 @@ namespace Horo::Audio {
         return Result<AudioStreamSnapshot>::Success(
             {static_cast<std::uint32_t>(buffered), state->underrunFrames.load(std::memory_order_seq_cst),
              state->underrunCallbacks.load(std::memory_order_seq_cst), ready && (publication & EndMarker) != 0, state->failed,
-             state->cancelled, state->stopped.load(std::memory_order_seq_cst), state->failure});
+             state->cancelled, state->stopped.load(std::memory_order_seq_cst), state->failure, state->chargedBytes,
+             state->request.ringFrames, state->decodeNanoseconds.load(), state->fillSubmissionRejections,
+             StarvationCause(*state, slots_[handle.slot - 1].fill.has_value(), buffered, (publication & EndMarker) != 0, ready)});
+    }
+
+    /** @copydoc AudioStreamingService::Snapshot() const */
+    AudioStreamingSnapshot AudioStreamingService::Snapshot() const noexcept {
+        const auto active = static_cast<std::uint32_t>(std::ranges::count_if(slots_, [](const auto &slot) {
+            return slot.state != nullptr;
+        }));
+        return {reservedBytes_, limits_.maximumBytes, active, invalidRequests_, budgetRejections_};
     }
 
     /** @copydoc AudioStreamingService::TakeUnderrunReport */
@@ -508,17 +553,9 @@ namespace Horo::Audio {
         if (minimumIntervalFrames == 0)
             return Result<std::optional<AudioStreamUnderrunReport>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         const auto frames = state->underrunFrames.load(std::memory_order_seq_cst);
-        auto &reporting = state->reporting;
-        if (frames == reporting.frames ||
-            (reporting.reported && sampleFrame >= reporting.sampleFrame && sampleFrame - reporting.sampleFrame < minimumIntervalFrames))
-            return Result<std::optional<AudioStreamUnderrunReport>>::Success(std::nullopt);
         const auto callbacks = state->underrunCallbacks.load(std::memory_order_seq_cst);
-        AudioStreamUnderrunReport report{frames - reporting.frames, callbacks - reporting.callbacks, sampleFrame};
-        reporting.frames = frames;
-        reporting.callbacks = callbacks;
-        reporting.sampleFrame = sampleFrame;
-        reporting.reported = true;
-        return Result<std::optional<AudioStreamUnderrunReport>>::Success(report);
+        return Result<std::optional<AudioStreamUnderrunReport>>::Success(
+            state->reporting.Take(frames, callbacks, sampleFrame, minimumIntervalFrames, Snapshot(handle).Value().starvationCause));
     }
 
     /** @copydoc AudioStreamingService::Shutdown */

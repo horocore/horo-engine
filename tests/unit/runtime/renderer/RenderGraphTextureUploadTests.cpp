@@ -117,7 +117,25 @@ TEST_CASE("Texture upload source must be the exact registered host-visible trans
     CHECK(fixture.ValidateDescriptors().HasError());
 }
 
-TEST_CASE("Texture upload admits only the declared whole RGBA8 base level", "[renderer][texture-upload]") {
+TEST_CASE("Texture upload preserves the exact float LUT format and tightly packed bytes", "[renderer][texture-upload]") {
+    UploadFixture fixture;
+    SECTION("R32Float") {
+        fixture.Upload().format = RenderTextureFormat::R32Float;
+    }
+    SECTION("Rgba32Float") {
+        fixture.Upload().format = RenderTextureFormat::Rgba32Float;
+        fixture.Upload().byteCount = fixture.source.byteSize = 64;
+    }
+    REQUIRE(fixture.ValidateGraph().HasValue());
+    CHECK(fixture.ValidateDescriptors().HasError());
+    fixture.destination.format = fixture.Upload().format;
+    REQUIRE(fixture.ValidateDescriptors().HasValue());
+    fixture.Upload().byteCount -= 4;
+    CHECK(fixture.ValidateGraph().HasError());
+    CHECK(fixture.ValidateDescriptors().HasError());
+}
+
+TEST_CASE("Texture upload admits only the declared whole base level", "[renderer][texture-upload]") {
     UploadFixture fixture;
     SECTION("foreign format") {
         fixture.destination.format = RenderTextureFormat::Rgba16Float;

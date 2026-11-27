@@ -175,7 +175,7 @@ namespace Horo::Physics::Detail {
                 auto transform = character.ControllerTransform(handle.Value());
                 if (transform.HasError())
                     return Result<void>::Failure(transform.ErrorValue());
-                staged.characterBindings.emplace_back(planned.object, planned.component, handle.Value());
+                staged.characterBindings.emplace_back(planned.object, planned.component, handle.Value(), planned.owner);
                 staged.placements.emplace_back(planned.owner, transform.Value().position, transform.Value().heading);
             }
             return Result<void>::Success();

@@ -22,12 +22,13 @@ namespace Horo::Input {
             std::uint64_t generation{};
             std::uint64_t context{};
             std::uint64_t configuration{};
-            std::uint64_t assignment{};
+            std::optional<std::uint64_t> assignment;
             std::optional<PlayerId> player;
             std::optional<GamepadDeviceId> device;
             std::size_t count{};
             bool retiring{};
             bool neutralCommitted{};
+            bool committed{}; /**< Contributed an admitted sample at the last cutoff, including explicitly neutral values. */
         };
 
         struct Entry final {
@@ -48,6 +49,7 @@ namespace Horo::Input {
         [[nodiscard]] Result<InputRouter *> Borrow() const;
         [[nodiscard]] Result<void> ValidateSource(std::size_t slot, std::uint64_t generation) const;
         [[nodiscard]] Result<void> ValidateFrame(std::uint64_t frame) const;
+        [[nodiscard]] bool AssignmentCurrent(std::optional<std::uint64_t> revision) const noexcept;
         [[nodiscard]] Result<void> Revoke(std::size_t slot, std::uint64_t generation);
         [[nodiscard]] Result<std::array<std::size_t, MaximumCollectedInputActions>> ResolveActions(
             std::uint64_t context, std::span<const ActionDescriptor> actions) const;
@@ -57,8 +59,13 @@ namespace Horo::Input {
         void Reconfigure() noexcept;
         void ReclaimNeutral() noexcept;
         void CommitEmpty() noexcept;
+        /** @brief Checks whether one registered action still belongs to the current routing authority. */
+        [[nodiscard]] bool SourceCurrent(const Source &source, std::uint64_t generation) const noexcept;
         void CommitValues(bool focused) noexcept;
-        void Accumulate(std::size_t action, std::optional<PlayerId> player, ActionValue &value) noexcept;
+        /** @brief Copies the covered generations in stable registration slot order. */
+        [[nodiscard]] std::array<std::uint64_t, MaximumCollectedInputSources> CommittedGenerations(
+            std::uint64_t context, std::optional<PlayerId> player) const noexcept;
+        void Accumulate(std::uint64_t context, std::size_t action, std::optional<PlayerId> player, ActionValue &value) noexcept;
         InputRouter *router;
         const std::thread::id thread{std::this_thread::get_id()};
         std::array<Source, MaximumCollectedInputSources> sources{};

@@ -4,6 +4,7 @@
 #include "Horo/AI/BehaviorTreeRuntime.h"
 
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 #include <utility>
@@ -53,6 +54,11 @@ namespace Horo::AI::BehaviorTreeTestSupport {
         std::uint64_t failTask{};
         std::uint64_t failService{};
         std::uint64_t failCheck{};
+        std::uint64_t cancelService{};
+        CancellationSource *cancellation{};
+        std::atomic_bool *withdrawOnStart{};
+        std::atomic_bool *withdrawOnResume{};
+        AiTaskContinuation *captureContinuation{};
         bool invalidOutput{};
 
         Probe() {
@@ -77,7 +83,11 @@ namespace Horo::AI::BehaviorTreeTestSupport {
             const auto id = context.node.Value();
             ++probe_->starts[id];
             probe_->handles[id] = operation.task;
+            if (probe_->captureContinuation)
+                *probe_->captureContinuation = context.continuation;
             probe_->order[probe_->orderCount++] = id;
+            if (probe_->withdrawOnStart)
+                probe_->withdrawOnStart->store(false);
             if (id == probe_->failTask)
                 return Result<AiTaskState>::Failure(MakeError(AIErrors::RuntimeUnavailable));
             return Result<AiTaskState>::Success(probe_->invalidOutput ? AiTaskState::Idle : probe_->outcome[id]);
@@ -85,6 +95,8 @@ namespace Horo::AI::BehaviorTreeTestSupport {
 
         Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context, const AiTaskOperationContext &) noexcept override {
             ++probe_->resumes[context.node.Value()];
+            if (probe_->withdrawOnResume)
+                probe_->withdrawOnResume->store(false);
             return Result<AiTaskState>::Success(probe_->outcome[context.node.Value()]);
         }
 
@@ -115,8 +127,11 @@ namespace Horo::AI::BehaviorTreeTestSupport {
         }
 
         Result<void> Service(const BehaviorTreeEvaluationContext &context) noexcept override {
-            ++probe_->services[context.node.Value()];
-            if (context.node.Value() == probe_->failService)
+            const auto id = context.node.Value();
+            ++probe_->services[id];
+            if (id == probe_->cancelService && probe_->cancellation)
+                probe_->cancellation->RequestCancellation();
+            if (id == probe_->failService)
                 return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
             return Result<void>::Success();
         }

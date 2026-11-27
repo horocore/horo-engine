@@ -6,6 +6,8 @@
 #include <type_traits>
 
 static_assert(std::is_same_v<decltype(Horo::Packages::PackageLifecycleConfiguration::editorHosts), Horo::Extensions::ExtensionEditorHosts>);
+static_assert(std::is_same_v<decltype(Horo::Packages::PackageLifecycleConfiguration::platformProviderCommit),
+                             Horo::Extensions::ExtensionPlatformProviderCommit>);
 
 static_assert(!std::is_default_constructible_v<Horo::Packages::VerifiedPackageModule>);
 static_assert(!std::is_copy_constructible_v<Horo::Packages::PackageModuleRetirementQueue>);
@@ -16,7 +18,9 @@ namespace Horo::Packages::Tests {
                                                                               const IPackageExtensionTrust &trust,
                                                                               PackageLifecycleConfiguration configuration,
                                                                               std::vector<PackageScriptRegistryRealm> realms,
-                                                                              std::vector<GameplayPackageModuleBinding> gameplayBindings) {
+                                                                              std::vector<GameplayPackageModuleBinding> gameplayBindings,
+                                                                              Extensions::ExtensionPlatformProviderCommit providerCommit) {
+        configuration.platformProviderCommit = std::move(providerCommit);
         auto native = std::make_shared<NativePackageModuleHost>(configuration);
         auto script = std::make_shared<ScriptPackageModuleHost>(std::move(realms), native);
         auto gameplay = std::make_shared<GameplayPackageModuleHost>(GameplayPackageHostConfiguration{configuration.temporaryRoot,

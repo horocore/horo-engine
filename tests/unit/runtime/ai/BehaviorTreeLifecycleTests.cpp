@@ -2,6 +2,8 @@
 #include "BehaviorTreeRuntimeTestSupport.h"
 
 #include <algorithm>
+#include <catch2/generators/catch_generators.hpp>
+#include <limits>
 
 namespace Horo::AI {
     namespace {
@@ -37,6 +39,27 @@ namespace Horo::AI {
             CHECK(fixture.probe->handles[2] != handle);
         }
 
+        TEST_CASE("Successful plan replacement fences fixed and event evaluation of the old tick", "[unit][ai][bt_runtime]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Sequence, {2}), Node(2, Task)});
+            fixture.probe->outcome[2] = Running;
+            auto instance = fixture.Instance();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            SECTION("compatible") {}
+            SECTION("incompatible") {
+                fixture.nodes[0].operation = Selector;
+            }
+            REQUIRE(instance->Replace(fixture.Plan()).HasValue());
+            const auto callbacks = fixture.probe->starts[2] + fixture.probe->resumes[2];
+            auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            ExpectError(instance->Evaluate(1, snapshot.Value(), fixture.agent), AIErrors::TaskTransitionInvalid);
+            ExpectError(instance->Evaluate(1, snapshot.Value(), fixture.agent, AiTaskResumeReason::Event), AIErrors::TaskTransitionInvalid);
+            CHECK(fixture.probe->starts[2] + fixture.probe->resumes[2] == callbacks);
+            REQUIRE(fixture.Evaluate(*instance, 2) == Running);
+        }
+
         TEST_CASE("Generation retirement cancellation and shutdown prevent any later callback", "[unit][ai][bt_runtime]") {
             using enum AiTaskState;
             for (const bool generation : {true, false}) {
@@ -63,6 +86,28 @@ namespace Horo::AI {
                 CHECK(fixture.probe->cleanups[1] == 1);
                 CHECK(fixture.probe->resumes[1] == 0);
             }
+        }
+
+        TEST_CASE("Owner revocation during a service fences the current tree evaluation", "[unit][ai][bt_runtime]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Parallel, {2, 3, 4}), Node(2, Task), Node(3, Task), Node(4, Task)},
+                            {{Id(5), Id(3), BehaviorTreeServiceMode::Periodic, 1}, {Id(6), Id(3), BehaviorTreeServiceMode::Periodic, 1}});
+            CancellationSource cancellation;
+            fixture.probe->cancelService = 5;
+            fixture.probe->cancellation = &cancellation;
+            fixture.probe->outcome[2] = Running;
+            auto instance = fixture.Instance(1, cancellation.Token());
+            CHECK(fixture.Evaluate(*instance, 1) == Cancelled);
+            CHECK(fixture.probe->services[5] == 1);
+            CHECK(fixture.probe->services[6] == 0);
+            CHECK(fixture.probe->starts[3] == 0);
+            CHECK(fixture.probe->starts[4] == 0);
+            REQUIRE(fixture.probe->terminals[2]);
+            CHECK(fixture.probe->terminals[2]->cancellationReason == AiTaskCancellationReason::ContextCancelled);
+            instance->Shutdown();
+            CHECK(fixture.probe->aborts[2] == 1);
+            CHECK(fixture.probe->cleanups[2] == 1);
         }
 
         TEST_CASE("Precancelled trees never start tasks and destructors abort running work", "[unit][ai][bt_runtime]") {
@@ -210,14 +255,50 @@ namespace Horo::AI {
             const auto handle = fixture.probe->handles[2];
             fixture.nodes[0].operation = Selector;
             auto candidate = fixture.Plan();
+            const auto successfulAllocations = GENERATE(std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4});
             auto replaced = [&] {
-                Tests::AllocationProbe::ScopedFailure failure;
+                Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
                 return instance->Replace(candidate);
             }();
             ExpectError(replaced, AIErrors::BehaviorTreeStorageUnavailable);
             CHECK(fixture.probe->aborts[2] == 0);
             CHECK(fixture.Evaluate(*instance, 2) == Running);
             CHECK(fixture.probe->handles[2] == handle);
+        }
+
+        TEST_CASE("Prepared executor replacement restarts compatible plans without copying opaque provider state",
+                  "[unit][ai][bt_runtime]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            auto instance = fixture.Instance();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            const auto originalHandle = fixture.probe->handles[1];
+            auto replaced = instance->Replace(fixture.Plan(), std::make_unique<Executor>(fixture.probe));
+            REQUIRE(replaced.HasValue());
+            CHECK_FALSE(replaced.Value());
+            CHECK(fixture.probe->aborts[1] == 1);
+            CHECK(fixture.probe->cleanups[1] == 1);
+            REQUIRE(fixture.Evaluate(*instance, 2) == Running);
+            CHECK(fixture.probe->starts[1] == 2);
+            CHECK(fixture.probe->handles[1] != originalHandle);
+        }
+
+        TEST_CASE("Tree admission rejects an overflowing task reservation before activation", "[unit][ai][bt_runtime]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            auto binding = BehaviorTreeInstanceBinding{fixture.agent,
+                                                       {},
+                                                       std::numeric_limits<std::uint32_t>::max() - 1,
+                                                       1,
+                                                       fixture.blackboard->Binding()};
+            binding.availableTaskSlots = 3;
+            ExpectError(BehaviorTreeInstance::Create(fixture.Plan(), binding, std::make_unique<Executor>(fixture.probe)),
+                        AIErrors::TaskContextInvalid);
+            CHECK(fixture.probe->starts[1] == 0);
         }
 
         TEST_CASE("Detached cyclic controls invalid attachments and illegal priority observers never publish a plan",

@@ -6,9 +6,12 @@
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
 
+#include <memory>
 #include <optional>
 
 namespace Horo::Editor {
+    class OpenGLViewportImageCapture;
+
     /** @brief OpenGL editor adapter that renders backend-neutral editor scene instances into an offscreen target. */
     class EditorViewportRendererOpenGL final : public IEditorViewportRenderer, public Render::IShaderHotReloadTarget {
     public:
@@ -21,6 +24,13 @@ namespace Horo::Editor {
 
         /** @brief Creates shader, geometry, and offscreen target state in the current OpenGL context. */
         [[nodiscard]] Result<void> Initialize();
+        [[nodiscard]] Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region,
+                                                                std::function<bool()> authorized) override;
+        [[nodiscard]] std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t id) override;
+        bool CancelImageCapture(std::uint64_t id) noexcept override;
+        [[nodiscard]] Result<void> EnableCameraCrossFade() override;
+        [[nodiscard]] EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept override;
+        [[nodiscard]] Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) override;
 
         /** @brief Releases all OpenGL objects; repeated calls are safe. */
         void Shutdown() noexcept;
@@ -54,6 +64,12 @@ namespace Horo::Editor {
 
     private:
         struct ProgramGeneration;
+
+        struct PreparedCrossFade final {
+            EditorViewportCameraCrossFade camera;
+            Render::RenderTargetHandle target;
+        };
+
         [[nodiscard]] Result<void> CreateGridGeometry();
         [[nodiscard]] Result<void> PrepareDrawLighting(const Render::RenderSceneView &scene,
                                                        const Render::RenderStaticMeshInstance &instance);
@@ -70,7 +86,11 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ValidatePassRequest(const Render::StaticMeshPassDescriptor &descriptor,
                                                        EditorViewportExtent requestedExtent) const;
         [[nodiscard]] Result<void> RenderViewportPass(const Render::StaticMeshPassDescriptor &descriptor,
-                                                      const std::optional<EditorViewportDirectionalShadowView> &shadow, float aspect);
+                                                      const std::optional<EditorViewportDirectionalShadowView> &shadow, float aspect,
+                                                      Render::RenderTargetHandle target, bool overlays = true);
+        [[nodiscard]] Result<void> RenderCameraCrossFadeSource(const Render::StaticMeshPassDescriptor &descriptor,
+                                                               const EditorViewportCameraCrossFade &crossFade, float aspect);
+        [[nodiscard]] Result<void> CompositeCameraCrossFade(float destinationWeight) const;
         [[nodiscard]] Result<void> DrawShadowCascade(const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame &frame,
                                                      std::size_t cascade) const;
         [[nodiscard]] Result<void> DrawDirectionalShadowMap(const Render::RenderSceneView &scene,
@@ -122,11 +142,15 @@ namespace Horo::Editor {
         EditorViewportShaderParameters reloadParameters_;
         std::uint32_t program_{0};
         std::uint32_t shadowProgram_{0};
+        std::uint32_t crossFadeProgram_{};
+        std::uint64_t crossFadeGeneration_{};
+        std::optional<PreparedCrossFade> preparedCrossFade_;
         std::uint32_t gridVertexArray_{0};
         std::uint32_t gridVertexBuffer_{0};
         Render::RenderBufferHandle gridVertexBufferHandle_;
         Render::RenderFrontend *frontend_{nullptr};
         EditorViewportResources resources_;
+        std::unique_ptr<OpenGLViewportImageCapture> imageCapture_;
         UniformLocations uniforms_{};
         EditorViewportExtent requestedExtent_{};
         EditorViewportGridOptions gridOptions_{};

@@ -9,14 +9,14 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Gameplay/GameplayErrors.h"
-#include "WorkspacePathText.h"
+#include "docking/WorkspacePathText.h"
 #include "editor/document/EditorViewportPicking.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/document/SceneDocumentComparison.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/project_model/EditorModelErrors.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
 #include <algorithm>
 #include <array>
@@ -101,19 +101,25 @@ namespace Horo::Editor {
           m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.world.documentSessionOwner),
           m_streamingPreviewPolicy(dependencies.world.streamingPreviewPolicy), m_streamingPreview(dependencies.world.streamingPreview),
           m_worldSourceFiles(dependencies.world.sourceFiles), m_mutableAssetRegistry(dependencies.assets.mutableAssetRegistry),
-          m_uiInspectorResources(dependencies.uiInspectorResources), m_collisionInventory(dependencies.collision.inventory),
-          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
-          m_collisionSceneOwner(dependencies.world.documentSessionOwner), m_mutations(dependencies.mutations),
-          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assets.source),
+          m_latticeQueryFactory(dependencies.latticeQueryFactory), m_querySchema(dependencies.querySchema),
+          m_queryContextAccess(dependencies.queryContextAccess), m_queryPreviewPhysics(dependencies.queryPreviewPhysics),
+          m_queryPreviewNavigation(dependencies.queryPreviewNavigation), m_inspectionPhysics(dependencies.inspectionPhysics),
+          m_uiInspectorResources(dependencies.uiInspectorResources), m_sourceRecoveryJobs(dependencies.jobs),
+          m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
+          m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.world.documentSessionOwner),
+          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assets.source),
           m_importerCatalog(dependencies.assets.importerCatalog),
+          m_acquireImporters(std::move(dependencies.assets.acquireImporters)),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
           m_diagnosticSourceNavigator(ComposeDiagnosticNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator)),
-          m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
-          m_localization(dependencies.localization),
+          m_diagnosticOutput(dependencies.sourceNavigation.diagnosticOutput), m_gameplayBuilds(dependencies.gameplay.builds),
+          m_gameplayBuildEnvironment(dependencies.gameplay.environment), m_gameplayTests(dependencies.gameplay.tests),
+          m_gameplayTestEnvironment(dependencies.gameplay.testEnvironment), m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
-          m_worldDocuments(dependencies.world.documentSessionOwner), m_playSession(dependencies.networkDebugger),
-          m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.world.documentSessionOwner) {
+          m_worldDocuments(dependencies.world.documentSessionOwner),
+          m_playSession(dependencies.networkDebugger, dependencies.gameplay.assistConfiguration), m_audioPreview(dependencies.audioPreview),
+          m_audioPreviewWorkspace(dependencies.world.documentSessionOwner) {
         m_viewModel.pcgPalette = dependencies.procedural.catalog.palette;
         m_viewModel.pcgSchemas = dependencies.procedural.catalog.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
@@ -122,6 +128,9 @@ namespace Horo::Editor {
         m_viewModel.terrainCookAvailable = m_terrainCookFactory && static_cast<bool>(*m_terrainCookFactory);
         m_viewModel.terrainAssetCreationAvailable =
             m_terrainAssetFactory && static_cast<bool>(*m_terrainAssetFactory) && m_mutableAssetRegistry && m_mutations;
+        m_viewModel.blackboardCreationAvailable = m_mutableAssetRegistry && m_mutations && m_durableFiles;
+        m_viewModel.environmentQueryCreationAvailable =
+            m_latticeQueryFactory && m_querySchema && m_mutableAssetRegistry && m_mutations && m_durableFiles;
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
@@ -136,6 +145,7 @@ namespace Horo::Editor {
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);
         InitializeProjectState(absoluteProjectRoot);
+        ConfigureScriptLanguage(dependencies.gameplay.moduleScripts);
         InitializeWorkspaceLayout();
         InitializeInitialScene(absoluteProjectRoot);
         RefreshSceneProjections();
@@ -145,6 +155,17 @@ namespace Horo::Editor {
     void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {
         m_projectRoot = absoluteProjectRoot;
         m_viewModel.projectRoot = WorkspacePathText(absoluteProjectRoot);
+        if (m_durableFiles != nullptr && !absoluteProjectRoot.empty()) {
+            const auto recovery = PrefabApplyTransaction::InspectPendingRecovery(absoluteProjectRoot);
+            m_prefabApplyRecoveryPendingOnDisk = recovery.HasError() || recovery.Value().has_value();
+            if (recovery.HasError()) {
+                m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Invalid;
+                LOG_ERROR("editor.prefab", "Paired Prefab recovery could not be inspected: %s", recovery.ErrorValue().message.c_str());
+            } else if (m_prefabApplyRecoveryPendingOnDisk) {
+                m_viewModel.prefabApplyRecovery = std::make_shared<const PrefabApplyRecoveryCandidate>(*recovery.Value());
+                LOG_WARN("editor.prefab", "A previous paired Prefab publication requires source and Scene reconciliation.");
+            }
+        }
         if (const auto metadata = Application::LoadProjectMetadata(absoluteProjectRoot); metadata.HasValue())
             m_viewModel.projectName = metadata.Value().name;
         RefreshPhysicsProfiles();
@@ -169,6 +190,7 @@ namespace Horo::Editor {
                                       {"horo.navigation", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}};
         m_viewModel.panelDockAreas.emplace("horo.foliage_palette", WorkspaceDockArea::Right);
+        m_viewModel.panelDockAreas.emplace("horo.input_mapping", WorkspaceDockArea::Right);
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
@@ -178,6 +200,7 @@ namespace Horo::Editor {
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.navigation", ActivityBarSlot{ActivityBarRail::Left, 3, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.foliage_palette", ActivityBarSlot{ActivityBarRail::Right, 1, 0}));
+        static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.input_mapping", ActivityBarSlot{ActivityBarRail::Right, 2, 0}));
     }
 
     void EditorWorkspaceController::InitializeInitialScene(const std::filesystem::path &absoluteProjectRoot) {
@@ -197,7 +220,8 @@ namespace Horo::Editor {
         if (!loaded.Value().has_value())
             return false;
         LoadedProjectScene projectScene = *loaded.Value();
-        if (const Result<void> installed = m_document.LoadSaved(std::move(projectScene.objects), std::move(projectScene.prefabInstances));
+        if (const Result<void> installed = m_document.LoadSaved(std::move(projectScene.objects), std::move(projectScene.prefabInstances),
+                                                                std::move(projectScene.childScenes));
             installed.HasError()) {
             m_initializationError = installed.ErrorValue();
             LOG_ERROR("editor.scene_document", "Default scene validation failed: %s", installed.ErrorValue().message.c_str());
@@ -242,6 +266,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::UpdateExternalSceneWatch */
     void EditorWorkspaceController::UpdateExternalSceneWatch(const float elapsedSeconds) {
+        UpdatePrefabExternalWatch(elapsedSeconds);
         if (m_sceneFileWatch == nullptr || !m_defaultScenePath.has_value() || !m_sceneFingerprint.has_value())
             return;
 
@@ -307,15 +332,19 @@ namespace Horo::Editor {
         RefreshSourceDocumentProjection();
         (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);
-        if (m_nativeGameplayReloadQuarantined || m_gameplayRegistry == nullptr || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)
+        if (m_nativeGameplayReloadQuarantined || m_gameplayRegistry == nullptr || m_playSession.UsesCookedDecisionExecution() ||
+            !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)
             return;
         m_gameplaySourceWatchElapsedSeconds += elapsedSeconds;
         if (m_gameplaySourceWatchElapsedSeconds < 0.5F)
             return;
         m_gameplaySourceWatchElapsedSeconds = 0.0F;
+        const auto priorDecisionCatalog = m_gameplayRegistry->DecisionUsageMetadata();
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->ReloadChangedLuaSources())
             LOG_ERROR("editor.gameplay", "Lua reload kept the last working revision for '%s': %s",
                       WorkspacePathText(diagnostic.source).c_str(), diagnostic.error.message.c_str());
+        if (priorDecisionCatalog != m_gameplayRegistry->DecisionUsageMetadata())
+            RefreshAvailableBehaviorProjection();
         if (!m_gameplayRegistry->ConsumeNativeArtifactChange())
             return;
         if (m_playSession.IsActive()) {

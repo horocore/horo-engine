@@ -1,98 +1,18 @@
-#include "Horo/Network/SceneReplicationApplyOwner.h"
 #include "Horo/Runtime/RuntimeLifecycle.h"
-#include "ReplicationStateCodecTestSupport.h"
-#include "RpcGameplayDispatchTestSupport.h"
+#include "ReplicationInboundApplyTestSupport.h"
 
 #include <limits>
 #include <thread>
 
 namespace Horo::Network {
     namespace {
-        using namespace StateCodecTestSupport;
+        using namespace InboundApplyTestSupport;
 
         /** @brief One-frame monotonic clock; the integration exercises phase dispatch without elapsed fixed steps. */
         class ApplyTestClock final : public Clock {
         public:
             Duration MonotonicNow() const override {
                 return {};
-            }
-        };
-
-        /** @brief Real receiving Scene plus server capture/codec and authenticated inbound evidence. */
-        struct ApplyFixture final {
-            RpcDispatchTestSupport::Fixture peer{true, RpcTarget::AllClients, false};
-            Fixture sender;
-            std::shared_ptr<Owner> secondSource{std::make_shared<Owner>()};
-            ReplicationWorldLifecycle world{std::move(ReplicationWorldLifecycle::Create()).Value()};
-            std::shared_ptr<Runtime::RuntimeScene> scene;
-            std::shared_ptr<SceneReplicationApplyOwner> owner;
-            std::shared_ptr<ReplicationInboundApply> inbound;
-            std::array<std::shared_ptr<ReplicationRoleState>, 2> roles;
-            std::array<std::shared_ptr<ReplicationStateCodec>, 2> codecs;
-
-            explicit ApplyFixture(const ReplicationInboundLimits &limits = {}) {
-                Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, {1}};
-                for (std::uint64_t slot = 1; slot <= 2; ++slot) {
-                    Runtime::RuntimeEntityDefinition entity;
-                    entity.object = Runtime::SceneObjectId{slot};
-                    builder.Add(entity);
-                }
-                scene = std::shared_ptr<Runtime::RuntimeScene>{
-                    std::move(Runtime::RuntimeScene::Create(std::move(builder).Build().Value(), World().scene)).Value()};
-                const std::array bindings{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::TranslationX}};
-                owner = SceneReplicationApplyOwner::Create(scene, SchemaId(10), {1, 0}, bindings).Value();
-                REQUIRE(world.Stage(World(1, ReplicationExecutionRole::SimulatedClient)).HasValue());
-                REQUIRE(world.CommitAtSafePoint(World().scene, World().session).HasValue());
-                inbound =
-                    ReplicationInboundApply::Create({peer.session, peer.connection, peer.generation, World().scene, World().session,
-                                                     World().authority, *Recipient().localPeer, TestSupport::WireIdentity<ProtocolId>(1),
-                                                     TestSupport::WireIdentity<MessageTypeId>(2)},
-                                                    world, owner, 22, limits)
-                        .Value();
-                REQUIRE(sender.lifecycle.RegisterObject(World().scene, World().session, Object(2)).HasValue());
-                const std::array targets{ReplicationCaptureTarget{Object(), sender.owner},
-                                         ReplicationCaptureTarget{Object(2), secondSource}};
-                sender.capture = std::move(ReplicationStateCapture::Prepare(Read(sender.lifecycle), sender.registry, targets)).Value();
-                for (std::size_t index{}; index < 2; ++index) {
-                    const auto mapping = Object(index + 1);
-                    REQUIRE(world.RegisterObject(World().scene, World().session, mapping).HasValue());
-                    auto role = Recipient();
-                    role.object = mapping.object;
-                    roles[index] = std::make_shared<ReplicationRoleState>(std::move(ReplicationRoleState::Create(role)).Value());
-                    codecs[index] = std::shared_ptr<ReplicationStateCodec>{
-                        std::move(ReplicationStateCodec::Create(sender.registry, role, ReplicationRecordKind::Update, 1)).Value()};
-                    REQUIRE(inbound->RegisterObject(mapping, roles[index], codecs[index]).HasValue());
-                }
-            }
-
-            void Capture(const std::uint64_t tick, const double first, const double second) {
-                sender.owner->Commit(tick, first);
-                secondSource->Commit(tick, second);
-                REQUIRE(sender.capture->CaptureAtCommit(Read(sender.lifecycle, tick), tick).Value().published == 2);
-            }
-
-            MessageEnvelope Message(const std::size_t index, const ReplicationAcknowledgedBaseline &baseline = {}) {
-                MessageEnvelope message;
-                message.protocol = TestSupport::WireIdentity<ProtocolId>(1);
-                message.message = TestSupport::WireIdentity<MessageTypeId>(2);
-                message.payload = codecs[index]->Encode(sender.capture->Latest(Object(index + 1).object).Value(), baseline).Value();
-                return message;
-            }
-
-            Result<void> Stage(const MessageEnvelope &message, const CancellationToken &cancellation = {}) {
-                return inbound->HandleAdmitted(peer.Context(cancellation), message);
-            }
-
-            ReplicationWorldWorkRequest Work(const CancellationToken &cancellation = {}) const {
-                return {World().scene, World().session, Runtime::RuntimePhase::CommitDeferredLifecycleChanges, 1, cancellation};
-            }
-
-            Result<ReplicationApplyReport> Apply(const CancellationToken &cancellation = {}) {
-                return inbound->ApplyAtSafePoint(Work(cancellation), 23);
-            }
-
-            float Value(const std::size_t index) const {
-                return scene->View().Get(Object(index + 1).entity).Value().localTransform->translation.x;
             }
         };
 
@@ -204,6 +124,109 @@ namespace Horo::Network {
         REQUIRE(fixture.Value(1) == 4);
         REQUIRE(fixture.Stage(first).HasValue());
         REQUIRE(fixture.Apply().Value().applied == 0);
+    }
+
+    TEST_CASE("Initial state waits for one complete tick across authored and Prefab objects", "[network][apply][initial]") {
+        ApplyFixture fixture{{}, ReplicationInboundApplyMode::InitialSnapshot};
+        fixture.Capture(1, 3.0, 4.0);
+        const auto authority = fixture.sender.lifecycle
+                                   .AcquireFor({World().scene, World().session, Runtime::RuntimePhase::NetworkFlush, 1},
+                                               ReplicationWorldCapability::PublishAuthority)
+                                   .Value();
+        const std::array reversed{fixture.codecs[1], fixture.codecs[0]};
+        const auto snapshot = EncodeReplicationInitialState(authority, *fixture.sender.capture, 1, reversed, 4096).Value();
+        REQUIRE(snapshot.records.size() == 2);
+        CHECK(snapshot.session == World().session);
+        CHECK(snapshot.authority == World().authority);
+        CHECK(snapshot.tick == 1);
+        CHECK(snapshot.records[0].ownership.object == Object().object);
+        CHECK(snapshot.records[1].ownership.object == Object(2).object);
+        CHECK(EncodeReplicationInitialState(authority, *fixture.sender.capture, 2, reversed, 4096).HasError());
+        CHECK(EncodeReplicationInitialState(authority, *fixture.sender.capture, 1, reversed, snapshot.records[0].wire.size()).HasError());
+        CHECK(EncodeReplicationInitialState(authority, *fixture.sender.capture, 1, std::span{reversed}.first(1), 4096).HasError());
+        auto authored = fixture.Message(0);
+        auto prefab = fixture.Message(1);
+        authored.payload = snapshot.records[0].wire;
+        prefab.payload = snapshot.records[1].wire;
+        REQUIRE(fixture.Stage(authored).HasValue());
+        REQUIRE(fixture.Stage(authored).HasValue());
+        const auto pending = fixture.Apply().Value();
+        CHECK(pending.applied == 0);
+        CHECK_FALSE(pending.initialPublished);
+        CHECK(fixture.Value(0) == 0);
+        CHECK(fixture.Value(1) == 0);
+        const auto prior = fixture.sender.capture->Latest(Object().object).Value();
+        fixture.Capture(2, 5.0, 6.0);
+        const auto delta = fixture.Message(0, Ack(prior, *fixture.codecs[0]));
+        REQUIRE(delta.payload[5] == std::byte{1});
+        CHECK(fixture.Stage(delta).HasError());
+        CHECK(fixture.Stage(fixture.Message(0)).HasError());
+        CHECK(fixture.Stage(fixture.Message(1)).HasError());
+        REQUIRE(fixture.Stage(prefab).HasValue());
+        const auto complete = fixture.Apply().Value();
+        CHECK(complete.applied == 2);
+        CHECK(complete.initialPublished);
+        CHECK(fixture.Value(0) == 3);
+        CHECK(fixture.Value(1) == 4);
+        CHECK(fixture.Stage(authored).HasError());
+        const auto repeated = fixture.Apply().Value();
+        CHECK(repeated.applied == 0);
+        CHECK(repeated.initialPublished);
+    }
+
+    TEST_CASE("Initial state rollback preserves the whole receiving Scene", "[network][apply][initial]") {
+        ApplyFixture fixture{{}, ReplicationInboundApplyMode::InitialSnapshot};
+        fixture.Capture(1, 3.0, 4.0);
+        const auto authored = fixture.Message(0);
+        const auto prefab = fixture.Message(1);
+        SECTION("cancelling a partial acquisition requires every record again") {
+            REQUIRE(fixture.Stage(authored).HasValue());
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            CHECK(fixture.Apply(cancelled.Token()).HasError());
+            REQUIRE(fixture.Stage(prefab).HasValue());
+            CHECK_FALSE(fixture.Apply().Value().initialPublished);
+            CHECK(fixture.Value(0) == 0);
+            CHECK(fixture.Value(1) == 0);
+            REQUIRE(fixture.Stage(authored).HasValue());
+            CHECK(fixture.Apply().Value().initialPublished);
+        }
+        SECTION("a changed mapping revision rejects stale capture despite identical final rows") {
+            REQUIRE(fixture.Stage(authored).HasValue());
+            REQUIRE(fixture.Stage(prefab).HasValue());
+            auto extra = Object(3);
+            REQUIRE(fixture.world.RegisterObject(World().scene, World().session, extra).HasValue());
+            REQUIRE(fixture.world.RetireObject(World().scene, World().session, extra.object).HasValue());
+            CHECK(fixture.Apply().HasError());
+            CHECK(fixture.Value(0) == 0);
+            CHECK(fixture.Value(1) == 0);
+        }
+        SECTION("an invalid field in the later object rejects the complete transaction") {
+            fixture.Capture(2, 5.0, 1e100);
+            REQUIRE(fixture.Stage(fixture.Message(0)).HasValue());
+            REQUIRE(fixture.Stage(fixture.Message(1)).HasValue());
+            CHECK(fixture.Apply().HasError());
+            CHECK(fixture.Value(0) == 0);
+            CHECK(fixture.Value(1) == 0);
+            REQUIRE(fixture.Stage(authored).HasValue());
+            REQUIRE(fixture.Stage(prefab).HasValue());
+            CHECK(fixture.Apply().Value().initialPublished);
+        }
+    }
+
+    TEST_CASE("Initial state publishes an explicit empty inventory and rejects partial capacity", "[network][apply][initial]") {
+        ApplyFixture fixture;
+        constexpr auto mode = ReplicationInboundApplyMode::InitialSnapshot;
+        auto tooSmall = ReplicationInboundApply::Create(fixture.Authority(), fixture.world, fixture.owner, 22, {.maximumPending = 1}, mode);
+        TestSupport::RequireError(tooSmall, ReplicationStateErrors::Capacity);
+
+        auto empty = ReplicationWorldLifecycle::Create().Value();
+        REQUIRE(empty.Stage(World(1, ReplicationExecutionRole::SimulatedClient)).HasValue());
+        REQUIRE(empty.CommitAtSafePoint(World().scene, World().session).HasValue());
+        auto receiver = ReplicationInboundApply::Create(fixture.Authority(), empty, fixture.owner, 22, {}, mode).Value();
+        const auto report = receiver->ApplyAtSafePoint(fixture.Work(), 23).Value();
+        CHECK(report.applied == 0);
+        CHECK(report.initialPublished);
     }
 
     TEST_CASE("Impaired transport receipt waits for the actual runtime scheduler Scene safe point", "[network][apply][runtime]") {
@@ -482,5 +505,27 @@ namespace Horo::Network {
         foreign.SetLocalTransform(Object().entity, changed, {Runtime::SceneRuntimeId{99}, {}, {}, {}, {}});
         REQUIRE(fixture.scene->Commit(foreign).HasError());
         REQUIRE(fixture.Value(0) == 0);
+    }
+
+    TEST_CASE("Scene service apply cannot acquire a preparation view on a foreign lane", "[network][apply][scene]") {
+        auto service = std::make_shared<Runtime::RuntimeSceneService>();
+        Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+        builder.Add(Runtime::RuntimeEntityDefinition{.object = {1}});
+        const CancellationToken cancellation;
+        REQUIRE(service->Startup(cancellation).HasValue());
+        REQUIRE(service->QueuePreparation(std::move(builder).Build().Value()).HasValue());
+        REQUIRE(service->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.cancellation = cancellation}).HasValue());
+        const auto view = service->ActiveScene().value();
+        const auto mapping = Object();
+        const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::TranslationX}};
+        bool stale{};
+        std::jthread foreign([&] {
+            const auto result = SceneReplicationApplyOwner::CreateForService(service, view, {}, mapping.provenance.schema,
+                                                                             mapping.provenance.schemaVersion, fields);
+            stale = result.HasError() && result.ErrorValue().code.Value() == ReplicationStateErrors::Stale.code.Value();
+        });
+        foreign.join();
+        CHECK(stale);
+        CHECK(view.IsCurrent());
     }
 }  // namespace Horo::Network

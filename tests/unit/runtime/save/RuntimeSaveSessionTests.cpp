@@ -1,3 +1,5 @@
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Runtime/Save/RuntimeSaveSession.h"
 #include "SaveCaptureSnapshotTestUtils.h"
 
@@ -31,6 +33,7 @@ namespace Horo::Runtime {
 
             Result<void> Prepare(const RuntimeSaveSnapshot &snapshot, const CancellationToken &token) override {
                 preparedThread = std::this_thread::get_id();
+                prepareDiagnosticsSuppressed = Log::DiagnosticsSuppressed();
                 if (started) {
                     started->set_value();
                     while (release.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready &&
@@ -45,6 +48,7 @@ namespace Horo::Runtime {
 
             Result<void> Commit() override {
                 ++commits;
+                commitDiagnosticsSuppressed = Log::DiagnosticsSuppressed();
                 if (failCommit)
                     return Result<void>::Failure(Error{ErrorCode{"game.save.commit_uncertain"}});
                 std::lock_guard lock(store->mutex);
@@ -59,6 +63,8 @@ namespace Horo::Runtime {
             std::shared_future<void> release;
             bool failPrepare{};
             bool failCommit{};
+            bool prepareDiagnosticsSuppressed{};
+            bool commitDiagnosticsSuppressed{};
             int commits{};
         };
 
@@ -130,6 +136,7 @@ namespace Horo::Runtime {
             Result<RuntimeSaveRestoreStaging> Stage(const StagedRestoreContext &, const SaveParticipantRegistrySnapshot &,
                                                     const CancellationToken &) override {
                 stagedThread = std::this_thread::get_id();
+                diagnosticsSuppressed = Log::DiagnosticsSuppressed();
                 RuntimeSaveSnapshot snapshot;
                 {
                     std::lock_guard lock(store_->mutex);
@@ -150,6 +157,7 @@ namespace Horo::Runtime {
             }
 
             bool fail{};
+            bool diagnosticsSuppressed{};
             std::thread::id stagedThread;
 
         private:
@@ -253,8 +261,12 @@ namespace Horo::Runtime {
                 ++calls;
                 calledOn = std::this_thread::get_id();
                 context = prepared.context;
-                if (fault == 1)
-                    return Result<void>::Failure(Error{ErrorCode{"game.restore.handoff_failed"}});
+                if (fault == 1) {
+                    diagnosticsSuppressed = Log::DiagnosticsSuppressed();
+                    Log::Logger::WriteEmergency("save.test.handoff", Log::Level::Error, "private-staged-handoff");
+                    return Result<void>::Failure(
+                        Error{.code = ErrorCode{"game.restore.handoff_failed"}, .message = "private-staged-handoff"});
+                }
                 if (fault == 2)
                     throw std::runtime_error{"handoff before transfer"};
                 if (fault == 3)
@@ -306,6 +318,7 @@ namespace Horo::Runtime {
             StagedRestoreContext context;
             std::thread::id calledOn;
             unsigned calls{}, cancelled{}, fault{};
+            bool diagnosticsSuppressed{};
         };
 
         /** @brief Produces the actual registered captured state before testing an owner-safe alternate restore path. */
@@ -355,7 +368,7 @@ namespace Horo::Runtime {
         }
 
         TEST_CASE("Runtime handoff failures before producer transfer preserve original errors and cannot publish",
-                  "[save][session][handoff][failure]") {
+                  "[save][session][handoff][failure][privacy]") {
             for (const unsigned fault : {1U, 2U, 3U}) {
                 Fixture fixture;
                 SaveForHandoff(fixture);
@@ -365,11 +378,18 @@ namespace Horo::Runtime {
                                          ->Load(fixture.Operation(2, SaveOperationKind::Load),
                                                 std::make_shared<Source>(fixture.store, fixture.value), handoff)
                                          .Value();
+                const auto emergencyBefore = Log::Logger::Statistics().emergencyRecords;
                 AwaitHandoff(fixture, *handoff);
-                REQUIRE(request.Operation().Snapshot()->terminalError);
-                if (fault == 1)
-                    CHECK(request.Operation().Snapshot()->terminalError->code.Value() == "game.restore.handoff_failed");
-                CHECK(request.Operation().Snapshot()->commit == SaveOperationCommitOutcome::NotCommitted);
+                const auto snapshot = request.Operation().Snapshot();
+                REQUIRE(snapshot->terminalError);
+                if (fault == 1) {
+                    CHECK(handoff->diagnosticsSuppressed);
+                    CHECK(Log::Logger::Statistics().emergencyRecords == emergencyBefore);
+                    CHECK(snapshot->terminalError->code.Value() == "game.restore.handoff_failed");
+                    CHECK(snapshot->terminalError->message == "private-staged-handoff");
+                }
+                CHECK_FALSE(Log::DiagnosticsSuppressed());
+                CHECK(snapshot->commit == SaveOperationCommitOutcome::NotCommitted);
                 CHECK(fixture.value->published.empty());
                 CHECK(fixture.session->IsSettled());
                 CHECK(fixture.session->Acknowledge().HasValue());
@@ -446,6 +466,9 @@ namespace Horo::Runtime {
             CHECK(terminals == 1);
             CHECK(writer->preparedThread != std::this_thread::get_id());
             CHECK(writer->commits == 1);
+            CHECK(writer->prepareDiagnosticsSuppressed);
+            CHECK(writer->commitDiagnosticsSuppressed);
+            CHECK_FALSE(Log::DiagnosticsSuppressed());
             CHECK(fixture.value->captures == 2);
             REQUIRE(fixture.session->Acknowledge().HasValue());
             auto mutation = fixture.barrier->BeginMutation(fixture.owners[0]).Value();
@@ -457,6 +480,7 @@ namespace Horo::Runtime {
             fixture.Finish(loaded);
             CHECK(loaded.Operation().Snapshot()->state == SaveOperationState::Completed);
             CHECK(source->stagedThread != std::this_thread::get_id());
+            CHECK(source->diagnosticsSuppressed);
             CHECK(fixture.value->value == std::byte{0x31});
             CHECK(fixture.value->published == std::vector<std::string>{"game.a", "game.b"});
         }

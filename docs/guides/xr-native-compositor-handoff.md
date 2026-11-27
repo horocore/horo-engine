@@ -25,6 +25,12 @@ scale, shear and reflection are rejected (orthonormality tolerance `1e-5`). The
 retained value maps native Local/Stage base coordinates into authored World. No
 Scene entity/view/component borrow is retained by native frame retirement.
 
+Mounted World startup resolves the selected root from the same verified cell
+and origin as the camera and meshes. Use a cell root with a canonical signed
+World position and unit authored scale. This chooses the intended Local
+placement. Play still requires native reference calibration for that mounted
+origin generation.
+
 OpenXR's `poseInReferenceSpace` instead expresses the new space in its parent base,
 so the actual World reference child is created using the rigid inverse of that
 mapping. World is a distinct native child and receives its own Horo space identity
@@ -134,6 +140,15 @@ resource owner or completion lease.
 
 ## Timing and color/depth policy
 
+The compositor records native frame and swapchain outcomes with a finite
+vocabulary. The host measures CPU cutoff and observed render completion against
+the same frame's display prediction. The `horo.xr.projection_color_coverage`
+histogram records submitted color pixels as a fraction of the corresponding
+allocated color layers after native acceptance. Empty and rejected projections
+produce no coverage sample. The metric carries no frame, view or device identity
+and makes no claim about physical display completion. When the telemetry queue
+fills, the producer reports dropped records without delaying native submission.
+
 `ObservePacing` takes an explicitly converted timestamp in the runtime prediction
 clock domain. It reports the runtime period, exact predicted display time, finite
 CPU submission deadline (`prediction - GPU budget - compositor margin`), remaining
@@ -239,6 +254,20 @@ supply all three normalized absolute paths together:
 --xr-host-catalog-signature <detached-signature.json>
 --xr-tracking-root <authored-scene-object-id>
 ```
+
+Pass `--xr-input-player <local-player-id>` with an explicit native or simulator
+launch to route the selected headset's scalar actions to a local Play player.
+The editor accepts one decimal player ID from 0 through 255. The workspace
+borrows that player's context-bound Input collection and captures fixed-tick
+gameplay input for the same player. Keyboard and gamepad ownership remains
+independent. Launches that omit the option continue to use the aggregate
+single-player preview input.
+
+An action-map reload commits one neutral Input cutoff before the existing
+signed plan can regain scalar routing. The same player, XR session and native
+binding publication remain selected. An incompatible map leaves the semantic
+source neutral until a compatible map is installed. Ordinary physical Input
+continues during both transitions.
 
 The roots document uses the existing package publisher-policy codec. Its source
 is an explicit operator/installer approval; neither project metadata nor a

@@ -42,6 +42,28 @@ namespace Horo::AI {
         }
     };
 
+    /** @brief Independent incompatibilities between one admitted requirement and its Blackboard key. */
+    struct DecisionBlackboardBindingIssues final {
+        bool missingKey{};
+        bool typeMismatch{};
+        bool accessMismatch{};
+        bool presenceMismatch{};
+        bool missingDefault{};
+
+        /** @brief Reports requirement compatibility. @return True only when all constraints are satisfied. */
+        [[nodiscard]] bool Matches() const noexcept {
+            return !(missingKey || typeMismatch || accessMismatch || presenceMismatch || missingDefault);
+        }
+    };
+
+    /** @brief Compares a validated requirement against one key from an admitted Blackboard schema.
+     * @param requirement Validated requirement from an admitted asset or provider declaration.
+     * @param key Candidate for the required identity, or null if the schema lacks the key.
+     * @return Missing key alone for absent or different identities, otherwise all independent mismatches.
+     */
+    [[nodiscard]] DecisionBlackboardBindingIssues InspectDecisionBlackboardBinding(const DecisionBlackboardRequirement &requirement,
+                                                                                   const BlackboardKeyDescriptor *key) noexcept;
+
     /**
      * @brief Descriptor contract supplied by native, package, or script node discovery.
      * @details A descriptor is inert metadata. Registering or validating it never starts provider code.
@@ -112,6 +134,16 @@ namespace Horo::AI {
         std::size_t maximumDiagnostics{DecisionAssetValidationHardLimits::Diagnostics};
     };
 
+    /** @brief Authored identities associated with a validation finding. Invalid fields have no exact target. */
+    struct DecisionDiagnosticTarget final {
+        DecisionGraphAssetId asset;    /**< Owning decision graph. */
+        DecisionNodeId node;           /**< Authored node within that graph. */
+        BlackboardSchemaId blackboard; /**< Schema referenced by the graph. */
+        BlackboardKeyId key;           /**< Required key, which may be absent from the schema. */
+
+        auto operator<=>(const DecisionDiagnosticTarget &) const = default;
+    };
+
     /** @brief One source-located finding emitted by decision-asset validation. */
     struct DecisionAssetValidationDiagnostic final {
         ErrorCode code;                                         /**< Stable AIErrors identity. */
@@ -119,6 +151,7 @@ namespace Horo::AI {
         std::string message;                                    /**< Finding-specific detail. */
         SourceLocation source;                                  /**< Exact authored source context. */
         std::string path;                                       /**< Machine-readable semantic path, never a runtime lookup key. */
+        DecisionDiagnosticTarget target{};                      /**< Exact authored identities when available. */
     };
 
     /** @brief Immutable, deterministically ordered findings from one decision-asset validation pass. */
@@ -153,6 +186,12 @@ namespace Horo::AI {
         BlackboardKeyAccess access{BlackboardKeyAccess::ReadOnly};                  /**< Schema access granted to the plan. */
         BlackboardKeyPresence presence{BlackboardKeyPresence::Optional};            /**< Schema presence policy. */
         std::optional<BlackboardValue> defaultValue; /**< Owned schema default resolved by stable key identity. */
+    };
+
+    /** @brief Compiler-admitted node's declared dependency on a typed perception listener. */
+    struct DecisionWakePerceptionDependency final {
+        DecisionNodeId node;
+        PerceptionListenerTypeId listener;
     };
 
     /** @brief Flat node record with a contiguous range into the plan's blackboard bindings. */
@@ -238,6 +277,10 @@ namespace Horo::AI {
         [[nodiscard]] std::span<const DecisionPlanBlackboardBinding> Bindings() const noexcept;
         /** @brief Returns stable subplan dependencies. @return Borrowed dependency-table view. */
         [[nodiscard]] std::span<const DecisionPlanDependency> Dependencies() const noexcept;
+        /** @brief Checks whether existing runtime callbacks can keep their exact node and Blackboard bindings.
+         * @param candidate Compiled replacement bindings.
+         * @return True if all callback-visible bindings and schema identities match. */
+        [[nodiscard]] bool HasEquivalentBindings(const DecisionAssetPlan &candidate) const noexcept;
         /** @brief Actual retained logical container extents, excluding the separately owned schema lease. */
         [[nodiscard]] std::uint64_t StorageBytes() const noexcept;
         /**

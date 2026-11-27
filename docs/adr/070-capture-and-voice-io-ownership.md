@@ -81,6 +81,10 @@ Permission for one purpose does not authorize another. Editor preview consent do
 not grant packaged-game network voice, and microphone permission does not grant
 recording retention, upload, telemetry, or speech-provider network access.
 
+The editor connection test computes a live peak level in the capture callback.
+The test publishes activity and scalar level only. It does not queue PCM for a
+consumer, route microphone audio to a playback device, or authorize recording.
+
 ### 4. The reusable transport is bounded timestamped PCM
 
 The private backend reports native input format and timestamps. Audio validates and
@@ -100,6 +104,9 @@ consumers. The callback never blocks, allocates, logs, waits for output/network/
 Speech/Editor, or calls consumers. Overrun policy is explicit: drop oldest or
 newest complete block, insert a discontinuity marker, increment bounded counters,
 and notify control. It never overwrites a leased block or claims continuity.
+Consumers can read the latest discarded block's sample position and timestamp
+even if no later block reaches the queue. This metadata read does not copy PCM
+or wait for the producer.
 
 Consumers obtain leases or bounded copied reads with independent cursors and
 backpressure. A slow NET/Speech/recording consumer cannot block capture or output;
@@ -118,6 +125,24 @@ retention. Device combinations that risk acoustic feedback are warned/rejected b
 typed product policy; Audio does not silently enable echo cancellation or modify
 the microphone signal.
 
+The monitor route is scoped to one capture generation, a pinned playback
+endpoint and callback epoch, and a mixer bus owned by that playback runtime.
+The host must verify private listening for that exact route. SDL rejects the
+automatically migrating default playback endpoint. Monitoring PCM is available
+only through its gain-limited reader, which discards samples outside the queue
+age budget. Playback quiescence retires monitoring and any replacement requires
+fresh admission. An opt-in echo reference is eligible only from the program
+tap before microphone monitor mixing, in the same output epoch and clock
+domain. An echo-canceller owns its alignment and processing separately.
+
+The host prepares a live PCM source on the intended mixer bus before opening
+output. Once the pinned output is rendering, the SDL control owner binds the
+empty source to one admitted microphone generation. The playback queue is
+bounded in frames by the route's duration budget. Each control pump copies at
+most one current, gain-limited block, then clears its scratch. Capture
+retirement stops the live source before detaching the microphone. The host
+releases the playback storage after its voice detaches.
+
 ### 6. Recording publishes through AST
 
 Editor/game code submits start/stop/cancel through an application recording use
@@ -130,6 +155,12 @@ creates stable asset identity/sidecar/cooked outputs, and atomically publishes o
 rolls back. Cancellation, permission revocation, device loss, disk/budget failure,
 or malformed/gapped policy failure preserves the last good project state. Raw
 temporary data follows explicit retention and secure cleanup policy.
+
+The baseline recording path accumulates finite PCM in bounded private memory.
+The Audio owner detaches capture before transferring the unread tail on a
+normal stop. The application discards an incomplete or revoked take, validates
+the complete WAVE through the built-in source importer, and publishes it through
+the normal authored asset transaction.
 
 ### 7. NET owns voice packets and remote policy
 

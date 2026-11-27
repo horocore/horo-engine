@@ -88,7 +88,7 @@ namespace Horo::Navigation {
         const bool includeSuggestions = policy == NavigationGeneratedLinkCookPolicy::IncludeValidatedSuggestions;
         output.links.reserve(authored_.size() + (includeSuggestions ? suggestions_.size() : 0));
         Sha256Builder hash;
-        HashU64(hash, 0x4e41564c494e4b01ULL);
+        HashU64(hash, 0x4e41564c494e4b02ULL);
         static_cast<void>(hash.Update(std::as_bytes(std::span{fingerprint_.bytes})));
         HashU64(hash, context_.profile.Value());
         HashU64(hash, static_cast<std::uint8_t>(policy));
@@ -101,7 +101,8 @@ namespace Horo::Navigation {
                                         .startPolygon = row.start.provenance.polygonIndex,
                                         .endPolygon = row.end.provenance.polygonIndex,
                                         .area = row.area,
-                                        .bidirectional = row.direction == NavigationLinkDirection::Bidirectional});
+                                        .bidirectional = row.direction == NavigationLinkDirection::Bidirectional,
+                                        .authoredLink = row.authoredLink});
                 HashLink(hash, row);
             }
         };

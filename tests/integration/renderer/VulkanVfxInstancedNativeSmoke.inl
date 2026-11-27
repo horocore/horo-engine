@@ -557,12 +557,34 @@ namespace VulkanVfxInstancedSmoke {
     float PlaneDepth(const Math::Mat4 &projection, int x, int y, Math::Vec3 center) {
         const auto inverse = Value(Math::TryInverse(projection));
         const float nx = (float(x) + .5F) / 32 - 1, ny = (float(y) + .5F) / 16 - 1;
-        const auto near = Math::TransformPoint(inverse, {nx, ny, 0});
-        const auto far = Math::TransformPoint(inverse, {nx, ny, 1});
-        const auto ray = far - near;
+        const auto nearPoint = Math::TransformPoint(inverse, {nx, ny, 0});
+        const auto farPoint = Math::TransformPoint(inverse, {nx, ny, 1});
+        const auto ray = farPoint - nearPoint;
         REQUIRE(std::abs(ray.z) > .0001F);
-        const auto point = near + ray * ((center.z - near.z) / ray.z);
+        const auto point = nearPoint + ray * ((center.z - nearPoint.z) / ray.z);
         return Math::TransformPoint(projection, point).z;
+    }
+
+    /** @brief Decodes the raw Vulkan binary16 channel on every host compiler. */
+    float DecodeBinary16(std::uint16_t bits) {
+        const int exponent = (bits >> 10) & 0x1f;
+        const int fraction = bits & 0x3ff;
+        float magnitude;
+        if (exponent == 0x1f)
+            magnitude = fraction == 0 ? std::numeric_limits<float>::infinity() : std::numeric_limits<float>::quiet_NaN();
+        else
+            magnitude = exponent == 0 ? std::ldexp(static_cast<float>(fraction), -24)
+                                      : std::ldexp(static_cast<float>(fraction + 1024), exponent - 25);
+        return (bits & 0x8000) ? -magnitude : magnitude;
+    }
+
+    TEST_CASE("Native Vulkan VFX readback decodes binary16 on the host", "[renderer][vulkan][vfx][binary16]") {
+        CHECK(DecodeBinary16(0x3c00) == 1.0F);
+        CHECK(DecodeBinary16(0xb800) == -0.5F);
+        CHECK(DecodeBinary16(0x0001) == 0x1p-24F);
+        CHECK(std::signbit(DecodeBinary16(0x8000)));
+        CHECK(std::isinf(DecodeBinary16(0x7c00)));
+        CHECK(std::isnan(DecodeBinary16(0x7e00)));
     }
 
     /** @brief Verifies real copied FP16/depth values under Vulkan positive-height viewport and zero-to-one clip conventions. */
@@ -576,7 +598,7 @@ namespace VulkanVfxInstancedSmoke {
         const auto offset = std::size_t(y * 64 + x);
         INFO("Actual Vulkan pixel " << x << ',' << y);
         for (std::size_t i = 0; i < expected.size(); ++i)
-            CHECK(float(std::bit_cast<_Float16>(pixels.color[offset * 4 + i])) == Catch::Approx(expected[i]).margin(.02F).epsilon(0));
+            CHECK(DecodeBinary16(pixels.color[offset * 4 + i]) == Catch::Approx(expected[i]).margin(.02F).epsilon(0));
         CHECK(pixels.depth[offset] == Catch::Approx(PlaneDepth(scene.view.viewProjection, x, y, center)).margin(.0001F).epsilon(0));
         if (authored)
             CHECK(std::abs(pixels.depth[offset] - PlaneDepth(scene.view.viewProjection, x, y, Right)) > .001F);

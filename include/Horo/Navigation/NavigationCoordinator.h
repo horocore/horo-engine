@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 
 namespace Horo::Navigation {
     /** @brief Compiled ceiling on owner-side full-table candidate probes in one tick. */
@@ -21,6 +22,12 @@ namespace Horo::Navigation {
         NavigationDynamicOwnerId owner;
         NavigationDynamicOwnerGeneration generation;
         constexpr auto operator<=>(const NavigationPathCaller &) const noexcept = default;
+    };
+
+    /** @brief Explicit execution contract for a world coordinator. */
+    enum class NavigationPathExecution : std::uint8_t {
+        BestEffortJobs,
+        FixedOwner,
     };
 
     /** @brief Preparation bounds; admission and partition pressure retain pending work without blocking. */
@@ -36,6 +43,7 @@ namespace Horo::Navigation {
         std::uint32_t selectionProbesPerTick{4096};     /**< Full-table probes, in [requestSlots, MaximumNavigationPathSelectionProbes]. */
         std::uint64_t priorityAgingTicks{30};           /**< Oldest requests outrank fresh priority after this delay. */
         std::size_t maximumOwnedBytes{4 * 1024 * 1024}; /**< Prepared inline storage ceiling; provider output uses admitted limits. */
+        NavigationPathExecution execution{NavigationPathExecution::BestEffortJobs}; /**< FixedOwner requires a qualified provider. */
     };
 
     /** @brief Owned admission input captured from one committed world root. */
@@ -50,6 +58,7 @@ namespace Horo::Navigation {
         CancellationToken cancellation;
         std::optional<ConfigurationSnapshotRef> configuration;
         Telemetry::OperationContext operation;
+        CrowdAgentHandle agent; /**< Exact logical registration for movement-owned reservations, or zero for standalone queries. */
     };
 
     /** @brief One owned terminal result; a partial corridor retains the provider's exact status and stop evidence. */
@@ -57,7 +66,7 @@ namespace Horo::Navigation {
         NavRequestHandle handle;
         NavigationPathCaller caller;
         std::uint64_t acceptedSequence{};
-        JobId job{}; /**< Zero when cancellation/deadline prevented dispatch. */
+        JobId job{}; /**< Zero for owner execution or when cancellation/deadline prevented dispatch. */
         NavigationOutcomeProvenance source;
         NavigationWorldActivationDescriptor activation;
         Result<NavigationPath> result;
@@ -71,6 +80,12 @@ namespace Horo::Navigation {
         std::uint64_t tick{};
     };
 
+    /** @brief Optional synchronous read receipt for each newly published terminal path. */
+    struct NavigationPathCommitObserver final {
+        void *context{};
+        void (*observe)(void *, const NavigationPathCompletion &) noexcept {};
+    };
+
     /**
      * @brief Owner-thread admission, bounded batching, cancellation and stable terminal publication.
      * @details The host injects its process JobSystem and calls Dispatch/Commit at fixed-tick boundaries. Submit never
@@ -78,13 +93,38 @@ namespace Horo::Navigation {
      * each invocation uses provider-owned exclusive scratch. Rotating caller service precedes per-caller deadline,
      * priority and aging selection. Worker arrival cannot bypass earlier eligible admission order or caller authority.
      * Prepared storage is bounded; Foundation callback/record and cancellation allocations are bounded by accepted
-     * requests/jobs. This is best-effort execution: deterministic fixed-tick kernels remain a distinct host contract.
+     * requests/jobs. FixedOwner executes within the same work ceilings without consulting the scheduler. The host
+     * must compose an exclusively owned, bounded provider qualified for the selected build and numeric profile.
      * All methods except worker execution are owner-thread only. Destruction closes admission and signals cancellation
      * without joining; jobs retain only owned state/leases. The host must drain/shutdown JobSystem before unloading
      * provider code. No live Scene, gameplay callback, TaskGroup destructor wait, or new worker pool is retained.
      */
     class NavigationCoordinator final {
+        struct State;
+
     public:
+        /** @brief Non-owning path request access bound to the coordinator's owner lane. */
+        class PathRequests final {
+        public:
+            /** @brief Admits a path through the current owner or reports stale access. */
+            [[nodiscard]] Result<NavRequestHandle> Submit(const NavigationWorldLifecycle &world, NavigationPathSubmission submission,
+                                                          std::uint64_t tick) const;
+            /** @brief Reads a published result while the admitting coordinator is live and open.
+             * @details A successful path queued before provider retirement becomes a typed failure at delivery.
+             */
+            [[nodiscard]] Result<std::optional<NavigationPathCompletion>> Take(NavRequestHandle handle) const;
+            /** @brief Releases a retained consumer reservation, including during owner shutdown. */
+            void Abandon(NavRequestHandle handle) const noexcept;
+
+        private:
+            friend class NavigationCoordinator;
+            explicit PathRequests(const std::shared_ptr<State> &state) noexcept;
+            [[nodiscard]] std::shared_ptr<State> Resolve() const noexcept;
+
+            std::weak_ptr<State> state_;
+            std::thread::id lane_;
+        };
+
         /** @brief Prepare storage outside fixed-tick work.
          * @param jobs Process scheduler, configured with nonblocking CPU priority queues, outliving owner calls.
          * @param limits Finite request/partition/work/storage ceilings.
@@ -98,6 +138,9 @@ namespace Horo::Navigation {
         NavigationCoordinator &operator=(NavigationCoordinator &&) = delete;
         /** @brief Signal cancellation and release owner pins without waiting for workers. */
         ~NavigationCoordinator();
+
+        /** @brief Issues path access without extending the owner, provider, or worker lifetime. */
+        [[nodiscard]] PathRequests ObservePathRequests() const noexcept;
 
         /** @brief Admit an owned request without execution or publication.
          * @param world Owner-thread lifecycle issuing the exact provider lease.
@@ -119,20 +162,28 @@ namespace Horo::Navigation {
          * Cancel, this explicitly discards even an already published result. Use when its consumer is destroyed.
          */
         [[nodiscard]] bool Abandon(NavRequestHandle handle) noexcept;
+        /** @brief Abandons all retained movement queries belonging to the passed logical agent generations.
+         * @param retired Exact retiring handles in strict ascending order, borrowed for this call only.
+         * @details Owner thread, no allocation or callback. Running provider work retains its immutable lease until terminal. */
+        void RetireAgentQueriesAtSafePoint(std::span<const CrowdAgentHandle> retired) noexcept;
         /** @brief Dispatch one bounded tick slice without waiting; repeated calls cannot reset quotas.
-         * @param tick Monotonic simulation tick. @return Number of queries accepted by Foundation this call.
+         * @param tick Monotonic simulation tick.
+         * @param cancellation Fixed-attempt cancellation observed by owner-executed queries.
+         * @return Number of queries dispatched this call. Results remain private until Commit.
          */
-        [[nodiscard]] std::uint32_t Dispatch(std::uint64_t tick);
+        [[nodiscard]] std::uint32_t Dispatch(std::uint64_t tick, const CancellationToken &cancellation = {});
         /** @brief Publish a stable prefix of eligible terminal results at NavIntentCommit.
          * @param current Fresh exact Scene/root and active caller incarnations.
+         * @param observer Optional borrowed diagnostic callback in publication order. It must not reenter the coordinator.
          * @return Number newly published; invalid/rollback observations leave publication unchanged.
          * @details Cancellation wins before publication. Expired pending work returns CapacityExceeded; eligible ready
          * results may publish on deadlineTick. Revision mismatch returns StaleSnapshot, never fabricated region proof.
          */
-        [[nodiscard]] std::uint32_t Commit(const NavigationPathPublication &current);
+        [[nodiscard]] std::uint32_t Commit(const NavigationPathPublication &current, NavigationPathCommitObserver observer = {});
         /** @brief Transfer one published result once. @param handle Exact request identity.
          * @return Owned terminal result or empty for pending, stale or already consumed handles.
-         * @details A consumed slot is reclaimed only after its partition is quiescent; late workers cannot alias reuse.
+         * @details Provider retirement can replace queued success with typed stale evidence. A consumed slot is reclaimed
+         * only after its partition is quiescent; late workers cannot alias reuse.
          */
         [[nodiscard]] std::optional<NavigationPathCompletion> Take(NavRequestHandle handle);
         /** @brief Collect transport and exact terminal job fences without publishing or consuming active results.
@@ -152,7 +203,6 @@ namespace Horo::Navigation {
         [[nodiscard]] bool IsDrained() const noexcept;
 
     private:
-        struct State;
         explicit NavigationCoordinator(std::shared_ptr<State> state) noexcept;
         /** @brief Access owner mutation authority; unavailable on a const coordinator. @return Shared owned state. */
         [[nodiscard]] std::shared_ptr<State> &MutableState() noexcept;

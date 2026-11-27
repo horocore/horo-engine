@@ -97,6 +97,41 @@ namespace Horo::Navigation {
         RequireError(registry.UnregisterOwnerAtSafePoint(staleOwner), NavigationErrors::AgentRegistryStale);
     }
 
+    TEST_CASE("Structural agent staging reuses only retired slots and fences competing candidates", "[unit][navigation][headless]") {
+        auto registry = std::move(NavigationAgentRegistry::Create({.maximumAgents = 2})).Value();
+        const auto binding = Binding(71, 81, 1);
+        const std::array initial{Agent(binding, 2, 4), Agent(binding, 3, 5)};
+        auto activation = std::move(registry.PrepareScene(binding, initial)).Value();
+        activation->Publish();
+        const auto snapshot = registry.Snapshot().Value();
+        REQUIRE(snapshot.Agents().size() == 2);
+        const auto resident = snapshot.Agents().front().handle;
+        const auto retiring = snapshot.Agents().back().handle;
+        const std::array added{Agent(binding, 3, 6)};
+        RequireError(registry.PrepareStructuralChanges(binding, added, {}), NavigationErrors::AgentRegistryCapacityExceeded);
+
+        auto prepared = registry.PrepareStructuralChanges(binding, added, std::array{initial.back().owner});
+        auto competing = registry.PrepareStructuralChanges(binding, {}, std::array{initial.front().owner});
+        REQUIRE(prepared.HasValue());
+        REQUIRE(competing.HasValue());
+        REQUIRE(prepared.Value()->RetiredHandles().size() == 1);
+        CHECK(prepared.Value()->RetiredHandles().front() == retiring);
+        CHECK(registry.Find(retiring).HasValue());
+        REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+        prepared.Value()->Publish();
+
+        RequireError(competing.Value()->ValidatePublication(), NavigationErrors::AgentRegistryStale);
+        competing.Value()->Publish();
+        CHECK(registry.Find(resident).HasValue());
+        CHECK(registry.Find(retiring).HasError());
+        CHECK(snapshot.Find(retiring).HasValue());
+        const auto updated = registry.Snapshot().Value();
+        REQUIRE(updated.Agents().size() == 2);
+        CHECK(updated.Agents().back().owner == added.front().owner);
+        CHECK(updated.Agents().back().handle.slot.index == retiring.slot.index);
+        CHECK(updated.Agents().back().handle.slot.generation == retiring.slot.generation + 1);
+    }
+
     TEST_CASE("Navigation agent admission rejects malformed descriptors and closes cleanly", "[unit][navigation][headless]") {
         RequireError(NavigationAgentRegistry::Create({.maximumAgents = 0}), NavigationErrors::AgentRegistryCapacityExceeded);
 

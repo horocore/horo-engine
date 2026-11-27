@@ -57,10 +57,39 @@ namespace Horo::Tests::ShaderCook {
           "outputs":[{"name":"color","type":"vec4","location":0}]})"}}};
     }
 
+    inline std::array<SpirvReflectionStage, 2> MultiviewMotionEvidence() {
+        auto evidence = MultiviewEvidence();
+        evidence[0].json = R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "inputs":[{"name":"position","type":"vec3","location":0}],
+          "outputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
+          "types":{"_1":{"members":[
+            {"name":"CurrentLocalToClip","type":"mat4","offset":0,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64},
+            {"name":"PreviousLocalToClip","type":"mat4","offset":2048,"matrix_stride":16,"array":[32],"array_size_is_literal":[true],"array_stride":64}]}},
+          "ubos":[{"type":"_1","name":"type.MultiviewMotionParameters","block_size":4096,"set":0,"binding":0}]})";
+        evidence[1].json = R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
+          "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1}],
+          "outputs":[{"name":"motion","type":"vec4","location":0}]})";
+        return evidence;
+    }
+
     inline void ReplaceEvidence(std::string &json, const std::string_view before, const std::string_view after) {
         const auto position = json.find(before);
         REQUIRE(position != std::string::npos);
         json.replace(position, before.size(), after);
+    }
+
+    /** @brief Scripted coverage interface used by loader and injected graphics command qualification. */
+    inline std::array<SpirvReflectionStage, 2> MultiviewCoverageEvidence() {
+        auto evidence = MultiviewMotionEvidence();
+        evidence[0].entryPoint = "VSCoverage";
+        ReplaceEvidence(evidence[0].json, "\"VSMain\"", "\"VSCoverage\"");
+        ReplaceEvidence(evidence[0].json, R"("location":1}])", R"("location":1},{"name":"eye","type":"uint","location":2}])");
+        evidence[1].entryPoint = "PSCoverage";
+        evidence[1].json = R"({"entryPoints":[{"name":"PSCoverage","mode":"frag"}],
+          "inputs":[{"name":"currentClip","type":"vec4","location":0},{"name":"previousClip","type":"vec4","location":1},{"name":"eye","type":"uint","location":2}],
+          "outputs":[{"name":"coverage","type":"float","location":0}],
+          "separate_images":[{"name":"PreviousLeftDepth","type":"texture2D","set":0,"binding":1},{"name":"PreviousRightDepth","type":"texture2D","set":0,"binding":2}]})";
+        return evidence;
     }
 
     /** @brief Scripted same-boundary fixture for loader validation only; its payload is never native execution evidence. */
@@ -72,9 +101,23 @@ namespace Horo::Tests::ShaderCook {
                  {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}]})"}}};
     }
 
+    /** @brief Scripted fullscreen vertex input and fragment-only rectangle/opacity block. */
+    inline std::array<SpirvReflectionStage, 2> XrComfortEvidence() {
+        return {{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "inputs":[{"name":"position","type":"vec3","location":0}]})"},
+                 {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
+          "outputs":[{"name":"color","type":"vec4","location":0}],
+          "types":{"_comfort":{"members":[{"name":"EyeRegion","type":"vec4","offset":0},{"name":"Comfort","type":"vec4","offset":16}]}},
+          "ubos":[{"name":"type.XrComfortParameters","type":"_comfort","set":0,"binding":0,"block_size":32}]})"}}};
+    }
+
     enum class CookFixtureRole {
         Viewport,
+        SceneLinear,
         Multiview,
+        MultiviewMotion,
+        MultiviewCoverage,
+        XrComfort,
         Shadow
     };
 
@@ -82,10 +125,18 @@ namespace Horo::Tests::ShaderCook {
         switch (role) {
             case CookFixtureRole::Viewport:
                 return EditorVulkanViewportShaderManifest();
+            case CookFixtureRole::SceneLinear:
+                return EditorVulkanSceneLinearShaderManifest();
             case CookFixtureRole::Multiview:
                 return EditorVulkanMultiviewShaderManifest();
+            case CookFixtureRole::MultiviewMotion:
+                return EditorVulkanMultiviewMotionShaderManifest();
+            case CookFixtureRole::MultiviewCoverage:
+                return EditorVulkanMultiviewCoverageShaderManifest();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowShaderManifest();
+            case CookFixtureRole::XrComfort:
+                return EditorVulkanXrComfortShaderManifest();
         }
         return {};
     }
@@ -93,11 +144,18 @@ namespace Horo::Tests::ShaderCook {
     inline std::vector<ShaderReflectionBindingName> FixtureNames(CookFixtureRole role) {
         switch (role) {
             case CookFixtureRole::Viewport:
+            case CookFixtureRole::SceneLinear:
                 return EditorVulkanViewportReflectionNames();
             case CookFixtureRole::Multiview:
                 return EditorVulkanMultiviewReflectionNames();
+            case CookFixtureRole::MultiviewMotion:
+                return EditorVulkanMultiviewMotionReflectionNames();
+            case CookFixtureRole::MultiviewCoverage:
+                return EditorVulkanMultiviewCoverageReflectionNames();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowReflectionNames();
+            case CookFixtureRole::XrComfort:
+                return EditorVulkanXrComfortReflectionNames();
         }
         return {};
     }
@@ -120,7 +178,7 @@ namespace Horo::Tests::ShaderCook {
             const auto payload =
                 PackageShaderArtifactStages(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16,
                                             nativeStages.empty() ? std::span<const ShaderArtifactStage>{packageStages} : nativeStages,
-                                            1024);
+                                            4096);
             REQUIRE(payload.HasValue());
             compiled = {.backend = ShaderTargetBackend::Vulkan,
                         .payloadFormat = ShaderPayloadFormat::SpirV16,

@@ -103,6 +103,10 @@ namespace Horo::Editor {
                                                          context.viewModel, context.command, context.gui);
             }
 
+            void Reveal(const std::string_view absolutePath) {
+                pane_.Reveal(absolutePath);
+            }
+
         private:
             AssetBrowserPane pane_;
         };
@@ -126,6 +130,32 @@ namespace Horo::Editor {
 
         private:
             GlobalDockConsolePane pane_;
+        };
+
+        class McpPaneAdapter final : public BuiltInPaneAdapter {
+        public:
+            McpPaneAdapter(GlobalDockTab tab, IWorkspaceMcpControls *controls) : BuiltInPaneAdapter(tab), controls_(controls) {}
+
+            void Attach(PanelContext &context) override {
+                pane_.Attach(context.logQuery, controls_);
+            }
+
+            void Detach() override {
+                pane_.Detach();
+            }
+
+            void Draw(const GlobalDockPaneDrawContext &context) override {
+                GuiLive::Invoke<&GlobalDockMcpPane::Draw>(context.gui.theme.liveReload, pane_, context.contentOrigin, context.contentWidth,
+                                                          context.gui);
+            }
+
+            void FocusAudit(const WorkspaceMcpAuditReference &reference) {
+                pane_.FocusAudit(reference);
+            }
+
+        private:
+            GlobalDockMcpPane pane_;
+            IWorkspaceMcpControls *controls_{};
         };
 
         class BuildOutputPaneAdapter final : public BuiltInPaneAdapter {
@@ -192,9 +222,12 @@ namespace Horo::Editor {
         };
     }  // namespace
 
-    GlobalDockPanel::GlobalDockPanel(const GlobalDockTab activeTab)
+    GlobalDockPanel::GlobalDockPanel(const GlobalDockTab activeTab) : GlobalDockPanel(activeTab, nullptr) {}
+
+    /** @copydoc GlobalDockPanel::GlobalDockPanel(GlobalDockTab,IWorkspaceMcpControls*) */
+    GlobalDockPanel::GlobalDockPanel(const GlobalDockTab activeTab, IWorkspaceMcpControls *mcpControls)
         : IWorkspacePanel(kTextScope), activeTab_{activeTab}, activePaneId_{PaneId(activeTab)} {
-        RegisterBuiltInPanes();
+        RegisterBuiltInPanes(mcpControls);
     }
 
     bool GlobalDockPanel::RegisterPane(std::unique_ptr<IGlobalDockPane> pane) {
@@ -220,17 +253,41 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc GlobalDockPanel::FocusMcpAudit */
+    bool GlobalDockPanel::FocusMcpAudit(const WorkspaceMcpAuditReference &reference) {
+        if (!reference.operation || !reference.session.principal || !reference.session.session || !reference.session.generation)
+            return false;
+        const auto builtIn = std::ranges::find_if(panes_, [](const RegisteredPane &entry) {
+            return entry.builtIn && entry.builtInTab == GlobalDockTab::Mcp;
+        });
+        if (builtIn == panes_.end() || !ActivatePane(builtIn->pane->Id()))
+            return false;
+        static_cast<McpPaneAdapter &>(*builtIn->pane).FocusAudit(reference);
+        return true;
+    }
+
+    /** @copydoc GlobalDockPanel::RevealAsset */
+    bool GlobalDockPanel::RevealAsset(const std::string_view absolutePath) {
+        const auto builtIn = std::ranges::find_if(panes_, [](const RegisteredPane &entry) {
+            return entry.builtIn && entry.builtInTab == GlobalDockTab::Assets;
+        });
+        if (builtIn == panes_.end() || !ActivatePane(builtIn->pane->Id()))
+            return false;
+        static_cast<AssetPaneAdapter &>(*builtIn->pane).Reveal(absolutePath);
+        return true;
+    }
+
     template <typename Adapter> void GlobalDockPanel::RegisterBuiltInPane(const GlobalDockTab tab) {
         panes_.push_back({.pane = std::make_unique<Adapter>(tab), .builtInTab = tab, .builtIn = true});
     }
 
-    void GlobalDockPanel::RegisterBuiltInPanes() {
+    void GlobalDockPanel::RegisterBuiltInPanes(IWorkspaceMcpControls *mcpControls) {
         using enum GlobalDockTab;
         RegisterBuiltInPane<AssetPaneAdapter>(Assets);
         RegisterBuiltInPane<ConsolePaneAdapter>(Console);
         RegisterBuiltInPane<BuildOutputPaneAdapter>(BuildOutput);
         RegisterBuiltInPane<OperationsPaneAdapter>(Operations);
-        RegisterBuiltInPane<PaneAdapter<GlobalDockMcpPane>>(Mcp);
+        panes_.push_back({std::make_unique<McpPaneAdapter>(Mcp, mcpControls), Mcp, true});
         RegisterBuiltInPane<PaneAdapter<GlobalDockPerformancePane>>(Performance);
         RegisterBuiltInPane<PaneAdapter<GlobalDockPhysicsPane>>(Physics);
         RegisterBuiltInPane<PaneAdapter<GlobalDockAudioPane>>(Audio);

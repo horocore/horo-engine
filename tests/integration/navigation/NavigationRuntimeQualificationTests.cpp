@@ -1,7 +1,9 @@
+#include "Horo/Gameplay/GameplayFormationMovement.h"
 #include "navigation/NavigationRuntimeQualificationFixture.h"
 #include "navigation/NavigationTestAssertions.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <iostream>
 
@@ -36,6 +38,33 @@ namespace Horo::Navigation {
             REQUIRE(host.dynamic.IsShutdown());
             REQUIRE(host.agents.ActiveBinding().HasError());
             REQUIRE(host.physics->State() == Physics::PhysicsWorldState::Destroyed);
+        }
+
+        /** @brief Hashes exact desired velocities and Character roots from the same native fixed-tick circuit. */
+        Sha256Digest DeterministicMotionDigest(const std::uint32_t workers) {
+            Host host(false, false, {}, workers);
+            const auto fixture = ComputeSha256(std::as_bytes(std::span{"native navigation fixture", 25}));
+            const NavigationCrowdQualification
+                evidence{DeterministicCrowdProviderFingerprint(), fixture, fixture, fixture, fixture, StepSeconds, 1};
+            auto solver = CreateDeterministicCrowdBackend(evidence);
+            REQUIRE(solver.HasValue());
+            host.deterministicCrowd = std::move(solver).Value();
+            host.Start(host.RequestTo());
+            Sha256Builder digest;
+            for (std::uint64_t tick = 1; tick <= 90; ++tick) {
+                const auto publication = host.Advance(tick);
+                REQUIRE(publication.HasValue());
+                const auto position = host.Now(tick).position;
+                const auto desired = publication.Value().intent.desiredVelocity;
+                for (const auto value : {position.x, position.y, position.z, desired.x, desired.z}) {
+                    const auto bits = std::bit_cast<std::uint32_t>(value);
+                    const std::array bytes{std::byte(bits >> 24), std::byte(bits >> 16), std::byte(bits >> 8), std::byte(bits)};
+                    REQUIRE(digest.Update(bytes));
+                }
+            }
+            CHECK(host.Now(90).position.x > 2.0F);
+            RequireClosed(host);
+            return digest.Finalize();
         }
 
         /** @brief Borrow caller-owned scope values and admit the two real pending jobs at monotonic ticks. */
@@ -130,6 +159,111 @@ namespace Horo::Navigation {
         RequireClosed(host);
     }
 
+    TEST_CASE("Qualified crowd reproduces native Character motion under different path worker counts",
+              "[integration][navigation][qualification][native][character][deterministic]") {
+        CHECK(DeterministicMotionDigest(1) == DeterministicMotionDigest(3));
+    }
+
+    TEST_CASE("Native crowd density slows Character inside a narrow corridor and releases the cap after passing the neighbor",
+              "[integration][navigation][qualification][native][character][density]") {
+        const CrowdCorridor corridor;
+        Host host(false, false, corridor);
+        host.Start(host.RequestTo({7, RootHeight, 5}));
+        bool advancedUnderCap{};
+        bool resumedFullSpeed{};
+        bool arrived{};
+        for (std::uint64_t tick = 1; tick <= 600; ++tick) {
+            const auto publication = host.Advance(tick);
+            REQUIRE(publication.HasValue());
+            const auto &intent = publication.Value().intent;
+            const auto position = host.Now(tick).position;
+            CHECK(position.z >= corridor.minimumZ);
+            CHECK(position.z <= corridor.maximumZ);
+            CHECK(position.x >= 0.0F);
+            CHECK(position.x <= 10.0F);
+            const auto speed = std::hypot(intent.desiredVelocity.x, intent.desiredVelocity.z);
+            CHECK(speed <= 2.001F);
+            if (intent.state == NavigationMovementState::Following && position.x < 2.5F) {
+                CHECK(speed <= 1.001F);
+                advancedUnderCap = advancedUnderCap || position.x > 1.5F;
+            }
+            if (position.x > 5.0F && speed > 1.1F)
+                resumedFullSpeed = true;
+            if (intent.state >= NavigationMovementState::Arrived) {
+                REQUIRE(intent.state == NavigationMovementState::Arrived);
+                arrived = true;
+                break;
+            }
+        }
+        CHECK(advancedUnderCap);
+        CHECK(resumedFullSpeed);
+        REQUIRE(arrived);
+        CHECK(std::abs(host.Now(host.lastTick).position.x - 7.0F) <= 0.2F);
+        RequireClosed(host);
+    }
+
+    TEST_CASE("Formation movement carries a Character toward its native slot and stops when the layout dissolves",
+              "[integration][navigation][qualification][native][character][formation]") {
+        using namespace Gameplay;
+        const CrowdCorridor corridor;
+        Host host(false, false, corridor);
+        const auto leased = host.navigation.Acquire(host.activation.world);
+        REQUIRE(leased.HasValue());
+        const auto snapshot = host.agents.Snapshot().Value();
+        const std::array members{GameplayFormationMember{host.agent, host.Now(0).position},
+                                 GameplayFormationMember{host.neighbor,
+                                                         host.character->ControllerTransform(host.neighborController).Value().position}};
+        const auto group = GameplayFormationId::Create(1).Value();
+        const std::array offsets{Math::Vec3{3, 0, 0}};
+        const auto plan = PrepareGameplayFormation({.group = group,
+                                                    .revision = 1,
+                                                    .shape = GameplayFormationShape::Custom,
+                                                    .preferredLeader = host.neighbor,
+                                                    .customSlots = offsets},
+                                                   snapshot, members);
+        REQUIRE(plan.HasValue());
+        const GameplayFormationQueryPolicy queries{.projection = {NavigationQueryKind::NearestPoint,
+                                                                  NavigationQualityLevel::Balanced,
+                                                                  {64, 16, 100}},
+                                                   .path = Request().requirement,
+                                                   .projectionHalfExtents = {1, 2, 1}};
+        const auto resolved = ResolveGameplayFormation(plan.Value(), snapshot, leased.Value(), queries);
+        REQUIRE(resolved.HasValue());
+        REQUIRE(resolved.Value().goals.size() == 2);
+
+        NavigationPathSubmission policy{.caller = host.callers.front(), .request = Request(), .capabilityRevision = 1};
+        const auto context = GameplayNavigationContext::Create({"game.formation", host.binding, false, true}, &host.navigation,
+                                                               host.coordinator.get(), host.movement.get(), policy);
+        REQUIRE(context.HasValue());
+        REQUIRE(context.Value()->Refresh(host.Now(0)).HasValue());
+        const std::array grants{GameplayFormationMovementBinding{host.agent, context.Value().get()}};
+        GameplayFormationMovement movement{group};
+        const auto applied = movement.Apply(resolved.Value(), 1, host.navigation, grants);
+        REQUIRE(applied.HasValue());
+        CHECK(applied.Value().availability == GameplayFormationAvailability::Degraded);
+        REQUIRE(applied.Value().started == std::vector{host.agent});
+        REQUIRE(applied.Value().unassigned == std::vector{host.neighbor});
+        REQUIRE(movement.Apply(resolved.Value(), 1, host.navigation, grants).HasError());
+
+        for (std::uint64_t tick = 1; tick <= 45; ++tick)
+            REQUIRE(host.Advance(tick).HasValue());
+        const auto before = host.Now(45).position;
+        CHECK(before.x > 1.25F);
+        CHECK(before.z >= corridor.minimumZ);
+        CHECK(before.z <= corridor.maximumZ);
+
+        const GameplayFormationResolution empty{.group = group, .revision = 2, .source = host.activation};
+        const auto stopped = movement.Apply(empty, 2, host.navigation, grants);
+        REQUIRE(stopped.HasValue());
+        CHECK(stopped.Value().availability == GameplayFormationAvailability::Dissolved);
+        const auto next = host.Advance(46);
+        REQUIRE(next.HasValue());
+        CHECK(next.Value().intent.state == NavigationMovementState::Cancelled);
+        CHECK(host.Now(46).position == before);
+        context.Value()->Revoke();
+        movement.Retire();
+    }
+
     TEST_CASE("Disconnected reference floor preserves an explicit unreachable outcome without physical movement",
               "[integration][navigation][qualification][native][character]") {
         Host host(true);
@@ -145,10 +279,13 @@ namespace Horo::Navigation {
         Host host(false, true);
         host.Start(host.RequestTo());
         bool physicallyBlocked{};
+        std::uint32_t repaths{};
         for (std::uint64_t tick = 1; tick <= 180; ++tick) {
             const auto result = host.Advance(tick);
             REQUIRE(result.HasValue());
             CHECK(result.Value().intent.state != NavigationMovementState::Arrived);
+            if (result.Value().recovery == NavigationCrowdRecovery::RepathRequested)
+                ++repaths;
             const auto root = host.Now(tick).position;
             CHECK(root.x < 3.75F);
             const auto motion = host.character->ControllerLocomotionSnapshot(host.controller);
@@ -157,6 +294,8 @@ namespace Horo::Navigation {
                                                       static_cast<std::uint16_t>(Character::CharacterCollisionFlags::Sides)) != 0;
         }
         REQUIRE(physicallyBlocked);
+        CHECK(repaths > 0);
+        CHECK(repaths <= 18);
         RequireClosed(host);
     }
 

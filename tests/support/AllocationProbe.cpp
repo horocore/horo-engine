@@ -4,9 +4,12 @@
 #include <atomic>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <new>
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 #include <malloc.h>
+#elif defined(__APPLE__)
+#include <malloc/malloc.h>
 #endif
 
 namespace {
@@ -14,6 +17,24 @@ namespace {
     thread_local Horo::Tests::AllocationProbe::Measurement *activeMeasurement{};
     thread_local Horo::Tests::AllocationProbe::AllocationObserver activeObserver{};
     thread_local void *observerContext{};
+    using LiveProbe = Horo::Tests::AllocationProbe::ScopedLiveMeasurement;
+    // The lock protects the active scope pointer and its caller-owned records across allocator threads.
+    constinit std::atomic<LiveProbe *> activeLiveProbe{};
+    std::mutex liveProbeMutex;
+
+    /** @brief Reads usable capacity for an allocation made by the matching CRT allocator. */
+    std::size_t UsableAllocationBytes(void *const storage, [[maybe_unused]] const std::size_t alignment) noexcept {
+#ifdef _WIN32
+        return alignment == 0 ? _msize(storage) : _aligned_msize(storage, alignment, 0);
+#elif defined(__linux__)
+        return malloc_usable_size(storage);
+#elif defined(__APPLE__)
+        return malloc_size(storage);
+#else
+        static_cast<void>(storage);
+        return 0;
+#endif
+    }
 
     class AllocationMeter final {
     public:
@@ -22,12 +43,15 @@ namespace {
             void *const storage = std::malloc(std::max(byteCount, std::size_t{1}));
             if (storage == nullptr)
                 throw std::bad_alloc{};
+            LiveProbe::Acquired(storage, byteCount);
             return storage;
         }
 
         static void Release(void *const storage) noexcept {
-            if (storage != nullptr)
+            if (storage != nullptr) {
+                LiveProbe::Released(storage);
                 freeCount_.fetch_add(1, std::memory_order_relaxed);
+            }
             std::free(storage);
         }
 
@@ -42,12 +66,15 @@ namespace {
 #endif
             if (storage == nullptr)
                 throw std::bad_alloc{};
+            LiveProbe::Acquired(storage, byteCount, alignment);
             return storage;
         }
 
         static void ReleaseAligned(void *const storage) noexcept {
-            if (storage != nullptr)
+            if (storage != nullptr) {
+                LiveProbe::Released(storage);
                 freeCount_.fetch_add(1, std::memory_order_relaxed);
+            }
 #ifdef _WIN32
             _aligned_free(storage);
 #else
@@ -178,6 +205,62 @@ namespace Horo::Tests::AllocationProbe {
 
     Measurement ScopedMeasurement::Snapshot() const noexcept {
         return measurement_;
+    }
+
+    ScopedLiveMeasurement::ScopedLiveMeasurement(const std::span<LiveAllocation> storage) noexcept : storage_(storage) {
+        const std::lock_guard lock(liveProbeMutex);
+        measurement_.incomplete = activeLiveProbe.load(std::memory_order_relaxed) != nullptr || storage_.empty();
+        if (!measurement_.incomplete)
+            activeLiveProbe.store(this, std::memory_order_release);
+    }
+
+    ScopedLiveMeasurement::~ScopedLiveMeasurement() {
+        const std::lock_guard lock(liveProbeMutex);
+        if (activeLiveProbe.load(std::memory_order_relaxed) == this)
+            activeLiveProbe.store(nullptr, std::memory_order_release);
+    }
+
+    LiveMeasurement ScopedLiveMeasurement::Snapshot() const noexcept {
+        const std::lock_guard lock(liveProbeMutex);
+        return measurement_;
+    }
+
+    void ScopedLiveMeasurement::Acquired(void *const address, const std::size_t requestedBytes, const std::size_t alignment) noexcept {
+        if (activeLiveProbe.load(std::memory_order_acquire) == nullptr)
+            return;
+        const std::lock_guard lock(liveProbeMutex);
+        auto *probe = activeLiveProbe.load(std::memory_order_relaxed);
+        if (probe == nullptr)
+            return;
+        auto &sample = probe->measurement_;
+        const auto usableBytes = UsableAllocationBytes(address, alignment);
+        constexpr auto maxSize = std::numeric_limits<std::size_t>::max();
+        if (probe->count_ == probe->storage_.size() || usableBytes == 0 || usableBytes == maxSize || usableBytes < requestedBytes ||
+            usableBytes > maxSize - sample.liveUsableBytes) {
+            sample.incomplete = true;
+            return;
+        }
+        probe->storage_[probe->count_++] = {address, requestedBytes, usableBytes};
+        sample.liveBytes += requestedBytes;
+        sample.peakBytes = std::max(sample.peakBytes, sample.liveBytes);
+        sample.liveUsableBytes += usableBytes;
+        sample.peakUsableBytes = std::max(sample.peakUsableBytes, sample.liveUsableBytes);
+    }
+
+    void ScopedLiveMeasurement::Released(const void *address) noexcept {
+        if (activeLiveProbe.load(std::memory_order_acquire) == nullptr)
+            return;
+        const std::lock_guard lock(liveProbeMutex);
+        auto *probe = activeLiveProbe.load(std::memory_order_relaxed);
+        if (probe == nullptr)
+            return;
+        const auto live = probe->storage_.first(probe->count_);
+        const auto found = std::ranges::find(live, address, &LiveAllocation::address);
+        if (found == live.end())
+            return;
+        probe->measurement_.liveBytes -= found->requestedBytes;
+        probe->measurement_.liveUsableBytes -= found->usableBytes;
+        *found = probe->storage_[--probe->count_];
     }
 
     /** @copydoc ScopedFailure::ScopedFailure */

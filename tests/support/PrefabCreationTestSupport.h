@@ -8,7 +8,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Scene/SceneSource.h"
 #include "NativePublicationFiles.h"
-#include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/assets/PrefabCreation.h"
 
 #include <filesystem>
 #include <fstream>

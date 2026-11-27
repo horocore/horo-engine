@@ -14,7 +14,8 @@ namespace Horo::Editor {
         static constexpr GuiLocalizationScope kTextScope{"workspace.packages"};
 
         /** @brief Binds presentation and an explicit project application capability. */
-        PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire);
+        PackageModal(const EditorGuiContext &context, std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire,
+                     bool gameplayModuleOwner, std::function<bool()> removalAllowed = {}, bool importerModuleOwner = false);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -28,14 +29,36 @@ namespace Horo::Editor {
         [[nodiscard]] const std::string &Text(const char *key) const;
         void Reconnect();
         void DrawPlan();
-        void DrawDiagnostic(const Error &error) const;
+        /** @brief Shows direct dependents of the package selected in the active plan. */
+        void DrawPackageDependents() const;
+        /** @brief Displays the supplied locked dependents when the graph contains any. */
+        void DrawRequiredBy(std::span<const Packages::LockedPackageReference> dependents) const;
+        /** @brief Reads an inert removal preview for the entered package. */
+        void PreviewPackageRemoval();
+        /** @brief Shows exact graph effects and an explicit confirmation for eligible packages. */
+        void DrawRemovalPreview();
+        /** @brief Confirms removal against the plan displayed to the user. */
+        void DrawRemovalConfirmation();
+        /** @brief Checks whether a live removal must finish before normal modal exit. */
+        [[nodiscard]] bool Removing() const;
+        /** @brief Shows the bounded cause chain and one page of recognized reference details. */
+        void DrawDiagnostic(const Error &error, std::size_t offset = 0) const;
+        /** @brief Draws one diagnostic using a localized reason and the approved identity fields. */
+        void DrawReference(const Diagnostic &diagnostic) const;
+        /** @brief Keeps reference navigation on the exact failed removal operation. */
+        void DrawOperationDiagnostic(const Application::PackageOperationSnapshot &operation);
+        /** @brief Places navigation before the reference rows so it remains near the operation summary. */
+        void DrawReferenceNavigation(std::size_t lastOffset);
         void DrawActions();
-        void Activate();
+        void Activate(std::optional<Extensions::ExtensionModuleRole> role = std::nullopt);
         void Record(const Result<Application::PackageOperationId> &result);
         const EditorGuiContext &context_;
         std::function<Result<std::shared_ptr<Application::PackageApplication>>()> acquire_;
+        std::function<bool()> removalAllowed_;
         std::unique_ptr<PackageModalSession> session_;
         PackageModalGeneration generation_;
+        bool gameplayModuleOwner_{};
+        bool importerModuleOwner_{};
 
         struct PlanRow final {
             std::string package;
@@ -45,8 +68,12 @@ namespace Horo::Editor {
 
         std::shared_ptr<const Application::PackagePlanSnapshot> displayedPlan_;
         std::vector<PlanRow> planRows_;
+        std::optional<Application::PackageRemovalPreview> removalPreview_;
+        Application::PackageOperationId referenceOperation_;
+        std::size_t referenceOffset_{};
         std::string package_;
         std::string descriptor_;
+        std::string module_;
         std::optional<Error> error_;
     };
 }  // namespace Horo::Editor

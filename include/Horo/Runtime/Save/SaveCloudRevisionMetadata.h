@@ -13,9 +13,66 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
 namespace Horo::Runtime {
+    /** @brief Hard ceiling for intermediate verified cloud archives in one comparison. */
+    inline constexpr std::size_t MaximumCloudAncestorArchives = 16;
+
+    /** @brief Verified publication identity and direct lineage, without payload or presentation fields. */
+    struct SaveCloudPublicationHead final {
+        SaveGameSlotId slot;
+        SlotGenerationId generation;
+        std::optional<SlotGenerationId> parent;
+        ArchiveContentHash archive;
+        CanonicalStateHash state;
+    };
+
+    /** @brief Confirmed deletion evidence for one exact former publication. */
+    struct SaveCloudDeletionHead final {
+        SaveGameSlotId slot;
+        SlotGenerationId removed;
+        ArchiveContentHash archive;
+    };
+
+    /** @brief A verified head, an explicit tombstone, or absence without proof. */
+    using SaveCloudHead = std::variant<std::monostate, SaveCloudPublicationHead, SaveCloudDeletionHead>;
+
+    /** @brief Scoped comparison of two observations. Classification grants no publication authority. */
+    enum class SaveCloudHeadRelation : std::uint8_t {
+        Unproven,
+        SamePublication,
+        EquivalentState,
+        LocalAhead,
+        RemoteAhead,
+        Diverged,
+        LocalDeleted,
+        RemoteDeleted,
+        DeleteEdit,
+        BothDeleted,
+        IntegrityMismatch,
+    };
+
+    /** @brief Classifies verified observations in one authenticated logical slot.
+     * @param local Local publication or tombstone evidence.
+     * @param remote Remote publication or tombstone evidence.
+     * @return Relation based on exact identity, hashes and the available direct parent edges.
+     * @details Absence and incomplete ancestry remain unproven. Callers enforce current revision and publication authority.
+     */
+    [[nodiscard]] SaveCloudHeadRelation CompareSaveCloudHeads(const SaveCloudHead &local, const SaveCloudHead &remote) noexcept;
+
+    /** @brief Display-safe result for two verified saves at an exact catalog revision. */
+    struct SaveCloudConflictSnapshot final {
+        SaveGameSlotId slot;
+        SlotGenerationId localGeneration;
+        SlotGenerationId remoteGeneration;
+        std::uint64_t catalogRevision{};
+        std::uint64_t cloudRevision{};
+        SaveCloudHeadRelation relation{SaveCloudHeadRelation::Unproven};
+        bool equivalentGameplay{};
+    };
+
     struct SaveCloudProviderIdentityTag;
     struct SaveCloudAccountIdentityTag;
     struct SaveCloudMutationIdentityTag;
@@ -92,6 +149,8 @@ namespace Horo::Runtime {
         std::uint64_t indexRevision{};                                       /**< Exact paired local slot-index revision. */
         SaveCloudMetadataScope scope;                                        /**< Full local and provider/account authority. */
         std::vector<SaveCloudGenerationRecord> records;                      /**< Canonical strict slot order. */
+
+        [[nodiscard]] bool operator==(const SaveCloudRevisionMetadata &) const noexcept = default;
     };
 
     /**

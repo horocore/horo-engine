@@ -157,6 +157,19 @@ namespace Horo::Release {
             std::filesystem::path root_;
         };
 
+        /** @brief Freezes small final metadata in the private upload directory, independent of the source inode. */
+        [[nodiscard]] bool StageUploadFile(const std::filesystem::path &source, const std::filesystem::path &staged,
+                                           std::string_view name) {
+            std::error_code error;
+            if (name != ReleaseManifestFilename && name != ReleaseManifestSignatureFilename) {
+                std::filesystem::create_hard_link(source, staged, error);
+                if (!error)
+                    return true;
+                error.clear();
+            }
+            return std::filesystem::copy_file(source, staged, std::filesystem::copy_options::none, error) && !error;
+        }
+
         [[nodiscard]] bool Matches(const GitHubReleaseAssetEvidence &actual, const ReleaseArtifactRecord &expected) {
             return actual.size == expected.size && actual.digest == expected.digest;
         }
@@ -349,14 +362,8 @@ namespace Horo::Release {
         if (!temporary.Valid())
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
         const auto staged = temporary.Path(name);
-        std::error_code error;
-        std::filesystem::create_hard_link(file, staged, error);
-        if (error) {
-            error.clear();
-            std::filesystem::copy_file(file, staged, std::filesystem::copy_options::none, error);
-            if (error)
-                return Result<void>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
-        }
+        if (!StageUploadFile(file, staged, name))
+            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
         if (auto stagedEvidence = MeasureFile(staged, name); stagedEvidence.HasError() || !Matches(stagedEvidence.Value(), evidence))
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
         auto upload = Run({"release", "upload", release.tag, staged.string(), "--repo", release.repository});
@@ -372,11 +379,38 @@ namespace Horo::Release {
                                                 const Sha256Digest &manifestDigest) {
         if (channel.kind != ReleaseChannelKind::Stable || !channel.customId.empty())
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
-        auto manifest = ReadAsset(release, "manifest.json");
+        auto manifest = ReadAsset(release, ReleaseManifestFilename);
         if (manifest.HasError())
             return Result<void>::Failure(manifest.ErrorValue());
         if (manifest.Value().digest != manifestDigest)
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+        return CommitLatest(release);
+    }
+
+    /** @copydoc GitHubReleaseCliClient::CommitVerified */
+    Result<void> GitHubReleaseCliClient::CommitVerified(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
+                                                        const GitHubReleaseFinalMetadata &expected) {
+        if (channel.kind != ReleaseChannelKind::Stable || !channel.customId.empty())
+            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
+
+        const auto check = [&](std::string_view name, std::uint64_t size, const Sha256Digest &digest) -> Result<void> {
+            const auto actual = ReadAsset(release, name);
+            if (actual.HasError())
+                return Result<void>::Failure(actual.ErrorValue());
+            if (actual.Value().size != size || actual.Value().digest != digest)
+                return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            return Result<void>::Success();
+        };
+        if (auto manifest = check(ReleaseManifestFilename, expected.manifestSize, expected.manifestDigest); manifest.HasError())
+            return manifest;
+        if (const auto &signature = expected.manifestSignature; signature)
+            if (auto envelope = check(ReleaseManifestSignatureFilename, signature->size, signature->digest); envelope.HasError())
+                return envelope;
+        return CommitLatest(release);
+    }
+
+    /** @copydoc GitHubReleaseCliClient::CommitLatest */
+    Result<void> GitHubReleaseCliClient::CommitLatest(const GitHubReleaseIdentity &release) {
         if (auto changed = Run({"api", "--method", "PATCH", std::format("repos/{}/releases/{}", release.repository, release.releaseId),
                                 "--field", "make_latest=true", "--silent"});
             changed.HasError())

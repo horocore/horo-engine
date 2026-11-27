@@ -43,6 +43,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::shared_ptr<const Platform::DynamicLibrary> Library() const noexcept;
         /** @brief Returns immutable exact verified component evidence. @return Borrow valid through this lease. */
         [[nodiscard]] const VerifiedOpenXRComponent &Component() const noexcept;
+        /** @brief Returns signed loader deployment metadata retained by this exact lease. */
+        [[nodiscard]] const VerifiedOpenXRDeployment &Deployment() const noexcept;
 
     private:
         std::shared_ptr<const Files> files_;

@@ -1,0 +1,45 @@
+#pragma once
+
+/** @file EnvironmentQueryWorkspaceSource.h @brief Private saved Query source admission used by the editor document and preview. */
+
+#include "Horo/AI/EnvironmentQueryAuthoring.h"
+#include "Horo/Assets/AssetCookInputSnapshot.h"
+#include "Horo/Assets/AssetSourcePublication.h"
+
+#include <cstdint>
+#include <variant>
+
+namespace Horo::AI {
+    class EnvironmentQueryAsset;
+    class QuerySchemaRegistry;
+}  // namespace Horo::AI
+
+namespace Horo::Editor {
+    enum class QueryDescriptorAvailability : std::uint8_t;
+    struct EnvironmentQueryWorkspaceDocument;
+
+    using EditableEnvironmentQuerySettings = std::variant<AI::BuiltinPointQuerySettings, AI::BuiltinPerceptionQuerySettings>;
+
+    namespace EnvironmentQueryWorkspaceSource {
+        /** @brief Resolves an editable native shape without accepting unrecognized stages. */
+        [[nodiscard]] Result<EditableEnvironmentQuerySettings> ReadEditableSettings(const AI::EnvironmentQueryAsset &query,
+                                                                                    const AI::QuerySchemaRegistry &registry);
+
+        /** @brief Projects a single typed settings family into the document view. */
+        void SetEditableSettings(EnvironmentQueryWorkspaceDocument &document, const EditableEnvironmentQuerySettings &settings);
+
+        /** @brief Captures a registered saved source and its validated identity sidecar. */
+        [[nodiscard]] Result<Assets::AssetCookInputSnapshot> CaptureQuerySource(const std::filesystem::path &root,
+                                                                                const Assets::AssetRegistrySnapshot &registry,
+                                                                                Assets::AssetId source);
+        /** @brief Captures the exact registered identity sidecar using the source metadata limit. */
+        [[nodiscard]] Result<Assets::AssetSourceIdentity> CaptureQuerySidecar(const std::filesystem::path &root,
+                                                                              const Assets::AssetRecord &record);
+        /** @brief Checks the document's exact stable asset, registered path and source type. */
+        [[nodiscard]] bool RegisteredQueryDocument(const EnvironmentQueryWorkspaceDocument &document,
+                                                   const Assets::AssetRegistrySnapshot &registry);
+        /** @brief Checks inert source descriptors and preserves the authored source on failure. */
+        [[nodiscard]] QueryDescriptorAvailability DescriptorAvailability(const AI::EnvironmentQueryAsset &query,
+                                                                         const AI::QuerySchemaRegistry *registry);
+    }  // namespace EnvironmentQueryWorkspaceSource
+}  // namespace Horo::Editor

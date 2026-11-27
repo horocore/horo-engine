@@ -13,6 +13,16 @@ namespace Horo::Render::Internal {
                 .supportsStorageResources = true};
     }
 
+    /** @copydoc ColorOutputVulkanManualCookTarget */
+    ShaderTargetRequirement ColorOutputVulkanManualCookTarget() {
+        return {.backend = ShaderTargetBackend::Vulkan,
+                .payloadFormat = ShaderPayloadFormat::SpirV16,
+                .descriptorVersion = 1,
+                .interfaceSchemaVersion = 1,
+                .maximumBindings = 16,
+                .maximumInlineConstantBytes = 128};
+    }
+
     /** @copydoc ColorOutputCookPrefixes */
     std::span<const std::string_view, 2> ColorOutputCookPrefixes() noexcept {
         static constexpr std::array<std::string_view, 2> paths{"shaders/runtime/color-output-scene-metal",
@@ -21,7 +31,14 @@ namespace Horo::Render::Internal {
     }
 
     /** @copydoc ColorOutputCookPrefix */
-    std::string_view ColorOutputCookPrefix(std::size_t index) noexcept {
+    std::string_view ColorOutputCookPrefix(std::size_t index, ShaderTargetBackend backend) noexcept {
+        if (backend == ShaderTargetBackend::Vulkan) {
+            constexpr std::array<std::string_view, 2> paths{"shaders/runtime/color-output-scene-vulkan-manual",
+                                                            "shaders/runtime/color-output-encode-vulkan"};
+            return index < paths.size() ? paths[index] : std::string_view{};
+        }
+        if (backend != ShaderTargetBackend::Metal)
+            return {};
         if (index < 2)
             return ColorOutputCookPrefixes()[index];
         return index == 2 ? "shaders/runtime/color-output-look-metal" : std::string_view{};
@@ -50,12 +67,12 @@ namespace Horo::Render::Internal {
         }
 
         /** @brief Decodes one exact product artifact against the canonical stage recipe. */
-        CompiledShaderArtifact LoadProgram(const std::filesystem::path &root, std::size_t index) {
-            const auto prefix = std::string{ColorOutputCookPrefix(index)};
+        CompiledShaderArtifact LoadProgram(const std::filesystem::path &root, std::size_t index, const ShaderTargetRequirement &target,
+                                           bool accessibilityEncoder) {
+            const auto prefix = std::string{ColorOutputCookPrefix(index, target.backend)};
             auto payload = Read(root, prefix + ".horoshdr", 16U * 1024U * 1024U);
             const auto metadata = Read(root, prefix + ".reflection.json", 16U * 1024U * 1024U);
-            const auto target = ColorOutputMetalCookTarget();
-            const auto manifest = Take(MakeColorOutputShaderManifest(static_cast<ColorOutputShaderStage>(index), target));
+            const auto manifest = Take(MakeColorOutputShaderManifest(SelectColorOutputShaderStage(index, accessibilityEncoder), target));
             auto reflection = Take(DecodeReflectedShaderArtifact(manifest, target, payload, metadata));
             CompiledShaderArtifact artifact{.backend = target.backend,
                                             .payloadFormat = target.payloadFormat,
@@ -79,25 +96,40 @@ namespace Horo::Render::Internal {
         Json ProgramRow(std::size_t index, const Bytes &source, const CompiledShaderArtifact &artifact) {
             Require(artifact.reflection != nullptr);
             Take(ValidateReflectedShaderArtifact(artifact, *artifact.reflection));
-            return {{"prefix", ColorOutputCookPrefix(index)},
+            return {{"prefix", ColorOutputCookPrefix(index, artifact.backend)},
                     {"sourceDigest", FormatSha256(Hash(source))},
                     {"compiledKey", FormatSha256(artifact.artifactKey)},
                     {"cookedKey", FormatSha256(artifact.reflection->cookedArtifactKey)}};
         }
 
-        /** @brief Constructs the complete bounded schema1 baseline or schema2 look-enabled generation identity. */
-        Json Generation(const ColorOutputAnalyticBundle &analytic, std::span<const CompiledShaderArtifact> programs,
-                        std::span<const Bytes> sources) {
-            Require(analytic.program != nullptr);
+        /** @brief Validates backend, stage count and source inventory before generation indexes into the inputs. */
+        void CheckGenerationInputs(std::span<const CompiledShaderArtifact> programs, std::span<const Bytes> sources) {
             Require(programs.size() == 2 || programs.size() == 3);
+            const auto backend = programs.front().backend;
+            const bool vulkan = backend == ShaderTargetBackend::Vulkan;
+            Require(vulkan ? programs.size() == 2 : backend == ShaderTargetBackend::Metal);
+            const auto target = vulkan ? ColorOutputVulkanManualCookTarget() : ColorOutputMetalCookTarget();
+            for (const auto &program : programs)
+                Require(program.backend == target.backend && program.payloadFormat == target.payloadFormat);
             Require(sources.size() == (programs.size() == 2 ? 3u : 5u));
+        }
+
+        /** @brief Constructs the canonical generation identity from validated stage and source evidence. */
+        Json Generation(const ColorOutputAnalyticBundle &analytic, std::span<const CompiledShaderArtifact> programs,
+                        std::span<const Bytes> sources, bool accessibilityEncoder) {
+            Require(analytic.program != nullptr);
+            CheckGenerationInputs(programs, sources);
+            const bool vulkan = programs.front().backend == ShaderTargetBackend::Vulkan;
+            const bool look = programs.size() == 3;
             CheckAssembly(analytic, sources[0], sources[1]);
             auto rows = Json::array();
             constexpr std::array<std::size_t, 3> sourceIndices{0, 2, 3};
             for (std::size_t i = 0; i < programs.size(); ++i)
                 rows.push_back(ProgramRow(i, sources[sourceIndices[i]], programs[i]));
             const auto &d = analytic.program->Descriptor();
-            Json value{{"schemaVersion", programs.size() == 2 ? 1 : 2},
+            const unsigned metalSchema = look ? 2U : 1U;
+            const unsigned schema = vulkan ? 3U : metalSchema;
+            Json value{{"schemaVersion", schema},
                        {"kind", "horo-color-output-product"},
                        {"profile", "aces2-sdr100-rec709-linear-v1"},
                        {"analyticManifestDigest", FormatSha256(Hash(analytic.files[0]))},
@@ -107,7 +139,11 @@ namespace Horo::Render::Internal {
                        {"wrapperDigest", FormatSha256(Hash(sources[1]))},
                        {"encodeSourceDigest", FormatSha256(Hash(sources[2]))},
                        {"programs", rows}};
-            if (programs.size() == 3) {
+            if (vulkan)
+                value["target"] = "vulkan-manual-exposure";
+            if (accessibilityEncoder)
+                value["encoderRevision"] = 2;
+            if (look) {
                 CheckAssembly(analytic, sources[3], sources[4]);
                 value["lookWrapperDigest"] = FormatSha256(Hash(sources[4]));
             }
@@ -115,21 +151,30 @@ namespace Horo::Render::Internal {
         }
 
         /** @brief Reads only a recognized version before any optional native artifact is touched. */
-        std::size_t ProgramCount(const Json &value) {
+        std::size_t ProgramCount(const Json &value, ShaderTargetBackend backend) {
             const auto schema = UInt(value.at("schemaVersion"));
-            Require(schema == 1 || schema == 2);
-            const auto count = schema == 1 ? 2u : 3u;
+            Require(backend == ShaderTargetBackend::Metal ? schema == 1 || schema == 2 : schema == 3);
+            const auto count = schema == 2 ? 3u : 2u;
             Require(value.at("programs").is_array() && value.at("programs").size() == count);
             return count;
+        }
+
+        /** @brief Recognizes the legacy encoded form and the exact reflected accessibility revision. */
+        bool UsesAccessibilityEncoder(const Json &value) {
+            if (!value.contains("encoderRevision"))
+                return false;
+            Require(UInt(value.at("encoderRevision")) == 2);
+            return true;
         }
     }  // namespace
 
     /** @copydoc EncodeColorOutputGeneration */
     Result<std::vector<std::uint8_t>> EncodeColorOutputGeneration(const ColorOutputAnalyticBundle &analytic,
                                                                   std::span<const CompiledShaderArtifact> programs,
-                                                                  std::span<const std::vector<std::uint8_t>> sources) {
+                                                                  std::span<const std::vector<std::uint8_t>> sources,
+                                                                  bool accessibilityEncoder) {
         try {
-            return Result<std::vector<std::uint8_t>>::Success(Encode(Generation(analytic, programs, sources)));
+            return Result<std::vector<std::uint8_t>>::Success(Encode(Generation(analytic, programs, sources, accessibilityEncoder)));
         } catch (const Failure &f) {
             return Result<std::vector<std::uint8_t>>::Failure(f.error);
         } catch (const std::exception &) {
@@ -138,19 +183,23 @@ namespace Horo::Render::Internal {
     }
 
     /** @copydoc LoadColorOutputCookPackage */
-    Result<ColorOutputCookPackage> LoadColorOutputCookPackage(const std::filesystem::path &root) {
+    Result<ColorOutputCookPackage> LoadColorOutputCookPackage(const std::filesystem::path &root, ShaderTargetBackend backend) {
         try {
+            Require(backend == ShaderTargetBackend::Metal || backend == ShaderTargetBackend::Vulkan);
             const auto canonical = Root(root);
             const auto generation = Parse(Read(canonical, "color-output-generation.json", 64U * 1024U));
             ColorOutputCookPackage package;
-            package.programCount = ProgramCount(generation);
+            package.programCount = ProgramCount(generation, backend);
+            package.accessibilityEncoder = UsesAccessibilityEncoder(generation);
+            package.target = backend == ShaderTargetBackend::Vulkan ? ColorOutputVulkanManualCookTarget() : ColorOutputMetalCookTarget();
             package.analytic = Take(LoadColorOutputAnalyticBundle(canonical / "analytic"));
             for (std::size_t i = 0; i < package.programCount; ++i)
-                package.programs[i] = LoadProgram(canonical, i);
+                package.programs[i] = LoadProgram(canonical, i, package.target, package.accessibilityEncoder);
             std::vector<Bytes> sources(package.programCount == 2 ? 3 : 5);
             for (std::size_t i = 0; i < sources.size(); ++i)
                 sources[i] = Read(canonical, ColorOutputSourceFilenames()[i], 1024U * 1024U);
-            const auto expected = Generation(package.analytic, std::span{package.programs}.first(package.programCount), sources);
+            const auto expected = Generation(package.analytic, std::span{package.programs}.first(package.programCount), sources,
+                                             package.accessibilityEncoder);
             Require(generation == expected);
             return Result<ColorOutputCookPackage>::Success(std::move(package));
         } catch (const Failure &f) {

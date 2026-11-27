@@ -84,7 +84,10 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::VersionUnsupportedNewer));
         if (auto unknown = archive.InspectUnknownData(policy.compatibility, policy.archiveLimits.maximumArchiveBytes); unknown.HasError())
             return Result<ValidatedSaveArchive>::Failure(unknown.ErrorValue());
-        if (auto semantics = host.ValidateSemantics(archive); semantics.HasError())
+        if (auto semantics = InvokeSaveSlotHost([&host, &archive] {
+            return host.ValidateSemantics(archive);
+        });
+            semantics.HasError())
             return Result<ValidatedSaveArchive>::Failure(semantics.ErrorValue());
         return admitted;
     }
@@ -123,7 +126,9 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
     Result<SaveStorageWrite> Repack(const ValidatedSaveArchive &source, const SaveGameSlotId slot,
                                     const std::optional<SlotGenerationId> previous, SaveSlotDisplayMetadata display,
                                     const SaveSlotLifecyclePolicy &policy, ISaveSlotLifecycleHost &host) {
-        auto generation = host.AllocateGeneration();
+        auto generation = InvokeSaveSlotHost([&host] {
+            return host.AllocateGeneration();
+        });
         if (generation.HasError())
             return Result<SaveStorageWrite>::Failure(generation.ErrorValue());
         if (!generation.Value().IsValid() || generation.Value() == source.Header().slotGeneration || generation.Value() == previous)
@@ -150,7 +155,9 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             return Result<SaveStorageWrite>::Failure(written.ErrorValue());
         std::vector<std::byte> bytes(written.Value().Bytes().begin(), written.Value().Bytes().end());
         if (policy.signature == SaveSignaturePolicy::Required) {
-            auto signedArchive = host.SignDestination(std::move(bytes), policy.destination);
+            auto signedArchive = InvokeSaveSlotHost([&host, &bytes, &policy] {
+                return host.SignDestination(std::move(bytes), policy.destination);
+            });
             if (signedArchive.HasError())
                 return Result<SaveStorageWrite>::Failure(signedArchive.ErrorValue());
             bytes = std::move(signedArchive).Value();

@@ -7,7 +7,7 @@ namespace Horo::Editor {
     /** @brief Owns fixed draw/read/workload borrows for one cold graph variant; it never submits a frame. */
     class EditorViewportColorGraph final {
     public:
-        /** @brief Appends meter and analytic output to the same graph as the unexposed scene.
+        /** @brief Appends analytic output and any selected exposure meter to the same graph as the unexposed scene.
          * @param builder Existing scene graph. @param pipeline Prepared actual color owner. @param queue Actual graphics queue.
          * @param initial Existing bounded imported-state inventory. @param scene Existing scene graph resource.
          * @param display Existing display-linear graph resource. @param displayView Exact display attachment.
@@ -28,8 +28,8 @@ namespace Horo::Editor {
                                                                       Render::RenderGraphPassRef after);
 
         /** @brief Returns fixed workload borrows for insertion into the owning frame's ordered record inventory. */
-        [[nodiscard]] std::span<const Render::RenderGraphPassWorkload, 3> Workloads() const noexcept {
-            return workloads_;
+        [[nodiscard]] std::span<const Render::RenderGraphPassWorkload> Workloads() const noexcept {
+            return std::span{workloads_}.subspan(firstWorkload_);
         }
 
         /** @brief Refreshes only metadata/uniform leases after a reused graph's cold topology was matched. @param pipeline Prepared owner.
@@ -41,6 +41,10 @@ namespace Horo::Editor {
         [[nodiscard]] bool MatchesInitialStates(const EditorViewportColorPipeline &pipeline) const noexcept;
 
     private:
+        /** @brief Appends the existing selected native meter before the analytic pass. */
+        [[nodiscard]] Render::RenderGraphPassRef AppendMeter(Render::RenderGraphPassRef after);
+        /** @brief Uploads both exact analytic tables before their first sample in the owning Vulkan graph. */
+        [[nodiscard]] Render::RenderGraphPassRef AppendTableUploads(Render::RenderGraphPassRef after);
         [[nodiscard]] Render::RenderGraphResourceId Buffer(Render::RenderBufferHandle handle);
         [[nodiscard]] Render::RenderGraphResourceId Table(const EditorViewportColorPipeline &pipeline, std::size_t index);
         void Use(Render::RenderGraphPassRef pass, Render::RenderGraphResourceId resource, Render::RenderGraphAccess access,
@@ -59,11 +63,12 @@ namespace Horo::Editor {
         Render::FramebufferExtent extent_;
         Render::RenderGraphResourceId scene_;
         Render::RenderGraphResourceId display_;
-        Render::RenderGraphResourceId exposure_;
-        std::array<Render::RenderGraphPassWorkload, 3> workloads_;
+        std::array<Render::RenderGraphResourceId, 2> analyticTables_;
+        std::array<Render::RenderGraphPassWorkload, 4> workloads_;
         std::array<std::array<Render::RenderGraphMaterialDraw, 1>, 2> draws_;
         std::array<std::array<Render::RenderGraphMaterialRead, 6>, 2> reads_;
         std::array<std::pair<Render::RenderBufferHandle, Render::RenderGraphResourceId>, 8> buffers_;
         std::size_t bufferCount_{};
+        std::size_t firstWorkload_{};
     };
 }  // namespace Horo::Editor

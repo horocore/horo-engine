@@ -51,6 +51,82 @@ namespace Horo::AI {
                 return Result<void>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
             return Result<void>::Success();
         }
+
+        /** @brief Bounds the number of state transitions that can re-enter a call site in one step. */
+        std::size_t TransitionLimit(const CookedStateMachinePlan &machine) noexcept {
+            return machine.Transitions().empty() ? 0 : machine.MaximumTransitionsPerStep();
+        }
+
+        /** @brief Reserves local state visits, action phases and transition searches. */
+        std::size_t MachineWork(const CookedStateMachinePlan &machine) noexcept {
+            const auto depth = std::min(machine.States().size(), StateMachineLimits::Depth);
+            std::size_t search = depth * machine.Transitions().size();
+            for (const auto &transition : machine.Transitions()) {
+                // Each transition can reach its guards only at the one matching source in the active path.
+                search += 1 + transition.guards.size() + (transition.event.has_value() ? StateMachineLimits::EventsPerStep : 0);
+            }
+            return 1 + 3 * depth + TransitionLimit(machine) * (search + 4 * depth);
+        }
+
+        /** @brief Reserves selection and action work, including dormant actions restarted by ancestor calls. */
+        std::size_t UtilityWork(const CookedUtilityPlan &utility, const bool composed) noexcept {
+            std::size_t actions{};
+            for (const auto &action : utility.Actions()) {
+                const auto work = action->MaximumDecisionWorkUnits();
+                actions = composed ? actions + work : std::max(actions, work);
+            }
+            return utility.Selector().MaximumWorkUnits() + actions;
+        }
+
+        /** @brief Bounds one visit to an occurrence without charging any child evaluation. */
+        std::size_t OccurrenceWork(const DecisionCompiledGraph &graph, const bool composed) noexcept {
+            if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&graph.execution))
+                return (*tree)->MaximumDecisionWorkUnits();
+            if (const auto *machine = std::get_if<std::shared_ptr<const CookedStateMachinePlan>>(&graph.execution))
+                return MachineWork(**machine);
+            return UtilityWork(*std::get<std::shared_ptr<const CookedUtilityPlan>>(graph.execution), composed);
+        }
+
+        /** @brief Returns the number of transitions that may revisit calls of this graph. */
+        std::size_t CallTransitionLimit(const DecisionCompiledGraph &graph) noexcept {
+            if (const auto *machine = std::get_if<std::shared_ptr<const CookedStateMachinePlan>>(&graph.execution))
+                return TransitionLimit(**machine);
+            return 0;
+        }
+
+        /** @brief Bounds reset passes from ancestors, plus this occurrence's evaluation and retirement. */
+        std::size_t OccurrencePasses(const CookedDecisionPlan &plan, std::size_t index) noexcept {
+            const auto occurrences = plan.Occurrences();
+            std::size_t passes = 2;
+            while (index != 0) {
+                index = occurrences[index].parent;
+                passes += 1 + CallTransitionLimit(plan.Graphs()[occurrences[index].plan]);
+            }
+            return passes;
+        }
+
+        /** @brief Reserves the whole closure before any child can execute. */
+        std::optional<std::size_t> ClosureWork(const CookedDecisionPlan &plan) noexcept {
+            std::size_t work{};
+            const auto occurrences = plan.Occurrences();
+            for (std::size_t index = 0; index < occurrences.size(); ++index) {
+                const auto &occurrence = occurrences[index];
+                const auto &graph = plan.Graphs()[occurrence.plan];
+                const auto local = OccurrenceWork(graph, occurrences.size() > 1);
+                if (occurrences.size() == 1)
+                    return local;
+                const auto passes = OccurrencePasses(plan, index);
+                // Reserve dispatch plus both the failed phase's cleanup and the owner's retirement.
+                // A machine transition may also exit and re-enter the same call.
+                const auto lookups = (4 + 2 * CallTransitionLimit(graph)) * graph.calls.size() * (occurrence.subtreeEnd - index - 1);
+                if (const auto available = std::numeric_limits<std::size_t>::max() - work;
+                    lookups > available || local > (available - lookups) / passes)
+                    return std::nullopt;
+                work += passes * local + lookups;
+            }
+            return work;
+        }
+
     }  // namespace
 
     Result<DecisionGraphCompilation> DecisionGraphCompiler::Compile(DecisionGraphAssetId root, std::span<const DecisionGraphSource> sources,
@@ -129,6 +205,11 @@ namespace Horo::AI {
 
     bool CookedDecisionPlan::IsCurrent() const noexcept {
         return providers_ && providers_->CanUse();
+    }
+
+    /** @copydoc CookedDecisionPlan::MaximumDecisionWorkUnits */
+    std::optional<std::size_t> CookedDecisionPlan::MaximumDecisionWorkUnits() const noexcept {
+        return ClosureWork(*this);
     }
 
     Result<bool> DecisionPlanStore::TryActivate(DecisionGraphCompilation candidate) {

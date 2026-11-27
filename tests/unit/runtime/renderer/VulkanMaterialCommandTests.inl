@@ -3,9 +3,12 @@ struct MaterialPacket {
     std::uint64_t vertex{}, index{}, mesh{}, texture{}, view{}, target{};
     Detail::VulkanPreparedMaterialBinding material;
 
-    explicit MaterialPacket(NativeGraphFixture &fixture, const bool layered = false) {
+    explicit MaterialPacket(NativeGraphFixture &fixture, const bool layered = false,
+                            const RenderTextureFormat format = RenderTextureFormat::Rgba8Unorm,
+                            const RenderTextureUsage usage = RenderTextureUsage::RenderAttachment, const std::uint32_t slotBase = 0) {
         fixture.resourceState.state.bufferRequirements.size = 256;
-        fixture.resourceState.state.imageRequirements.size = 8 * 8 * 4 * (layered ? 2 : 1);
+        fixture.resourceState.state.imageRequirements.size =
+            8 * 8 * (format == RenderTextureFormat::Rgba16Float ? 8 : 4) * (layered ? 2 : 1);
         auto &resources = fixture.resources;
         const std::array<std::byte, sizeof(MeshVertex) * 3> bytes{};
         const auto buffer = [&](const RenderBufferUsage usage) {
@@ -16,22 +19,20 @@ struct MaterialPacket {
         };
         vertex = buffer(RenderBufferUsage::Vertex);
         index = buffer(RenderBufferUsage::Index);
-        const RenderMeshDescriptor descriptor{.vertexBuffer = {{1}, 1, 1},
-                                              .indexBuffer = {{1}, 2, 1},
+        const RenderMeshDescriptor descriptor{.vertexBuffer = {{1}, slotBase + 1, 1},
+                                              .indexBuffer = {{1}, slotBase + 2, 1},
                                               .vertexStride = sizeof(MeshVertex),
                                               .vertexCount = 3,
                                               .indexCount = 3,
                                               .localBounds = {{-1, -1, 0}, {1, 1, 0}}};
         mesh = SubmissionTest::Take(resources.CreateMesh(descriptor, vertex, index));
-        const RenderTextureDescriptor image{.extent = {8, 8},
-                                            .layerCount = layered ? 2U : 1U,
-                                            .usage = RenderTextureUsage::RenderAttachment};
+        const RenderTextureDescriptor image{.extent = {8, 8}, .format = format, .layerCount = layered ? 2U : 1U, .usage = usage};
         const auto plan = resources.QueryTextureMemoryCost(image);
         INFO((plan.HasError() ? plan.ErrorValue().message : "attachment memory requirements admitted"));
         REQUIRE(plan.HasValue());
         texture = SubmissionTest::Take(resources.CreateTexture(image, {}, TestSupport::PlacementFor(plan.Value(), 1)));
-        view = SubmissionTest::Take(resources.CreateTextureView({.texture = {{1}, 3, 1}}, texture));
-        target = SubmissionTest::Take(resources.CreateRenderTarget({.colorAttachment = {{1}, 4, 1}, .extent = {8, 8}}, view, 0));
+        view = SubmissionTest::Take(resources.CreateTextureView({.texture = {{1}, slotBase + 3, 1}, .format = format}, texture));
+        target = SubmissionTest::Take(resources.CreateRenderTarget({.colorAttachment = {{1}, slotBase + 4, 1}, .extent = {8, 8}}, view, 0));
         material.deviceIncarnation = 11;
         static const Detail::VulkanShaderOwnerIdentity identity{11};
         material.owner = &identity;
@@ -39,6 +40,7 @@ struct MaterialPacket {
         material.pipeline = NativeHandle<VkPipeline>(201);
         material.layout = NativeHandle<VkPipelineLayout>(202);
         material.sets = {NativeHandle<VkDescriptorSet>(203)};
+        material.state.colorFormat = format;
         material.state.depthFormat.reset();
         material.state.depthTest = false;
         material.state.depthWrite = false;

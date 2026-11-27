@@ -144,7 +144,10 @@ namespace Horo::Animation::AnimationErrors {
                                                    "Provide finite transform values and a normalizable rotation."};
     const ErrorCodeDescriptor PoseJointMissing{AnimationDomain, ErrorCode{"animation.pose.joint_missing"}, ErrorSeverity::Error,
                                                "Pose evaluation references a joint absent from the immutable hierarchy.",
-                                               "Use stable joint identities declared by the arena skeleton."};
+                                               "Use stable joint identities declared by the skeleton."};
+    const ErrorCodeDescriptor PoseSocketMissing{AnimationDomain, ErrorCode{"animation.pose.socket_missing"}, ErrorSeverity::Error,
+                                                "A pose query references a socket absent from the immutable skeleton.",
+                                                "Use a stable socket identity declared by the active skeleton."};
     const ErrorCodeDescriptor PoseNotEvaluated{AnimationDomain, ErrorCode{"animation.pose.not_evaluated"}, ErrorSeverity::Warning,
                                                "The requested model-space matrix remains dirty.",
                                                "Evaluate the requested joint and its ancestors before reading it."};

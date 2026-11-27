@@ -63,11 +63,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> CheckCloud(const Catalog &catalog, const SaveNamespaceId &name, const SaveCloudRevisionSnapshot *cloud) {
             if (!cloud)
                 return Result<void>::Success();
-            SaveSlotIndex index{.revision = catalog.revision};
-            for (const auto &record : catalog.records) {
-                if (!record.deleted)
-                    index.entries.push_back(record.entry);
-            }
+            const auto index = CatalogIndex(catalog);
             if (cloud->Metadata().scope.localNamespace != name || cloud->Index().revision != index.revision ||
                 cloud->Index().entries != index.entries)
                 return Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale));
@@ -172,6 +168,16 @@ namespace Horo::Runtime {
                                                                         const bool lowSpace, const CancellationToken &cancellation,
                                                                         const SaveCloudRevisionSnapshot *cloud) {
         auto &catalog = operation.catalog;
+        std::optional<SaveCloudRevisionSnapshot> persistedCloud;
+        if (catalog.cloud) {
+            if (cloud && cloud->Metadata() != *catalog.cloud)
+                return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::CloudMetadataStale));
+            auto owned = SaveCloudRevisionSnapshot::Create(CatalogIndex(catalog), catalog.cloud->scope, *catalog.cloud);
+            if (owned.HasError())
+                return Result<SaveSlotLifecycleResult>::Failure(owned.ErrorValue());
+            persistedCloud = std::move(owned).Value();
+            cloud = &*persistedCloud;
+        }
         if (clock < catalog.clock || catalog.revision == std::numeric_limits<std::uint64_t>::max())
             return Result<SaveSlotLifecycleResult>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         auto admitted = Admit(*candidate.archive.bytes, state_->policy.destination, state_->policy, *state_->host);

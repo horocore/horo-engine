@@ -10,6 +10,7 @@
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Navigation/NavigationBakeJobs.h"
 #include "Horo/Navigation/NavigationBakeSourceValidation.h"
+#include "Horo/Navigation/NavigationLinkValidation.h"
 #include "Horo/Navigation/NavigationTileArtifact.h"
 
 namespace Horo::Application {
@@ -75,6 +76,10 @@ namespace Horo::Application {
          * Requests can join only when this exact immutable validation owner also matches.
          */
         std::shared_ptr<const Navigation::INavigationBakeSourceValidation> sourceValidation;
+        /** @brief Complete captured authored links, still requiring candidate-topology projection and clearance evidence.
+         * @details Unqualified link input fails on the gather worker after source freshness validation, before cache or builder work.
+         */
+        std::vector<Navigation::NavigationScopedBakeLinkInput> authoredLinks;
     };
 
     /** @brief Last successfully published immutable generation; retained readers survive subsequent submissions. */

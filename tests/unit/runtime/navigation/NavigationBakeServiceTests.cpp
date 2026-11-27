@@ -1,7 +1,9 @@
 #include "RecordingImmutableFiles.h"
 #include "navigation/NavigationBakeServiceFixture.h"
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 
 namespace Horo::Application {
@@ -57,6 +59,52 @@ namespace Horo::Application {
         const auto after = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(after.HasValue());
         CHECK(after.Value().manifestDigest == before.Value().manifestDigest);
+    }
+
+    TEST_CASE("Unqualified authored links fail before cache access and retain the current navigation generation",
+              "[navigation][bake][links]") {
+        BakeHarness harness;
+        harness.service->Close();
+        const auto files = std::make_shared<Horo::TestSupport::RecordingImmutableFiles>();
+        harness.config.cacheFiles = files;
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        constexpr std::array<std::uint8_t, 16> sceneBytes{1};
+        const auto scope = NavigationBakeScopeId::ForScene(sceneBytes).Value();
+        harness.fixture.scopes = {scope};
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        REQUIRE(before);
+        const auto builds = harness.builder->builds.load();
+        const auto loads = files->loads;
+        const auto stores = files->stores;
+        REQUIRE(loads > 0);
+        REQUIRE(stores > 0);
+
+        // Change the native tile dependencies so bypassing the guard would query the cache.
+        harness.fixture.ExcludeBorder();
+        const auto mode = GENERATE(NavigationBakeExecutionMode::ValidateOnly, NavigationBakeExecutionMode::BuildAndPublish);
+        auto request = Request(harness, mode);
+        const auto surface = harness.fixture.surfaces.front();
+        request.authoredLinks = {{.scope = scope,
+                                  .sourceGeneration = 1,
+                                  .link = {.id = Id<NavigationLinkId>(23),
+                                           .profile = harness.fixture.profile.id,
+                                           .start = {surface, {1, 0, 1}, 0.5F},
+                                           .end = {surface, {6, 0, 6}, 0.5F}}}};
+        const auto accepted = harness.service->Submit(std::move(request));
+        REQUIRE(accepted.HasValue());
+        const auto refused = Terminal(*harness.service, harness.operations, accepted.Value());
+        REQUIRE(refused.state == OperationState::Failed);
+        REQUIRE(refused.error);
+        CHECK(
+            ErrorChainContains(*refused.error, NavigationErrors::OperationUnsupported.domain, NavigationErrors::OperationUnsupported.code));
+        CHECK(harness.builder->builds.load() == builds);
+        CHECK(files->loads == loads);
+        CHECK(files->stores == stores);
+        CHECK(harness.service->Published() == before);
+        const auto durable = Assets::ResolveCurrentCookGeneration(NativeDurableFileSystem{}, harness.config.targetRoot);
+        REQUIRE(durable.HasValue());
+        CHECK(durable.Value().manifestDigest == before->generation.manifestDigest);
     }
 
     TEST_CASE("Incremental admission rejects invalid native ceilings before scheduling with either cold or warm cache") {

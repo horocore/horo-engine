@@ -42,6 +42,9 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Resize(FramebufferExtent extent, PresentMode mode);
         /** @brief Borrows the realized surface format for the matching GUI pipeline; unavailable before realization. */
         [[nodiscard]] Result<VkFormat> OutputFormat() const;
+        /** @brief Observes the actual legacy BGRA8 presentation encoding, without claiming display calibration or HDR.
+         * @return Current realized attachment facts or typed unavailable/unsupported. */
+        [[nodiscard]] Result<RenderPresentationOutput> ObserveOutput() const;
         /** @brief Starts or polls one timeout-zero fence acquisition, never consuming an unsignaled fence. */
         [[nodiscard]] Result<bool> PollAvailability(FramebufferExtent extent);
         /** @brief Binds a signaled acquired image to the existing renderer frame identity. */

@@ -89,7 +89,8 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] bool IsValidPlacement(const UiLayoutStyle &style) noexcept {
             return style.anchors.IsValid() && style.pivot.IsValid() && IsAlignment(style.horizontalAlignment) &&
-                   IsAlignment(style.verticalAlignment) && IsPositioning(style.positioning);
+                   IsAlignment(style.verticalAlignment) && IsPositioning(style.positioning) &&
+                   style.horizontalPlacement <= UiLayoutHorizontalPlacement::Physical;
         }
     }  // namespace
 
@@ -334,7 +335,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiLayoutElementDescriptor::IsValid */
     bool UiLayoutElementDescriptor::IsValid() const noexcept {
-        return element.IsValid() && style.IsValid() && intrinsic.IsValid();
+        return element.IsValid() && style.IsValid() && intrinsic.IsValid() && minimumInteractiveExtent >= 0 &&
+               minimumInteractiveExtent <= static_cast<std::int32_t>(MaximumUiAccessibleTargetDips) * UiScalarUnitsPerDip;
     }
 
     /** @copydoc UiLayoutIntrinsicMeasurement::IsValid */
@@ -353,7 +355,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLayoutArrangement::IsValid */
     bool UiLayoutArrangement::IsValid() const noexcept {
         return marginBox.IsValid() && borderBox.IsValid() && paddingBox.IsValid() && contentBox.IsValid() && overflow.IsValid() &&
-               hitTest.IsValid() && baseline >= NoUiBaseline;
+               hitTest.IsValid() && baseline >= NoUiBaseline && horizontalPlacement <= UiLayoutHorizontalPlacement::Physical;
     }
 
     /** @copydoc UiLayoutEngineDescriptor::IsValid */

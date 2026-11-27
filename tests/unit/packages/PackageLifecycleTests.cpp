@@ -34,6 +34,31 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Removal review reports an unverified descriptor and independent owners in one archive", "[packages][activation][removal]") {
+    const std::string packageId = "com.example.transaction";
+    const auto image = "module" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
+    const auto graph = Graph(HORO_PACKAGE_NATIVE_FIXTURE, true, true, packageId, NativeDescriptor(packageId, image, false),
+                             {{"extensions/a-unowned/extension.json", "{}"}, {"extensions/b-unowned/extension.json", "{}"},
+                              {"extensions/b-unowned/private.txt", "package data"}});
+    const auto review = InspectGameplayRemovalRoles(graph->packages.front());
+    REQUIRE(review.HasError());
+    const auto &error = review.ErrorValue();
+    REQUIRE(error.cause.Get());
+    for (const std::string_view path : {"extensions/a-unowned/extension.json", "extensions/b-unowned/extension.json"}) {
+        CHECK(std::ranges::any_of(error.diagnostics, [&](const Diagnostic &item) {
+            return item.code.Value() == "packages.lifecycle.removal_descriptor_unverified" && item.location.source == path &&
+                   item.path == packageId;
+        }));
+    }
+    CHECK(std::ranges::any_of(error.diagnostics, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_contribution_owner_required" && item.path == "fixture.importer";
+    }));
+    CHECK(std::ranges::any_of(error.diagnostics, [](const Diagnostic &item) {
+        return item.code.Value() == "packages.lifecycle.removal_file_owner_required" &&
+               item.location.source == "extensions/b-unowned/private.txt";
+    }));
+}
+
 TEST_CASE("Package lifecycle activates the exact installed native module and publishes real registrations and leases",
           "[packages][activation]") {
     Fixture fixture;
@@ -181,21 +206,24 @@ TEST_CASE("Package lifecycle orders actual native providers before dependants an
     CHECK(std::filesystem::is_empty(fixture.temporary.Path()));
 }
 
-TEST_CASE("Package lifecycle rejects missing and cyclic native dependency plans before loading", "[packages][activation]") {
+TEST_CASE("Package installation and activation reject invalid dependency plans before loading", "[packages][activation]") {
     Fixture fixture;
     auto graph = Graph(HORO_PACKAGE_EMPTY_FIXTURE, true, true, "com.example.dependent");
     auto provider = Graph(HORO_PACKAGE_EMPTY_FIXTURE, true, true, "com.example.provider");
     graph->packages.front().lock.dependencies.push_back({provider->packages.front().lock.package, provider->packages.front().lock.version});
-    SECTION("missing dependency") {}
+    SECTION("missing dependency is rejected at installation") {
+        CHECK(fixture.install.Install(graph, fixture.cancellation.Token()).HasError());
+        CHECK_FALSE(fixture.install.InstalledRecord());
+    }
     SECTION("cyclic dependency") {
         provider->packages.front().lock.dependencies.push_back(
             {graph->packages.front().lock.package, graph->packages.front().lock.version});
         graph->packages.push_back(provider->packages.front());
         fixture.enabled.push_back({Parse<HoroPackageId>("com.example.provider"), Parse<PackagePath>("extensions/native/extension.json")});
+        fixture.enabled.front().package = Parse<HoroPackageId>("com.example.dependent");
+        fixture.Install(graph);
+        CHECK(fixture.Activate().HasError());
     }
-    fixture.enabled.front().package = Parse<HoroPackageId>("com.example.dependent");
-    fixture.Install(graph);
-    CHECK(fixture.Activate().HasError());
     CHECK(fixture.loads == 0U);
 }
 
@@ -214,6 +242,89 @@ TEST_CASE("Package lifecycle generation and file storage survive retained old ca
     CHECK(std::distance(std::filesystem::directory_iterator(fixture.temporary.Path()), {}) == 1);
     fixture.service->Shutdown();
     CHECK(fixture.retiredIds.size() == 2U);
+}
+
+TEST_CASE("Package removal inventory retains native package identity until the old catalog drains", "[packages][activation][removal]") {
+    Fixture fixture;
+    fixture.Install();
+    REQUIRE(fixture.Activate().HasValue());
+    auto retained = fixture.service->Active();
+    REQUIRE(retained);
+    const auto package = fixture.enabled.front().package;
+    const std::array departing{LockedPackageReference{package, retained->install->Graph()->packages.front().lock.version}};
+    const PackageRestoreGraph replacement;
+    REQUIRE(fixture.service->MissingRetainedPackages(replacement).Value() == std::vector{package});
+    CHECK(fixture.service->MissingRetainedPackages(*retained->install->Graph()).Value().empty());
+    const auto active = fixture.service->ReserveRemoval(departing);
+    REQUIRE(active.HasError());
+    REQUIRE(active.ErrorValue().diagnostics.size() == 1);
+    CHECK(active.ErrorValue().diagnostics.front().path == package.Value());
+
+    REQUIRE(fixture.service->Activate({}, PackageActivationBoundary::Quiescent, fixture.cancellation.Token()).HasValue());
+    CHECK(fixture.service->Active()->activations.empty());
+    CHECK(fixture.service->MissingRetainedPackages(replacement).Value() == std::vector{package});
+    CHECK(fixture.service->ReserveRemoval(departing).HasError());
+    retained.reset();
+    fixture.service->FinalizeRetirements();
+    CHECK(fixture.service->MissingRetainedPackages(replacement).Value().empty());
+    auto pending = fixture.service->ReserveRemoval(departing);
+    REQUIRE(pending.HasValue());
+    const auto blocked = fixture.Activate();
+    REQUIRE(blocked.HasError());
+    CHECK(blocked.ErrorValue().code.Value() == "packages.activation.removal_reserved");
+    CHECK(fixture.service->ReserveRemoval(departing).HasError());
+    std::jthread worker{[lease = std::move(pending).Value()]() mutable { lease.reset(); }};
+    worker.join();
+    CHECK(fixture.Activate().HasValue());
+}
+
+TEST_CASE("Package removal reserves only distinct members of the verified installation", "[packages][activation][removal]") {
+    Fixture fixture;
+    fixture.Install();
+    const auto installed = fixture.install.InstalledRecord();
+    REQUIRE(installed);
+    const auto &locked = installed->Graph()->packages.front().lock;
+    const LockedPackageReference current{locked.package, locked.version};
+    std::vector departing{current};
+    auto expected = PackageLifecycleErrors::StaleInstall.code.Value();
+    SECTION("a package is absent from the installed graph") {
+        departing.front().package = Parse<HoroPackageId>("com.example.missing");
+    }
+    SECTION("the departing version has been replaced") {
+        departing.front().version = Parse<PackageVersion>("2.0.0");
+    }
+    SECTION("a package appears twice in the same request") {
+        departing.push_back(current);
+        expected = PackageLifecycleErrors::InvalidCandidate.code.Value();
+    }
+
+    const auto rejected = fixture.service->ReserveRemoval(departing);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == expected);
+    const auto reserved = fixture.service->ReserveRemoval(std::span{&current, 1});
+    REQUIRE(reserved.HasValue());
+    CHECK(reserved.Value()->InstalledRecord() == installed);
+}
+
+TEST_CASE("Package removal cannot reserve a graph while its native activation is preparing", "[packages][activation][removal]") {
+    bool attempted = false;
+    Fixture fixture{16U, [&](Fixture &owner) {
+        attempted = true;
+        const auto installed = owner.install.InstalledRecord();
+        REQUIRE(installed);
+        const auto &locked = installed->Graph()->packages.front().lock;
+        const std::array departing{LockedPackageReference{locked.package, locked.version}};
+        const auto reserved = owner.service->ReserveRemoval(departing);
+        REQUIRE(reserved.HasError());
+        CHECK(reserved.ErrorValue().code.Value() == PackageLifecycleErrors::InvalidLifecycle.code.Value());
+    }};
+    fixture.Install();
+    REQUIRE(fixture.Activate().HasValue());
+    CHECK(attempted);
+    const auto active = fixture.service->Active();
+    REQUIRE(active);
+    REQUIRE(active->activations.size() == 1);
+    CHECK(active->activations.front().IsUsable());
 }
 
 TEST_CASE("Package lifecycle shutdown during native preparation cannot publish or resurrect a graph", "[packages][activation]") {
@@ -246,9 +357,12 @@ TEST_CASE("Package lifecycle shutdown during native preparation cannot publish o
 TEST_CASE("Package lifecycle storage failure keeps prior activated graph and typed failure evidence", "[packages][activation]") {
     Fixture fixture;
     fixture.Install();
+    // Keep the same fixture code loaded outside the staging root so Windows can move that root.
+    fixture.fixtureLibraryPath = HORO_PACKAGE_NATIVE_FIXTURE;
     REQUIRE(fixture.Activate().HasValue());
     const auto previous = fixture.service->Active();
-    const auto unavailable = fixture.temporary.Path().string() + "-unavailable";
+    auto unavailable = fixture.temporary.Path();
+    unavailable += "-unavailable";
     std::filesystem::rename(fixture.temporary.Path(), unavailable);
     const auto result = fixture.Activate();
     std::filesystem::rename(unavailable, fixture.temporary.Path());

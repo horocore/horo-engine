@@ -1,10 +1,14 @@
 #pragma once
+
+#include "ProjectSceneNavigationComposition.h"
 /** @file EditorProjectSceneHostOwner.h
  * @brief Target-private single Scene lifetime owner and project resource capture contract.
  */
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabServices.h"
 #include "EditorProjectSceneHost.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
@@ -13,7 +17,9 @@
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "PhysicsStateHostLifecycle.h"
+#include "ProjectScenePerception.h"
 #include "RuntimeUiPaintProjectSources.h"
+#include "SceneDecisionQueries.h"
 #include "ScenePhysicsHost.h"
 
 #include <cmath>
@@ -22,6 +28,10 @@
 #include <utility>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @brief Compares an authored Play projection to exact committed Scene bytes after canonical identity normalization. */
+    [[nodiscard]] Result<void> MatchCommittedPlayProjection(const Runtime::RuntimeSceneDefinition &live,
+                                                            const Runtime::RuntimeSceneDefinition &committed,
+                                                            const ErrorCodeDescriptor &stale);
     inline const ErrorCodeDescriptor InvalidProjectScene{ErrorDomainId{"application.scene"},
                                                          ErrorCode{"application.scene.project.invalid"},
                                                          ErrorSeverity::Error,
@@ -44,7 +54,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     /** @brief Pins registry, cooked payloads and dependent loaders in their original destruction order. */
     struct ProjectSceneAssetOwners final {
         Assets::AssetRegistry registry_;
-        std::unique_ptr<CommittedSceneAssets> assets_;
+        std::shared_ptr<const CommittedSceneAssets> assets_;
         Assets::MemoryAssetProvider emptyProvider_;
         std::unique_ptr<Assets::AssetLoadService> loads_;
         std::unique_ptr<Assets::AssetLoadService> prefabLoads_;
@@ -190,10 +200,64 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         ProjectPlaySceneHost(ProjectPlaySceneHost &&) = delete;
         ProjectPlaySceneHost &operator=(ProjectPlaySceneHost &&) = delete;
 
+        /** @brief Validates exact World ingress and admits it only for the currently supported Play composition. */
+        Result<void> SelectWorldStartup(const std::filesystem::path &root, const EditorProjectScenePolicy &policy,
+                                        const Runtime::RuntimeSceneDefinition *definition);
+
+        /** @brief Borrows this published Scene owner's canonical mounted origin lease. */
+        [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> WorldOrigin() const;
+
+        /** @brief Reads the current live mount's readiness for one exact occurrence. */
+        [[nodiscard]] Result<MountedWorldCellReadiness> InspectWorldCell(Runtime::SceneInstanceId occurrence) const;
+        /** @brief Submits an authorized geometry change to the active resident navigation owner. */
+        [[nodiscard]] Result<void> QueueNavigationRebuild(ProjectSceneNavigationRebuildCommand command);
+
+        /** @brief Returns the last accepted rebuild's typed failure, if present. */
+        [[nodiscard]] std::optional<Error> NavigationRebuildError() const {
+            return navigationRebuildError_;
+        }
+
+        /** @brief Activates selected World geometry before ordinary Play becomes externally visible. */
+        [[nodiscard]] Result<void> CompleteWorldStartup(const Runtime::FrameContext &frame);
+
+        /** @brief Re-publishes a stale desktop World packet after its owning Scene commit.
+         * @param frame Current commit safe point and cancellation scope.
+         * @return Success or a typed capture/ownership refusal; the old packet remains retained. */
+        [[nodiscard]] Result<void> RefreshDesktopWorldViewport(const Runtime::FrameContext &frame);
+
+        /** @brief Captures the selected canonical geometry from the current committed desktop World.
+         * @param parent Active Scene of this mount. @param renderer Its existing frontend view owner.
+         * @return Retained packet or typed canonical ownership/geometry refusal. */
+        [[nodiscard]] Result<std::shared_ptr<const MountedWorldRenderPacket>> CaptureDesktopWorldViewport(
+            const Runtime::RuntimeSceneView &parent, Render::RenderOriginSceneAdapter &renderer);
+
+        /** @brief Creates the renderer participant bound to this exact World and frontend view. */
+        [[nodiscard]] Result<std::unique_ptr<Render::RenderOriginSceneAdapter>> PrepareWorldRenderer(Render::RenderViewId view) const;
+
+        /** @brief Queues the selected mounted World privately so the native participant can observe its canonical geometry. */
+        [[nodiscard]] Result<void> QueueMountedXrScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                       const MountedWorldStartup &boundary);
+
+        /** @brief Returns a retained origin-relative borrow for only this Play host's exact startup candidate. */
+        [[nodiscard]] Result<Editor::EditorMountedXrScene> CaptureMountedXrGeometry(const Runtime::RuntimeSceneView &candidate,
+                                                                                    Runtime::SceneObjectId trackingRoot);
+
+        /** @copydoc Editor::EditorPlaySceneHost::UsesMountedViewport */
+        bool UsesMountedViewport() const noexcept override {
+            return worldViewport_.has_value() && !selectedXrHost_;
+        }
+
+        /** @copydoc Editor::EditorPlaySceneHost::BindViewportPrimitiveCache */
+        void BindViewportPrimitiveCache(Runtime::PrimitiveMeshCache *cache) noexcept override {
+            viewportPrimitives_ = cache;
+        }
+
         Result<void> Prepare(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                              const Runtime::RuntimeSceneDefinition *definition) {
             if (!ValidPreparation(identity_, root, policy))
                 return Result<void>::Failure(MakeError(InvalidProjectScene));
+            if (auto selected = SelectWorldStartup(root, policy, definition); selected.HasError())
+                return selected;
             std::optional<Prefab::PrefabLimitProfile> prefabLimits;
             if (policy.prefabGranted) {
                 const auto captured = LoadPrefabProjectSettings(root);
@@ -207,14 +271,29 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return captured;
             if (const auto prepared = PrepareNativeOwners(root, policy); prepared.HasError())
                 return prepared;
+            if (const auto mounted = PrepareLiveWorld(jobs, policy); mounted.HasError())
+                return mounted;
             if (const auto animation = PrepareAnimation(policy); animation.HasError())
                 return animation;
+            if (const auto navigation = PrepareNavigation(root, jobs, policy, definition); navigation.HasError())
+                return navigation;
             if (policy.prefabGranted) {
                 if (auto prepared = PreparePrefabServices(std::move(*prefabLimits), policy); prepared.HasError())
                     return prepared;
             }
+            if (policy.decisions) {
+                if (!definition)
+                    return Result<void>::Failure(MakeError(InvalidProjectScene));
+                if (auto admitted = PrepareDecisionSelection(root, jobs, *definition, policy); admitted.HasError())
+                    return admitted;
+                return Result<void>::Success();
+            }
             return RegisterPresentationParticipants(policy);
         }
+
+        /** @brief Captures the approved project route and verifies the input references an authored interaction. */
+        [[nodiscard]] Result<void> PrepareNpcDialogue(const std::filesystem::path &root, JobSystem &jobs,
+                                                      const EditorProjectScenePolicy &policy);
 
         Result<void> PrepareAnimation(const EditorProjectScenePolicy &policy) {
             if (!policy.animation)
@@ -227,6 +306,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation runtime identity admission failed."));
             Runtime::SceneAnimationRuntimeConfig config{selected.dispatch,          identity.identity, selected.target,
                                                         animationLifetime_.Token(), selected.limits,   selected.inputs};
+            config.enableRootMotionRequests = policy.physicsMode == Physics::PhysicsRuntimeMode::Canonical;
             auto created = Runtime::SceneAnimationRuntime::Create(std::move(config));
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
@@ -241,6 +321,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         Runtime::SceneAnimationRuntime *AnimationRuntime() noexcept override {
             return animation_.get();
         }
+
+        /** @brief Issues exact-type animation grants for the selected Play registry and live Scene. */
+        Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices(const Gameplay::BehaviorRegistry &registry) override;
+
+        /** @brief Admits the exact selected cooked profile/scope only when the authored Play projection still matches it. */
+        Result<void> PrepareNavigation(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
+                                       const Runtime::RuntimeSceneDefinition *definition);
 
         /** @brief Composes the one shared provider and Scene-owned service participant before presentation seals. */
         Result<void> PreparePrefabServices(Prefab::PrefabLimitProfile limits, const EditorProjectScenePolicy &policy) {
@@ -291,6 +378,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @copydoc Editor::EditorPlaySceneHost::ConfigureSaveSession */
         Result<void> ConfigureSaveSession(std::vector<Editor::PlaySaveGameplayBinding> bindings,
                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner) override {
+            if (mountedWorld_)
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported,
+                                                       "Mounted World state requires its own capture and restore authority."));
+            if (hasActivatedChildren_)
+                return Result<void>::Failure(
+                    MakeError(Runtime::SaveErrors::CompositionUnsupported, "Save requires independent child Scene capture and restore."));
             if (saves_.saveError_)
                 return Result<void>::Failure(*saves_.saveError_);
             if (saves_.save_)
@@ -301,7 +394,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (physics.HasError())
                 return Result<void>::Failure(physics.ErrorValue());
             auto composed = saves_.saveFactory_(saves_.saveProject_, *scenes_, *saves_.saveBaseline_, std::move(bindings),
-                                                std::move(behaviorOwner), prefab_.services, std::move(physics).Value());
+                                                std::move(behaviorOwner), prefab_.services, std::move(physics).Value(), aiSave_);
             if (composed.HasError())
                 return Result<void>::Failure(composed.ErrorValue());
             saves_.save_ = std::move(composed).Value();
@@ -321,20 +414,51 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
         /** @brief Registers the same canonical AI, selected XR and final UI participants in publication order. */
-        Result<void> RegisterPresentationParticipants(const EditorProjectScenePolicy &policy) {
-            auto ai = AI::AiSceneRuntime::Create();
+        Result<void> RegisterPresentationParticipants(const EditorProjectScenePolicy &policy,
+                                                      std::optional<AI::AiSceneCookedDecisionExecution> execution = {}) {
+            auto ai = execution ? AI::AiSceneRuntime::Create(policy.aiSettings, std::move(*execution))
+                                : AI::AiSceneRuntime::Create(policy.aiSettings);
             if (ai.HasError())
                 return Result<void>::Failure(ai.ErrorValue());
-            ai_ = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+            ai_ = std::make_shared<AI::AiSceneRuntime>(std::move(ai).Value());
+            AI::AiSceneRestoreSource restore;
+            if (policy.saveFactory) {
+                aiSave_ = std::make_shared<PlaySaveAiServices>(*scenes_, ai_);
+                restore = [weak = std::weak_ptr{aiSave_}](const Runtime::RuntimeSceneView &scene) {
+                    const auto owner = weak.lock();
+                    return owner ? owner->Take(scene) : Result<AI::AiSceneRestoredPopulation>::Success({});
+                };
+            }
             controllers_ = policy.aiControllers;
-            if (auto added = scenes_->AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_));
+            std::optional<AI::AiScenePerceptionActivationInput> perception;
+            std::optional<AI::AiScenePerceptionGroupInput> perceptionGroups;
+            if (playPerception_) {
+                auto &capture = *playPerception_;
+                perception.emplace(
+                    AI::AiScenePerceptionActivationInput{capture.spatial, capture.filtering, capture.positions.scene, capture.execution});
+                perceptionGroups.emplace(AI::AiScenePerceptionGroupInput{.spatial = capture.spatial,
+                                                                         .filtering = capture.filtering,
+                                                                         .positionsWithHierarchy = capture.positions.group});
+            }
+            if (auto added = scenes_->AddActivationParticipant(
+                    std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_, std::move(perception), std::move(restore)));
                 added.HasError())
                 return added;
-            if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
+            if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_, std::move(perceptionGroups)));
+                added.HasError())
                 return added;
             selectedXrHost_ = policy.xrHost;
+            xrLocomotion_ = policy.xrLocomotion;
+            commitXrLocomotion_ = policy.commitXrLocomotion;
+            cancelXrLocomotion_ = policy.cancelXrLocomotion;
             if (policy.xrHost) {
-                if (auto added = scenes_->AddActivationParticipant(policy.xrHost->MakeSceneParticipant()); added.HasError())
+                Editor::EditorMountedXrGeometryCapture mounted;
+                if (worldViewport_)
+                    mounted = [this](const Runtime::RuntimeSceneView &candidate, Runtime::SceneObjectId trackingRoot) {
+                        return CaptureMountedXrGeometry(candidate, trackingRoot);
+                    };
+                auto participant = policy.xrHost->MakeSceneParticipant(std::move(mounted));
+                if (auto added = scenes_->AddActivationParticipant(std::move(participant)); added.HasError())
                     return added;
             }
             // Last participant: sealing the UI generation must be followed only by the
@@ -365,12 +489,61 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return *scenes_;
         }
 
+        /** @copydoc Editor::EditorPlaySceneHost::RequiresDecisionProviders */
+        bool RequiresDecisionProviders() const noexcept override {
+            return pendingDecisionPolicy_.has_value();
+        }
+
+        /** @copydoc Editor::EditorPlaySceneHost::UsesCookedDecisionExecution */
+        bool UsesCookedDecisionExecution() const noexcept override {
+            return decisionJobs_ != nullptr;
+        }
+
+        /** @copydoc Editor::EditorPlaySceneHost::ConfigureDecisionProviders */
+        Result<void> ConfigureDecisionProviders(const Runtime::RuntimeSceneDefinition &definition,
+                                                const Editor::EditorPlayDecisionProviderSource &providerSource,
+                                                const CancellationToken &cancellation) override;
+
+        /** @copydoc Editor::EditorPlaySceneHost::EvaluateDecisionBeforeGameplay */
+        Result<bool> EvaluateDecisionBeforeGameplay(const Runtime::FixedStepContext &context) override;
+
+        /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
+        std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override;
+
+        std::uint64_t AgentInspectionTick() const noexcept override;
+        bool IsAgentInspectionCurrent(Runtime::EntityRef owner, AI::AgentHandle agent) const override;
+        std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
+        [[nodiscard]] std::optional<AI::AgentHandle> ResolveInspectionAgent(const Runtime::RuntimeEntityView &entity) const;
+        void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef> owner) noexcept override;
+        [[nodiscard]] std::optional<Sha256Digest> ResolveQueryInspectionSource(const AI::EnvironmentQueryAsset &source) const override;
+        [[nodiscard]] Editor::EditorPlayQueryInspection InspectQuery(
+            std::optional<Editor::EditorPlayQueryInspectionSelection> selection) override;
+        void SetDecisionDebugView(std::optional<AI::AgentHandle> agent) override;
+        bool ApplyDecisionDebugCommand(const Editor::EditorPlayDecisionDebugCommand &command) override;
+        [[nodiscard]] std::optional<Editor::EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept override;
+        [[nodiscard]] std::optional<Editor::EditorPlayAgentNavigation> ReadAgentNavigation(Runtime::EntityRef owner) const;
+
+        [[nodiscard]] Result<Editor::EnvironmentQueryPreviewPhysics::Visibility> CapturePreviewVisibility(
+            const Runtime::RuntimeSceneView &scene, const AI::QueryPhysicsVisibilityRequest &request);
+        /** @brief Samples overlap of the exact published authoring body pair on a project query channel. */
+        [[nodiscard]] Result<std::optional<Editor::InspectionPenetrationSample>> CapturePreviewPenetration(
+            const Runtime::RuntimeSceneView &scene, const Runtime::PhysicsBodyReference &source,
+            const Runtime::PhysicsBodyReference &target, std::string_view channelId);
+        [[nodiscard]] Result<Editor::EnvironmentQueryPreviewNavigation::Evaluate> CapturePreviewNavigation(
+            const std::filesystem::path &previewRoot, const std::optional<SceneCookSelection> &cook, JobSystem &jobs,
+            const Editor::EnvironmentQueryPreviewNavigationRequest &request) const;
+
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
                                                                                 const Gameplay::ComponentRegistry &components) override {
             if (!prefab_.templates)
                 return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
             return prefab_.services->Bind(registry, components, tick_);
         }
+
+        /** @copydoc Editor::EditorPlaySceneHost::QueueInitialScene */
+        [[nodiscard]] Result<void> QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                     const Editor::EditorPlayChildSceneSource *source,
+                                                     const CancellationToken &cancellation) override;
 
         Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) override {
             const auto phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
@@ -379,11 +552,24 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                     return prepared;
             if (auto committed = scenes_->OnPhase(phase, frame); committed.HasError())
                 return committed;
+            AdvanceNavigationRebuild(frame.cancellation);
+            if (auto mounted = CompleteWorldStartup(frame); mounted.HasError()) {
+                Shutdown();
+                return mounted;
+            }
+            if (auto refreshed = RefreshDesktopWorldViewport(frame); refreshed.HasError())
+                return refreshed;
             if (prefab_.services)
                 if (const auto advanced = prefab_.services->Advance(tick_); advanced.HasError())
                     return advanced;
             return saves_.FinishSavePhase(frame);
         }
+
+        /** @copydoc Editor::EditorPlaySceneHost::OnRuntimeSceneCutoff */
+        [[nodiscard]] Result<void> OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) override;
+
+        /** @copydoc Editor::EditorPlaySceneHost::StagePresentationInput */
+        void StagePresentationInput(std::span<const Gameplay::GameplayInputAction> input) noexcept override;
 
         /** @copydoc Editor::EditorPlaySceneHost::BeginPresentationUpdate */
         Result<void> BeginPresentationUpdate() override {
@@ -431,9 +617,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                        resources_.collision_->Schema()->SemanticFingerprint()};
         }
 
+        /** @copydoc Editor::EditorPlaySceneHost::ReadAgentSceneContacts */
+        [[nodiscard]] std::optional<Editor::EditorPlayContactSnapshot> ReadAgentSceneContacts(Runtime::EntityRef object) override;
+
         Result<void> FixedUpdate(const Gameplay::FixedDeltaTime delta) override {
-            if (animation_)
-                return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation requires the actual runtime fixed context."));
+            if (animation_ || decisionJobs_)
+                return Result<void>::Failure(
+                    MakeError(InvalidProjectScene, "The selected Play owner requires the actual runtime fixed context."));
             // The existing Editor screen contract supplies seconds. Convert that one
             // host quantum once to the nearest representable nanosecond, never from
             // frame time.
@@ -444,26 +634,70 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return native_.AdvanceFixedTick(Duration::FromNanoseconds(std::llround(delta.seconds * 1'000'000'000.0)));
         }
 
+        Result<void> BeforeNativeFixedUpdate(const Runtime::FixedStepContext &context) override {
+            if (!xrLocomotion_)
+                return Result<void>::Success();
+            const auto scene = scenes_->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(InvalidProjectScene));
+            return xrLocomotion_(native_, *scene, context);
+        }
+
         Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
-            if (animation_) {
+            if (!animation_ && !xrLocomotion_)
+                return native_.AdvanceFixedTick(context.fixedDelta);
+            if (animation_)
                 if (auto evaluated = animation_->OnFixedUpdate(context); evaluated.HasError())
                     return evaluated;
-            }
-            return native_.AdvanceFixedTick(context.fixedDelta);
+            const auto scene = scenes_->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(InvalidProjectScene));
+            return animation_ ? native_.StageAnimationFixedTick(*scene, *animation_, context)
+                              : native_.StageCharacterFixedTick(*scene, context);
         }
 
         Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override {
-            return animation_ ? animation_->PrepareFixedCommit(context) : Result<void>::Success();
+            if (animation_)
+                if (auto prepared = animation_->PrepareFixedCommit(context); prepared.HasError())
+                    return prepared;
+            auto prepared = native_.PrepareAnimationFixedCommit(context);
+            if (prepared.HasValue() && decisionTickPending_ && decisionQueries_ && decisionQueries_->UsesNavigation() && navigation_)
+                static_cast<void>(navigation_->coordinator.Dispatch(committedDecisionTick_ + 1));
+            return prepared;
         }
 
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            native_.CommitAnimationFixedTick(context);
+            CommitNpcDialogueInput(context.simulationTick);
+            if (commitXrLocomotion_)
+                commitXrLocomotion_(native_, context);
             if (animation_)
                 animation_->CommitFixedUpdate(context);
+            if (decisionTickPending_) {
+                ++committedDecisionTick_;
+                decisionTickPending_ = false;
+                if (pendingDecisionTrace_)
+                    committedDecisionTrace_ = std::move(pendingDecisionTrace_);
+                CommitDecisionDebugTick();
+                if (decisionQueries_) {
+                    if (auto snapshot = decisionQueries_->TakeInspection())
+                        committedQueryInspection_ = std::move(snapshot);
+                }
+            }
         }
 
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            native_.AbortAnimationFixedTick(context);
+            if (dialogue_)
+                dialogue_->staged = false;
+            if (cancelXrLocomotion_)
+                cancelXrLocomotion_();
             if (animation_)
                 animation_->AbortFixedUpdate(context);
+            decisionTickPending_ = false;
+            pendingDecisionTrace_.reset();
+            if (decisionQueries_)
+                static_cast<void>(decisionQueries_->TakeInspection());
         }
 
         void Shutdown() noexcept override {
@@ -473,9 +707,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return;
             saves_.ShutdownSave();
             sceneClosed_ = true;
+            CloseNpcDialogue();
             saves_.ClosePhysicsSaveSource();
             QuiesceGameplay();
             ShutdownSceneOwners();
+            localPolicies_.clear();
             resources_.ShutdownLoadOwners();
         }
 
@@ -484,14 +720,91 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
             if (!sceneClosed_)
                 return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
-            return PollProductPhysicsRetirement(physics_, physicsRetirement_, maximumNativeRecords);
+            if (navigation_)
+                navigation_->coordinator.CollectRetiredAtSafePoint();
+            const auto physics = PollProductPhysicsRetirement(physics_, physicsRetirement_, maximumNativeRecords);
+            if (physics.HasError())
+                return physics;
+            return Result<bool>::Success(physics.Value() && (!navigation_ || navigation_->coordinator.IsDrained()));
         }
 
     private:
+        /** @brief Publishes completed navigation at the drained Scene cutoff and retains command-local failures. */
+        void AdvanceNavigationRebuild(const CancellationToken &cancellation);
+        /** @brief Composes the provider for an already verified committed Play Scene projection. */
+        [[nodiscard]] Result<void> PrepareCommittedNavigation(const std::filesystem::path &root, JobSystem &jobs,
+                                                              const EditorProjectScenePolicy &policy,
+                                                              const Runtime::RuntimeSceneDefinition &committed);
+        /** @brief Arms one bounded read-only sample for the current live editor selection. */
+        [[nodiscard]] std::optional<AI::AgentHandle> ArmSelectedDecisionTrace(std::uint64_t tick);
+        /** @brief Resolves the selected entity's current live AI generation. */
+        [[nodiscard]] std::optional<AI::AgentHandle> SelectedDecisionAgent() const;
+        /** @brief Confirms that the exact cooked occurrence and node were visited in the supplied trace. */
+        [[nodiscard]] static bool HasDecisionBreakpoint(const AI::DecisionStepTrace &trace,
+                                                        const Editor::EditorPlayDecisionBreakpoint &breakpoint);
+        /** @brief Arms a breakpoint against the selected agent's currently published cooked trace. */
+        [[nodiscard]] bool SetDecisionBreakpoint(const Editor::EditorPlayDecisionDebugCommand &command);
+        /** @brief Evaluates and dispatches one Decision tick with its optional hold and trace. */
+        [[nodiscard]] Result<void> RunDecisionScheduler(AI::AiTaskScheduler &scheduler, std::uint64_t tick);
+        [[nodiscard]] Result<void> RunDecisionQueries(const Runtime::RuntimeSceneView &scene, std::uint64_t tick);
+        void CommitQueryNavigation(std::uint64_t tick);
+        [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
+                                                                                   Runtime::EntityRef querier,
+                                                                                   std::uint64_t tick) const noexcept;
+        /** @brief Commits a consumed step or a visited breakpoint at the full fixed boundary. */
+        void CommitDecisionDebugTick() noexcept;
+        /** @brief Detaches the exact observed trace after scheduler commit, before fixed publication. */
+        void CaptureSelectedDecisionTrace(AI::AgentHandle agent, std::uint64_t tick);
+
+        /** @brief Owns Play's exact sensing generation and spatial publication for the Scene lifetime. */
+        struct PlayPerception final {
+            AI::PerceptionSpatialBroadphase spatial;
+            ProjectPerceptionPositionSources positions;
+            AI::PerceptionFilteringPolicy filtering;
+            AI::AiScenePerceptionExecution execution;
+            Gameplay::PerceptionEventSourceFactory eventSource;
+        };
+
+        /** @brief Admits project-authored sensing from the same active provider generation as the Play project. */
+        [[nodiscard]] Result<void> PrepareDecisionPerception(EditorProjectScenePolicy &policy,
+                                                             const Runtime::RuntimeSceneDefinition &cooked,
+                                                             const Runtime::RuntimeSceneDefinition &live,
+                                                             const Editor::EditorPlayDecisionProviderSource &source,
+                                                             std::size_t workUnitsLimit);
+        /** @brief Publishes current positions and polls sensing before the selected Play Decision tick. */
+        [[nodiscard]] Result<void> PollDecisionPerception(std::uint64_t tick, Duration fixedStep);
+        /** @brief Resolves the saved parent Scene and verifies that its cook still matches the selected source.
+         * @param source Exact saved Scene path and content digest.
+         * @return Decoded parent with cooked child references, or a path, identity, or decode error.
+         * @pre The Play host has a committed cook selection.
+         */
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ReadCookedChildSceneSource(
+            const Editor::EditorPlayChildSceneSource &source) const;
+
+        /** @brief Prepares the selected World mount and transfers it only to the matching Play startup path.
+         * @param definition Initial Scene definition for the mount.
+         * @param cancellation Play startup cancellation token.
+         * @return Queued startup or the preparation error, with temporary ownership released on failure.
+         */
+        [[nodiscard]] Result<void> QueueMountedWorldStartup(const Runtime::RuntimeSceneDefinition &definition,
+                                                            const CancellationToken &cancellation);
+
+        /** @brief Prepares the live mount before Navigation selects its initial coverage policy. */
+        [[nodiscard]] Result<void> PrepareLiveWorld(JobSystem &jobs, const EditorProjectScenePolicy &policy);
+
         /** @brief Stops actual Scene participants before native retirement can be observed. */
         void ShutdownSceneOwners() noexcept {
             if (prefab_.templates)
                 prefab_.templates->Shutdown();
+            if (navigation_) {
+                navigation_->coordinator.BeginShutdown();
+                navigation_->rebuild.reset();
+                navigation_->rebuildAuthority = {};
+            }
+            if (worldViewport_)
+                worldViewport_->publication->Withdraw(identity_);
+            worldRenderer_.reset();
+            mountedWorld_.reset();
             if (scenes_)
                 scenes_->Shutdown();
             animationLifetime_.RequestCancellation();
@@ -499,9 +812,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 animation_->Shutdown();
             if (ai_)
                 ai_->BeginShutdown();
+            decisionQueries_.reset();
         }
 
         Editor::IEditorPlayXrHost *selectedXrHost_{};
+        EditorPlayXrLocomotion xrLocomotion_;
+        std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion_;
+        std::function<void()> cancelXrLocomotion_;
 
         const std::thread::id ownerLane_{std::this_thread::get_id()};
         ProjectSceneAssetOwners resources_;
@@ -509,13 +826,76 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::optional<Physics::PhysicsRuntimeRetirement> physicsRetirement_;
         std::optional<Error> physicsStateUnavailable_;
         bool sceneClosed_{};
+        bool hasActivatedChildren_{};
         Physics::PhysicsSceneActivationAuthority authority_;
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;
-        std::unique_ptr<AI::AiSceneRuntime> ai_;
+        std::shared_ptr<AI::AiSceneRuntime> ai_;
+        struct NpcDialogueState final {
+            EditorPlayNpcDialogueSelection selection;
+            App::NpcDialogueProjectActivation activation;
+            JobSystem *jobs{};
+            std::optional<App::NpcDialogueScenePresentation> channel;
+            AI::AiSceneActivationBinding binding;
+            bool staged{};
+            std::optional<std::uint64_t> committed;
+        };
+        std::optional<NpcDialogueState> dialogue_;
+        /** @brief Converts the opted-in project source to the normal timeline composition on the cold Play path. */
+        [[nodiscard]] Result<void> PrepareAuthoredNpcDialogue(const std::filesystem::path &root, JobSystem &jobs,
+                                                              const EditorPlayAuthoredNpcDialogue &port);
+        /** @brief Binds a semantic caption queue to the exact newly published Scene. */
+        [[nodiscard]] Result<void> BindNpcDialogueScene(NpcDialogueState &state, const AI::AiSceneActivationBinding &binding);
+        /** @brief Starts committed interactions and publishes completed turns outside simulation callbacks. */
+        [[nodiscard]] Result<void> AdvanceNpcDialogue(const Runtime::FrameContext &frame);
+        /** @brief Dispatches one eligible committed interaction after the current presentation poll. */
+        static void DispatchCommittedNpcDialogue(NpcDialogueState &state, const Runtime::FrameContext &frame);
+        /** @brief Advances streaming and commits structural changes before presentation observes the Scene. */
+        [[nodiscard]] Result<void> AdvanceMountedWorldAtCutoff(const Runtime::FrameContext &frame);
+        /** @brief Promotes at most one staged input for the next Scene cutoff. */
+        void CommitNpcDialogueInput(std::uint64_t tick) noexcept;
+        /** @brief Revokes the Scene channel and clears its displayed captions. */
+        static void RetireNpcDialogueScene(NpcDialogueState &state) noexcept;
+        /** @brief Releases the Play-scoped dialogue policy after retiring its Scene channel. */
+        void CloseNpcDialogue() noexcept;
+        std::shared_ptr<SceneDecisionQueries> decisionQueries_;
+        CookedSceneLocalPolicyCatalog localPolicies_;
+        [[nodiscard]] Result<void> PrepareDecisionSelection(const std::filesystem::path &root, JobSystem &jobs,
+                                                            const Runtime::RuntimeSceneDefinition &definition,
+                                                            const EditorProjectScenePolicy &policy);
+        std::optional<EditorProjectScenePolicy> pendingDecisionPolicy_;
+        JobSystem *decisionJobs_{};
+        std::unique_ptr<PlayPerception> playPerception_;
+        std::vector<EditorPlayInspectionKey> inspectionKeys_;
+        std::optional<Editor::EditorPlayAiPolicy> inspectionPolicy_;
+        std::optional<Editor::EditorPlayDecisionDebugState> decisionDebug_;
+        Sha256Digest decisionBreakpointPlan_{};
+        bool decisionDebugGranted_{};
+        bool queryInspectionGranted_{};
+        std::optional<SceneQueryInspectionSelection> liveQueryInspection_;
+        std::uint64_t queryInspectionStructure_{};
+        std::shared_ptr<const AI::QueryDebugSnapshot> committedQueryInspection_;
+        std::optional<Runtime::EntityRef> decisionTraceOwner_;
+        std::uint64_t lastDecisionTraceTick_{};
+        std::shared_ptr<const AI::DecisionStepTrace> pendingDecisionTrace_;
+        std::shared_ptr<const AI::DecisionStepTrace> committedDecisionTrace_;
+        std::uint64_t committedDecisionTick_{};
+        bool decisionTickPending_{};
+        std::shared_ptr<PlaySaveAiServices> aiSave_;
         CancellationSource animationLifetime_;
-        std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;
+        std::shared_ptr<Runtime::SceneAnimationRuntime> animation_;
+        std::unique_ptr<ProjectSceneNavigationWorld> navigation_;
+        std::optional<Error> navigationRebuildError_;
+        std::shared_ptr<const ProjectSceneNavigationSelection> navigationSelection_;
+        std::array<Navigation::NavigationPathCaller, 1> queryNavigationCallers_;
+        std::optional<Navigation::NavigationPathPublication> queryNavigationPublication_;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
+        std::optional<CommittedWorldSelection> worldSelection_;
+        std::unique_ptr<MountedWorld> mountedWorld_;
+        std::optional<EditorMountedWorldViewportSelection> worldViewport_;
+        std::optional<MountedWorldStartup> worldStartup_;
+        std::unique_ptr<Render::RenderOriginSceneAdapter> worldRenderer_;
+        Runtime::PrimitiveMeshCache *viewportPrimitives_{};
 
         /** @brief Owns the projector/provider/spawn chain and its shared gameplay borrow in their required lifetime order. */
         struct PrefabState final {

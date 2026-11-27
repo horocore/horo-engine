@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cmp_to_key
 from pathlib import Path, PurePosixPath
@@ -9,16 +11,21 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import pathlib
 import platform as host_platform
 import re
+from queue import Empty, Queue
+import secrets
 import shutil
 import signal
 import struct
 import subprocess
 import sys
 import tempfile
+from threading import Thread
+import time
 import urllib.request
 import zipfile
 
@@ -27,11 +34,33 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 MAXIMUM_FILE = 256 * 1024 * 1024
+OPENXR_DEVELOPMENT_PROFILE = "qualification-openxr-development"
+OPENXR_QUEST_DEVELOPMENT_PROFILE = "qualification-openxr-quest-development"
+OPENXR_DEVELOPMENT_PROFILES = frozenset((OPENXR_DEVELOPMENT_PROFILE, OPENXR_QUEST_DEVELOPMENT_PROFILE))
+QUEST_PASSTHROUGH_FEATURE = "com.oculus.feature.PASSTHROUGH"
+OPENXR_LOADER_NAME = "libopenxr_loader.so"
+OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
+OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
+DEPLOY_LAUNCH_EXTRA = "org.horocore.qualification.LAUNCH"
+DEPLOY_DEADLINE_EXTRA = "org.horocore.qualification.DEADLINE_MS"
+DEPLOY_DEADLINE_MARKER = "host-launch-deadline nonce="
+DEPLOY_MAX_SECONDS = 300
+DEPLOY_OBSERVATION_MAX_SECONDS = 120
+DEPLOY_LOG_TAIL_LINES = 200
+DEPLOY_TRANSITION_LIMIT = 512
+DEPLOY_TRANSITION_BYTES = 10 * 1024
+DEPLOY_LAUNCH_MARKER = "host-launch nonce="
+DEPLOY_LAUNCH_CRASH_MARKER = "host-launch-crash nonce="
+DEPLOY_ENTRY_MARKER = "host-entry input=accepted"
 
 
 # D203 and D211 conflict; retain the PEP-257 no-blank class docstring style.
 class AndroidError(ValueError):  # noqa: D203
     """Actionable Android preflight or assembly failure."""
+
+
+class AndroidCommandFailed(AndroidError):  # noqa: D203
+    """An admitted command ran to completion and reported failure."""
 
 
 def bounded_bytes(path: Path, maximum: int = MAXIMUM_FILE) -> bytes:
@@ -74,24 +103,38 @@ def input_path(root: Path, name: str) -> Path:
     return result
 
 
-def load_contract(profile_name: str, abis: list[str]) -> tuple[dict, dict]:
+def android_profile(profile_name: str) -> tuple[dict, dict]:
     tools = json.loads(bounded_bytes(ROOT / "android/toolchain-lock.json", 65536))
     profiles = json.loads(bounded_bytes(ROOT / "android/package-profiles.json", 65536))
     if tools.get("schema") != 1 or profiles.get("schema") != 1:
         raise AndroidError("Unsupported Android contract schema; migrate the declared profile.")
     profile = profiles["profiles"].get(profile_name)
-    if profile is None or not abis or len(set(abis)) != len(abis):
-        raise AndroidError("Select a declared profile and a unique nonempty ABI set.")
-    validate_profile(profile, tools, abis)
+    if profile is None:
+        raise AndroidError("Select a declared Android profile.")
+    if profile_name in OPENXR_DEVELOPMENT_PROFILES:
+        loader = json.loads(bounded_bytes(ROOT / "android/openxr-loader-lock.json", 65536))
+        if loader.get("schema") != 1:
+            raise AndroidError("Unsupported Android OpenXR loader lock schema.")
+        tools["openxrLoader"] = loader
     return tools, profile
 
 
-def validate_profile(profile: dict, tools: dict, abis: list[str]) -> None:
+def load_contract(profile_name: str, abis: list[str]) -> tuple[dict, dict]:
+    tools, profile = android_profile(profile_name)
+    if not abis or len(set(abis)) != len(abis):
+        raise AndroidError("Select a declared profile and a unique nonempty ABI set.")
+    validate_profile(profile, tools, abis, profile_name=profile_name)
+    return tools, profile
+
+
+def validate_profile(profile: dict, tools: dict, abis: list[str], *, profile_name: str = "") -> None:
     if any(abi not in profile["abis"] or abi not in tools["abis"] for abi in abis):
         raise AndroidError("Unsupported profile/ABI pair; use arm64-v8a or the declared x86_64 development profile.")
     if not tools["minimumApi"] <= profile["minimumApi"] <= profile["targetApi"] <= tools["sdkApi"]:
         raise AndroidError("Incompatible min/target/compile API levels; select the declared API 29/36 tuple.")
     validate_profile_identity(profile)
+    validate_profile_features(profile_name, profile)
+    validate_openxr_profile(profile, tools, abis)
     validate_asset_names(profile)
     for target, source in profile["assets"].items():
         relative_name(target)
@@ -103,12 +146,14 @@ def validate_asset_names(profile: dict) -> None:
     expected = ["dexopt/baseline.prof", "dexopt/baseline.profm"] if profile["configuration"] == "Release" else []
     if generated != expected:
         raise AndroidError("Generated assets must match the declared Gradle baseline-profile producer contract.")
-    reserved = set(generated) | {"horo-package-provenance.json", "horo-java-dependencies.json"}
+    reserved = set(generated) | {"horo-package-provenance.json", JAVA_DEPENDENCIES_ASSET}
+    if "openxrProfile" in profile:
+        reserved.add(OPENXR_LOADER_LICENSE)
     if set(profile["assets"]) & reserved:
         raise AndroidError("Source assets cannot overwrite owned provenance or generated package metadata.")
 
 
-def exact_graphics_profile(actual: object, expected: dict) -> bool:
+def exact_profile_fields(actual: object, expected: dict) -> bool:
     """Require the closed profile's exact field types as well as values."""
     if not isinstance(actual, dict) or actual.keys() != expected.keys():
         return False
@@ -126,7 +171,7 @@ def validate_renderer_profile(profile: dict) -> None:
     expected = {"schema": 2, "api": "Vulkan1.1", "presentMode": "Fifo",
                 "swapchainMaintenance1Required": True, "singleGraphicsPresentQueue": True,
                 "compositeAlphaPolicy": "prefer-opaque-else-inherit-alpha-one"}
-    if profile["renderer"] != "vulkan-android" or not exact_graphics_profile(profile.get("graphicsProfile"), expected):
+    if profile["renderer"] != "vulkan-android" or not exact_profile_fields(profile.get("graphicsProfile"), expected):
         raise AndroidError("Unsupported Android development graphics profile; select the declared effective Vulkan tuple.")
     if profile["preset"] != "android-vulkan-development" or profile["configuration"] != "Debug":
         raise AndroidError("Android Vulkan qualification requires its explicit development preset.")
@@ -134,15 +179,41 @@ def validate_renderer_profile(profile: dict) -> None:
         raise AndroidError("Android Vulkan development requires its presentation-intent asset without device qualification claims.")
 
 
+def validate_profile_features(profile_name: str, profile: dict) -> None:
+    """Reserve required passthrough hardware for the opt-in Quest application."""
+    quest = profile_name == OPENXR_QUEST_DEVELOPMENT_PROFILE
+    if profile["features"] != ([QUEST_PASSTHROUGH_FEATURE] if quest else []):
+        raise AndroidError("Qualification profile has an invalid required hardware feature list.")
+    if quest and (profile["applicationId"] != "org.horocore.packagequalification.openxr.quest"
+                  or profile["abis"] != ["arm64-v8a"]):
+        raise AndroidError("Quest qualification requires its dedicated application identity and ARM64 ABI.")
+
+
 def validate_profile_identity(profile: dict) -> None:
     validate_renderer_profile(profile)
-    if profile["permissions"] != [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-                                   "android.permission.ACTIVITY_RECOGNITION"] or profile["features"]:
-        raise AndroidError("Qualification profiles admit only AndroidX receiver and optional Activity Recognition permissions; no required hardware features.")
+    permissions = [profile["applicationId"] + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", "android.permission.ACTIVITY_RECOGNITION"]
+    if "openxrProfile" in profile:
+        permissions.extend(OPENXR_PERMISSIONS)
+    if profile["permissions"] != permissions:
+        raise AndroidError("Qualification profile permissions differ from its declared capability policy.")
     if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+", profile["applicationId"]):
         raise AndroidError("Invalid Android application identity.")
     if not re.fullmatch(r"[a-z][a-z0-9-]*", profile["nativeLibrary"]):
         raise AndroidError("Invalid native library identity.")
+
+
+def validate_openxr_profile(profile: dict, tools: dict, abis: list[str]) -> None:
+    lock = tools.get("openxrLoader")
+    if lock is None:
+        if "openxrProfile" in profile or OPENXR_LOADER_NAME in profile["nativeLibraries"]:
+            raise AndroidError("Only the declared OpenXR profile may include an OpenXR loader.")
+        return
+    expected = {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "cold-discovery"}
+    if (not exact_profile_fields(profile.get("openxrProfile"), expected) or profile["preset"] != "android-openxr-development"
+            or profile["configuration"] != "Debug" or profile["renderer"] != "none"):
+        raise AndroidError("The Android OpenXR profile requires its explicit cold-discovery preset.")
+    if profile["nativeLibraries"].count(OPENXR_LOADER_NAME) != 1 or any(abi not in lock["abiSha256"] for abi in abis):
+        raise AndroidError("OpenXR loader packaging requires one pinned image for every selected ABI.")
 
 
 def admitted_command(command: list[str]) -> list[str]:
@@ -205,7 +276,27 @@ def android_run(command: list[str], directory: Path, log: Path, timeout: int = 1
             process.wait()
             raise AndroidError(f"Android command timed out; inspect {log.name} and retry explicitly.") from error
     if return_code:
-        raise AndroidError(f"Android command failed ({return_code}); inspect {log.name}.")
+        raise AndroidCommandFailed(f"Android command failed ({return_code}); inspect {log.name}.")
+
+
+def run_gradle_task(gradle: Path, task: str, stage: Path, log: Path) -> None:
+    """Retry Gradle repository throttling while preserving each attempt's log."""
+    command = [str(gradle.resolve()), "--no-daemon", "--console=plain", task]
+    delays = (20, 60)
+    for attempt, delay in enumerate(delays, start=1):
+        try:
+            android_run(command, stage, log)
+            return
+        except AndroidCommandFailed:
+            with log.open("rb") as output:
+                output.seek(max(0, log.stat().st_size - 65536))
+                throttled = b"Received status code 429 from server: Too Many Requests" in output.read(65536)
+            if not throttled:
+                raise
+            log.replace(log.with_name(f"{log.stem}-attempt-{attempt}{log.suffix}"))
+            print(f"Android dependency repository rate limited the request. Retrying in {delay} seconds.", file=sys.stderr)
+            time.sleep(delay)
+    android_run(command, stage, log)
 
 
 def version_output(command: list[str]) -> str:
@@ -454,6 +545,7 @@ def extract_entry(source: zipfile.ZipFile, entry: zipfile.ZipInfo, target: Path)
 
 ASSET_PREFIX = "assets/"
 PROVENANCE_ASSET = ASSET_PREFIX + "horo-package-provenance.json"
+JAVA_DEPENDENCIES_ASSET = "horo-java-dependencies.json"
 
 
 def copy_assets(profile: dict, destination: Path) -> list[dict]:
@@ -467,12 +559,60 @@ def copy_assets(profile: dict, destination: Path) -> list[dict]:
     return records
 
 
-def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abis: list[str]) -> dict:
+@dataclass(frozen=True)
+class AndroidOpenXRLoader:
+    images: dict[str, bytes]
+    license: bytes
+
+
+def read_openxr_loader(source: Path | None, tools: dict, abis: list[str], unsigned: bool) -> AndroidOpenXRLoader | None:
+    lock = tools.get("openxrLoader")
+    if lock is None:
+        if source is not None:
+            raise AndroidError("The OpenXR loader AAR is only accepted by the explicit OpenXR profile.")
+        return None
+    if unsigned or source is None:
+        raise AndroidError("The OpenXR development profile requires signing and the explicit locked loader AAR.")
+    data = bounded_bytes(source, 8 * 1024 * 1024)
+    if hashlib.sha256(data).hexdigest() != lock["sha256"]:
+        raise AndroidError("Android OpenXR loader AAR digest mismatch.")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        archive_limits(archive)
+        loaders = {abi: archive.read(f"jni/{abi}/{OPENXR_LOADER_NAME}") for abi in abis}
+        license_text = archive.read("META-INF/LICENSE")
+    for abi, image in loaders.items():
+        if hashlib.sha256(image).hexdigest() != lock["abiSha256"][abi]:
+            raise AndroidError(f"Android OpenXR loader digest mismatch for {abi}.")
+    if hashlib.sha256(license_text).hexdigest() != lock["licenseSha256"]:
+        raise AndroidError("Android OpenXR loader license digest mismatch.")
+    return AndroidOpenXRLoader(loaders, license_text)
+
+
+def stage_openxr_loader(destination: Path, image: bytes, tools: dict, abi: str) -> dict:
+    path = destination / OPENXR_LOADER_NAME
+    path.write_bytes(image)
+    record = inspect_elf(path, tools["abis"][abi], tools["minimumApi"])
+    if record["sha256"] != tools["openxrLoader"]["abiSha256"][abi]:
+        raise AndroidError(f"Staged Android OpenXR loader digest mismatch for {abi}.")
+    validate_dependency_closure([record], set(tools["systemLibraries"]))
+    return record
+
+
+def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abis: list[str],
+                 openxr_loaders: dict[str, bytes] | None = None) -> dict:
+    openxr_loaders = openxr_loaders or {}
+    expected = set(profile["nativeLibraries"])
+    if OPENXR_LOADER_NAME in expected:
+        if set(openxr_loaders) != set(abis):
+            raise AndroidError("The staged OpenXR loader images must cover the selected ABI set exactly.")
+        expected.remove(OPENXR_LOADER_NAME)
+    elif openxr_loaders:
+        raise AndroidError("The selected Android profile does not permit a loader.")
     result = {}
     for abi in abis:
         source = native_root / abi
         records = native_closure(source, abi, tools, profile["nativeLibrary"])
-        if {record["name"] for record in records} != set(profile["nativeLibraries"]):
+        if {record["name"] for record in records} != expected:
             raise AndroidError("Native inputs differ from the explicitly declared library set.")
         destination = stage / "native" / abi
         destination.mkdir(parents=True)
@@ -480,19 +620,30 @@ def stage_native(native_root: Path, stage: Path, tools: dict, profile: dict, abi
             shutil.copyfile(source / record["name"], destination / record["name"])
             if digest(destination / record["name"]) != record["sha256"]:
                 raise AndroidError("Native input changed during staging; retry with stable files.")
-        result[abi] = records
+        if abi in openxr_loaders:
+            records.append(stage_openxr_loader(destination, openxr_loaders[abi], tools, abi))
+        result[abi] = sorted(records, key=lambda record: record["name"])
     return result
 
 
 def apk_manifest(profile: dict) -> str:
     application = profile["applicationId"]  # Validated restricted identifier; cannot contain XML metacharacters.
     library = profile["nativeLibrary"]
+    features = "".join(f'\n  <uses-feature android:name="{name}" android:required="true" />' for name in profile["features"])
+    openxr = "" if "openxrProfile" not in profile else """
+  <uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
+  <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
+  <queries>
+    <provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker" />
+    <intent><action android:name="org.khronos.openxr.OpenXRRuntimeService" /></intent>
+    <intent><action android:name="org.khronos.openxr.OpenXRApiLayerService" /></intent>
+  </queries>"""
     return f'''<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />{features}
+  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />{openxr}
   <application android:label="Horo Package Qualification" android:theme="@style/Theme.AppCompat.NoActionBar"
                android:extractNativeLibs="false" android:allowBackup="false">
-    <activity android:name="{application}.PackageActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
+    <activity android:name="{application}.{PACKAGE_ACTIVITY}" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
       <meta-data android:name="android.app.lib_name" android:value="{library}" />
       <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
     </activity>
@@ -508,9 +659,87 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
     (stage / "AndroidManifest.xml").write_text(apk_manifest(profile), encoding="utf-8")
     java_root = stage / "java" / Path(*profile["applicationId"].split("."))
     java_root.mkdir(parents=True)
+    activity_base = "org.horocore.platform.HoroInputActivity"
+    crash_observer = ""
+    deadline_members = ""
+    deadline_intent = ""
+    if profile["renderer"] == "vulkan-android":
+        package = Path("org/horocore/qualification")
+        destination = stage / "java" / package
+        destination.mkdir(parents=True, exist_ok=True)
+        for source_name in (
+            "HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java", "MemoryObservation.java"
+        ):
+            shutil.copyfile(ROOT / "apps/android-package-qualification/java" / package / source_name, destination / source_name)
+        activity_base = "org.horocore.qualification.HoroVulkanQualificationActivity"
+    if "openxrProfile" in profile:
+        observer = Path("org/horocore/qualification/OpenXRLaunchCrashObserver.java")
+        destination = stage / "java" / observer
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "apps/android-package-qualification/java" / observer, destination)
+        deadline_members = (
+            "    private static long diagnosticExpiresAt;\n"
+            "    private final android.os.Handler diagnosticHandler = new android.os.Handler(android.os.Looper.getMainLooper());\n"
+            "    private final Runnable endDiagnostic = () -> { if (!isFinishing() && !isDestroyed()) finishAndRemoveTask(); };\n"
+            "    private boolean scheduleDiagnosticEnd() {\n"
+            "        diagnosticHandler.removeCallbacks(endDiagnostic);\n"
+            "        long remaining = Math.max(0L, diagnosticExpiresAt - android.os.SystemClock.elapsedRealtime());\n"
+            "        return diagnosticHandler.postDelayed(endDiagnostic, remaining);\n"
+            "    }\n"
+            "    private boolean armDiagnosticDeadline(int milliseconds) {\n"
+            f"        if (milliseconds <= 0 || milliseconds > {DEPLOY_MAX_SECONDS * 1000}) return false;\n"
+            "        diagnosticExpiresAt = android.os.SystemClock.elapsedRealtime() + milliseconds;\n"
+            "        if (scheduleDiagnosticEnd()) return true;\n"
+            "        diagnosticExpiresAt = 0L;\n"
+            "        return false;\n"
+            "    }\n"
+            "    @Override public void onResume() {\n"
+            "        super.onResume();\n"
+            "        if (diagnosticExpiresAt != 0L) scheduleDiagnosticEnd();\n"
+            "    }\n"
+            "    @Override public void onDestroy() {\n"
+            "        diagnosticHandler.removeCallbacks(endDiagnostic);\n"
+            "        super.onDestroy();\n"
+            "    }\n")
+        deadline_intent = (f"        int deadlineMs = intent.getIntExtra(\"{DEPLOY_DEADLINE_EXTRA}\", 0);\n"
+                           f"        intent.removeExtra(\"{DEPLOY_DEADLINE_EXTRA}\");\n")
+        crash_observer = (
+            "                org.horocore.qualification.OpenXRLaunchCrashObserver.install(nonce, started);\n"
+            "                if (armDiagnosticDeadline(deadlineMs)) {\n"
+            f"                    android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_DEADLINE_MARKER}\"\n"
+            "                            + nonce + \" startTicks=\" + started + \" milliseconds=\" + deadlineMs);\n"
+            "                }\n")
     source = (f"package {profile['applicationId']};\n"
-              "public final class PackageActivity extends org.horocore.platform.HoroInputActivity {\n"
-              f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n}}\n")
+              f"public final class PackageActivity extends {activity_base} {{\n"
+              f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n"
+              f"{deadline_members}"
+              "    private static boolean activityCreated;\n"
+              "    private static String processStartTicks() {\n"
+              "        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(\"/proc/self/stat\"))) {\n"
+              "            String stat = reader.readLine();\n"
+              "            int end = stat == null ? -1 : stat.lastIndexOf(\") \");\n"
+              "            if (end < 0) return null;\n"
+              "            String[] fields = stat.substring(end + 2).split(\" +\", 21);\n"
+              "            if (fields.length > 19 && fields[19].matches(\"[1-9][0-9]{0,19}\")) return fields[19];\n"
+              "        } catch (java.io.IOException ignored) { }\n"
+              "        return null;\n"
+              "    }\n"
+              "    @Override public void onCreate(android.os.Bundle state) {\n"
+              "        boolean firstActivity = !activityCreated;\n"
+              "        activityCreated = true;\n"
+              "        android.content.Intent intent = getIntent();\n"
+              f"        String nonce = intent.getStringExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
+              f"        intent.removeExtra(\"{DEPLOY_LAUNCH_EXTRA}\");\n"
+              f"{deadline_intent}"
+              "        super.onCreate(state);\n"
+              "        if (firstActivity && state == null && nonce != null && nonce.matches(\"[0-9a-f]{32}\")) {\n"
+              "            String started = processStartTicks();\n"
+              "            if (started != null) {\n"
+              f"                android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_LAUNCH_MARKER}\" + nonce + \" startTicks=\" + started);\n"
+              f"{crash_observer}"
+              "            }\n"
+              "        }\n"
+              "    }\n}\n")
     (java_root / "PackageActivity.java").write_text(source, encoding="utf-8")
     input_root = stage / "java/org/horocore/platform"
     input_root.mkdir(parents=True, exist_ok=True)
@@ -630,6 +859,13 @@ def verify_native_contents(archive: zipfile.ZipFile, expected: dict) -> None:
     for name, record in admitted.items():
         if hashlib.sha256(archive.read(name)).hexdigest() != record["sha256"]:
             raise AndroidError("APK native library changed after its preflight inspection.")
+    if "openxrProfile" in expected.get("profile", {}):
+        lock = expected["toolchain"]["openxrLoader"]
+        for abi in expected["abis"]:
+            name = f"lib/{abi}/{OPENXR_LOADER_NAME}"
+            entry = archive.getinfo(name)
+            if (entry.compress_type != zipfile.ZIP_STORED or admitted[name]["sha256"] != lock["abiSha256"][abi]):
+                raise AndroidError(f"APK OpenXR loader differs from the locked stored image for {abi}.")
 
 
 def verify_assets(archive: zipfile.ZipFile, expected: dict) -> None:
@@ -640,10 +876,18 @@ def verify_assets(archive: zipfile.ZipFile, expected: dict) -> None:
     for name, record in admitted.items():
         if hashlib.sha256(archive.read(name)).hexdigest() != record["sha256"]:
             raise AndroidError("APK runtime asset changed after admission.")
+    if "openxrProfile" in expected.get("profile", {}):
+        license_record = admitted.get(ASSET_PREFIX + OPENXR_LOADER_LICENSE)
+        if (license_record is None
+                or license_record["sha256"] != expected["toolchain"]["openxrLoader"]["licenseSha256"]):
+            raise AndroidError("APK OpenXR loader license differs from the locked license.")
 
 
 def assemble(arguments: argparse.Namespace) -> None:
     tools, profile = load_contract(arguments.profile, arguments.abi)
+    if "openxrProfile" in profile and arguments.native_root:
+        raise AndroidError("The Android OpenXR profile must build its declared native diagnostic host.")
+    openxr_loader = read_openxr_loader(arguments.openxr_loader, tools, arguments.abi, arguments.unsigned)
     capability = tools_preflight(tools, arguments.sdk, arguments.ndk, arguments.gradle, not arguments.unsigned)
     workspace = arguments.output.resolve()
     if workspace.exists():
@@ -654,19 +898,23 @@ def assemble(arguments: argparse.Namespace) -> None:
     native_root = build_native(arguments, profile, activity_root, workspace)
     stage = workspace / "gradle-project"
     stage.mkdir()
-    native = stage_native(native_root, stage, tools, profile, arguments.abi)
+    native = stage_native(native_root, stage, tools, profile, arguments.abi, openxr_loader.images if openxr_loader else None)
     assets = copy_assets(profile, stage / "assets")
+    if openxr_loader is not None:
+        license_asset = stage / ASSET_PREFIX / OPENXR_LOADER_LICENSE
+        license_asset.parent.mkdir(parents=True, exist_ok=True)
+        license_asset.write_bytes(openxr_loader.license)
+        assets.append({"name": OPENXR_LOADER_LICENSE, "sha256": digest(license_asset), "size": license_asset.stat().st_size})
     apk_write_project(stage, tools, profile, arguments.abi, arguments.game_activity)
     os.environ["ANDROID_HOME"] = str(arguments.sdk.resolve())
     os.environ["SOURCE_DATE_EPOCH"] = "315532800"
-    android_run([str(arguments.gradle.resolve()), "--no-daemon", "--console=plain", "writeDependencyProvenance"],
-        stage, workspace / "java-dependencies.log")
-    dependencies = stage / "assets/horo-java-dependencies.json"
+    run_gradle_task(arguments.gradle, "writeDependencyProvenance", stage, workspace / "java-dependencies.log")
+    dependencies = stage / ASSET_PREFIX / JAVA_DEPENDENCIES_ASSET
     assets.append({"name": dependencies.name, "sha256": digest(dependencies), "size": dependencies.stat().st_size})
     evidence = provenance(tools, profile, native, assets)
     (stage / PROVENANCE_ASSET).write_bytes(canonical_json(evidence))
     task = "assemble" + profile["configuration"]
-    android_run([str(arguments.gradle.resolve()), "--no-daemon", "--console=plain", task], stage, workspace / "gradle.log")
+    run_gradle_task(arguments.gradle, task, stage, workspace / "gradle.log")
     complete_package(stage, workspace, profile, tools, capability, evidence, arguments.unsigned)
 
 
@@ -709,7 +957,10 @@ def complete_package(stage: Path, workspace: Path, profile: dict, tools: dict, c
     inspection["signed"] = not unsigned
     (workspace / "inspection.json").write_bytes(canonical_json(inspection))
     (workspace / "provenance.json").write_bytes(canonical_json(evidence))
-    print(json.dumps({"package": package.name, "sha256": inspection["apkSha256"], "signed": not unsigned}))
+    summary = {"package": package.name, "sha256": inspection["apkSha256"], "signed": not unsigned}
+    if "openxrProfile" in profile:
+        summary["openxr"] = profile["openxrProfile"]
+    print(json.dumps(summary))
 
 
 def verify_api_badging(badging: str, field: str, expected: int) -> None:
@@ -727,18 +978,24 @@ def verify_manifest(badging: str, profile: dict) -> None:
     permissions = set(re.findall(r"^uses-permission: name='([^']+)'", badging, re.MULTILINE))
     if permissions != set(profile["permissions"]):
         raise AndroidError("Assembled manifest has absent or undeclared permissions.")
-    features = set(re.findall(r"^uses-feature: name='([^']+)'", badging, re.MULTILINE))
+    if len(re.findall(r"^feature-group:", badging, re.MULTILINE)) > 1:
+        raise AndroidError("Qualification manifests cannot declare alternative hardware feature groups.")
+    features = set(re.findall(r"^[ \t]*uses-feature: name='([^']+)'", badging, re.MULTILINE))
     if features != set(profile["features"]):
-        raise AndroidError("Assembled manifest requires undeclared hardware features.")
+        raise AndroidError("Assembled manifest has absent or undeclared required hardware features.")
+    optional_features = set(re.findall(r"^[ \t]*uses-feature-not-required: name='([^']+)'", badging, re.MULTILINE))
+    if QUEST_PASSTHROUGH_FEATURE in optional_features:
+        raise AndroidError("Quest passthrough must only appear as an explicit required feature.")
 
 
 def apk_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("qualification-debug", "qualification-release", "qualification-vulkan-development"), required=True)
+    parser.add_argument("--profile", required=True, help="Exact name from android/package-profiles.json.")
     parser.add_argument("--abi", action="append", required=True)
     for name in ("sdk", "ndk", "gradle", "game-activity", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--native-root", type=Path, help="Explicit prebuilt ABI directories; complete closure is inspected before assembly.")
+    parser.add_argument("--openxr-loader", type=Path, help="Explicit pinned Khronos loader AAR for the signed OpenXR development profile.")
     parser.add_argument("--unsigned", action="store_true", help="Produce an unsigned qualification candidate; no install/signing claim.")
     arguments = parser.parse_args(argv)
     try:
@@ -747,6 +1004,1198 @@ def apk_main(argv=None) -> int:
         print(f"Android preflight: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+# Android developer deployment
+
+PACKAGE_ACTIVITY = "PackageActivity"
+DEPLOY_CAPTURE_BYTES = 256 * 1024
+DEPLOY_REPORT_BYTES = 16 * 1024
+DEPLOY_CLEANUP_SECONDS = 5
+DEPLOY_REPORT_ENTRY = "android/deployment.json"
+ADB_CONNECTION_MODES = ("usb", "emulator", "tcpip")
+
+
+class AndroidDeployError(AndroidError):
+    """Stable portable deployment diagnostic with no child output."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def stop_deploy_process(process: subprocess.Popen, *, leader_exited: bool = False) -> None:
+    """Stop only the admitted host child and its isolated POSIX process group."""
+    # Keep the leader PID reserved until the group has been signalled. Polling
+    # would reap an exited leader even if its descendants still hold stdout.
+    if process.returncode is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin excludes zombie leaders and can report EPERM once the isolated
+        # group has no remaining members signalable by this invocation.
+        if sys.platform != "darwin" or not leader_exited:
+            raise
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        raise AndroidDeployError("host_process_stop_unconfirmed") from None
+
+
+def wait_deploy_status(process: subprocess.Popen, deadline: float, *, retain_adb_server: bool = False) -> int:
+    """Retire the POSIX group before reaping its leader unless successful inventory owns a daemon."""
+    if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+        while True:
+            exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            if exited is not None:
+                successful_inventory = retain_adb_server and exited.si_code == os.CLD_EXITED and exited.si_status == 0
+                if not successful_inventory:
+                    stop_deploy_process(process, leader_exited=True)
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AndroidDeployError("deadline_exceeded")
+            time.sleep(min(0.01, remaining))
+    return process.wait(timeout=max(0, deadline - time.monotonic()))
+
+
+@contextmanager
+def owned_deploy_process(command: list[str], retain_adb_server: bool) -> Iterator[subprocess.Popen]:
+    """Admit an argv command with host-specific ownership of its subprocess tree."""
+    argv = admitted_command(command)
+    environment = execution_environment()
+    if os.name == "nt":
+        from dev import CleanupError, owned_windows_process
+
+        try:
+            with owned_windows_process(argv, env=environment, capture_output=True,
+                                       retain_children_on_success=retain_adb_server) as process:
+                yield process
+        except CleanupError:
+            raise AndroidDeployError("host_process_stop_unconfirmed") from None
+        return
+    process = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        shell=False, start_new_session=True, env=environment)
+    try:
+        yield process
+    finally:
+        stop_deploy_process(process)
+
+
+def deploy_process(command: list[str], deadline: float, *, retain_adb_server: bool = False) -> tuple[int, str]:
+    """Collect at most one bounded output buffer before a shared absolute deadline."""
+    if deadline <= time.monotonic():
+        raise AndroidDeployError("deadline_exceeded")
+    with owned_deploy_process(command, retain_adb_server) as process:
+        return read_deploy_process(process, deadline, retain_adb_server=retain_adb_server)
+
+
+def read_deploy_process(process: subprocess.Popen, deadline: float, *, retain_adb_server: bool = False) -> tuple[int, str]:
+    """Read only the owned command's bounded output and terminal status."""
+    output: Queue[bytes | OSError] = Queue(maxsize=1)
+
+    def capture() -> None:
+        try:
+            with process.stdout as pipe:
+                output.put(pipe.read(DEPLOY_CAPTURE_BYTES + 1))
+        except OSError as error:
+            output.put(error)
+
+    reader = Thread(target=capture, daemon=True)
+    try:
+        reader.start()
+        captured = output.get(timeout=max(0, deadline - time.monotonic()))
+        if isinstance(captured, OSError):
+            raise AndroidDeployError("host_output_unavailable") from None
+        if len(captured) > DEPLOY_CAPTURE_BYTES:
+            raise AndroidDeployError("host_output_limit")
+        status = wait_deploy_status(process, deadline, retain_adb_server=retain_adb_server)
+        return status, captured.decode("utf-8", errors="replace")
+    except (Empty, subprocess.TimeoutExpired):
+        raise AndroidDeployError("deadline_exceeded") from None
+
+
+def deploy_tool(sdk: Path, name: str) -> str:
+    """Select a native Android SDK executable without implicit cwd or shell resolution."""
+    return str((sdk / (name + (".exe" if os.name == "nt" else ""))).absolute())
+
+
+@dataclass(frozen=True)
+class OpenXRDiagnosticImages:
+    """Digests of the verified native diagnostic and bundled loader for one APK ABI."""
+
+    abi: str
+    diagnostic_host_sha256: str
+    loader_sha256: str
+
+    def report(self) -> dict[str, str]:
+        return {"abi": self.abi, "diagnosticHostSha256": self.diagnostic_host_sha256, "loaderSha256": self.loader_sha256}
+
+
+@dataclass(frozen=True)
+class VerifiedAndroidArtifact:
+    path: Path
+    profile: dict
+    apk_sha256: str
+    provenance_sha256: str
+    source_revision: str
+    abis: frozenset[str]
+    openxr_images: tuple[OpenXRDiagnosticImages, ...] = ()
+
+
+def verified_openxr_images(profile: dict, inspection: dict, abis: frozenset[str]) -> tuple[OpenXRDiagnosticImages, ...]:
+    """Select only the named OpenXR binaries from the verified signed APK inspection."""
+    if "openxrProfile" not in profile:
+        return ()
+    host_library = f"lib{profile['nativeLibrary']}.so"
+    entries = {record["name"]: record["sha256"] for record in inspection["contents"]}
+    return tuple(OpenXRDiagnosticImages(abi, entries[f"lib/{abi}/{host_library}"], entries[f"lib/{abi}/{OPENXR_LOADER_NAME}"])
+                 for abi in sorted(abis))
+
+
+def deploy_artifact(artifact: Path, stage: Path, sdk: Path, profile_name: str,
+                    java: str, deadline: float) -> VerifiedAndroidArtifact:
+    """Recheck the exact signed package bytes and expected launch component before touching a device."""
+    declared = json.loads(bounded_bytes(input_path(artifact, "provenance.json"), 1024 * 1024))
+    inspection = json.loads(bounded_bytes(input_path(artifact, "inspection.json"), 8 * 1024 * 1024))
+    abis = frozenset(declared["abis"])
+    tools, profile = load_contract(profile_name, sorted(abis))
+    if (declared["schema"] != 1 or declared["profile"] != profile or declared.get("toolchain") != tools
+            or inspection.get("signed") is not True):
+        raise AndroidDeployError("artifact_contract_mismatch")
+    names = sorted(profile["nativeLibraries"])
+    assets = [*profile["assets"], *profile["generatedAssets"], JAVA_DEPENDENCIES_ASSET]
+    if "openxrProfile" in profile:
+        assets.append(OPENXR_LOADER_LICENSE)
+    if (any(sorted(record["name"] for record in declared["abis"][abi]) != names for abi in abis)
+            or sorted(record["name"] for record in declared["assets"]) != sorted(assets)):
+        raise AndroidDeployError("artifact_contract_mismatch")
+    revision = declared.get("sourceRevision")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise AndroidDeployError("artifact_source_revision_unavailable")
+    if declared.get("javaDependencyLockSha256") != digest(ROOT / "android/gradle/gradle.lockfile"):
+        raise AndroidDeployError("artifact_dependency_lock_stale")
+    package = stage / "signed.apk"
+    package.write_bytes(bounded_bytes(input_path(artifact, "signed.apk")))
+    actual = inspect_package(package, declared)
+    if actual | {"signed": True} != inspection:
+        raise AndroidDeployError("artifact_inspection_mismatch")
+    build_tools = sdk / "build-tools" / tools["buildTools"]
+    require_revision(build_tools, tools["buildTools"], "Build tools")
+    signing_verifier = input_path(build_tools, "lib/apksigner.jar")
+    status, _ = deploy_process([java, "-jar", str(signing_verifier.absolute()), "verify", str(package)], deadline)
+    if status:
+        raise AndroidDeployError("artifact_signature_invalid")
+    status, badging = deploy_process([deploy_tool(build_tools, "aapt2"), "dump", "badging", str(package)], deadline)
+    if status:
+        raise AndroidDeployError("artifact_manifest_unavailable")
+    verify_manifest(badging, profile)
+    activity = profile["applicationId"] + "." + PACKAGE_ACTIVITY
+    if re.findall(r"^launchable-activity: name='([^']+)'", badging, re.MULTILINE) != [activity]:
+        raise AndroidDeployError("artifact_activity_mismatch")
+    return VerifiedAndroidArtifact(package, profile, actual["apkSha256"], actual["provenanceSha256"], revision, abis,
+                                   verified_openxr_images(profile, actual, abis))
+
+
+@dataclass(frozen=True)
+class AdmittedAdbDevice:
+    """One explicitly selected transport, shared by every command in the operation."""
+
+    executable: str
+    serial: str
+    transport: int
+    deadline: float
+    connection: str
+
+    def run(self, *arguments: str, missing_process: bool = False) -> str:
+        status, output = deploy_process([self.executable, "-t", str(self.transport), *arguments], self.deadline)
+        if any(line.startswith("* daemon") for line in output.splitlines()):
+            raise AndroidDeployError("device_transport_changed")
+        if status:
+            if missing_process and status == 1 and not output.strip():
+                return ""
+            lower = output.lower()
+            if "unauthorized" in lower:
+                raise AndroidDeployError("device_unauthorized")
+            if "offline" in lower or "not found" in lower or "no devices" in lower or "disconnected" in lower:
+                raise AndroidDeployError("device_disconnected")
+            raise AndroidDeployError("device_command_failed")
+        return "\n".join(output.splitlines()).strip()
+
+    def require_identity(self) -> None:
+        """Confirm that the admitted transport still names the selected device."""
+        if self.run("get-serialno") != self.serial:
+            raise AndroidDeployError("device_transport_changed")
+
+    def process_id(self, application: str) -> int | None:
+        output = self.run("shell", "pidof", application, missing_process=True)
+        if not output:
+            return None
+        pid = deploy_number(output, 2**31 - 1, "application_process_unavailable")
+        if not pid:
+            raise AndroidDeployError("application_process_unavailable")
+        return pid
+
+
+def adb_connection_mode(serial: str, details: list[str]) -> str:
+    """Classify the selected ADB inventory row without exporting raw device identifiers."""
+    modes = []
+    if any(field.startswith("usb:") and field != "usb:" for field in details):
+        modes.append("usb")
+    if re.fullmatch(r"emulator-[0-9]{1,5}", serial):
+        modes.append("emulator")
+    tcp = re.fullmatch(r"(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[a-fA-F0-9:%.]+\]):([0-9]{1,5})", serial)
+    if ((tcp and 0 < int(tcp.group(1)) <= 65535)
+            or re.fullmatch(r"adb-[A-Za-z0-9-]+\._adb-tls-connect\._tcp(?:\.local)?", serial)):
+        modes.append("tcpip")
+    return modes[0] if len(modes) == 1 else "unknown"
+
+
+def admit_adb_device(executable: str, serial: str, deadline: float) -> AdmittedAdbDevice:
+    """Resolve a serial to one current ADB transport. Reconnects require a new operation."""
+    status, output = deploy_process([executable, "devices", "-l"], deadline, retain_adb_server=True)
+    if status:
+        raise AndroidDeployError("device_inventory_unavailable")
+    matches = [fields for line in output.splitlines() if (fields := line.split()) and fields[0] == serial]
+    if len(matches) != 1 or len(matches[0]) < 2:
+        raise AndroidDeployError("device_unavailable")
+    if matches[0][1] == "unauthorized":
+        raise AndroidDeployError("device_unauthorized")
+    if matches[0][1] != "device":
+        raise AndroidDeployError("device_disconnected")
+    identities = [field.removeprefix("transport_id:") for field in matches[0][2:] if field.startswith("transport_id:")]
+    if len(identities) != 1:
+        raise AndroidDeployError("device_transport_unavailable")
+    transport = deploy_number(identities[0], 2**63 - 1, "device_transport_unavailable")
+    if transport == 0:
+        raise AndroidDeployError("device_transport_unavailable")
+    device = AdmittedAdbDevice(executable, serial, transport, deadline, adb_connection_mode(serial, matches[0][2:]))
+    device.require_identity()
+    return device
+
+
+def deploy_number(output: str, maximum: int, code: str) -> int:
+    """Admit bounded decimal fields without forwarding device text."""
+    if not re.fullmatch(r"[0-9]{1,20}", output) or int(output) > maximum:
+        raise AndroidDeployError(code)
+    return int(output)
+
+
+def deploy_current_user(device: AdmittedAdbDevice) -> str:
+    """Read the canonical foreground user without including it in evidence."""
+    output = device.run("shell", "am", "get-current-user")
+    return str(deploy_number(output, 2**31 - 1, "device_user_unavailable"))
+
+
+def require_deploy_user(device: AdmittedAdbDevice, expected: str) -> None:
+    """Keep the deployment and its evidence bound to one foreground Android user."""
+    if deploy_current_user(device) != expected:
+        raise AndroidDeployError("device_user_changed")
+
+
+def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: frozenset[str]) -> tuple[str, int, str]:
+    if device.run("get-state") != "device":
+        raise AndroidDeployError("device_unavailable")
+    user = deploy_current_user(device)
+    api = deploy_number(device.run("shell", "getprop", "ro.build.version.sdk"), 9999, "device_api_unavailable")
+    abi = device.run("shell", "getprop", "ro.product.cpu.abi")
+    if api < minimum_api or abi not in abis:
+        raise AndroidDeployError("device_profile_unsupported")
+    return user, api, abi
+
+
+def deploy_device_build_digest(device: AdmittedAdbDevice) -> str:
+    """Bind XR evidence to the Android system build without exporting the raw fingerprint."""
+    fingerprint = device.run("shell", "getprop", "ro.build.fingerprint")
+    if re.fullmatch(r"[!-~]{1,256}", fingerprint) is None:
+        raise AndroidDeployError("device_build_unverifiable")
+    return hashlib.sha256(fingerprint.encode("ascii")).hexdigest()
+
+
+def deploy_device_boot_time(device: AdmittedAdbDevice) -> int:
+    """Read bounded kernel boot evidence for this ADB operation without exporting it."""
+    try:
+        reported = device.run("shell", "toybox", "grep", "^btime", "/proc/stat")
+    except AndroidDeployError as error:
+        if error.code == "device_command_failed":
+            raise AndroidDeployError("device_boot_unverifiable") from None
+        raise
+    match = re.fullmatch(r"btime ([1-9][0-9]{0,19})", reported)
+    if match is None:
+        raise AndroidDeployError("device_boot_unverifiable")
+    return deploy_number(match[1], 2**64 - 1, "device_boot_unverifiable")
+
+
+def require_deploy_boot(device: AdmittedAdbDevice, expected: int | None) -> None:
+    if expected is not None and deploy_device_boot_time(device) != expected:
+        raise AndroidDeployError("device_boot_changed")
+
+
+def deploy_verified_install(device: AdmittedAdbDevice, application: str, user: str, digest_value: str) -> None:
+    """Require the same installed package digest before launch and evidence admission."""
+    reported = device.run("shell", "pm", "path", "--user", user, application)
+    match = re.fullmatch(r"package:(/[A-Za-z0-9_./=~+@-]{1,1024}/base\.apk)", reported)
+    if not match or any(part in (".", "..") for part in match.group(1).split("/")):
+        raise AndroidDeployError("installed_artifact_unverifiable")
+    filename = match.group(1)
+    checksum = device.run("shell", "toybox", "sha256sum", filename)
+    if re.fullmatch(r"[a-f0-9]{64}  " + re.escape(filename), checksum) is None:
+        raise AndroidDeployError("installed_artifact_unverifiable")
+    if checksum.split()[0] != digest_value:
+        raise AndroidDeployError("installed_artifact_stale")
+
+
+STATE_FIELDS = ("lifecycleRevision", "activity", "state", "process", "window", "presentation", "factsRevision")
+STATE_FLAGS = ("nativeAvailable", "ready", "hasWindow", "hasPresentation")
+FRAME_FIELDS = ("attempts", "presentAccepted", "beginPending", "executePending", "presentPending")
+STATE_LINE = re.compile(
+    r"host-state " + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in STATE_FIELDS)
+    + r" extent=(?P<width>[0-9]{1,8})x(?P<height>[0-9]{1,8}) "
+    + " ".join(fr"{name}=(?P<{name}>[01])" for name in STATE_FLAGS)
+    + r" attempts=(?P<attempts>[0-9]{1,20}) presentAccepted=(?P<presentAccepted>[0-9]{1,20})")
+FRAME_LINE = re.compile(
+    r"host-frame stage=(?P<stage>begin|execute|present) outcome=(?P<outcome>accepted|backpressure|failed) "
+    + " ".join(fr"{name}=(?P<{name}>[0-9]{{1,20}})" for name in FRAME_FIELDS) + r" completion=unobserved")
+PLATFORM_STATE_LINES = {
+    "thermal": re.compile(
+        r"host-thermal revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>pending|inactive|unsupported|unavailable|none|light|moderate|severe|critical|emergency|shutdown)"),
+    "memory": re.compile(
+        r"host-memory revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|normal|moderate|low|critical)"),
+    "power": re.compile(
+        r"host-power revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|enabled|disabled)"),
+    "battery": re.compile(
+        r"host-battery revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|charging|discharging|not-charging|full) "
+        r"percent=(?P<percent>-1|0|[1-9][0-9]{0,2})"),
+    "pacing": re.compile(
+        r"host-pacing revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>baseline|power-conservation|thermal-conservation|memory-conservation)"
+        r"(?: intervalMs=(?P<intervalMs>[1-9][0-9]{0,9}) attempts=(?P<attempts>0|[1-9][0-9]{0,19}))?"),
+    "refresh": re.compile(
+        r"host-refresh revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|observed) milliHz=(?P<milliHz>0|[1-9][0-9]{0,9})"),
+}
+OPENXR_LINE = re.compile(
+    r"host-openxr abi=(arm64-v8a|x86_64) stage=(host-application|bundled-loader|loader-dispatch|loader-initialization|extension-admission|"
+    r"instance-creation|system-discovery|runtime-properties|instance-retirement|discovered) "
+    r"result=(0|-?[1-9][0-9]{0,9}) runtimeMajor=([0-9]{1,5}) runtimeMinor=([0-9]{1,5}) runtimePatch=([0-9]{1,10})"
+    r"(?: primaryView0=([1-9][0-9]{0,9})x([1-9][0-9]{0,9}) primaryView1=([1-9][0-9]{0,9})x([1-9][0-9]{0,9}))?")
+
+
+LOG_ENTRY_TIME = re.compile(
+    r"\s*([0-9]{1,12}\.[0-9]{9}) ([IWEF])/(HoroPackageQualification|AndroidRuntime)\s*"
+    r"\(\s*([0-9]{1,10}|u[0-9]{1,5}_a[0-9]{1,5}):\s*([0-9]{1,10})\): (.*)")
+
+
+def log_epoch_nanoseconds(value: str) -> int:
+    if not re.fullmatch(r"[0-9]{1,12}\.[0-9]{9}", value):
+        raise AndroidDeployError("device_log_clock_unavailable")
+    seconds, nanos = value.split(".")
+    return int(seconds) * 1_000_000_000 + int(nanos)
+
+
+@dataclass(frozen=True)
+class AndroidLogClock:
+    """One device realtime sample bracketed by the host's monotonic clock."""
+
+    nanoseconds: int
+    host_before: int
+    host_after: int
+
+    @classmethod
+    def read(cls, device: AdmittedAdbDevice) -> AndroidLogClock:
+        before = time.monotonic_ns()
+        sampled = device.run("shell", "toybox", "date", "+%s.%N")
+        return cls(log_epoch_nanoseconds(sampled), before, time.monotonic_ns())
+
+    def logcat_since(self) -> str:
+        """Format the verified device time as an epoch-valued logcat cutoff."""
+        seconds, nanos = divmod(self.nanoseconds, 1_000_000_000)
+        return f"{seconds}.{nanos:09d}"
+
+    def require_continuity(self, initial: AndroidLogClock) -> None:
+        elapsed = self.nanoseconds - initial.nanoseconds
+        lower = max(0, self.host_before - initial.host_after)
+        upper = self.host_after - initial.host_before
+        if elapsed <= 0 or not lower <= elapsed <= upper:
+            raise AndroidDeployError("device_log_clock_changed")
+
+
+@dataclass(frozen=True)
+class AndroidDiagnosticWindow:
+    """Keep the clock fence and the minimum accepted diagnostic timestamp distinct."""
+
+    start: AndroidLogClock
+    evidence_after: int
+
+
+@dataclass(frozen=True)
+class DeployedProcess:
+    pid: int
+    uid: int
+    start_ticks: int
+
+
+def openxr_log_evidence(message: str) -> dict:
+    match = OPENXR_LINE.fullmatch(message)
+    if match is None:
+        raise AndroidDeployError("openxr_diagnostic_invalid")
+    abi, stage, result, major, minor, patch, *views = match.groups()
+    result, major, minor, patch = map(int, (result, major, minor, patch))
+    if not -2**31 <= result < 2**31 or major >= 2**16 or minor >= 2**16 or patch >= 2**32:
+        raise AndroidDeployError("openxr_diagnostic_invalid")
+    evidence = {"abi": abi, "stage": stage, "result": result}
+    if stage == "discovered":
+        if result == 0 and major:
+            evidence["runtimeVersion"] = {"major": major, "minor": minor, "patch": patch}
+            if views[0] is not None:
+                dimensions = tuple(map(int, views))
+                if any(value >= 2**32 for value in dimensions):
+                    raise AndroidDeployError("openxr_diagnostic_invalid")
+                evidence["primaryStereoRecommendedViewExtents"] = [
+                    {"width": width, "height": height} for width, height in zip(dimensions[::2], dimensions[1::2])]
+            return evidence
+    elif result != 0 and not (major or minor or patch) and views[0] is None:
+        return evidence
+    raise AndroidDeployError("openxr_diagnostic_invalid")
+
+
+def expected_openxr_runtime_version(value: str) -> dict[str, int]:
+    match = re.fullmatch(r"([1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,9})", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("Expected a numeric OpenXR runtime version, such as 1.1.63.")
+    major, minor, patch = map(int, match.groups())
+    if major >= 2**16 or minor >= 2**16 or patch >= 2**32:
+        raise argparse.ArgumentTypeError("Expected a version that fits the OpenXR version fields.")
+    return {"major": major, "minor": minor, "patch": patch}
+
+
+def qualification_uid_log_entries(log: str, expected_uid: int, after: int,
+                                  through: int) -> Iterator[tuple[int, str, str, int, str]]:
+    """Read log fields for one installed UID inside the verified device-clock interval."""
+    user, app = divmod(expected_uid, 100_000)
+    accepted_uids = {str(expected_uid)}
+    if app >= 10_000:
+        accepted_uids.add(f"u{user}_a{app - 10_000}")
+    for line in log.splitlines():
+        header = LOG_ENTRY_TIME.fullmatch(line)
+        if not header:
+            continue
+        stamp, priority, tag, uid, pid, message = header.groups()
+        if uid not in accepted_uids:
+            continue
+        logged = log_epoch_nanoseconds(stamp)
+        if after < logged <= through:
+            yield logged, priority, tag, int(pid), message
+
+
+def process_log_entries(log: str, process: DeployedProcess, after: int, through: int) -> Iterator[tuple[int, str, str, str]]:
+    """Yield only entries from the exact UID, PID and admitted time interval."""
+    for logged, priority, tag, pid, message in qualification_uid_log_entries(log, process.uid, after, through):
+        if pid == process.pid:
+            yield logged, priority, tag, message
+
+
+def platform_state(category: str, state: re.Match) -> dict | None:
+    """Project a bounded platform observation with only available measurements."""
+    revision = int(state["revision"])
+    if not 0 < revision < 2**63:
+        return None
+    value = {"revision": revision, "state": state["state"]}
+    if category == "refresh":
+        rate = int(state["milliHz"])
+        if rate >= 2**31 or (rate > 0) != (value["state"] == "observed"):
+            return None
+        if rate:
+            value["milliHz"] = rate
+    elif category == "battery":
+        percent = int(state["percent"])
+        measured = value["state"] in ("charging", "discharging", "not-charging", "full")
+        if percent > 100 or (percent >= 0) != measured:
+            return None
+        if measured:
+            value["percent"] = percent
+    elif category == "pacing" and state["intervalMs"] is not None:
+        interval, attempts = int(state["intervalMs"]), int(state["attempts"])
+        if interval >= 2**31 or attempts >= 2**64:
+            return None
+        value.update(intervalMs=interval, attempts=attempts)
+    return value
+
+
+class AndroidPressureTimeline:
+    """Retains bounded, redacted transitions across overlapping logcat windows."""
+
+    def __init__(self, after: int):
+        self.after = after
+        self.through = after
+        self.transitions = {}
+        self.retained_bytes = 0
+        self.truncated = False
+
+    def record(self, category: str, logged: int, fields: dict) -> None:
+        # Lifecycle facts can change without a new committed lifecycle revision.
+        identity = (category, fields["revision"]) if "revision" in fields else (category, logged, tuple(fields.items()))
+        transition = {"category": category, "elapsedNs": logged - self.after, **fields}
+        if identity in self.transitions:
+            self.truncated |= self.transitions[identity] != transition
+            return
+        size = len(canonical_json(transition)) + 1
+        if len(self.transitions) == DEPLOY_TRANSITION_LIMIT or self.retained_bytes + size > DEPLOY_TRANSITION_BYTES:
+            self.truncated = True
+            return
+        self.transitions[identity] = transition
+        self.retained_bytes += size
+
+    def finish_poll(self, through: int, admitted_lines: int, first: int | None) -> None:
+        if admitted_lines >= DEPLOY_LOG_TAIL_LINES and first is not None and first > self.through:
+            self.truncated = True
+        self.through = through
+
+    def report(self, duration: int, complete: bool) -> dict:
+        return {"durationSeconds": duration, "complete": complete, "truncated": self.truncated,
+                "transitions": sorted(self.transitions.values(), key=lambda value: value["elapsedNs"])}
+
+
+def record_platform_transition(evidence: dict, message: str, logged: int, categories: tuple[str, ...],
+                               timeline: AndroidPressureTimeline | None) -> None:
+    for category, pattern in PLATFORM_STATE_LINES.items():
+        if category not in categories or (state := pattern.fullmatch(message)) is None:
+            continue
+        value = platform_state(category, state)
+        if value is None:
+            return
+        if timeline is not None:
+            timeline.record(category, logged, value)
+        if value["revision"] > evidence.get(category, {}).get("revision", 0):
+            evidence[category] = value
+        return
+
+
+def record_render_evidence(evidence: dict, latest: dict, message: str, logged: int, categories: tuple[str, ...],
+                           timeline: AndroidPressureTimeline | None) -> None:
+    for category, pattern in (("lifecycle", STATE_LINE), ("renderer", FRAME_LINE)):
+        if category not in categories or (match := pattern.fullmatch(message)) is None:
+            continue
+        fields = {name: (int(value) if value.isdecimal() else value) for name, value in match.groupdict().items()}
+        if any(isinstance(value, int) and value >= 2**64 for value in fields.values()):
+            return
+        if timeline is not None and category == "lifecycle":
+            timeline.record(category, logged, fields)
+        if logged >= latest.get(category, 0):
+            evidence[category] = fields
+            latest[category] = logged
+        return
+
+
+def package_log_evidence(log: str, process: DeployedProcess, after: int, through: int, categories: tuple[str, ...],
+                         timeline: AndroidPressureTimeline | None = None) -> dict:
+    """Project named telemetry only from the exact UID, PID and admitted time interval."""
+    evidence = {"crashObserved": False}
+    latest = {}
+    first = None
+    admitted_lines = 0
+    for logged, priority, tag, message in process_log_entries(log, process, after, through):
+        if timeline is not None:
+            first = logged if first is None else min(first, logged)
+            admitted_lines += 1
+        if tag == "AndroidRuntime":
+            evidence["crashObserved"] |= priority in ("E", "F") and message.startswith("FATAL EXCEPTION:")
+            continue
+        if tag != "HoroPackageQualification" or priority != "I":
+            continue
+        if "entry" in categories and message == DEPLOY_ENTRY_MARKER:
+            evidence["entry"] = {"input": "accepted"}
+            continue
+        if "openxr" in categories and message.startswith("host-openxr "):
+            if "openxr" in evidence:
+                raise AndroidDeployError("openxr_diagnostic_ambiguous")
+            evidence["openxr"] = openxr_log_evidence(message)
+            continue
+        record_platform_transition(evidence, message, logged, categories, timeline)
+        record_render_evidence(evidence, latest, message, logged, categories, timeline)
+    if timeline is not None:
+        timeline.finish_poll(through, admitted_lines, first)
+    return evidence
+
+
+def deployed_uid(device: AdmittedAdbDevice, application: str, user: str) -> int:
+    inventory = device.run("shell", "cmd", "package", "list", "packages", "--user", user, "-U", application)
+    matches = re.findall(r"^package:" + re.escape(application) + r" uid:([0-9]{1,10})$", inventory, re.MULTILINE)
+    if len(matches) != 1:
+        raise AndroidDeployError("installed_identity_unverifiable")
+    return deploy_number(matches[0], 2**32 - 1, "installed_identity_unverifiable")
+
+
+def process_start_ticks(device: AdmittedAdbDevice, pid: int) -> int:
+    """Read Linux stat field 22 after separating the parenthesized process name."""
+    observed = device.run("shell", "toybox", "cat", f"/proc/{pid}/stat")
+    prefix, _, remainder = observed.rpartition(") ")
+    fields = remainder.split()
+    if not prefix.startswith(f"{pid} (") or len(fields) <= 19:
+        raise AndroidDeployError("application_process_unavailable")
+    return deploy_number(fields[19], 2**64 - 1, "application_process_unavailable")
+
+
+def require_process_uid(device: AdmittedAdbDevice, pid: int, uid: int) -> None:
+    """Require the live owner's UID without retaining the command output."""
+    identity = device.run("shell", "toybox", "ps", "-p", str(pid), "-o", "UID")
+    matched = re.fullmatch(r"UID\n\s*([0-9]{1,10})", identity)
+    if not matched:
+        raise AndroidDeployError("application_process_unavailable")
+    if uid != int(matched.group(1)):
+        raise AndroidDeployError("application_process_identity_mismatch")
+
+
+def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> DeployedProcess:
+    """Capture the exact live process incarnation for one already verified package user."""
+    pid = device.process_id(application)
+    if not pid:
+        raise AndroidDeployError("application_process_unavailable")
+    started = process_start_ticks(device, pid)
+    require_process_uid(device, pid, uid)
+    if process_start_ticks(device, pid) != started:
+        raise AndroidDeployError("application_process_changed")
+    return DeployedProcess(pid, uid, started)
+
+
+def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProcess, start: AndroidLogClock,
+                              *, cold_openxr: bool = False) -> tuple[str, int]:
+    """Read bounded logcat output and validate the device clock interval."""
+    cutoff = start.logcat_since() if cold_openxr else str(DEPLOY_LOG_TAIL_LINES)
+    raw = device.run("logcat", f"--pid={process.pid}", "-v", "time,epoch,nsec,uid", "-t", cutoff, "-s",
+                     "HoroPackageQualification:I", "AndroidRuntime:E")
+    end = AndroidLogClock.read(device)
+    end.require_continuity(start)
+    return raw, end.nanoseconds
+
+
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, window: AndroidDiagnosticWindow,
+                       categories: tuple[str, ...], timeline: AndroidPressureTimeline | None = None) -> dict:
+    """Collect bounded markers from the exact process captured by this launch."""
+    raw, through = read_deployed_process_log(device, process, window.start, cold_openxr="openxr" in categories)
+    facts = package_log_evidence(raw, process, window.evidence_after, through, categories, timeline)
+    device.require_identity()
+    if facts["crashObserved"] and device.process_id(application) is None:
+        return facts
+    if deployed_process(device, application, process.uid) != process:
+        raise AndroidDeployError("application_process_changed")
+    return facts
+
+
+def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess,
+                             window: AndroidDiagnosticWindow, profile: dict, observe_seconds: int = 0) -> tuple[dict, bool]:
+    """Wait for actual evidence from the selected profile on the verified ADB transport and process."""
+    openxr = "openxrProfile" in profile
+    if openxr:
+        required = ("openxr",)
+    elif profile["renderer"] == "none":
+        required = ("entry",)
+    else:
+        required = ("lifecycle", "renderer")
+    categories = (*required, *PLATFORM_STATE_LINES) if profile["renderer"] == "vulkan-android" else required
+    timeline = AndroidPressureTimeline(window.evidence_after) if observe_seconds else None
+    end = time.monotonic() + observe_seconds if timeline is not None else device.deadline
+    facts = {"crashObserved": False}
+    applicable = False
+    while time.monotonic() < device.deadline:
+        observed = deploy_diagnostics(device, application, process, window, categories, timeline)
+        for category in PLATFORM_STATE_LINES:
+            if (state := observed.get(category)) and state["revision"] <= facts.get(category, {}).get("revision", 0):
+                observed.pop(category)
+        facts.update(observed)
+        applicable = all(key in facts for key in required)
+        ready = applicable if timeline is None else time.monotonic() >= end
+        if facts["crashObserved"] or ready:
+            break
+        time.sleep(min(0.5 if timeline is not None else 0.1, max(0, min(end, device.deadline) - time.monotonic())))
+    if timeline is not None:
+        complete = time.monotonic() >= end and not facts["crashObserved"]
+        facts["observationWindow"] = timeline.report(observe_seconds, complete)
+        return facts, applicable and complete and not timeline.truncated
+    if openxr and not applicable and not facts["crashObserved"]:
+        raise AndroidDeployError("openxr_diagnostic_timeout")
+    return facts, applicable
+
+
+@dataclass(frozen=True)
+class AndroidLaunchRecovery:
+    """Device observations needed to attribute an interrupted launch."""
+
+    uid: int
+    started: AndroidLogClock
+    nonce: str
+    deadline_ms: int | None
+
+
+@dataclass(frozen=True)
+class AndroidLaunchReceipt:
+    process: DeployedProcess
+    deadline_timestamp: int | None
+
+
+@dataclass
+class AndroidPackageLaunch:
+    """Tracks the issued launch and its attributable process for rollback."""
+
+    device: AdmittedAdbDevice
+    application: str
+    user: str
+    digest: str
+    openxr_diagnostic: bool = False
+    device_boot_time: int | None = None
+    process: DeployedProcess | None = None
+    attempted: bool = False
+    recovery: AndroidLaunchRecovery | None = None
+    retired_crash: bool = False
+
+    def start(self) -> tuple[DeployedProcess, AndroidDiagnosticWindow]:
+        uid = deployed_uid(self.device, self.application, self.user)
+        if self.device.process_id(self.application) is not None:
+            raise AndroidDeployError("application_already_running")
+        component = f"{self.application}/{self.application}.{PACKAGE_ACTIVITY}"
+        start = AndroidLogClock.read(self.device)
+        nonce = secrets.token_hex(16)
+        launch_options = ["--es", DEPLOY_LAUNCH_EXTRA, nonce]
+        self.device.require_identity()
+        require_deploy_user(self.device, self.user)
+        require_deploy_boot(self.device, self.device_boot_time)
+        deadline_ms = None
+        if self.openxr_diagnostic:
+            remaining = math.ceil((self.device.deadline - time.monotonic()) * 1000)
+            if remaining <= 0:
+                raise AndroidDeployError("deadline_exceeded")
+            deadline_ms = min(remaining, DEPLOY_MAX_SECONDS * 1000)
+            launch_options.extend(("--ei", DEPLOY_DEADLINE_EXTRA, str(deadline_ms)))
+        self.recovery = AndroidLaunchRecovery(uid, start, nonce, deadline_ms)
+        self.attempted = True
+        launched = self.device.run("shell", "am", "start", "-W", "--user", self.user, "-n", component, *launch_options)
+        allowed_components = {component, f"{self.application}/.{PACKAGE_ACTIVITY}"}
+        states = re.findall(r"^LaunchState: ([A-Z]+)$", launched, re.MULTILINE)
+        activities = re.findall(r"^Activity: (\S+)$", launched, re.MULTILINE)
+        exact_activity = len(activities) == 1 and activities[0] in allowed_components
+        not_started = "Warning: Activity not started" in launched
+        if (re.findall(r"^Status: ([a-z]+)$", launched, re.MULTILINE) != ["ok"]
+                or not exact_activity or states not in ([], ["COLD"]) or not_started):
+            # Allow cleanup only when the device still reported this exact cold launch.
+            # Rollback must prove the private receipt and current process before stopping it.
+            if not exact_activity or states != ["COLD"] or not_started:
+                self.recovery = None
+            raise AndroidDeployError("launch_unconfirmed")
+        try:
+            receipt = self.recover_process(self.device, uid)
+            self.process = receipt.process
+        except AndroidDeployError as error:
+            if (self.openxr_diagnostic and states == ["COLD"] and error.code == "application_process_unavailable"
+                    and self.device.process_id(self.application) is None and self.confirm_retired_crash()):
+                self.retired_crash = True
+                raise AndroidDeployError("application_crashed") from None
+            raise
+        # Keep the exact process for cleanup even if an old APK did not arm its Activity deadline.
+        evidence_after = start.nanoseconds
+        if self.openxr_diagnostic:
+            if receipt.deadline_timestamp is None:
+                raise AndroidDeployError("openxr_launch_deadline_unconfirmed")
+            evidence_after = receipt.deadline_timestamp
+        return self.process, AndroidDiagnosticWindow(start, evidence_after)
+
+    def recover_process(self, device: AdmittedAdbDevice, uid: int) -> AndroidLaunchReceipt:
+        """Prove that this operation started a first Activity in the live package process."""
+        recovery = self.recovery
+        if recovery is None or recovery.uid != uid:
+            raise AndroidDeployError("launch_process_unattributed")
+        process = deployed_process(device, self.application, uid)
+        log, through = read_deployed_process_log(device, process, recovery.started, cold_openxr=self.openxr_diagnostic)
+        marker = f"{DEPLOY_LAUNCH_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
+        deadline_marker = (f"{DEPLOY_DEADLINE_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
+                           f" milliseconds={recovery.deadline_ms}")
+        timestamps = []
+        deadline_timestamps = []
+        for logged, priority, tag, message in process_log_entries(log, process, recovery.started.nanoseconds, through):
+            if priority != "I" or tag != "HoroPackageQualification":
+                continue
+            if message == marker:
+                timestamps.append(logged)
+            elif recovery.deadline_ms is not None and message == deadline_marker:
+                deadline_timestamps.append(logged)
+        if len(timestamps) != 1:
+            raise AndroidDeployError("launch_process_unattributed")
+        if deployed_process(device, self.application, uid) != process:
+            raise AndroidDeployError("application_process_changed")
+        confirmed_deadline = (deadline_timestamps[0]
+                              if len(deadline_timestamps) == 1 and deadline_timestamps[0] > timestamps[0] else None)
+        return AndroidLaunchReceipt(process, confirmed_deadline)
+
+    def confirm_retired_crash(self) -> bool:
+        """Read exact app receipts for a cold OpenXR Activity that exited before or during capture."""
+        recovery = self.recovery
+        if recovery is None:
+            return False
+        raw = self.device.run("logcat", "-v", "time,epoch,nsec,uid", "-t", recovery.started.logcat_since(), "-s",
+                              "HoroPackageQualification:I")
+        through = AndroidLogClock.read(self.device)
+        through.require_continuity(recovery.started)
+        markers = {
+            name: re.compile(re.escape(prefix + recovery.nonce) + r" startTicks=([1-9][0-9]{0,19})")
+            for name, prefix in (("launch", DEPLOY_LAUNCH_MARKER), ("crash", DEPLOY_LAUNCH_CRASH_MARKER))
+        }
+        receipts = {}
+        for logged, priority, tag, pid, message in qualification_uid_log_entries(
+                raw, recovery.uid, recovery.started.nanoseconds, through.nanoseconds):
+            if priority != "I" or tag != "HoroPackageQualification" or not 0 < pid < 2**31:
+                continue
+            for name, pattern in markers.items():
+                if (match := pattern.fullmatch(message)) and int(match[1]) < 2**64:
+                    if name in receipts:
+                        return False
+                    receipts[name] = (logged, pid, int(match[1]))
+        launch, crash = receipts.get("launch"), receipts.get("crash")
+        if not (launch and crash and launch[0] < crash[0] and launch[1:] == crash[1:]
+                and self.device.process_id(self.application) is None):
+            return False
+        if self.process is not None and launch[1:] != (self.process.pid, self.process.start_ticks):
+            return False
+        self.require_rollback_target(self.device)
+        return True
+
+    def require_rollback_target(self, device: AdmittedAdbDevice) -> None:
+        """Fence retirement against ADB transport replacement and, for XR, reboot."""
+        device.require_identity()
+        require_deploy_boot(device, self.device_boot_time)
+
+    def confirm_capture_target(self, build_digest: str | None) -> None:
+        """Confirm that captured diagnostics still refer to the selected installation and device."""
+        deploy_verified_install(self.device, self.application, self.user, self.digest)
+        if build_digest is not None and deploy_device_build_digest(self.device) != build_digest:
+            raise AndroidDeployError("device_build_changed")
+        self.device.require_identity()
+        require_deploy_user(self.device, self.user)
+        require_deploy_boot(self.device, self.device_boot_time)
+
+    def process_ready_to_stop(self, device: AdmittedAdbDevice, process: DeployedProcess) -> bool:
+        """Confirm the exact live process or prove it exited on the admitted device."""
+        current_pid = device.process_id(self.application)
+        if current_pid == process.pid:
+            try:
+                require_process_uid(device, current_pid, process.uid)
+                start_ticks = process_start_ticks(device, current_pid)
+            except AndroidDeployError as error:
+                if error.code not in {"device_command_failed", "application_process_unavailable"}:
+                    raise
+                current_pid = device.process_id(self.application)
+                if current_pid == process.pid:
+                    raise
+            else:
+                if start_ticks == process.start_ticks:
+                    return True
+        if current_pid is not None:
+            raise AndroidDeployError("application_process_changed")
+        self.require_rollback_target(device)
+        return False
+
+    def rollback(self) -> dict:
+        """Use a separate deadline to stop only a provably attributed package process."""
+        if self.process is None and self.recovery is None:
+            return {"status": "unconfirmed", "reason": "launch_process_unattributed"}
+        device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
+                                   time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
+        try:
+            self.require_rollback_target(device)
+            if self.retired_crash:
+                return {"status": "already_exited"}
+            if device.process_id(self.application) is None:
+                if self.process is None:
+                    raise AndroidDeployError("launch_process_unattributed")
+                self.require_rollback_target(device)
+                return {"status": "already_exited"}
+            deploy_verified_install(device, self.application, self.user, self.digest)
+            uid = deployed_uid(device, self.application, self.user)
+            process = self.process
+            if process is None:
+                process = self.recover_process(device, uid).process
+            elif uid != process.uid or deployed_process(device, self.application, uid) != process:
+                raise AndroidDeployError("application_process_changed")
+            self.require_rollback_target(device)
+            if not self.process_ready_to_stop(device, process):
+                return {"status": "already_exited"}
+            device.run("shell", "am", "force-stop", "--user", self.user, self.application)
+            if device.process_id(self.application) is not None:
+                raise AndroidDeployError("application_stop_unconfirmed")
+            self.require_rollback_target(device)
+            return {"status": "stopped"}
+        except AndroidDeployError as error:
+            return {"status": "unconfirmed", "reason": error.code}
+        except (KeyboardInterrupt, OSError):
+            return {"status": "unconfirmed", "reason": "cleanup_interrupted"}
+
+
+def android_deploy_host() -> str:
+    """Return the closed host OS/architecture identity used in deployment evidence."""
+    system, machine = host_platform.system(), host_platform.machine().lower()
+    return next((name for name, (os_name, machines) in HOSTS.items()
+                 if os_name == system and machine in {value.lower() for value in machines}), "unknown")
+
+
+def validate_deploy_bundle(path: Path) -> None:
+    """Require an absent absolute ZIP output under a stable existing directory."""
+    try:
+        valid = (path.is_absolute() and path.suffix.lower() == ".zip" and not os.path.lexists(path)
+                 and path.parent.is_dir() and path.parent.resolve(strict=True) == path.parent)
+    except (OSError, RuntimeError, ValueError):
+        raise AndroidDeployError("diagnostic_bundle_destination_invalid") from None
+    if not valid:
+        raise AndroidDeployError("diagnostic_bundle_destination_invalid")
+
+
+def write_deploy_bundle(path: Path, report: dict) -> None:
+    """Publish a complete report and digest manifest atomically without replacing anything."""
+    data = canonical_json(report)
+    if len(data) > DEPLOY_REPORT_BYTES:
+        raise AndroidDeployError("diagnostic_bundle_report_limit")
+    manifest = canonical_json({"schemaVersion": 1, "metadata": {"kind": "android-deployment"}, "missingOptional": [],
+                               "files": [{"path": DEPLOY_REPORT_ENTRY, "bytes": len(data),
+                                          "sha256": hashlib.sha256(data).hexdigest()}]})
+    try:
+        with tempfile.TemporaryDirectory(prefix=".horo-android-diagnostics-", dir=path.parent) as scratch:
+            staged = Path(scratch) / "bundle.zip"
+            with staged.open("xb") as output:
+                with zipfile.ZipFile(output, "w") as bundle:
+                    bundle.writestr(zipfile.ZipInfo("manifest.json"), manifest)
+                    bundle.writestr(zipfile.ZipInfo(DEPLOY_REPORT_ENTRY), data)
+                output.flush()
+                os.fsync(output.fileno())
+            os.link(staged, path)
+    except OSError:
+        raise AndroidDeployError("diagnostic_bundle_write_failed") from None
+
+
+def check_deployment_apk(artifact: dict, expected_sha256: str | None) -> None:
+    """Compare the verified artifact to an independently selected APK before device access."""
+    if expected_sha256 is None:
+        return
+    artifact["expectedApkSha256"] = expected_sha256
+    if artifact["apkSha256"] != expected_sha256:
+        raise AndroidDeployError("deployment_apk_digest_mismatch")
+
+
+def select_openxr_device_images(artifact: VerifiedAndroidArtifact, abi: str) -> dict[str, str]:
+    """Report the two verified native images for the selected device ABI."""
+    selected = next((images for images in artifact.openxr_images if images.abi == abi), None)
+    if selected is None:
+        raise AndroidDeployError("openxr_device_images_unavailable")
+    return selected.report()
+
+
+def check_openxr_discovery(runtime: dict, observation: dict, abi: str) -> None:
+    """Admit the exact cold-process runtime observation without claiming a device smoke result."""
+    if observation["abi"] != abi:
+        raise AndroidDeployError("openxr_diagnostic_abi_mismatch")
+    if observation["stage"] != "discovered":
+        runtime["status"] = "cold_discovery_failed"
+        raise AndroidDeployError("openxr_cold_discovery_failed")
+    if "expectedVersion" in runtime and observation["runtimeVersion"] != runtime["expectedVersion"]:
+        runtime["status"] = "version_mismatch"
+        raise AndroidDeployError("openxr_runtime_version_mismatch")
+
+
+def check_deploy_capture(observed: dict, applicable: bool, observe_seconds: int) -> None:
+    """Require complete profile evidence or return the reason it cannot qualify."""
+    if observed["crashObserved"]:
+        raise AndroidDeployError("application_crashed")
+    if applicable:
+        return
+    window = observed.get("observationWindow", {})
+    if window.get("truncated"):
+        raise AndroidDeployError("observation_window_truncated")
+    if observe_seconds and not window["complete"]:
+        raise AndroidDeployError("observation_window_incomplete")
+    raise AndroidDeployError("application_evidence_unavailable")
+
+
+def android_deploy_main(argv=None) -> int:
+    """Install and launch one declared signed Android artifact, then emit a redacted JSON result."""
+    parser = argparse.ArgumentParser(description=android_deploy_main.__doc__)
+    parser.add_argument("--artifact", required=True, type=Path, help="Completed Android package output directory.")
+    parser.add_argument("--profile", required=True, help="Exact profile used to assemble the artifact.")
+    parser.add_argument("--sdk", required=True, type=Path, help="Explicit Android SDK root.")
+    parser.add_argument("--device", required=True, help="Explicit connected ADB serial; no default selection.")
+    parser.add_argument("--host", choices=PLATFORMS, help="Expected deployment host OS and architecture.")
+    parser.add_argument("--connection", choices=ADB_CONNECTION_MODES, help="Expected connection mode for the selected serial.")
+    parser.add_argument("--runtime", choices=("none", "openxr"), default="none",
+                        help="Explicit runtime intent. OpenXR requires host and connection selections.")
+    parser.add_argument("--expect-runtime-version", type=expected_openxr_runtime_version,
+                        help="Require this exact OpenXR runtime version from the cold process.")
+    parser.add_argument("--expect-apk-sha256", help="Require the exact verified APK SHA-256 before contacting the device.")
+    parser.add_argument("--expect-device-build-sha256", help="Require the SHA-256 of the selected Android build fingerprint for OpenXR.")
+    parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help=f"Total host command deadline in seconds (1-{DEPLOY_MAX_SECONDS}).")
+    parser.add_argument("--observe-seconds", type=int, default=None,
+                        help=f"Collect Vulkan pressure transitions for 1-{DEPLOY_OBSERVATION_MAX_SECONDS} seconds after launch.")
+    parser.add_argument("--diagnostic-bundle", type=Path, help="New absolute ZIP path for redacted deployment evidence.")
+    arguments = parser.parse_args(argv)
+    if (not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device)
+            or not 1 <= arguments.timeout <= DEPLOY_MAX_SECONDS):
+        parser.error(f"Supply a valid explicit ADB serial and a deadline of 1-{DEPLOY_MAX_SECONDS} seconds.")
+    if arguments.expect_apk_sha256 is not None and not re.fullmatch(r"[a-f0-9]{64}", arguments.expect_apk_sha256):
+        parser.error("--expect-apk-sha256 requires 64 lowercase hexadecimal digits.")
+    if arguments.expect_runtime_version is not None and arguments.runtime != "openxr":
+        parser.error("--expect-runtime-version requires --runtime openxr.")
+    if arguments.observe_seconds is not None and not 1 <= arguments.observe_seconds <= DEPLOY_OBSERVATION_MAX_SECONDS:
+        parser.error(f"--observe-seconds must be from 1 to {DEPLOY_OBSERVATION_MAX_SECONDS}.")
+    if arguments.expect_device_build_sha256 is not None:
+        if not re.fullmatch(r"[a-f0-9]{64}", arguments.expect_device_build_sha256):
+            parser.error("--expect-device-build-sha256 requires 64 lowercase hexadecimal digits.")
+        if arguments.runtime != "openxr":
+            parser.error("--expect-device-build-sha256 requires --runtime openxr.")
+    deadline = time.monotonic() + arguments.timeout
+    host = android_deploy_host()
+    runtime = {"requested": arguments.runtime, "status": "not_requested" if arguments.runtime == "none" else "not_observed"}
+    if arguments.expect_runtime_version is not None:
+        runtime["expectedVersion"] = arguments.expect_runtime_version
+    connection = {"requested": arguments.connection, "observed": "not_observed"}
+    report = {"schema": 1, "status": "partial", "stage": "selection",
+              "qualification": {"host": {"requested": arguments.host, "observed": host},
+                                "connection": connection, "runtime": runtime, "physicalXrQualification": "not_run"}}
+    exit_code = 1
+    launch = None
+    bundle_admitted = False
+    try:
+        if arguments.diagnostic_bundle is not None:
+            validate_deploy_bundle(arguments.diagnostic_bundle)
+            bundle_admitted = True
+        if arguments.host and arguments.host != host:
+            raise AndroidDeployError("deployment_host_mismatch")
+        if arguments.runtime == "openxr":
+            if not arguments.host or not arguments.connection:
+                raise AndroidDeployError("xr_target_selection_incomplete")
+            if arguments.profile not in OPENXR_DEVELOPMENT_PROFILES:
+                report["stage"] = "artifact"
+                android_profile(arguments.profile)
+                report["stage"] = "runtime"
+                report["qualification"]["profile"] = arguments.profile
+                runtime["status"] = "unsupported"
+                raise AndroidDeployError("android_openxr_route_unavailable")
+        elif arguments.profile in OPENXR_DEVELOPMENT_PROFILES:
+            raise AndroidDeployError("explicit_openxr_intent_required")
+        report["stage"] = "artifact"
+        with tempfile.TemporaryDirectory(prefix="horo-android-deploy-") as directory:
+            artifact = deploy_artifact(
+                arguments.artifact, Path(directory), arguments.sdk, arguments.profile, arguments.java, deadline)
+            profile = artifact.profile
+            if arguments.observe_seconds and profile["renderer"] != "vulkan-android":
+                raise AndroidDeployError("observation_profile_unsupported")
+            application = profile["applicationId"]
+            report["artifact"] = {"profile": arguments.profile, "applicationId": application,
+                                  "apkSha256": artifact.apk_sha256, "provenanceSha256": artifact.provenance_sha256,
+                                  "sourceRevision": artifact.source_revision, "declaredRenderer": profile["renderer"],
+                                  "abis": sorted(artifact.abis)}
+            check_deployment_apk(report["artifact"], arguments.expect_apk_sha256)
+            openxr = "openxrProfile" in profile
+            if openxr:
+                runtime["selection"] = "system-default"
+                report["artifact"]["openxr"] = profile["openxrProfile"]
+                report["qualification"]["profile"] = arguments.profile
+            report["stage"] = "device"
+            device = admit_adb_device(deploy_tool(arguments.sdk / "platform-tools", "adb"), arguments.device, deadline)
+            connection["observed"] = device.connection
+            if arguments.connection and device.connection == "unknown":
+                raise AndroidDeployError("device_connection_unverifiable")
+            if arguments.connection and arguments.connection != device.connection:
+                raise AndroidDeployError("device_connection_mismatch")
+            user, api, abi = deploy_device_identity(device, profile["minimumApi"], artifact.abis)
+            report["device"] = {"androidApi": api, "abi": abi}
+            device_boot_time = None
+            device_build = None
+            if openxr:
+                device_boot_time = deploy_device_boot_time(device)
+                device_build = deploy_device_build_digest(device)
+                report["device"]["buildSha256"] = device_build
+                expected_build = arguments.expect_device_build_sha256
+                if expected_build is not None:
+                    report["device"]["expectedBuildSha256"] = expected_build
+                    if expected_build != device_build:
+                        raise AndroidDeployError("device_build_mismatch")
+                report["artifact"]["openxrImages"] = select_openxr_device_images(artifact, abi)
+            report["stage"] = "install"
+            if device.process_id(application) is not None:
+                raise AndroidDeployError("application_already_running")
+            device.require_identity()
+            require_deploy_user(device, user)
+            require_deploy_boot(device, device_boot_time)
+            installed = device.run("install", "-r", "--user", user, str(artifact.path)).splitlines()
+            if installed not in (["Success"], ["Performing Streamed Install", "Success"], ["Performing Push Install", "Success"]):
+                raise AndroidDeployError("install_unconfirmed")
+            report["stage"] = "verify_install"
+            deploy_verified_install(device, application, user, artifact.apk_sha256)
+            report["stage"] = "launch"
+            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256,
+                                          openxr_diagnostic=openxr, device_boot_time=device_boot_time)
+            try:
+                process, window = launch.start()
+                report["stage"] = "diagnostics"
+                observe_seconds = arguments.observe_seconds or 0
+                observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, observe_seconds)
+            except AndroidDeployError as error:
+                if openxr and report["stage"] == "diagnostics" and error.code == "application_process_unavailable":
+                    launch.retired_crash = launch.confirm_retired_crash()
+                if launch.retired_crash:
+                    launch.confirm_capture_target(device_build)
+                    report["observed"] = {"crashObserved": True}
+                    raise AndroidDeployError("application_crashed") from None
+                raise
+            runtime_candidate = runtime.copy()
+            try:
+                check_deploy_capture(observed, applicable, observe_seconds)
+                if openxr:
+                    check_openxr_discovery(runtime_candidate, observed["openxr"], abi)
+            except AndroidDeployError:
+                if openxr:
+                    launch.confirm_capture_target(device_build)
+                    runtime.update(runtime_candidate)
+                report["observed"] = observed
+                raise
+            if openxr:
+                report["cleanup"] = launch.rollback()
+                if report["cleanup"]["status"] not in ("stopped", "already_exited"):
+                    raise AndroidDeployError("application_stop_unconfirmed")
+            launch.confirm_capture_target(device_build)
+        report["observed"] = observed
+        if openxr:
+            runtime["status"] = "cold_system_discovered"
+        report["status"] = "diagnostic_complete" if openxr else "complete"
+        exit_code = 0
+    except KeyboardInterrupt:
+        report["error"] = "cancelled"
+        exit_code = 130
+    except AndroidDeployError as error:
+        report["error"] = error.code
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
+        report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
+    if exit_code != 0 and launch is not None and launch.attempted and "cleanup" not in report:
+        if report["error"] == "device_transport_changed":
+            report["cleanup"] = {"status": "unconfirmed", "reason": "device_transport_changed"}
+        else:
+            report["cleanup"] = launch.rollback()
+    if bundle_admitted:
+        try:
+            write_deploy_bundle(arguments.diagnostic_bundle, report)
+        except KeyboardInterrupt:
+            report["bundleError"] = "cancelled"
+            exit_code = 130
+        except AndroidDeployError as error:
+            report["bundleError"] = error.code
+            if exit_code == 0:
+                exit_code = 1
+    print(canonical_json(report).decode("utf-8"), end="")
+    return exit_code
 
 
 # Bootstrap
@@ -1636,10 +3085,11 @@ const auto &Factories() {{
 '''
 
 
-def generated_exports(module_id: str, fingerprint: str, revision: int, count: int, node_count: int = 0) -> str:
+def generated_exports(module_id: str, fingerprint: str, revision: int, count: int, node_count: int = 0, sense_count: int = 0) -> str:
     behavior_pointer = "Descriptors().data()" if count else "nullptr"
     factory_pointer = "Factories().data()" if count else "nullptr"
     node_pointer = "DecisionNodes().data()" if node_count else "nullptr"
+    sense_pointer = "PerceptionSenses().data()" if sense_count else "nullptr"
     return f'''
 
 extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GameModuleDescriptor *GetGameModuleDescriptor() noexcept {{
@@ -1670,6 +3120,8 @@ extern "C" HORO_GAME_EXPORT const Horo::Gameplay::GeneratedGameplayDescriptorBun
         .lifecycle = {{.create = &CreateGameModule, .destroy = &DestroyGameModule}},
         .decisionNodes = {node_pointer},
         .decisionNodeCount = {node_count},
+        .perceptionSenses = {sense_pointer},
+        .perceptionSenseCount = {sense_count},
     }};
     return &bundle;
 }}
@@ -1682,10 +3134,12 @@ def generated_source(
     revision: int,
     annotations: list[tuple[str, str, pathlib.Path]],
     nodes: list[tuple[str, str, pathlib.Path]] | None = None,
+    senses: list[tuple[str, str, pathlib.Path]] | None = None,
 ) -> str:
     nodes = nodes or []
-    return (generated_storage(annotations) + generated_node_storage(nodes)
-            + generated_exports(module_id, fingerprint, revision, len(annotations), len(nodes)))
+    senses = senses or []
+    return (generated_storage(annotations) + generated_node_storage(nodes) + generated_sense_storage(senses)
+            + generated_exports(module_id, fingerprint, revision, len(annotations), len(nodes), len(senses)))
 
 
 def generated_node_storage(nodes: list[tuple[str, str, pathlib.Path]]) -> str:
@@ -1707,21 +3161,51 @@ const auto &DecisionNodes() {{
 '''
 
 
-def decision_node_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
-    nodes = [(symbol, identity, source) for source, text, _ in sources
-             for symbol, identity in annotations_in(text, source, "HORO_AI_NODE")]
-    if len(nodes) > 128:
-        raise ValueError("decision node annotation count exceeds the supported limit")
+def native_ai_annotations(sources: list[tuple[pathlib.Path, str, str]], marker: str, kind: str,
+                          maximum: int, minimum: int) -> list[tuple[str, str, pathlib.Path]]:
+    records = [(symbol, identity, source) for source, text, _ in sources
+               for symbol, identity in annotations_in(text, source, marker)]
+    if len(records) > maximum:
+        raise ValueError(f"{kind} annotation count exceeds the supported limit")
     seen_ids: set[int] = set()
     seen_symbols: set[str] = set()
-    for symbol, identity, source in nodes:
-        if not re.fullmatch(r"[1-9][0-9]{0,19}", identity) or int(identity) > 2**64 - 1:
-            raise ValueError(f"invalid decision node identity in {source}")
+    for symbol, identity, source in records:
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", identity) or not minimum <= int(identity) <= 2**64 - 1:
+            raise ValueError(f"invalid {kind} identity in {source}")
         if int(identity) in seen_ids or symbol in seen_symbols:
-            raise ValueError(f"duplicate decision node annotation in {source}")
+            raise ValueError(f"duplicate {kind} annotation in {source}")
         seen_ids.add(int(identity))
         seen_symbols.add(symbol)
-    return sorted(nodes, key=lambda node: (int(node[1]), node[0]))
+    return sorted(records, key=lambda record: (int(record[1]), record[0]))
+
+
+def decision_node_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
+    return native_ai_annotations(sources, "HORO_AI_NODE", "decision node", 128, 1)
+
+
+def perception_sense_annotations(sources: list[tuple[pathlib.Path, str, str]]) -> list[tuple[str, str, pathlib.Path]]:
+    return native_ai_annotations(sources, "HORO_AI_SENSE", "perception sense", 64, 6)
+
+
+def generated_sense_storage(senses: list[tuple[str, str, pathlib.Path]]) -> str:
+    if not senses:
+        return ""
+    declarations = "\n".join(
+        f"Horo::AI::PerceptionSenseRegistration HoroGeneratedPerceptionSense_{symbol}() noexcept;"
+        for symbol, _, _ in senses
+    )
+    records = ",\n        ".join(f"HoroGeneratedPerceptionSense_{symbol}()" for symbol, _, _ in senses)
+    return f'''
+{declarations}
+namespace {{
+const auto &PerceptionSenses() {{
+    static const std::array<Horo::AI::PerceptionSenseRegistration, {len(senses)}> senses{{{{
+        {records}
+    }}}};
+    return senses;
+}}
+}}
+'''
 
 
 def validate_identity(module_id: str, fingerprint: str) -> None:
@@ -1756,8 +3240,9 @@ def generate_bundle(
     annotations.sort(key=lambda annotation: (annotation[1], annotation[0]))
     validate_annotations(annotations)
     nodes = decision_node_annotations(sources)
+    senses = perception_sense_annotations(sources)
     revision = descriptor_revision(module_id, annotations, [record[2] for record in sources])
-    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations, nodes))
+    write_atomic(generated_output, generated_source(module_id, fingerprint, revision, annotations, nodes, senses))
     write_atomic(generated_revision, f"{revision}\n")
 
 
@@ -2519,7 +4004,7 @@ def verify_shader_tool_main(argv=None) -> None:
     print(verify_shader_tool_executable(args.root, args.relative_path, args.sha256))
 
 
-TOOL_COMMANDS = {'verify-shader-tool': verify_shader_tool_main, 'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
+TOOL_COMMANDS = {'verify-shader-tool': verify_shader_tool_main, 'imgui-vulkan-slots': imgui_vulkan_slots_main, 'android': apk_main, 'android-deploy': android_deploy_main, 'extension-bootstrap': bootstrap_main, 'extension-ci': author_main, 'extension': scaffold_main, 'gameplay': gameplay_main, 'migrations': migration_main, 'compatibility': compatibility_main}
 
 
 def main(argv=None) -> int:

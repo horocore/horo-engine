@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <numbers>
 
 namespace Horo::XR {
     namespace {
@@ -50,13 +51,14 @@ namespace Horo::XR {
                 return result.Value();
             }
 
-            XRCapabilitySnapshot Capabilities() const {
+            XRCapabilitySnapshot Capabilities(std::uint32_t viewCount = 2) const {
                 XRCapabilityDescriptor descriptor{
                     .system = {.runtime = Identity<XRRuntimeGeneration>(), .slot = {.index = 1, .generation = 1}},
                     .revision = Identity<XRCapabilityRevision>(),
-                    .limits = {2, 8, 16, 4},
+                    .limits = {viewCount, 8, 16, 4},
                 };
                 descriptor.states.fill(XRCapabilityState::Available);
+                descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Unsupported;
                 const auto result = XRCapabilitySnapshot::Create(descriptor);
                 REQUIRE(result.HasValue());
                 return result.Value();
@@ -82,7 +84,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 15);
+            REQUIRE(descriptors.size() == 28);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -90,9 +92,79 @@ namespace Horo::XR {
             REQUIRE_FALSE(resolved.Value().Enabled());
             REQUIRE(resolved.Value().Profile() == XRFeatureProfile::Projection1_0);
             REQUIRE(resolved.Value().Features().empty());
+            CHECK_FALSE(resolved.Value().AllowsEyeGazePreview());
+            CHECK_FALSE(resolved.Value().AllowsPlaneCapturePreview());
+            CHECK_FALSE(resolved.Value().AllowsSpatialAnchorPreview());
+            CHECK(resolved.Value().WorldCanvasMinimumSpanPixels() == 1);
+            CHECK(resolved.Value().StageBoundaryWarningMeters() == 0.30F);
             const Evidence evidence;
             REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code.Value() ==
                     XRErrors::OperationUnavailable.code.Value());
+        }
+
+        TEST_CASE("XR canvas readability uses the admitted immutable project pixel floor", "[unit][xr][settings][canvas]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.world_canvas.minimum_span_pixels", std::int64_t{40});
+            const auto project = Enabled(request);
+            CHECK(project.WorldCanvasMinimumSpanPixels() == 40);
+            request.invocation.try_emplace(SettingKey{"xr.world_canvas.minimum_span_pixels"}, std::int64_t{80},
+                                           SourceLocation{"cli", 1, 2});
+            const auto overridden = Enabled(request, 2);
+            CHECK(overridden.WorldCanvasMinimumSpanPixels() == 80);
+            CHECK(project.WorldCanvasMinimumSpanPixels() == 40);
+            const Evidence evidence;
+            CHECK(AdmitXRProjectSettings(project, evidence.Admission(2)).HasError());
+            CHECK(AdmitXRProjectSettings(overridden, evidence.Admission(2)).HasValue());
+        }
+
+        TEST_CASE("XR Stage warning margin is immutable and checked", "[unit][xr][settings][comfort]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.stage_boundary.warning_centimeters", std::int64_t{65});
+            const auto first = Enabled(request);
+            CHECK(first.StageBoundaryWarningMeters() == 0.65F);
+            request.invocation.try_emplace(SettingKey{"xr.stage_boundary.warning_centimeters"}, std::int64_t{-1},
+                                           SourceLocation{"cli", 1, 2});
+            CHECK(ResolveXRProjectSettings(Configuration(request)).HasError());
+            CHECK(first.StageBoundaryWarningMeters() == 0.65F);
+        }
+
+        TEST_CASE("XR locomotion comfort is copied from immutable project preference evidence", "[unit][xr][settings][comfort]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.locomotion.reduced_motion", true);
+            Project(request, "xr.locomotion.teleport_when_reduced", true);
+            Project(request, "xr.locomotion.maximum_vignette_percent", std::int64_t{40});
+            Project(request, "xr.locomotion.artificial_speed_cap_centimeters_per_second", std::int64_t{225});
+            Project(request, "xr.locomotion.snap_turn_degrees", std::int64_t{180});
+            const auto accepted = Enabled(request);
+            const auto &comfort = accepted.LocomotionComfort();
+            CHECK(comfort.reducedMotion);
+            CHECK(comfort.teleportWhenReduced);
+            CHECK(comfort.maximumVignetteOpacity == 0.4F);
+            CHECK(comfort.artificialSpeedCapMetersPerSecond == 2.25F);
+            CHECK(comfort.snapTurnAngleRadians == std::numbers::pi_v<float>);
+
+            request.invocation.try_emplace(SettingKey{"xr.locomotion.maximum_vignette_percent"}, std::int64_t{101},
+                                           SourceLocation{"cli", 7, 1});
+            const auto rejected = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(rejected.HasError());
+            REQUIRE_FALSE(rejected.ErrorValue().diagnostics.empty());
+            CHECK(rejected.ErrorValue().diagnostics.front().location.source == "cli");
+            CHECK(comfort.maximumVignetteOpacity == 0.4F);
+        }
+
+        TEST_CASE("XR settings capture a bounded advisory Stage warning margin", "[unit][xr][settings][comfort]") {
+            CHECK(Enabled().StageBoundaryWarningMeters() == 0.30F);
+            for (const auto centimeters : {0, 45}) {
+                ConfigurationResolutionRequest request;
+                Project(request, "xr.stage_boundary.warning_centimeters", static_cast<std::int64_t>(centimeters));
+                CHECK(Enabled(request).StageBoundaryWarningMeters() == static_cast<float>(centimeters) / 100.0F);
+            }
+            ConfigurationResolutionRequest invalid;
+            Project(invalid, "xr.stage_boundary.warning_centimeters", std::int64_t{-1});
+            const auto failed = ResolveXRProjectSettings(Configuration(invalid));
+            REQUIRE(failed.HasError());
+            REQUIRE_FALSE(failed.ErrorValue().diagnostics.empty());
+            CHECK(failed.ErrorValue().diagnostics.front().path == "xr.stage_boundary.warning_centimeters");
         }
 
         TEST_CASE("XR settings preserve Foundation precedence and winning source diagnostics", "[unit][xr][settings]") {
@@ -114,12 +186,15 @@ namespace Horo::XR {
             const std::array invalid{
                 std::pair{"xr.schema_version", std::int64_t{2}},
                 std::pair{"xr.runtime_selection", std::int64_t{-1}},
-                std::pair{"xr.capability_profile", std::int64_t{2}},
+                std::pair{"xr.capability_profile", static_cast<std::int64_t>(XRFeatureProfile::Count)},
                 std::pair{"xr.limits.views", std::int64_t{3}},
                 std::pair{"xr.limits.spaces", std::int64_t{0}},
                 std::pair{"xr.limits.actions", std::int64_t{513}},
                 std::pair{"xr.limits.devices", std::numeric_limits<std::int64_t>::max()},
+                std::pair{"xr.world_canvas.minimum_span_pixels", std::int64_t{0}},
+                std::pair{"xr.world_canvas.minimum_span_pixels", std::int64_t{65'536}},
                 std::pair{"xr.features.depth_composition", std::int64_t{5}},
+                std::pair{"xr.features.hand_tracking", std::int64_t{5}},
             };
             for (const auto &[key, value] : invalid) {
                 ConfigurationResolutionRequest request;
@@ -136,8 +211,62 @@ namespace Horo::XR {
             REQUIRE(ResolveXRProjectSettings(missing.Value()).HasError());
         }
 
+        TEST_CASE("XR spatial plane preview remains outside required product settings", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            const auto baseline = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(baseline.HasValue());
+            CHECK_FALSE(baseline.Value().AllowsPlaneCapturePreview());
+            Project(request, "xr.preview.spatial_planes", true);
+            const auto preview = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(preview.HasValue());
+            CHECK(preview.Value().AllowsPlaneCapturePreview());
+            CHECK_FALSE(preview.Value().AllowsSpatialAnchorPreview());
+            CHECK(preview.Value().Profile() == baseline.Value().Profile());
+            CHECK(preview.Value().Features().size() == baseline.Value().Features().size());
+        }
+
+        TEST_CASE("XR spatial anchors are an independent optional preview", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.preview.spatial_anchors", true);
+            const auto settings = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(settings.HasValue());
+            CHECK(settings.Value().AllowsSpatialAnchorPreview());
+            CHECK_FALSE(settings.Value().AllowsSpatialAnchorPersistence());
+            CHECK_FALSE(settings.Value().AllowsPlaneCapturePreview());
+            CHECK(settings.Value().Features().empty());
+        }
+
+        TEST_CASE("XR anchor storage has separate opt-in project policy", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            const auto defaults = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(defaults.HasValue());
+            CHECK_FALSE(defaults.Value().AllowsSpatialAnchorPersistence());
+
+            Project(request, "xr.persistence.spatial_anchors", true);
+            const auto settings = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(settings.HasValue());
+            CHECK(settings.Value().AllowsSpatialAnchorPersistence());
+            CHECK_FALSE(settings.Value().AllowsSpatialAnchorPreview());
+            CHECK(settings.Value().Features().empty());
+        }
+
+        TEST_CASE("XR project policy can offer optional eye gaze without granting consent", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::OptionalDisable));
+            const auto resolved = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(resolved.HasValue());
+            CHECK(resolved.Value().AllowsEyeGazePreview());
+            CHECK(resolved.Value().Features().empty());
+            request.project.clear();
+            Project(request, "xr.features.eye_gaze", static_cast<std::int64_t>(XRProjectFeaturePolicy::Required));
+            const auto required = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(required.HasError());
+            CHECK(required.ErrorValue().code.Value() == XRErrors::OperationIncompatible.code.Value());
+        }
+
         TEST_CASE("XR project feature policy rejects profile and fallback conflicts", "[unit][xr][settings]") {
-            for (const auto key : {"xr.features.stage_space", "xr.features.controller_presentation", "xr.features.android_standalone"}) {
+            for (const auto key : {"xr.features.stage_space", "xr.features.hand_tracking", "xr.features.controller_presentation",
+                                   "xr.features.android_standalone"}) {
                 ConfigurationResolutionRequest request;
                 Project(request, key, std::int64_t{3});
                 REQUIRE(ResolveXRProjectSettings(Configuration(request)).HasError());
@@ -146,6 +275,22 @@ namespace Horo::XR {
             Project(request, "xr.capability_profile", std::int64_t{1});
             Project(request, "xr.limits.devices", std::int64_t{1});
             REQUIRE(ResolveXRProjectSettings(Configuration(request)).HasError());
+        }
+
+        TEST_CASE("XR project space-warp requests resolve to ordinary projection without provider evidence", "[unit][xr][settings]") {
+            const Evidence evidence;
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.features.space_warp", static_cast<std::int64_t>(XRProjectFeaturePolicy::OptionalProjection));
+            const auto settings = Enabled(request);
+            REQUIRE(settings.Features().size() == 1);
+            CHECK(settings.Features().front().capability == XRCapability::SpaceWarp);
+            const auto plan = AdmitXRProjectSettings(settings, evidence.Admission());
+            REQUIRE(plan.HasValue());
+            CHECK(plan.Value().Decision(XRCapability::SpaceWarp).state == XRFeatureDecisionState::BaselineProjection);
+            CHECK(plan.Value().Decision(XRCapability::Projection).state == XRFeatureDecisionState::Required);
+            ConfigurationResolutionRequest required;
+            Project(required, "xr.features.space_warp", static_cast<std::int64_t>(XRProjectFeaturePolicy::Required));
+            CHECK(ResolveXRProjectSettings(Configuration(required)).HasError());
         }
 
         TEST_CASE("XR settings admit exact runtime and independent capability profiles", "[unit][xr][settings]") {
@@ -160,6 +305,24 @@ namespace Horo::XR {
                 REQUIRE(result.Value().Profile() == settings.Profile());
                 REQUIRE(result.Value().Decision(XRCapability::DepthComposition).state == XRFeatureDecisionState::OptionalEnabled);
             }
+        }
+
+        TEST_CASE("XR project quad selection requires exact four-view settings and capabilities", "[unit][xr][settings][quad]") {
+            constexpr auto quad = XRFeatureProfile::FoveatedInsetProjection;
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.capability_profile", static_cast<std::int64_t>(quad));
+            REQUIRE(ResolveXRProjectSettings(Configuration(request)).HasError());
+            Project(request, "xr.limits.views", std::int64_t{4});
+            const auto settings = Enabled(request);
+            REQUIRE(settings.Profile() == quad);
+
+            Evidence evidence;
+            CHECK(AdmitXRProjectSettings(settings, evidence.Admission()).HasError());
+            evidence.capabilities = evidence.Capabilities(4);
+            const auto admitted = AdmitXRProjectSettings(settings, evidence.Admission());
+            REQUIRE(admitted.HasValue());
+            CHECK(admitted.Value().Limits().maximumViews == 4);
+            CHECK(admitted.Value().Decision(XRCapability::QuadViews).state == XRFeatureDecisionState::Required);
         }
 
         TEST_CASE("XR retained settings reject replacement, owner shutdown and incompatible renderer", "[unit][xr][settings]") {
@@ -198,6 +361,22 @@ namespace Horo::XR {
             evidence.request.productMode = XRPreflightProductMode::Development;
             evidence.request.attempt = Identity<XRLoaderPreflightAttempt>(2);
             REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasError());
+        }
+
+        TEST_CASE("XR settings require a fresh preflight when the product mode changes", "[unit][xr][settings]") {
+            const auto settings = Enabled();
+            Evidence evidence;
+            REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasValue());
+            for (const auto productMode : {XRPreflightProductMode::Development, XRPreflightProductMode::Shipping}) {
+                evidence.request.productMode = productMode;
+                const auto changed = AdmitXRProjectSettings(settings, evidence.Admission());
+                REQUIRE(changed.HasError());
+                CHECK(changed.ErrorValue().code.Value() == XRErrors::LoaderPreflightStale.code.Value());
+                REQUIRE_FALSE(changed.ErrorValue().diagnostics.empty());
+                CHECK(changed.ErrorValue().diagnostics.front().path == "xr.runtime_selection");
+                evidence.loader = evidence.Loader();
+                REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasValue());
+            }
         }
 
         TEST_CASE("XR admission rechecks changed loader policy and capability revisions", "[unit][xr][settings]") {

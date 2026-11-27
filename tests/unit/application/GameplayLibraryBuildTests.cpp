@@ -195,8 +195,9 @@ TEST_CASE("Gameplay source preparation retains exact bytes and rejects cache cor
     }
     SECTION("exhausted traversal depth") {
         auto deep = cache;
-        for (int index = 0; index < 26; ++index)
-            deep /= "nested";
+        // Exercise traversal depth independently of the Windows path-length limit.
+        for (int index = 0; index < 25; ++index)
+            deep /= "d";
         std::filesystem::create_directories(deep);
     }
 #if !defined(_WIN32)

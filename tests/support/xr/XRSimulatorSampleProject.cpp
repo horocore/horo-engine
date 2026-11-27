@@ -3,7 +3,9 @@
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Scene/SceneSource.h"
+#include "Horo/Security/SecureMemory.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
@@ -11,6 +13,16 @@
 
 namespace Horo::Tests {
     namespace {
+        /** @brief Supplies stable nonzero identity entropy for the explicitly materialized sample fixture. */
+        class SampleRandom final : public Security::SecureRandomSource {
+        public:
+            Result<void> Fill(const std::span<std::byte> destination) override {
+                for (auto &byte : destination)
+                    byte = std::byte{0x71};
+                return Result<void>::Success();
+            }
+        };
+
         void Write(const std::filesystem::path &path, const std::string_view bytes) {
             std::filesystem::create_directories(path.parent_path());
             std::ofstream file{path, std::ios::binary | std::ios::trunc};
@@ -51,7 +63,7 @@ namespace Horo::Tests {
         REQUIRE_FALSE(std::filesystem::exists(root));
         JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
         EngineDataBus bus;
-        Editor::ProjectCreationService service{jobs, bus};
+        Editor::ProjectCreationService service{jobs, bus, std::make_shared<SampleRandom>(), std::make_shared<NativeDurableFileSystem>()};
         const Editor::ProjectCreationRequest request{.templateId = "3d-starter",
                                                      .projectName = "XRSimulator",
                                                      .projectRoot = root,

@@ -5,6 +5,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <vector>
 
 namespace Horo::Audio {
     namespace {
@@ -74,6 +75,44 @@ namespace Horo::Audio {
             CheckDecision(Request(voices, RejectNew), AudioVoiceAdmissionAction::Reject, RejectNewest);
             CheckDecision(Request(voices, Allow), AudioVoiceAdmissionAction::Reject, PhysicalCapacity);
             CheckDecision(Request(voices, Virtualize), AudioVoiceAdmissionAction::AdmitVirtual, Virtualized);
+        }
+
+        TEST_CASE("Configured voice ceilings repeat the complete physical capacity policy matrix", "[audio][admission][qualification]") {
+            for (const std::uint32_t capacity : {1U, 64U, 256U, 1024U}) {
+                CAPTURE(capacity);
+                std::vector<AudioVoiceAdmissionCandidate> voices;
+                voices.reserve(capacity);
+                for (std::uint32_t slot = 1; slot <= capacity; ++slot)
+                    voices.push_back(Candidate(slot));
+                for (const auto mode :
+                     {AudioConcurrencyMode::Allow, AudioConcurrencyMode::RejectNew, AudioConcurrencyMode::StealOldest,
+                      AudioConcurrencyMode::StealQuietest, AudioConcurrencyMode::StealLowestPriority, AudioConcurrencyMode::StealFurthest,
+                      AudioConcurrencyMode::Replace, AudioConcurrencyMode::Virtualize}) {
+                    CAPTURE(mode);
+                    auto request = Request(voices, mode);
+                    const auto expected = EvaluateAudioVoiceAdmission(request);
+                    REQUIRE(expected.HasValue());
+                    if (mode == AudioConcurrencyMode::Allow || mode == AudioConcurrencyMode::RejectNew)
+                        CHECK(expected.Value().action == AudioVoiceAdmissionAction::Reject);
+                    else if (mode == AudioConcurrencyMode::Virtualize)
+                        CHECK(expected.Value().action == AudioVoiceAdmissionAction::AdmitVirtual);
+                    else {
+                        CHECK(expected.Value().action == AudioVoiceAdmissionAction::Replace);
+                        CHECK(expected.Value().victim == voices.front().snapshot.voice);
+                    }
+                    for (std::uint32_t repeat = 0; repeat < 4; ++repeat) {
+                        const auto before = Tests::AllocationProbe::Count();
+                        const auto result = EvaluateAudioVoiceAdmission(request);
+                        const auto after = Tests::AllocationProbe::Count();
+                        REQUIRE(result.HasValue());
+                        CHECK(result.Value() == expected.Value());
+                        CHECK(after == before);
+                    }
+                    request.maximumPhysicalVoices = capacity + 1;
+                    REQUIRE(EvaluateAudioVoiceAdmission(request).HasValue());
+                    CHECK(EvaluateAudioVoiceAdmission(request).Value().action == AudioVoiceAdmissionAction::AdmitPhysical);
+                }
+            }
         }
 
         TEST_CASE("Voice policy ties minimize admission order then complete handle with no allocation", "[unit][audio][admission]") {

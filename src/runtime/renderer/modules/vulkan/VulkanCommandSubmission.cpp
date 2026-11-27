@@ -133,6 +133,16 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanCommandRuntime::WasSubmissionAccepted */
+    Result<bool> VulkanCommandRuntime::WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const {
+        if (const auto access = impl_->Access(); access.HasError())
+            return Result<bool>::Failure(access.ErrorValue());
+        const auto *queue = impl_->FindQueue(signal.queue);
+        if (!signal.IsValid() || deviceIncarnation != impl_->deviceIncarnation || !queue)
+            return Result<bool>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
+        return Result<bool>::Success(queue->WasIssued(signal.value));
+    }
+
     /** @copydoc VulkanCommandRuntime::Poll */
     Result<void> VulkanCommandRuntime::Poll() {
         if (const auto access = impl_->Access(); access.HasError())
@@ -146,10 +156,12 @@ namespace Horo::Render::Detail {
                     MakeError(VulkanBackendErrors::TimelineInvalid, "The native completion counter escaped its accepted timeline domain."));
             queue.observed = observed;
             for (auto &slot : queue.slots) {
-                if (slot.state == Impl::State::Pending && slot.completion.value <= observed) {
-                    slot.ReleaseRetention();
-                    slot.state = Impl::State::Idle;
-                }
+                if (slot.state != Impl::State::Pending || slot.completion.value > observed)
+                    continue;
+                if (const auto timing = impl_->ReadTimestamps(queue, slot); timing.HasError())
+                    return timing;
+                slot.ReleaseRetention();
+                slot.state = Impl::State::Idle;
             }
         }
         return Result<void>::Success();

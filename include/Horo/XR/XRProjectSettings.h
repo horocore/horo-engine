@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Configuration.h"
 #include "Horo/XR/XRFeatureNegotiation.h"
 #include "Horo/XR/XRLoaderPreflight.h"
+#include "Horo/XR/XRLocomotionComfort.h"
 
 namespace Horo::XR {
     /** @brief Portable XR project-settings schema version, independent of the native API version. */
@@ -46,7 +47,32 @@ namespace Horo::XR {
         [[nodiscard]] XRFeatureProfile Profile() const noexcept;
         /** @brief Returns requested finite capacities. @return Immutable validated budget. */
         [[nodiscard]] const XRSystemLimits &Limits() const noexcept;
-        /** @brief Returns extra feature requests. @return Snapshot-owned span valid for this object's lifetime. */
+        /** @brief Returns the immutable preferences for the admitted locomotion owner's profile. */
+        [[nodiscard]] const XRLocomotionComfortSettings &LocomotionComfort() const noexcept;
+        /** @brief Returns the authored inward Stage warning margin in metres. */
+        [[nodiscard]] float StageBoundaryWarningMeters() const noexcept;
+        /** @brief Returns the minimum projected world-canvas span required in each eye.
+         * @return Positive pixel count captured at project reopen.
+         */
+        [[nodiscard]] std::uint32_t WorldCanvasMinimumSpanPixels() const noexcept;
+        /** @brief Reports optional policy for the independent eye-pointing preview.
+         * @return True when product policy permits requesting consent; this is never a grant. */
+        [[nodiscard]] bool AllowsEyeGazePreview() const noexcept;
+        /** @brief Reports policy for the independent plane-capture preview.
+         * @return True when the product permits a separate operator request for consent. */
+        [[nodiscard]] bool AllowsPlaneCapturePreview() const noexcept;
+
+        /** @brief Reports whether the selected host may offer live spatial anchor preview consent. */
+        [[nodiscard]] bool AllowsSpatialAnchorPreview() const noexcept {
+            return spatialAnchorPreview_;
+        }
+
+        /** @brief Reports whether the selected host may offer separate anchor storage consent. */
+        [[nodiscard]] bool AllowsSpatialAnchorPersistence() const noexcept {
+            return spatialAnchorPersistence_;
+        }
+
+        /** @brief Returns version-one extra requests. @return Snapshot-owned span valid for this object's lifetime. */
         [[nodiscard]] std::span<const XRFeatureRequest> Features() const noexcept;
         /** @brief Returns safe configuration provenance. @return Retained immutable source snapshot. */
         [[nodiscard]] const ConfigurationSnapshot &Source() const noexcept;
@@ -60,8 +86,15 @@ namespace Horo::XR {
         XRRuntimeSelectionPolicy runtimeSelection_{XRRuntimeSelectionPolicy::SystemDefault};
         XRFeatureProfile profile_{XRFeatureProfile::Projection1_0};
         XRSystemLimits limits_{};
-        std::array<XRFeatureRequest, 7> features_{};
+        std::uint32_t worldCanvasMinimumSpanPixels_{};
+        float stageBoundaryWarningMeters_{0.30F};
+        XRLocomotionComfortSettings locomotionComfort_;
+        std::array<XRFeatureRequest, static_cast<std::size_t>(XRCapability::Count)> features_{};
         std::size_t featureCount_{};
+        bool planeCapturePreview_{};
+        bool spatialAnchorPreview_{};
+        bool spatialAnchorPersistence_{};
+        bool eyeGazePreview_{};
     };
 
     /**

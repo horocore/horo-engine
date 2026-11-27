@@ -36,6 +36,7 @@ namespace Horo::Vfx::Detail {
         std::uint32_t initialBurst{};
         float durationSeconds{};
         bool requiredGameplay{};
+        bool photosensitiveFlash{};
     };
 
     struct VfxSpawnOwner final {

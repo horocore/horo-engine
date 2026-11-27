@@ -52,7 +52,7 @@ namespace Horo::Runtime::Ui {
         }
 
         UiTextShaper MakeShaper(UiFontFallbackChain chain, const std::uint64_t ownerValue = 1, const std::uint64_t fontRevisionValue = 1,
-                                const std::uint32_t concurrentShapes = 2) {
+                                const std::uint32_t concurrentShapes = 2, const bool measureCpuWork = false) {
             UiTextShaperLimits limits;
             limits.maxInputBytes = 512;
             limits.maxFeatures = 8;
@@ -62,7 +62,7 @@ namespace Horo::Runtime::Ui {
             limits.concurrentShapes = concurrentShapes;
             return RequireValue(
                 UiTextShaper::Create(UiTextShaperDescriptor{Ownership(ownerValue), RevisionValue<UiTextFontRevision>(fontRevisionValue),
-                                                            std::move(chain), limits}));
+                                                            std::move(chain), limits, measureCpuWork}));
         }
 
         UiTextShapingRequest Request(const std::string_view text, const UiTextScript script = UiTextScript::Auto(),
@@ -104,6 +104,19 @@ namespace Horo::Runtime::Ui {
         const std::string overlong{"\xC0\xAF", 2};
         const auto overlongResult = shaper.Shape(Request(overlong));
         RequireCode(overlongResult, UiErrors::TextInputInvalid);
+    }
+
+    TEST_CASE("Shaping timing counts slot pressure independently of completed work", "[runtime_ui][text][profile]") {
+        auto shaper = MakeShaper(Chain(std::array{LoadFont(2, "assets/fonts/inter/InterVariable.ttf")}, UiMissingGlyphPolicy::Replacement),
+                                 11, 7, 1, true);
+        const auto retained = shaper.Shape(Request("office"));
+        REQUIRE(retained.HasValue());
+        RequireCode(shaper.Shape(Request("later")), UiErrors::TextShapeStorageExhausted);
+        const auto timing = shaper.CpuWorkStatistics();
+        CHECK(timing.enabled);
+        CHECK(timing.attempts == 2);
+        CHECK(timing.succeeded == 1);
+        CHECK(timing.elapsedNanoseconds >= timing.lastNanoseconds);
     }
 
     TEST_CASE("Runtime UI shaping returns stable logical metrics and features", "[runtime_ui][text][shaping]") {

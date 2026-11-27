@@ -60,6 +60,7 @@ namespace Horo::Navigation {
         std::size_t maximumPartitions{64};
         Assets::AssetCookLimits cook;
         std::size_t maximumDecodedBytes{64U * 1024U * 1024U};
+        std::optional<std::size_t> maximumBytesPerTile; /**< Optional decoded storage limit for each tile in the selected scope. */
     };
 
     /** @brief Synchronous host-selected decode bounds, release evidence and exact coordinate-space selection. */
@@ -67,6 +68,9 @@ namespace Horo::Navigation {
         NavMeshAssetLimits limits;                           /**< Qualified envelope and complete decoded-closure ceilings. */
         const NavMeshAssetContentExpectation *expectation{}; /**< Borrowed release evidence; must outlive this synchronous load. */
         NavigationBakeScopeId scope; /**< Exact Scene UUID or explicit non-Scene domain; never inferred or used as a fallback. */
+        std::optional<std::span<const NavigationBakeTileKey>> selectedTiles; /**< Sorted unique addresses for a streaming preparation. */
+        std::optional<std::size_t> maximumSelectedBytes; /**< Additional decoded storage allowance for the selected tiles. */
+        bool retainTileBytes{true};                      /**< False for cold qualification without Cache residency. */
     };
 
     /** @brief Verify canonical record/envelope identity and complete canonical closure before admitting immutable tile allocations.
@@ -77,6 +81,9 @@ namespace Horo::Navigation {
      * @param cache AssetPipeline allocation owner, mutated only on its owner thread.
      * @param options Explicit decode ceilings, optional exact release evidence and requested coordinate space.
      * Presence of release evidence requires matching producer provenance before cache admission; no cross-scope fallback.
+     * A configured per-tile limit is checked for the entire selected scope before the first cache admission.
+     * With a selection, the full envelope is still verified and only the exact requested tile addresses are retained.
+     * A present empty selection prepares an empty set. Unknown or cross-scope keys never admit partial cache membership.
      * @return Fully prepared value or original envelope/typed navigation error; no world is published.
      * @note A failed capacity admission may warm the byte cache; it cannot mutate a navigation world. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,

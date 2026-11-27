@@ -58,6 +58,14 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor IdempotencyConflict;
         /** @brief A successful provider response lacks required commit evidence. */
         extern const ErrorCodeDescriptor InvalidProviderResponse;
+        /** @brief The requested remote key is absent at this provider observation. */
+        extern const ErrorCodeDescriptor NotFound;
+        /** @brief The provider revision changed while retrieving complete bytes. */
+        extern const ErrorCodeDescriptor RevisionChanged;
+        /** @brief A transfer retired without receiving the exact admitted complete length. */
+        extern const ErrorCodeDescriptor PartialTransfer;
+        /** @brief Native staging cleanup is pending; the remote mutation outcome remains uncertain. */
+        extern const ErrorCodeDescriptor CleanupPending;
     }  // namespace CloudObjectErrors
 
     /** @brief Opaque value tag used to prevent address/revision type confusion. */
@@ -145,7 +153,47 @@ namespace Horo::PlatformServices {
         [[nodiscard]] bool operator==(const CloudBlobOwnedBytes &) const noexcept = default;
 
     private:
+        friend class CloudBlobStagingBuffer;
         std::vector<std::byte> bytes_;
+    };
+
+    /**
+     * @brief Operation-owned bounded download staging that never exposes partial bytes.
+     * @details The adapter's owner lane appends call-borrowed chunks. It retains this owner and its provider lease until native
+     * callbacks retire, including after cancellation/timeout. This buffer owns no filesystem path, callback, retry or durable intent.
+     */
+    class CloudBlobStagingBuffer final {
+    public:
+        /** @brief Transfers staging ownership and permanently closes the source. @param other Previous staging owner. */
+        CloudBlobStagingBuffer(CloudBlobStagingBuffer &&other) noexcept;
+        /** @brief Replaces staging ownership and permanently closes the source. @param other Previous staging owner.
+         * @return This staging owner. */
+        CloudBlobStagingBuffer &operator=(CloudBlobStagingBuffer &&other) noexcept;
+        CloudBlobStagingBuffer(const CloudBlobStagingBuffer &) = delete;
+        CloudBlobStagingBuffer &operator=(const CloudBlobStagingBuffer &) = delete;
+
+        /** @brief Admits one exact complete length before reserving storage.
+         * @param exactBytes Length captured with the requested revision; zero is a valid opaque object.
+         * @param maximumBytes Selected provider/request byte bound, within Horo's hard ceiling.
+         * @param digest Optional expected transport digest.
+         * @return New staging owner or InvalidLimits/PayloadTooLarge. */
+        [[nodiscard]] static Result<CloudBlobStagingBuffer> Begin(std::uint64_t exactBytes, std::uint64_t maximumBytes,
+                                                                  std::optional<CloudBlobDigest> digest = std::nullopt);
+        /** @brief Copies one chunk without retaining its borrowed span.
+         * @param bytes Next contiguous bytes; an empty chunk makes no progress.
+         * @return Success or PayloadTooLarge/InvalidRequest. An excess chunk permanently invalidates this transfer. */
+        [[nodiscard]] Result<void> Append(std::span<const std::byte> bytes);
+        /** @brief Publishes complete owned bytes exactly once, after length and digest validation.
+         * @return Immutable complete bytes or PartialTransfer/IntegrityMismatch/InvalidRequest.
+         * @note Revision and session evidence still require ValidateCloudBlobReadCompletion before request success. */
+        [[nodiscard]] Result<CloudBlobOwnedBytes> Finish();
+
+    private:
+        CloudBlobStagingBuffer() = default;
+        CloudBlobOwnedBytes bytes_;
+        std::optional<CloudBlobDigest> digest_;
+        std::uint64_t exactBytes_{};
+        bool closed_{};
     };
 
     /** @brief Bounded authenticated-session partition used by all cloud operations. */
@@ -354,7 +402,7 @@ namespace Horo::PlatformServices {
      * @param request Original request and session partition.
      * @param currentSubject Current authenticated subject at publication time.
      * @param limits Selected provider limits.
-     * @return Success or StaleSession, PayloadTooLarge, InvalidPage, or IntegrityMismatch.
+     * @return Success or StaleSession, PayloadTooLarge, InvalidPage, PartialTransfer, or IntegrityMismatch.
      * @post A failure means the opaque bytes remain operation-owned and are not publishable.
      */
     [[nodiscard]] Result<void> ValidateCloudBlobReadCompletion(const CloudBlobReadResult &result, const CloudBlobReadRequest &request,

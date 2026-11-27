@@ -3,6 +3,9 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationAssetSceneActivation.h"
 #include "Horo/Navigation/NavigationRuntimeQueues.h"
+#include "Horo/Navigation/NavigationRuntimeRebuildJobs.h"
+#include "Horo/Navigation/NavigationRuntimeTileRebuild.h"
+#include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
 #include "navigation/NavigationContentPolicyFixture.h"
 #include "navigation/NavigationNativeBakeFixture.h"
@@ -14,10 +17,207 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <semaphore>
+#include <span>
 #include <thread>
+#include <utility>
 
 namespace Horo::Navigation {
     using namespace AssetTestSupport;
+
+    namespace {
+        /** @brief Materializes rebuilt tiles with the same native query factory as initial Scene activation. */
+        class SceneRebuildFactory final : public INavigationRuntimeRebuildBackendFactory {
+        public:
+            [[nodiscard]] Result<NavigationPreparedRuntimeRebuildBackend> Prepare(
+                const NavigationWorldActivationDescriptor &activation, std::span<const std::shared_ptr<const NavigationCookedTile>> tiles,
+                const std::size_t budget, const CancellationToken &) const override {
+                using Prepared = Result<NavigationPreparedRuntimeRebuildBackend>;
+                const auto &key = tiles.front()->Key();
+                const auto descriptor = ProjectNavigationCookedTileDescriptor(*tiles.front());
+                if (descriptor.HasError())
+                    return Prepared::Failure(descriptor.ErrorValue());
+                const LoadedNavMeshPartition partition{.surface = key.surface,
+                                                       .profile = key.profile,
+                                                       .descriptor = descriptor.Value(),
+                                                       .tiles = {tiles.begin(), tiles.end()},
+                                                       .scope = key.scope};
+                const std::array surfaces{NavigationLoadedSurface{Asset(), 1, &partition}};
+                auto provider = NativeFactory(activation, surfaces, budget);
+                if (provider.HasError())
+                    return Prepared::Failure(std::move(provider).ErrorValue());
+                auto owned = std::move(provider).Value();
+                return Prepared::Success({std::move(owned.backend), owned.reservedProviderBytes});
+            }
+        };
+
+        /** @brief Stops a real provider preparation at a known running-worker boundary. */
+        class PausedSceneRebuildFactory final : public INavigationRuntimeRebuildBackendFactory {
+        public:
+            [[nodiscard]] bool WaitUntilRunning() const {
+                return entered_.try_acquire_for(std::chrono::seconds{5});
+            }
+
+            void Resume() const {
+                resume_.release();
+            }
+
+            [[nodiscard]] Result<NavigationPreparedRuntimeRebuildBackend> Prepare(
+                const NavigationWorldActivationDescriptor &activation, std::span<const std::shared_ptr<const NavigationCookedTile>> tiles,
+                const std::size_t budget, const CancellationToken &cancellation) const override {
+                entered_.release();
+                resume_.acquire();
+                return factory_.Prepare(activation, tiles, budget, cancellation);
+            }
+
+        private:
+            SceneRebuildFactory factory_;
+            mutable std::binary_semaphore entered_{0};
+            mutable std::binary_semaphore resume_{0};
+        };
+
+        /** @brief Supplies a rebuild to the real Scene group transaction and can withdraw authority after staging. */
+        class RebuildGroupPublication final : public Runtime::SceneGroupPublication {
+        public:
+            RebuildGroupPublication(NavigationAssetSceneActivationParticipant &participant, NavigationRuntimeTileRebuildCandidate candidate,
+                                    const NavigationRuntimeRebuildFence &fence, const bool expireDuringPreparation)
+                : participant_(participant), candidate_(std::move(candidate)),
+                  authority_(std::make_shared<NavigationRuntimeRebuildFence>(fence)), expireDuringPreparation_(expireDuringPreparation) {}
+
+            [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &,
+                                                                                             std::span<const Runtime::EntityRef>,
+                                                                                             bool) const override {
+                auto prepared = participant_.PrepareRuntimeRebuildPublication(std::move(candidate_), [authority = authority_] {
+                    return Result<NavigationRuntimeRebuildFence>::Success(*authority);
+                });
+                if (prepared.HasValue() && expireDuringPreparation_)
+                    ++authority_->worldChanges;
+                return prepared;
+            }
+
+        private:
+            NavigationAssetSceneActivationParticipant &participant_;
+            mutable NavigationRuntimeTileRebuildCandidate candidate_;
+            std::shared_ptr<NavigationRuntimeRebuildFence> authority_;
+            bool expireDuringPreparation_;
+        };
+
+        /** @brief Owns the actual Scene, immutable asset cache and non-streamed runtime rebuild admission. */
+        struct RuntimeRebuildSceneFixture final {
+            Assets::AssetRegistry registry;
+            Assets::MemoryAssetProvider provider;
+            JobSystem jobs{{2, 16}};
+            Assets::AssetLoadService loads{jobs, provider};
+            std::unique_ptr<Assets::AssetPayloadCache> cache{Assets::AssetPayloadCache::Create(16, 4096).Value()};
+            Runtime::RuntimeSceneService scene{registry, loads};
+            CancellationSource cancellation;
+            NavigationAssetSceneActivationParticipant *participant{};
+
+            explicit RuntimeRebuildSceneFixture(const std::size_t budget = 3 * ProviderReservation) {
+                const NavigationAssetSceneLimits limits{.maximumLiveWorlds = 2, .maximumReservedProviderBytes = budget};
+                auto navigation =
+                    std::make_unique<NavigationAssetSceneActivationParticipant>(*cache, Target(), NativeFactory, limits, std::nullopt,
+                                                                                NavigationAssetSceneSelection{.runtimeRebuild = true});
+                participant = navigation.get();
+                REQUIRE(scene.AddActivationParticipant(std::move(navigation)).HasValue());
+                provider.Insert(Asset(), Cooked());
+                REQUIRE(registry.Publish({Record(Asset())}).status == Assets::AssetRegistryBuildStatus::Complete);
+                REQUIRE(scene.Startup(cancellation.Token()).HasValue());
+                REQUIRE_FALSE(ActivateService(scene, cancellation.Token(), Definition()));
+            }
+
+            /** @brief Runs a group with both a Scene member and a Navigation candidate through the same commit. */
+            [[nodiscard]] std::shared_ptr<const Runtime::SceneStructuralReceipt> Commit(NavigationRuntimeTileRebuildCandidate candidate,
+                                                                                        const NavigationRuntimeRebuildFence &fence,
+                                                                                        const bool expire,
+                                                                                        Runtime::SceneObjectId object = {102}) {
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands
+                            .CreateGroup({Runtime::RuntimeEntityGroupEntry{.info = {.authoredObject = object}}}, {},
+                                         {scene.ActiveScene()->RuntimeId(), registry.Snapshot().Revision(), cancellation.Token()})
+                            .HasValue());
+                auto publication = std::make_shared<RebuildGroupPublication>(*participant, std::move(candidate), fence, expire);
+                REQUIRE(commands.BindGroupPublication(std::move(publication)).HasValue());
+                auto queued = scene.QueueTrackedStructuralCommands(std::move(commands));
+                REQUIRE(queued.HasValue());
+                REQUIRE(scene.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {2, {}, 0, 0, {}, false, cancellation.Token()})
+                            .HasValue());
+                REQUIRE(queued.Value()->Complete());
+                return std::move(queued).Value();
+            }
+        };
+
+        /** @brief Keeps the cooked grid and profile, with one canonical exclusion spanning the fixture floor. */
+        [[nodiscard]] std::shared_ptr<const NavigationBakeInputSnapshot> CaptureRebuildExclusion(
+            TestSupport::IncrementalBakeFixture &fixture, const NavigationBakeTileKey &key, const NavigationAgentBuildGeometry &geometry) {
+            fixture.profile.id = key.profile;
+            fixture.profile.buildGeometry = geometry;
+            fixture.scopes = {key.scope};
+            fixture.surfaces = {key.surface};
+            fixture.ExcludeBorder(4);
+            fixture.modifiers.front().surface = key.surface;
+            return fixture.Input();
+        }
+
+        /** @brief Returns the detached candidate together with its exact publication authority. */
+        struct RuntimeRebuildAttempt final {
+            NavigationRuntimeRebuildFence fence;
+            NavigationRuntimeTileRebuildCandidate candidate;
+        };
+
+        /** @brief Captures a bounded rebuild request for the fixture's currently published closure. */
+        [[nodiscard]] NavigationRuntimeOwnedRebuildRequest CaptureSceneRebuild(const NavigationAssetSceneActivationParticipant &participant,
+                                                                               NavigationGeneration next) {
+            const auto world = participant.ActiveWorld();
+            REQUIRE(world);
+            const auto previous = world->ActiveDescriptor();
+            REQUIRE(previous.HasValue());
+            const auto base = participant.ActiveRuntimeRebuildTiles();
+            REQUIRE(base);
+            REQUIRE(base->size() == 1);
+            const auto &tile = *base->front();
+            const auto descriptor = ProjectNavigationCookedTileDescriptor(tile);
+            REQUIRE(descriptor.HasValue());
+            TestSupport::IncrementalBakeFixture geometry;
+            auto source = CaptureRebuildExclusion(geometry, tile.Key(), descriptor.Value().geometry);
+            const NavigationRuntimeRebuildFence fence{previous.Value(), source->Revisions(), 1, 1, 1};
+            return {.expected = fence,
+                    .nextTopology = next,
+                    .input = std::move(source),
+                    .layout = {{tile.Key(), tile.Topology().bounds, descriptor.Value().tileSizeMeters}},
+                    .activeTiles = *base,
+                    .compatibility = geometry.compatibility};
+        }
+
+        /** @brief Produces a real Recast successor synchronously for Scene barrier tests. */
+        [[nodiscard]] RuntimeRebuildAttempt PrepareSceneRebuild(const NavigationAssetSceneActivationParticipant &participant,
+                                                                NavigationGeneration next) {
+            const auto owned = CaptureSceneRebuild(participant, next);
+            const NavigationRuntimeTileRebuildRequest request{.expected = owned.expected,
+                                                              .nextTopology = owned.nextTopology,
+                                                              .input = *owned.input,
+                                                              .layout = owned.layout,
+                                                              .activeTiles = owned.activeTiles,
+                                                              .compatibility = owned.compatibility};
+            const auto builder = CreateRecastDetourNavigationMeshBuilder();
+            REQUIRE(builder.HasValue());
+            const SceneRebuildFactory factory;
+            auto candidate = PrepareRuntimeNavigationTileRebuild(request, *builder.Value(), factory);
+            REQUIRE(candidate.HasValue());
+            return {owned.expected, std::move(candidate).Value()};
+        }
+
+        /** @brief Queries opposite sides of the runtime exclusion using the current provider's exact identity. */
+        [[nodiscard]] NavigationPathStatus RebuildCorridorStatus(const NavigationWorldReadLease &lease) {
+            auto request = PathRequest(lease);
+            request.start = {2, 0, 2};
+            request.destination = {6, 0, 2};
+            const auto result = lease.Backend().FindPath(request, lease.Cancellation());
+            REQUIRE(result.HasValue());
+            return result.Value().status;
+        }
+    }  // namespace
 
     TEST_CASE("HNS3 empty current content loads without reusing old tile allocations", "[unit][navigation][navmesh_asset][empty]") {
         Assets::AssetRegistry registry;
@@ -381,6 +581,371 @@ namespace Horo::Navigation {
         REQUIRE(loaded.Value().partitions.front().tiles.back()->Topology().IsEmpty());
         REQUIRE(loaded.Value().tileBytes.size() == 2);
         REQUIRE(loaded.Value().partitions.front().tiles.front()->ContentIdentity() == built.ContentIdentity());
+    }
+
+    /** @brief Adds a canonical empty neighboring tile to the fixture's live ground tile. */
+    static void AddEmptyNeighbor(NavigationCookedTileSet &set) {
+        const auto &built = *set.tiles.front();
+        const auto descriptor = ProjectNavigationCookedTileDescriptor(built).Value();
+        const NavigationPreparedTile input{.tile = {.key = {built.Key().profile, built.Key().surface, {.x = -1}},
+                                                    .bounds = {{-32, -1, 0}, {0, 2, 32}},
+                                                    .tileSizeMeters = 32},
+                                           .geometry = descriptor.geometry,
+                                           .borderSizeCells = descriptor.borderSizeCells,
+                                           .dependencyKey = Digest(4)};
+        NavigationTileBuildResult empty{.state = NavigationTileBuildState::Empty, .key = input.tile.key.tile, .bounds = input.tile.bounds};
+        set.tiles.insert(set.tiles.begin(), NavigationCookedTile::Create(input, std::move(empty)).Value());
+    }
+
+    TEST_CASE("NavMesh residency rejects an oversized decoded tile before pinning any tile",
+              "[unit][navigation][navmesh_asset][canonical][budget]") {
+        auto set = TileSet();
+        AddEmptyNeighbor(set);
+        const auto payload = EncodeNavigationCookedTileSet(set, 4096).Value();
+        const auto encoded = Envelope(payload);
+        auto referenceCache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const auto reference = LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *referenceCache);
+        REQUIRE(reference.HasValue());
+        const auto &tiles = reference.Value().partitions.front().tiles;
+        REQUIRE(tiles.size() == 2);
+        REQUIRE(tiles.front()->Topology().IsEmpty());
+        const auto cap = tiles.back()->StorageBytes();
+        REQUIRE(tiles.front()->StorageBytes() < cap);
+
+        auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const auto refused =
+            LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache, {.limits = {.maximumBytesPerTile = cap - 1}});
+        TestSupport::RequireError(refused, NavigationErrors::CapacityExceeded);
+        CHECK(cache->Snapshot().retainedPayloadBytes == 0);
+        CHECK(cache->Snapshot().residentEntries == 0);
+
+        const auto exact = LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache, {.limits = {.maximumBytesPerTile = cap}});
+        REQUIRE(exact.HasValue());
+        CHECK(exact.Value().tileBytes.size() == 2);
+    }
+
+    TEST_CASE("NavMesh prefetch retains only verified selected tile addresses within its allowance",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        auto set = TileSet();
+        AddEmptyNeighbor(set);
+        const auto encoded = Envelope(EncodeNavigationCookedTileSet(set, 4096).Value());
+        auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const std::array selected{set.tiles.front()->Key()};
+        const auto bytes = set.tiles.front()->StorageBytes();
+        auto load = [&cache, &encoded](std::span<const NavigationBakeTileKey> keys, std::size_t budget) {
+            return LoadNavMeshAsset({Asset(), Type()}, {1}, encoded, Target(), *cache,
+                                    {.selectedTiles = keys, .maximumSelectedBytes = budget});
+        };
+        TestSupport::RequireError(load(selected, bytes - 1), NavigationErrors::CapacityExceeded);
+        const std::array duplicates{selected.front(), selected.front()};
+        TestSupport::RequireError(load(duplicates, bytes * 2), NavigationErrors::NavMeshArtifactInvalid);
+        auto missingKey = selected.front();
+        missingKey.tile.x -= 2;
+        TestSupport::RequireError(load(std::span{&missingKey, 1U}, bytes), NavigationErrors::NoNavigationData);
+        CHECK(cache->Snapshot().residentEntries == 0);
+        const auto empty = load({}, bytes);
+        REQUIRE(empty.HasValue());
+        CHECK(empty.Value().partitions.empty());
+        CHECK(cache->Snapshot().residentEntries == 0);
+
+        const auto exact = load(selected, bytes);
+        REQUIRE(exact.HasValue());
+        REQUIRE(exact.Value().partitions.size() == 1);
+        REQUIRE(exact.Value().partitions.front().tiles.size() == 1);
+        REQUIRE(exact.Value().tileBytes.size() == 1);
+        CHECK(exact.Value().tileBytes.front().Digest() == set.tiles.front()->ContentIdentity());
+        CHECK(cache->Snapshot().residentEntries == 1);
+    }
+
+    TEST_CASE("Streamed NavMesh removes tiles from the next provider while an older reader pins them",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        auto set = TileSet();
+        AddEmptyNeighbor(set);
+        const auto &removed = set.tiles.front();
+        const auto &retained = set.tiles.back();
+        const auto encoded = Envelope(EncodeNavigationCookedTileSet(set, 4096).Value());
+        std::vector<std::size_t> preparedTileCounts;
+        const NavigationAssetBackendFactory factory = [&preparedTileCounts](const auto &world, const auto surfaces, auto budget) {
+            preparedTileCounts.push_back(surfaces.front().partition->tiles.size());
+            return NativeFactory(world, surfaces, budget);
+        };
+        Harness host{{.maximumReservedProviderBytes = 2 * ProviderReservation}, factory};
+        host.Update(encoded);
+        REQUIRE_FALSE(host.Activate(Definition()));
+        const auto world = host.participant->ActiveWorld();
+        REQUIRE(world);
+        auto old = host.participant->Acquire().Value();
+        const auto original = old.Descriptor();
+        const auto revision = host.registry.Snapshot().Revision();
+        const std::array selected{retained->Key()};
+        const auto prefetched = LoadNavMeshAsset({Asset(), Type()}, revision, encoded, Target(), *host.cache,
+                                                 {.selectedTiles = selected, .maximumSelectedBytes = retained->StorageBytes()});
+        REQUIRE(prefetched.HasValue());
+        const std::array surfaces{NavigationStreamedSurface{prefetched.Value(), 0, 1}};
+        const auto next = NavigationGeneration::Create(original.topology.Value() + 1).Value();
+        REQUIRE(host.participant->StageStreamedTopology(original, next, surfaces).HasValue());
+        CHECK(host.participant->Acquire().Value().Descriptor() == original);
+        CHECK(host.participant->Snapshot().reservedProviderBytes == 2 * ProviderReservation);
+
+        REQUIRE(world->CommitAtSafePoint(original.scene, original.sceneGeneration).HasValue());
+        CHECK(host.participant->Acquire().Value().Descriptor().topology == next);
+        CHECK(old.IsRevoked());
+        CHECK((preparedTileCounts == std::vector<std::size_t>{2, 1}));
+        const auto both = host.cache->Snapshot().retainedPayloadBytes;
+        host.cache->Evict(removed->ContentIdentity());
+        CHECK(host.cache->Snapshot().retainedPayloadBytes == both);
+        const auto current = host.participant->Acquire().Value().Descriptor();
+        const auto successor = NavigationGeneration::Create(next.Value() + 1).Value();
+        TestSupport::RequireError(host.participant->StageStreamedTopology(current, successor, surfaces),
+                                  NavigationErrors::CapacityExceeded);
+        old = {};
+        REQUIRE(host.participant->StageStreamedTopology(current, successor, surfaces).HasValue());
+        CHECK(host.cache->Snapshot().retainedPayloadBytes < both);
+        auto staged = current;
+        staged.topology = successor;
+        REQUIRE(world->DiscardStagedTopology(staged).HasValue());
+        CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
+    }
+
+    TEST_CASE("Evicting the last NavMesh tile publishes an empty topology and allows later reactivation",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        Harness host{{.maximumLiveWorlds = 1, .maximumReservedProviderBytes = ProviderReservation}};
+        REQUIRE_FALSE(host.Activate(Definition()));
+        auto old = host.participant->Acquire().Value();
+        const auto original = old.Descriptor();
+        const auto world = host.participant->ActiveWorld();
+        REQUIRE(world);
+        const auto empty = NavigationGeneration::Create(original.topology.Value() + 1).Value();
+        REQUIRE(host.participant->StageStreamedTopology(original, empty, {}).HasValue());
+        CHECK(host.participant->Acquire().Value().Descriptor() == original);
+        auto removal = original;
+        removal.topology = empty;
+        TestSupport::RequireError(world->CommitStagedTopology(original), NavigationErrors::StaleSnapshot);
+        REQUIRE(world->CommitStagedTopology(removal).HasValue());
+        const auto uncovered = world->ActiveDescriptor().Value();
+        CHECK(uncovered.world == original.world);
+        CHECK(uncovered.topology == empty);
+        TestSupport::RequireError(host.participant->Acquire(), NavigationErrors::NoNavigationData);
+        CHECK(old.Revocation() == NavigationWorldRevocation::TopologyReplaced);
+        CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
+
+        const auto revision = host.registry.Snapshot().Revision();
+        const auto prefetched = LoadNavMeshAsset({Asset(), Type()}, revision, Cooked(), Target(), *host.cache);
+        REQUIRE(prefetched.HasValue());
+        const std::array selection{NavigationStreamedSurface{prefetched.Value(), 0, 1}};
+        const auto next = NavigationGeneration::Create(empty.Value() + 1).Value();
+        TestSupport::RequireError(host.participant->StageStreamedTopology(original, next, selection), NavigationErrors::StaleSnapshot);
+        TestSupport::RequireError(host.participant->StageStreamedTopology(uncovered, next, selection), NavigationErrors::CapacityExceeded);
+        old = {};
+        REQUIRE(host.participant->StageStreamedTopology(uncovered, next, selection).HasValue());
+        TestSupport::RequireError(host.participant->Acquire(), NavigationErrors::NoNavigationData);
+        auto reactivation = uncovered;
+        reactivation.topology = next;
+        TestSupport::RequireError(world->CommitStagedTopology(removal), NavigationErrors::StaleSnapshot);
+        REQUIRE(world->CommitStagedTopology(reactivation).HasValue());
+        const auto restored = host.participant->Acquire();
+        REQUIRE(restored.HasValue());
+        CHECK(restored.Value().Descriptor().world == original.world);
+        CHECK(restored.Value().Descriptor().topology == next);
+        CHECK(host.participant->Snapshot().reservedProviderBytes == ProviderReservation);
+    }
+
+    TEST_CASE("Streamed NavMesh preparation rolls back only its own candidate and wakes old readers after publication",
+              "[unit][navigation][navmesh_asset][streamed]") {
+        Harness host;
+        REQUIRE_FALSE(host.Activate(Definition()));
+        const auto world = host.participant->ActiveWorld();
+        REQUIRE(world);
+        const auto old = host.participant->Acquire().Value();
+        const auto &original = old.Descriptor();
+        auto candidate = original;
+        candidate.topology = NavigationGeneration::Create(original.topology.Value() + 1).Value();
+        REQUIRE(world->StageEmptyTopology(original, candidate.topology).HasValue());
+        CHECK(host.participant->PrepareStreamedPublication(original, candidate.topology, {}).HasError());
+        REQUIRE(world->ValidateStagedTopology(candidate).HasValue());
+        REQUIRE(world->DiscardStagedTopology(candidate).HasValue());
+
+        candidate.topology = NavigationGeneration::Create(candidate.topology.Value() + 1).Value();
+        {
+            auto prepared = host.participant->PrepareStreamedPublication(original, candidate.topology, {});
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+            CHECK(world->ActiveDescriptor().Value() == original);
+        }
+        CHECK_FALSE(world->HasStagedCandidate());
+        CHECK_FALSE(old.IsRevoked());
+
+        candidate.topology = NavigationGeneration::Create(candidate.topology.Value() + 1).Value();
+        auto prepared = host.participant->PrepareStreamedPublication(original, candidate.topology, {});
+        REQUIRE(prepared.HasValue());
+        REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+        prepared.Value()->Publish();
+        CHECK(world->ActiveDescriptor().Value() == candidate);
+        CHECK(old.Revocation() == NavigationWorldRevocation::TopologyReplaced);
+        CHECK_FALSE(old.Cancellation().IsCancellationRequested());
+        REQUIRE(prepared.Value()->AfterPublication().HasValue());
+        CHECK(old.Cancellation().IsCancellationRequested());
+        TestSupport::RequireError(host.participant->Acquire(), NavigationErrors::NoNavigationData);
+    }
+
+    TEST_CASE("Scene rolls back a staged runtime NavMesh rebuild after its authority changes",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        RuntimeRebuildSceneFixture fixture;
+        const auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto previous = participant.Acquire().Value();
+        const auto &original = previous.Descriptor();
+        const auto base = participant.ActiveRuntimeRebuildTiles();
+        const auto initial = participant.Snapshot();
+        auto pending = PrepareSceneRebuild(participant, TestSupport::Topology(original.topology.Value() + 1));
+        const auto rejected = fixture.Commit(std::move(pending.candidate), pending.fence, true);
+        REQUIRE(rejected->Failure());
+        CHECK(rejected->Failure()->code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+        CHECK_FALSE(fixture.scene.ActiveScene()->Find({102}));
+        CHECK_FALSE(world->HasStagedCandidate());
+        CHECK(world->ActiveDescriptor().Value() == original);
+        CHECK_FALSE(previous.IsRevoked());
+        CHECK(RebuildCorridorStatus(previous) == NavigationPathStatus::Reachable);
+        CHECK(participant.ActiveRuntimeRebuildTiles() == base);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds);
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes);
+    }
+
+    TEST_CASE("Scene adopts a runtime NavMesh rebuild and retains charged predecessor pins until readers drain",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        RuntimeRebuildSceneFixture fixture;
+        const auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        auto previous = participant.Acquire().Value();
+        auto base = participant.ActiveRuntimeRebuildTiles();
+        REQUIRE(base);
+        const auto initial = participant.Snapshot();
+        const auto canonicalEnvelope = participant.ActiveAssetProvenance().front().cookedContentDigest;
+        REQUIRE(RebuildCorridorStatus(previous) == NavigationPathStatus::Reachable);
+        const auto next = TestSupport::Topology(previous.Descriptor().topology.Value() + 1);
+        auto pending = PrepareSceneRebuild(participant, next);
+        const auto charge = pending.candidate.ReservedBytes();
+        const auto rebuiltDigest = pending.candidate.Tiles().front()->ContentIdentity();
+        REQUIRE(rebuiltDigest != base->front()->ContentIdentity());
+        const auto committed = fixture.Commit(std::move(pending.candidate), pending.fence, false);
+        REQUIRE(committed->ResultValue());
+        CHECK(fixture.scene.ActiveScene()->Find({102}).has_value());
+        auto current = participant.Acquire().Value();
+        CHECK(current.Descriptor().topology == next);
+        CHECK(RebuildCorridorStatus(current) == NavigationPathStatus::Unreachable);
+        CHECK(previous.Cancellation().IsCancellationRequested());
+        CHECK(participant.ActiveRuntimeRebuildTiles()->front()->ContentIdentity() == rebuiltDigest);
+        CHECK(participant.ActiveAssetProvenance().front().cookedContentDigest == canonicalEnvelope);
+        CHECK(participant.Snapshot().immutableBytes.residentEntries == initial.immutableBytes.residentEntries);
+        base.reset();
+        CHECK(participant.Snapshot().liveWorlds == 2);
+        const auto committedCharge = participant.Snapshot().reservedProviderBytes - initial.reservedProviderBytes;
+        CHECK(committedCharge >= charge);
+        previous = {};
+        CHECK(world->CollectRetired() == NavigationWorldLifecycleState::Active);
+        CHECK(participant.Snapshot().liveWorlds == 1);
+        CHECK(participant.Snapshot().reservedProviderBytes == committedCharge);
+    }
+
+    TEST_CASE("Scene charges one shared runtime NavMesh tile across overlapping topology generations",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        RuntimeRebuildSceneFixture fixture;
+        const auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto first = TestSupport::Topology(world->ActiveDescriptor().Value().topology.Value() + 1);
+        auto build = PrepareSceneRebuild(participant, first);
+        REQUIRE(fixture.Commit(std::move(build.candidate), build.fence, false)->ResultValue());
+
+        auto previous = participant.Acquire().Value();
+        auto tile = participant.ActiveRuntimeRebuildTiles()->front();
+        const auto baseline = participant.Snapshot().reservedProviderBytes;
+        const auto next = TestSupport::Topology(first.Value() + 1);
+        auto reused = PrepareSceneRebuild(participant, next);
+        REQUIRE(reused.candidate.RebuiltTileCount() == 0);
+        REQUIRE(reused.candidate.Tiles().front() == tile);
+        const auto additional = reused.candidate.ReservedBytes() - tile->StorageBytes();
+        REQUIRE(fixture.Commit(std::move(reused.candidate), reused.fence, false, {103})->ResultValue());
+        CHECK(participant.ActiveRuntimeRebuildTiles()->front() == tile);
+        CHECK(participant.Snapshot().reservedProviderBytes == baseline + additional);
+
+        previous = {};
+        CHECK(world->CollectRetired() == NavigationWorldLifecycleState::Active);
+        CHECK(participant.Snapshot().reservedProviderBytes == baseline);
+        participant.Shutdown();
+        CHECK(world->CollectRetired() == NavigationWorldLifecycleState::Closed);
+        CHECK(participant.Snapshot().reservedProviderBytes >= tile->StorageBytes());
+        CHECK(participant.Snapshot().reservedProviderBytes < baseline);
+        tile.reset();
+        CHECK(participant.Snapshot().reservedProviderBytes == 0);
+    }
+
+    TEST_CASE("Scene reserves worker rebuild memory before submission and transfers the charge at the barrier",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        constexpr std::size_t sceneBudget = 128U * 1024U * 1024U;
+        RuntimeRebuildSceneFixture fixture{sceneBudget};
+        auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto initial = participant.Snapshot();
+        const auto next = TestSupport::Topology(world->ActiveDescriptor().Value().topology.Value() + 1);
+        auto request = CaptureSceneRebuild(participant, next);
+        const auto fence = request.expected;
+        const auto limit = request.maximumOwnedBytes;
+        JobSystem workers{{.workerCount = 0}};
+        NavigationRuntimeRebuildJobs jobs{workers, CreateRecastDetourNavigationMeshBuilder().Value(),
+                                          std::make_shared<SceneRebuildFactory>()};
+        TestSupport::RequireError(participant.ReserveRuntimeRebuild(fence, sceneBudget), NavigationErrors::CapacityExceeded);
+        auto reserved = participant.ReserveRuntimeRebuild(fence, limit);
+        REQUIRE(reserved.HasValue());
+        TestSupport::RequireError(participant.ReserveRuntimeRebuild(fence, limit), NavigationErrors::AdmissionRejected);
+        REQUIRE(jobs.Start(std::move(request), {}, std::move(reserved).Value()).HasValue());
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes + limit);
+        workers.Shutdown(ShutdownPolicy::Drain);
+        auto completed = jobs.TakeCompleted();
+        REQUIRE(completed.HasValue());
+        REQUIRE(completed.Value());
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes + limit);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds + 1);
+        auto candidate = std::move(completed).Value().value();
+        TestSupport::RequireError(std::move(candidate).PublishAtSafePoint(*world, fence), NavigationErrors::OperationUnsupported);
+        REQUIRE(fixture.Commit(std::move(candidate), fence, false)->ResultValue());
+        CHECK(world->ActiveDescriptor().Value().topology == next);
+        CHECK(participant.Snapshot().reservedProviderBytes < initial.reservedProviderBytes + limit);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds);
+    }
+
+    TEST_CASE("Cancelling a running Scene rebuild retains its reservation until worker storage releases",
+              "[unit][navigation][navmesh_asset][tile_rebuild]") {
+        RuntimeRebuildSceneFixture fixture{128U * 1024U * 1024U};
+        auto &participant = *fixture.participant;
+        const auto world = participant.ActiveWorld();
+        REQUIRE(world);
+        const auto initial = participant.Snapshot();
+        const auto next = TestSupport::Topology(world->ActiveDescriptor().Value().topology.Value() + 1);
+        auto request = CaptureSceneRebuild(participant, next);
+        const auto limit = request.maximumOwnedBytes;
+        auto reserved = participant.ReserveRuntimeRebuild(request.expected, limit);
+        REQUIRE(reserved.HasValue());
+        JobSystem workers{{.workerCount = 1}};
+        const auto factory = std::make_shared<PausedSceneRebuildFactory>();
+        NavigationRuntimeRebuildJobs jobs{workers, CreateRecastDetourNavigationMeshBuilder().Value(), factory};
+        REQUIRE(jobs.Start(std::move(request), {}, std::move(reserved).Value()).HasValue());
+        const auto running = factory->WaitUntilRunning();
+        jobs.Cancel();
+        const auto duringCancellation = participant.Snapshot().reservedProviderBytes;
+        const auto unfinished = jobs.TakeCompleted();
+        factory->Resume();
+        workers.Shutdown(ShutdownPolicy::Drain);
+        REQUIRE(running);
+        REQUIRE(unfinished.HasValue());
+        CHECK_FALSE(unfinished.Value());
+        CHECK(duringCancellation == initial.reservedProviderBytes + limit);
+        TestSupport::RequireError(jobs.TakeCompleted(), NavigationErrors::BakeInputCancelled);
+        CHECK(participant.Snapshot().reservedProviderBytes == initial.reservedProviderBytes);
+        CHECK(participant.Snapshot().liveWorlds == initial.liveWorlds);
     }
 
     TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",

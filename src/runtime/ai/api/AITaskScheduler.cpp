@@ -1,11 +1,21 @@
 #include "Horo/AI/AITaskScheduler.h"
 
+#include "Horo/AI/DecisionGraphCompiler.h"
+
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::AI {
     namespace {
+        /** @brief Checks increasing bands and strictly positive best-effort cadence settings. */
+        [[nodiscard]] bool ValidProfile(const AiDecisionSimulationProfile &profile) noexcept {
+            return profile.fullDistanceMillimeters > 0 && profile.fullDistanceMillimeters < profile.reducedDistanceMillimeters &&
+                   profile.reducedDistanceMillimeters < profile.suspensionDistanceMillimeters && profile.reducedIntervalTicks > 1 &&
+                   profile.demotionDelayTicks > 0;
+        }
+
         /** @brief Validates finite scene admission independently of runtime/backend availability. */
         [[nodiscard]] bool Valid(const AiTaskSchedulerSettings &s) noexcept {
             return s.maximumAgents > 0 && s.maximumAgents <= AiTaskSchedulerSettings::HardAgents && s.evaluationsPerTick > 0 &&
@@ -13,7 +23,53 @@ namespace Horo::AI {
                    s.workUnitsPerTick <= AiTaskSchedulerSettings::HardWorkUnits && s.commandsPerTick > 0 &&
                    s.commandsPerTick <= AiTaskSchedulerSettings::HardWorkUnits && s.workerSubmissionsPerTick > 0 &&
                    s.workerSubmissionsPerTick <= AiTaskJobService::HardCapacity && s.pendingWorkers > 0 &&
-                   s.pendingWorkers <= AiTaskJobService::HardCapacity && s.starvationTicks > 0 && s.mode < AiSchedulingMode::Count;
+                   s.pendingWorkers <= AiTaskJobService::HardCapacity && s.starvationTicks > 0 && s.mode < AiSchedulingMode::Count &&
+                   (!s.simulationProfile || (s.mode == AiSchedulingMode::BestEffort && ValidProfile(*s.simulationProfile)));
+        }
+
+        /** @brief Uses only host-captured simulation facts and conservatively preserves unknown relevance. */
+        [[nodiscard]] AiSimulationTier DesiredTier(const AiDecisionSimulationProfile &profile,
+                                                   const AiDecisionRelevance &relevance) noexcept {
+            if (relevance.gameplayPinned || relevance.urgentStimulus || !relevance.anchorDistanceMillimeters ||
+                *relevance.anchorDistanceMillimeters <= profile.fullDistanceMillimeters)
+                return AiSimulationTier::Full;
+            const auto distance = *relevance.anchorDistanceMillimeters;
+            if (distance <= profile.reducedDistanceMillimeters)
+                return AiSimulationTier::Reduced;
+            if (distance <= profile.suspensionDistanceMillimeters || relevance.activeSimulationRegion)
+                return AiSimulationTier::EventOnly;
+            return AiSimulationTier::Suspended;
+        }
+
+        /** @brief Keeps only explicit or perception wakes for suspended agents and disables full-rate polling below Full. */
+        [[nodiscard]] DecisionWakeReasons AdmittedWake(const AiSimulationTier tier, DecisionWakeReasons reasons) noexcept {
+            if (tier == AiSimulationTier::Suspended)
+                return {.perception = reasons.perception, .explicitRequest = reasons.explicitRequest};
+            if (tier != AiSimulationTier::Full)
+                reasons.polling = false;
+            return reasons;
+        }
+
+        /** @brief Remaining deterministic allowance after each admitted registration. */
+        struct DeterministicAllowance final {
+            std::size_t evaluations;
+            std::size_t work;
+            std::size_t commands;
+
+            [[nodiscard]] bool Reserve(const AiAgentSchedulePolicy &policy) noexcept {
+                if (evaluations == 0 || policy.workUnitsPerTick > work || policy.commandsPerTick > commands)
+                    return false;
+                --evaluations;
+                work -= policy.workUnitsPerTick;
+                commands -= policy.commandsPerTick;
+                return true;
+            }
+        };
+
+        /** @brief Checks sorted admission keys for duplicates. */
+        template <typename Key> bool Unique(std::vector<Key> &keys) {
+            std::ranges::sort(keys);
+            return std::ranges::adjacent_find(keys) == keys.end();
         }
 
         /** @brief Advances cadence without overflow or missed-interval catch-up. */
@@ -38,7 +94,167 @@ namespace Horo::AI {
         std::size_t submitted{};
         std::size_t commands{};
         bool intents{};
+        bool blackboardWakeQueued{};
+        std::optional<std::vector<PerceptionListenerTypeId>> perceptionWatches;
     };
+
+    /** @brief Bounded tier state independent of the cold executor and canonical agent storage. */
+    struct AiTaskScheduler::RelevanceSlot final {
+        std::uint64_t demotionSince{};
+        AiSimulationTier requested{AiSimulationTier::Full};
+        AiSimulationTier current{AiSimulationTier::Full};
+        AiSimulationTier demotionTarget{AiSimulationTier::Full};
+        AiSimulationTier next{AiSimulationTier::Full};
+        bool trustedWake{};
+
+        /** @brief Stages a changed tier from admitted facts without invoking callbacks. */
+        [[nodiscard]] bool Stage(const std::uint64_t tick, const std::uint64_t delay) noexcept {
+            next = current == AiSimulationTier::Suspended && requested == current && trustedWake ? AiSimulationTier::EventOnly
+                                                                                                 : requested;
+            if (next <= current) {
+                demotionSince = 0;
+                return next != current;
+            }
+            if (demotionSince == 0 || next != demotionTarget) {
+                demotionTarget = next;
+                demotionSince = tick;
+                return false;
+            }
+            return tick - demotionSince >= delay;
+        }
+    };
+
+    struct AiTaskScheduler::PopulationChange::Storage final {
+        std::vector<std::size_t> removals;
+        std::vector<std::pair<std::size_t, Entry>> additions;
+        std::vector<Entry> retired;
+        bool decisionReplacement{};
+        AiTaskScheduler *retirementOwner{};
+
+        /** @brief Resolves known exact retiring generations without mutating scheduler state. */
+        [[nodiscard]] Result<void> PrepareRemovals(AiTaskScheduler &scheduler, std::span<const AgentHandle> requested) {
+            removals.reserve(requested.size());
+            for (const auto agent : requested) {
+                if (!agent.IsValid() || agent.incarnation != scheduler.incarnation_)
+                    return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+                if (const auto *entry = scheduler.Find(agent))
+                    removals.push_back(static_cast<std::size_t>(entry - scheduler.entries_.data()));
+            }
+            if (!Unique(removals))
+                return Result<void>::Failure(MakeError(AIErrors::DescriptorConflict));
+            retired.reserve(removals.size());
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves final capacity, uniqueness and deterministic allowances before staging any admission. */
+        [[nodiscard]] Result<void> PrepareAdditions(AiTaskScheduler &scheduler, std::span<const AiScheduledDecisionRegistration> requested,
+                                                    const Entry *predecessor = nullptr) {
+            if (requested.empty())
+                return Result<void>::Success();
+
+            const auto &settings = scheduler.settings_;
+            const auto residents = scheduler.activeByHandle_.size() - removals.size();
+            if (requested.size() > settings.maximumAgents - residents)
+                return Result<void>::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+
+            std::vector<AgentHandle> agents;
+            std::vector<AgentId> identities;
+            std::vector<std::size_t> available;
+            agents.reserve(residents + requested.size());
+            identities.reserve(residents + requested.size());
+            available.reserve(requested.size());
+            DeterministicAllowance allowance{settings.evaluationsPerTick, settings.workUnitsPerTick, settings.commandsPerTick};
+            const bool deterministic = settings.mode == AiSchedulingMode::Deterministic;
+            for (std::size_t index = 0; index < scheduler.entries_.size(); ++index) {
+                const auto &entry = scheduler.entries_[index];
+                if (!entry.executor || std::ranges::binary_search(removals, index)) {
+                    if (available.size() < requested.size())
+                        available.push_back(index);
+                    continue;
+                }
+                agents.push_back(entry.agent);
+                identities.push_back(entry.identity);
+                if (deterministic && !allowance.Reserve(entry.policy))
+                    return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+            }
+            for (const auto &input : requested) {
+                if (!scheduler.ValidRegistration(input))
+                    return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+                if (const auto *active = scheduler.Find(input.agent); active && active != predecessor)
+                    return Result<void>::Failure(MakeError(AIErrors::DescriptorConflict));
+                if (deterministic && !allowance.Reserve(input.policy))
+                    return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+                agents.push_back(input.agent);
+                identities.push_back(input.identity);
+            }
+            if (!Unique(agents) || !Unique(identities))
+                return Result<void>::Failure(MakeError(AIErrors::DescriptorConflict));
+
+            additions.reserve(requested.size());
+            for (std::size_t i = 0; i < requested.size(); ++i) {
+                const auto &input = requested[i];
+                additions.emplace_back(available[i], Entry{.agent = input.agent,
+                                                           .identity = input.identity,
+                                                           .policy = input.policy,
+                                                           .cancellation = input.cancellation,
+                                                           .image = input.image,
+                                                           .executor = input.executor});
+            }
+            return Result<void>::Success();
+        }
+    };
+
+    AiTaskScheduler::PopulationChange::PopulationChange(AiTaskScheduler &scheduler)
+        : scheduler_(&scheduler), storage_(std::make_unique<Storage>()), revision_(scheduler.populationRevision_),
+          tick_(scheduler.report_.tick) {}
+
+    /** @copydoc AiTaskScheduler::PopulationChange::~PopulationChange */
+    AiTaskScheduler::PopulationChange::~PopulationChange() {
+        FinishRetirements();
+    }
+
+    /** @copydoc AiTaskScheduler::PopulationChange::ValidatePublication */
+    Result<void> AiTaskScheduler::PopulationChange::ValidatePublication() const {
+        if (!scheduler_ || !scheduler_->CanChangePopulation(!storage_->additions.empty()) || scheduler_->populationRevision_ != revision_ ||
+            scheduler_->report_.tick != tick_)
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (std::ranges::any_of(storage_->additions, [](const auto &addition) {
+            return addition.second.cancellation.IsCancellationRequested();
+        }))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::PopulationChange::Publish */
+    void AiTaskScheduler::PopulationChange::Publish() noexcept {
+        if (!scheduler_)
+            return;
+        if (storage_->decisionReplacement) {
+            storage_->retirementOwner = scheduler_;
+            scheduler_->inPhase_ = true;
+        }
+        for (const auto index : storage_->removals)
+            storage_->retired.push_back(scheduler_->Detach(scheduler_->entries_[index]));
+        for (auto &[index, entry] : storage_->additions)
+            scheduler_->Install(index, std::move(entry));
+        scheduler_ = nullptr;
+    }
+
+    /** @copydoc AiTaskScheduler::PopulationChange::FinishRetirements */
+    void AiTaskScheduler::PopulationChange::FinishRetirements() noexcept {
+        auto retired = std::exchange(storage_->retired, {});
+        if (auto *owner = std::exchange(storage_->retirementOwner, nullptr)) {
+            for (auto &entry : retired)
+                entry.executor->CancelForReplacement();
+            retired.clear();
+            owner->inPhase_ = false;
+            if (owner->closed_)
+                owner->Shutdown();
+        } else {
+            for (auto &entry : retired)
+                entry.executor->Cancel();
+        }
+    }
 
     /** @copydoc AiWorkBudget::Consume */
     bool AiWorkBudget::Consume(const std::size_t units) noexcept {
@@ -54,10 +270,12 @@ namespace Horo::AI {
     Result<void> IAiBudgetedTaskJob::Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const {
         if (units_ == 0 || units_ > AiTaskSchedulerSettings::HardWorkUnits)
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
-        if (cancellation.IsCancellationRequested())
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
             return JobCancelled();
         AiWorkBudget budget{units_};
         auto result = RunSlice(operation, cancellation, budget);
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
+            return JobCancelled();
         if (result.HasError())
             return result;
         if (budget.Exhausted())
@@ -68,7 +286,9 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::AiTaskScheduler */
     AiTaskScheduler::AiTaskScheduler(ConstructionKey, JobSystem &jobs, const AiRuntimeIncarnation incarnation,
                                      const AiTaskSchedulerSettings &settings)
-        : incarnation_(incarnation), settings_(settings), entries_(settings.maximumAgents) {
+        : incarnation_(incarnation), settings_(settings), entries_(settings.maximumAgents),
+          relevance_(settings.simulationProfile ? settings.maximumAgents : 0) {
+        activeByHandle_.reserve(settings.maximumAgents);
         order_.reserve(settings.maximumAgents);
         auto service = AiTaskJobService::Create(jobs, settings.pendingWorkers);
         if (service.HasError())
@@ -76,11 +296,18 @@ namespace Horo::AI {
         jobs_ = std::move(service).Value();
     }
 
+    /** @copydoc AiTaskScheduler::ValidateSettings */
+    Result<void> AiTaskScheduler::ValidateSettings(const AiTaskSchedulerSettings &settings) {
+        return Valid(settings) ? Result<void>::Success() : Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+    }
+
     /** @copydoc AiTaskScheduler::Create */
     Result<std::unique_ptr<AiTaskScheduler>> AiTaskScheduler::Create(JobSystem &jobs, const AiRuntimeIncarnation incarnation,
                                                                      const AiTaskSchedulerSettings &settings) {
-        if (!incarnation.IsValid() || !Valid(settings))
+        if (!incarnation.IsValid())
             return Result<std::unique_ptr<AiTaskScheduler>>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        if (const auto validated = ValidateSettings(settings); validated.HasError())
+            return Result<std::unique_ptr<AiTaskScheduler>>::Failure(validated.ErrorValue());
         try {
             return Result<std::unique_ptr<AiTaskScheduler>>::Success(
                 std::make_unique<AiTaskScheduler>(ConstructionKey{}, jobs, incarnation, settings));
@@ -89,47 +316,62 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiTaskScheduler::HandlePosition */
+    std::vector<std::size_t>::iterator AiTaskScheduler::HandlePosition(const AgentHandle agent) noexcept {
+        return std::ranges::lower_bound(activeByHandle_, agent, {}, [this](const std::size_t slot) {
+            return entries_[slot].agent;
+        });
+    }
+
     /** @copydoc AiTaskScheduler::Find */
     AiTaskScheduler::Entry *AiTaskScheduler::Find(const AgentHandle agent) noexcept {
-        const auto found = std::ranges::find_if(entries_, [agent](const Entry &entry) {
-            return entry.agent == agent;
-        });
-        return found == entries_.end() ? nullptr : std::to_address(found);
+        const auto found = HandlePosition(agent);
+        return found != activeByHandle_.end() && entries_[*found].agent == agent ? &entries_[*found] : nullptr;
+    }
+
+    /** @copydoc AiTaskScheduler::CanChangePopulation */
+    bool AiTaskScheduler::CanChangePopulation(const bool hasAdditions) const noexcept {
+        return !closed_ && !inPhase_ && (!hasAdditions || report_.tick == 0 || committed_) &&
+               populationRevision_ != std::numeric_limits<std::uint64_t>::max();
+    }
+
+    /** @copydoc AiTaskScheduler::ValidRegistration */
+    bool AiTaskScheduler::ValidRegistration(const AiScheduledDecisionRegistration &registration) const noexcept {
+        const auto &policy = registration.policy;
+        return registration.agent.IsValid() && registration.agent.incarnation == incarnation_ && registration.identity.IsValid() &&
+               registration.image && registration.executor && !registration.cancellation.IsCancellationRequested() &&
+               policy.priority < AiTaskPriority::Count &&
+               (settings_.mode != AiSchedulingMode::Deterministic || policy.intervalTicks == 1) && policy.workUnitsPerTick > 0 &&
+               policy.workUnitsPerTick <= settings_.workUnitsPerTick && policy.commandsPerTick > 0 &&
+               policy.commandsPerTick <= settings_.commandsPerTick && policy.workerSubmissionsPerTick > 0 &&
+               policy.workerSubmissionsPerTick <= settings_.workerSubmissionsPerTick && policy.pendingWorkers > 0 &&
+               policy.pendingWorkers <= settings_.pendingWorkers;
     }
 
     /** @copydoc AiTaskScheduler::FitsDeterministic */
     bool AiTaskScheduler::FitsDeterministic(const AiAgentSchedulePolicy &policy) const noexcept {
-        std::size_t evaluations{};
-        auto remainingWork = settings_.workUnitsPerTick;
-        auto remainingCommands = settings_.commandsPerTick;
-        for (const auto &entry : entries_) {
-            if (!entry.executor)
-                continue;
-            ++evaluations;
-            if (evaluations >= settings_.evaluationsPerTick || entry.policy.workUnitsPerTick > remainingWork ||
-                entry.policy.commandsPerTick > remainingCommands)
-                return false;
-            remainingWork -= entry.policy.workUnitsPerTick;
-            remainingCommands -= entry.policy.commandsPerTick;
-        }
-        return policy.workUnitsPerTick <= remainingWork && policy.commandsPerTick <= remainingCommands;
+        DeterministicAllowance allowance{settings_.evaluationsPerTick, settings_.workUnitsPerTick, settings_.commandsPerTick};
+        return std::ranges::all_of(entries_, [&allowance](const Entry &entry) {
+            return !entry.executor || allowance.Reserve(entry.policy);
+        }) && allowance.Reserve(policy);
+    }
+
+    /** @copydoc AiTaskScheduler::Install */
+    void AiTaskScheduler::Install(const std::size_t slot, Entry entry) noexcept {
+        entry.waitingSince = report_.tick == 0 ? 1 : report_.tick;
+        entry.nextTick = entry.policy.intervalTicks == 0 ? 0 : entry.waitingSince;
+        entries_[slot] = std::move(entry);
+        activeByHandle_.insert(HandlePosition(entries_[slot].agent), slot);
+        if (populationRevision_ != std::numeric_limits<std::uint64_t>::max())
+            ++populationRevision_;
     }
 
     /** @copydoc AiTaskScheduler::Register */
     Result<void> AiTaskScheduler::Register(const AgentHandle agent, const AgentId identity, const AiAgentSchedulePolicy &policy,
                                            std::shared_ptr<const void> image, std::shared_ptr<IAiScheduledDecision> executor,
                                            CancellationToken cancellation) {
-        Entry captured;
-        captured.image = std::move(image);
-        captured.executor = std::move(executor);
-        if (closed_ || inPhase_ || (report_.tick != 0 && !committed_) || !agent.IsValid() || agent.incarnation != incarnation_ ||
-            !identity.IsValid() || !captured.image || !captured.executor || cancellation.IsCancellationRequested() ||
-            policy.priority >= AiTaskPriority::Count || policy.intervalTicks == 0 ||
-            (settings_.mode == AiSchedulingMode::Deterministic && policy.intervalTicks != 1) || policy.workUnitsPerTick == 0 ||
-            policy.workUnitsPerTick > settings_.workUnitsPerTick || policy.commandsPerTick == 0 ||
-            policy.commandsPerTick > settings_.commandsPerTick || policy.workerSubmissionsPerTick == 0 ||
-            policy.workerSubmissionsPerTick > settings_.workerSubmissionsPerTick || policy.pendingWorkers == 0 ||
-            policy.pendingWorkers > settings_.pendingWorkers)
+        AiScheduledDecisionRegistration captured{agent, identity, policy, std::move(image), std::move(executor), std::move(cancellation)};
+        if (!CanChangePopulation(true) || !ValidRegistration(captured))
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
         Entry *free = nullptr;
         for (auto &entry : entries_) {
@@ -142,22 +384,146 @@ namespace Horo::AI {
             return Result<void>::Failure(MakeError(AIErrors::AgentCapacityExceeded));
         if (settings_.mode == AiSchedulingMode::Deterministic && !FitsDeterministic(policy))
             return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
-        free->agent = agent;
-        free->identity = identity;
-        free->policy = policy;
-        free->cancellation = std::move(cancellation);
-        free->image = std::move(captured.image);
-        free->executor = std::move(captured.executor);
-        free->waitingSince = report_.tick == 0 ? 1 : report_.tick;
-        free->nextTick = free->waitingSince;
+
+        Install(static_cast<std::size_t>(free - entries_.data()), {.agent = agent,
+                                                                   .identity = identity,
+                                                                   .policy = policy,
+                                                                   .cancellation = std::move(captured.cancellation),
+                                                                   .image = std::move(captured.image),
+                                                                   .executor = std::move(captured.executor)});
         return Result<void>::Success();
     }
 
+    /** @copydoc AiTaskScheduler::PreparePopulationChange */
+    Result<std::unique_ptr<AiTaskScheduler::PopulationChange>> AiTaskScheduler::PreparePopulationChange(
+        const std::span<const AiScheduledDecisionRegistration> additions, const std::span<const AgentHandle> removals) {
+        using Prepared = Result<std::unique_ptr<PopulationChange>>;
+        if (!CanChangePopulation(!additions.empty()))
+            return Prepared::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (additions.size() > settings_.maximumAgents || removals.size() > AiTaskSchedulerSettings::HardAgents)
+            return Prepared::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        try {
+            std::unique_ptr<PopulationChange> candidate(new PopulationChange(*this));
+            if (auto prepared = candidate->storage_->PrepareRemovals(*this, removals); prepared.HasError())
+                return Prepared::Failure(prepared.ErrorValue());
+            if (auto prepared = candidate->storage_->PrepareAdditions(*this, additions); prepared.HasError())
+                return Prepared::Failure(prepared.ErrorValue());
+            return Prepared::Success(std::move(candidate));
+        } catch (const std::bad_alloc &) {
+            return Prepared::Failure(MakeError(AIErrors::BehaviorTreeStorageUnavailable));
+        }
+    }
+
+    /** @copydoc AiTaskScheduler::FindBoundDecision */
+    AiTaskScheduler::Entry *AiTaskScheduler::FindBoundDecision(const AgentHandle agent, const std::shared_ptr<const void> &image) noexcept {
+        auto *entry = Find(agent);
+        if (!entry || !image || entry->image != image || entry->image.owner_before(image) || image.owner_before(entry->image) ||
+            entry->cancellation.IsCancellationRequested())
+            return nullptr;
+        return entry;
+    }
+
+    /** @copydoc AiTaskScheduler::InspectDecision */
+    const IAiScheduledDecision *AiTaskScheduler::InspectDecision(const AgentHandle agent,
+                                                                 const std::shared_ptr<const void> &image) noexcept {
+        if (!CompletedReportAtSafePoint())
+            return nullptr;
+        const auto *entry = FindBoundDecision(agent, image);
+        return entry ? entry->executor.get() : nullptr;
+    }
+
+    /** @copydoc AiTaskScheduler::ValidateDecisionReplacement */
+    Result<IAiScheduledDecision *> AiTaskScheduler::ValidateDecisionReplacement(const AgentHandle agent,
+                                                                                const std::shared_ptr<const void> &previousImage) {
+        using Validated = Result<IAiScheduledDecision *>;
+        if (!CanChangePopulation(true) || settings_.mode != AiSchedulingMode::Deterministic ||
+            report_.tick == std::numeric_limits<std::uint64_t>::max())
+            return Validated::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        const auto *entry = FindBoundDecision(agent, previousImage);
+        if (!entry)
+            return Validated::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        return Validated::Success(entry->executor.get());
+    }
+
+    /** @copydoc AiTaskScheduler::PublishRetainedDecisionImage */
+    void AiTaskScheduler::PublishRetainedDecisionImage(const AgentHandle agent, std::shared_ptr<const void> image) noexcept {
+        Find(agent)->image = std::move(image);
+        ++populationRevision_;
+    }
+
+    /** @copydoc AiTaskScheduler::PrepareDecisionReplacement */
+    Result<std::unique_ptr<AiTaskScheduler::PopulationChange>> AiTaskScheduler::PrepareDecisionReplacement(
+        const AiScheduledDecisionRegistration &replacement, const std::shared_ptr<const void> &previousImage) {
+        using Prepared = Result<std::unique_ptr<PopulationChange>>;
+        if (auto valid = ValidateDecisionReplacement(replacement.agent, previousImage); valid.HasError())
+            return Prepared::Failure(valid.ErrorValue());
+        const auto *old = Find(replacement.agent);
+        if (old->identity != replacement.identity || old->image == replacement.image || old->executor == replacement.executor)
+            return Prepared::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        try {
+            std::unique_ptr<PopulationChange> candidate(new PopulationChange(*this));
+            auto &storage = *candidate->storage_;
+            if (auto removed = storage.PrepareRemovals(*this, std::span{&replacement.agent, 1}); removed.HasError())
+                return Prepared::Failure(removed.ErrorValue());
+            if (auto added = storage.PrepareAdditions(*this, std::span{&replacement, 1}, old); added.HasError())
+                return Prepared::Failure(added.ErrorValue());
+            storage.decisionReplacement = true;
+            return Prepared::Success(std::move(candidate));
+        } catch (const std::bad_alloc &) {
+            return Prepared::Failure(MakeError(AIErrors::BehaviorTreeStorageUnavailable));
+        }
+    }
+
+    /** @copydoc AiTaskScheduler::QueueBlackboardWake */
+    void AiTaskScheduler::QueueBlackboardWake(const AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                              const std::span<const BlackboardKeyId> changedKeys) noexcept {
+        if (closed_)
+            return;
+        auto *entry = FindBoundDecision(agent, plan);
+        if (!entry || entry->policy.intervalTicks != 0 || CurrentTier(*entry) == AiSimulationTier::Suspended || entry->blackboardWakeQueued)
+            return;
+        entry->blackboardWakeQueued = std::ranges::any_of(plan->Graphs(), [&](const DecisionCompiledGraph &graph) {
+            return std::ranges::any_of(graph.bindings->Bindings(), [&](const DecisionPlanBlackboardBinding &binding) {
+                return std::ranges::binary_search(changedKeys, binding.key);
+            });
+        });
+    }
+
+    /** @copydoc AiTaskScheduler::SetPerceptionWatches */
+    Result<void> AiTaskScheduler::SetPerceptionWatches(const AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                                       std::vector<PerceptionListenerTypeId> listeners) {
+        if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        auto *entry = FindBoundDecision(agent, plan);
+        if (!entry || entry->policy.intervalTicks != 0)
+            return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        entry->perceptionWatches.emplace(std::move(listeners));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::PerceptionWatches */
+    std::span<const PerceptionListenerTypeId> AiTaskScheduler::PerceptionWatches(
+        const AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan) noexcept {
+        if (closed_ || inPhase_)
+            return {};
+        const auto *entry = FindBoundDecision(agent, plan);
+        if (!entry || entry->policy.intervalTicks != 0)
+            return {};
+        return entry->perceptionWatches ? std::span<const PerceptionListenerTypeId>{*entry->perceptionWatches}
+                                        : entry->executor->DeclaredPerceptionWatches();
+    }
+
     /** @copydoc AiTaskScheduler::Wake */
-    Result<void> AiTaskScheduler::Wake(const AgentHandle agent, const DecisionWakeReasons reasons) {
+    Result<void> AiTaskScheduler::Wake(const AgentHandle agent, DecisionWakeReasons reasons) {
         auto *entry = Find(agent);
         if (closed_ || inPhase_ || !entry || !entry->executor || entry->cancellation.IsCancellationRequested() || !reasons.Any())
             return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        const auto tier = CurrentTier(*entry);
+        reasons = AdmittedWake(tier, reasons);
+        if (!reasons.Any())
+            return Result<void>::Success();
+        if (tier == AiSimulationTier::Suspended)
+            relevance_[static_cast<std::size_t>(entry - entries_.data())].trustedWake = true;
         if (!entry->pending.Any())
             entry->waitingSince = report_.tick == 0 ? 1 : report_.tick;
         entry->pending.activation |= reasons.activation;
@@ -169,13 +535,145 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    /** @copydoc AiTaskScheduler::SetRelevanceAtSafePoint */
+    Result<void> AiTaskScheduler::SetRelevanceAtSafePoint(const AgentHandle agent, const AiDecisionRelevance &relevance) {
+        const AiDecisionRelevanceUpdate update{agent, relevance};
+        return SetRelevanceBatchAtSafePoint(std::span{&update, 1});
+    }
+
+    /** @copydoc AiTaskScheduler::SetRelevanceBatchAtSafePoint */
+    Result<void> AiTaskScheduler::SetRelevanceBatchAtSafePoint(const std::span<const AiDecisionRelevanceUpdate> updates) {
+        if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (!settings_.simulationProfile)
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        if (auto admitted = ValidateRelevanceUpdates(updates); admitted.HasError())
+            return admitted;
+        for (const auto &update : updates) {
+            const auto slot = static_cast<std::size_t>(Find(update.agent) - entries_.data());
+            relevance_[slot].requested = DesiredTier(*settings_.simulationProfile, update.relevance);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::ValidateRelevanceUpdates */
+    Result<void> AiTaskScheduler::ValidateRelevanceUpdates(const std::span<const AiDecisionRelevanceUpdate> updates) {
+        if (updates.size() > settings_.maximumAgents)
+            return Result<void>::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        if (std::ranges::adjacent_find(updates, std::ranges::greater_equal{}, &AiDecisionRelevanceUpdate::agent) != updates.end())
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        for (const auto &update : updates) {
+            const auto *entry = Find(update.agent);
+            if (!entry || !entry->executor || entry->cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::CopyLiveRegistrationsAtSafePoint */
+    Result<std::size_t> AiTaskScheduler::CopyLiveRegistrationsAtSafePoint(const std::span<AgentHandle> output) const {
+        using Output = Result<std::size_t>;
+        if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
+            return Output::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (output.size() < activeByHandle_.size())
+            return Output::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        std::size_t written{};
+        for (const auto slot : activeByHandle_) {
+            const auto &entry = entries_[slot];
+            if (!entry.cancellation.IsCancellationRequested())
+                output[written++] = entry.agent;
+        }
+        return Output::Success(written);
+    }
+
+    /** @copydoc AiTaskScheduler::SimulationTier */
+    Result<AiSimulationTier> AiTaskScheduler::SimulationTier(const AgentHandle agent) {
+        auto *entry = Find(agent);
+        if (closed_ || inPhase_ || !entry || !entry->executor || entry->cancellation.IsCancellationRequested())
+            return Result<AiSimulationTier>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        return Result<AiSimulationTier>::Success(CurrentTier(*entry));
+    }
+
+    /** @copydoc AiTaskScheduler::CurrentTier */
+    AiSimulationTier AiTaskScheduler::CurrentTier(const Entry &entry) const noexcept {
+        return relevance_.empty() ? AiSimulationTier::Full : relevance_[static_cast<std::size_t>(&entry - entries_.data())].current;
+    }
+
+    /** @copydoc AiTaskScheduler::PeriodicInterval */
+    std::uint64_t AiTaskScheduler::PeriodicInterval(const Entry &entry) const noexcept {
+        const auto cadence = entry.policy.intervalTicks;
+        if (cadence == 0)
+            return 0;
+        switch (CurrentTier(entry)) {
+            case AiSimulationTier::Full:
+                return cadence;
+            case AiSimulationTier::Reduced:
+                return std::max(cadence, settings_.simulationProfile->reducedIntervalTicks);
+            case AiSimulationTier::EventOnly:
+            case AiSimulationTier::Suspended:
+                return 0;
+        }
+        return 0;
+    }
+
+    /** @copydoc AiTaskScheduler::ChangeTier */
+    void AiTaskScheduler::ChangeTier(Entry &entry, const AiSimulationTier tier) noexcept {
+        auto &state = relevance_[static_cast<std::size_t>(&entry - entries_.data())];
+        const auto previous = state.current;
+        state.current = tier;
+        state.demotionSince = 0;
+        state.trustedWake = false;
+        entry.pending.polling = false;
+        const auto interval = PeriodicInterval(entry);
+        entry.nextTick = interval == 0 ? 0 : Next(entry.evaluatedTick, interval);
+        if (tier == AiSimulationTier::Suspended) {
+            entry.pending = {};
+            entry.intents = false;
+            entry.context = {};
+            jobs_->DiscardAgentWork(entry.agent);
+            entry.executor->SuspendForRelevance();
+        } else if (tier < previous) {
+            if (!entry.pending.Any())
+                entry.waitingSince = report_.tick;
+            entry.pending.activation = true;
+        }
+    }
+
+    /** @copydoc AiTaskScheduler::ApplyRelevance */
+    void AiTaskScheduler::ApplyRelevance() {
+        const auto delay = settings_.simulationProfile->demotionDelayTicks;
+        order_.clear();
+        for (std::size_t slot = 0; slot < relevance_.size(); ++slot)
+            if (relevance_[slot].Stage(report_.tick, delay))
+                order_.push_back(slot);
+        for (const auto slot : order_) {
+            if (closed_)
+                break;
+            auto &entry = entries_[slot];
+            if (entry.executor && !entry.cancellation.IsCancellationRequested())
+                ChangeTier(entry, relevance_[slot].next);
+        }
+    }
+
+    /** @copydoc AiTaskScheduler::Detach */
+    AiTaskScheduler::Entry AiTaskScheduler::Detach(Entry &entry) noexcept {
+        if (!closed_)
+            activeByHandle_.erase(HandlePosition(entry.agent));
+        if (populationRevision_ != std::numeric_limits<std::uint64_t>::max())
+            ++populationRevision_;
+        // A completed job can still be waiting for the owner pump when its registration retires.
+        jobs_->DiscardAgentWork(entry.agent);
+        if (!relevance_.empty())
+            relevance_[static_cast<std::size_t>(&entry - entries_.data())] = {};
+        auto retired = std::move(entry);
+        entry = {};
+        return retired;
+    }
+
     /** @copydoc AiTaskScheduler::Retire */
     void AiTaskScheduler::Retire(Entry &entry) noexcept {
-        jobs_->CancelAgent(entry.agent, AiTaskCancellationReason::OwnerShutdown);
-        entry.executor->Cancel();
-        entry.executor.reset();
-        entry.image.reset();
-        entry = {};
+        auto retired = Detach(entry);
+        retired.executor->Cancel();
     }
 
     /** @copydoc AiTaskScheduler::RetireIfCancelled */
@@ -201,7 +699,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiTaskScheduler::Order */
-    void AiTaskScheduler::Order() {
+    void AiTaskScheduler::Order(const bool admitReactiveWakes) {
         order_.clear();
         for (std::size_t i = 0; i < entries_.size(); ++i) {
             auto &entry = entries_[i];
@@ -214,11 +712,31 @@ namespace Horo::AI {
                     entry.waitingSince = entry.nextTick;
                 entry.pending.polling = true;
             }
-            order_.push_back(i);
+            if (admitReactiveWakes)
+                AdmitReactiveWakes(entry);
+            if (entry.pending.Any() || entry.intents)
+                order_.push_back(i);
         }
         std::ranges::sort(order_, [this](const auto lhs, const auto rhs) {
             return Before(entries_[lhs], entries_[rhs]);
         });
+    }
+
+    /** @copydoc AiTaskScheduler::AdmitReactiveWakes */
+    void AiTaskScheduler::AdmitReactiveWakes(Entry &entry) noexcept {
+        if (entry.policy.intervalTicks != 0 || CurrentTier(entry) == AiSimulationTier::Suspended)
+            return;
+        const auto deadline = entry.executor->NextFixedWakeTick();
+        if (deadline && *deadline <= report_.tick) {
+            if (!entry.pending.Any())
+                entry.waitingSince = *deadline;
+            entry.pending.polling = true;
+        }
+        if (!entry.pending.task && entry.executor->HasPendingTaskWake()) {
+            if (!entry.pending.Any())
+                entry.waitingSince = report_.tick;
+            entry.pending.task = true;
+        }
     }
 
     /** @copydoc AiTaskScheduler::Before */
@@ -243,14 +761,20 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::EvaluateEntry */
     void AiTaskScheduler::EvaluateEntry(Entry &entry) {
         const auto tick = report_.tick;
-        const auto units = std::min(entry.policy.workUnitsPerTick, settings_.workUnitsPerTick - report_.workUnits);
+        auto allowance = entry.policy.workUnitsPerTick;
+        if (settings_.mode == AiSchedulingMode::BestEffort) {
+            if (const auto limit = entry.executor->EvaluationWorkLimit(); limit && *limit > 0)
+                allowance = std::min(allowance, *limit);
+        }
+        const auto units = std::min(allowance, settings_.workUnitsPerTick - report_.workUnits);
         // Reserve the whole slice before callbacks; unused allowance cannot hide unbounded reentry/work.
         report_.workUnits += units;
         ++report_.evaluated;
         entry.evaluatedTick = tick;
-        entry.context = {entry.agent, tick, entry.pending, entry.cancellation};
+        entry.context = {entry.agent, tick, entry.pending, entry.cancellation, CurrentTier(entry)};
         entry.pending = {};
-        entry.nextTick = Next(tick, entry.policy.intervalTicks);
+        const auto interval = PeriodicInterval(entry);
+        entry.nextTick = interval == 0 ? 0 : Next(tick, interval);
         AiWorkBudget budget{units};
         evaluating_ = &entry;
         evaluatingBudget_ = &budget;
@@ -259,22 +783,39 @@ namespace Horo::AI {
         evaluatingBudget_ = nullptr;
         if (closed_ || RetireIfCancelled(entry))
             return;
+        if (!report_.firstAdvisoryFailure) {
+            auto failure = entry.executor->TakeProviderFailure(tick);
+            if (closed_ || RetireIfCancelled(entry))
+                return;
+            if (failure && failure->asset.IsValid() && failure->node.IsValid()) {
+                report_.firstAdvisoryFailure.emplace(
+                    AiSchedulingAdvisoryFailure{std::move(failure->error),
+                                                {entry.agent, entry.identity, AiSchedulingFailurePhase::Evaluate, failure->asset,
+                                                 failure->node, true}});
+            }
+        }
         if (evaluated.HasError() || evaluated.Value() >= AiSliceOutcome::Count) {
             ++report_.failed;
-            if (!report_.firstFailure)
+            if (!report_.firstFailure) {
                 report_.firstFailure = evaluated.HasError() ? evaluated.ErrorValue() : MakeError(AIErrors::SchedulerPolicyInvalid);
+                report_.firstFailureOrigin = AiSchedulingFailureOrigin{entry.agent, entry.identity, AiSchedulingFailurePhase::Evaluate};
+            }
             entry.executor->Cancel();
             return;
         }
         entry.intents = true;
         entry.intentSince = tick;
         const auto outcome = evaluated.Value();
-        if (budget.Exhausted() || outcome == AiSliceOutcome::BudgetExhausted)
+        const bool exhausted = budget.Exhausted() || outcome == AiSliceOutcome::BudgetExhausted;
+        if (exhausted)
             ++report_.exhausted;
-        if (outcome != AiSliceOutcome::Complete || budget.Exhausted()) {
+        if (outcome != AiSliceOutcome::Complete || exhausted) {
             ++report_.yielded;
-            entry.pending.explicitRequest = true;
-            entry.waitingSince = tick;
+            const bool retry = entry.policy.intervalTicks == 0 ? exhausted : !settings_.simulationProfile;
+            if (retry) {
+                entry.pending.explicitRequest = true;
+                entry.waitingSince = tick;
+            }
         }
     }
 
@@ -295,37 +836,54 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::EvaluateAtDecision */
     Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecision(const std::uint64_t tick) {
+        return EvaluateAtDecisionWithPausedAgent(tick, {});
+    }
+
+    /** @copydoc AiTaskScheduler::EvaluateReadyEntry */
+    void AiTaskScheduler::EvaluateReadyEntry(Entry &entry, const std::uint64_t tick, const AgentHandle pausedAgent) {
+        if (RetireIfCancelled(entry) || entry.agent == pausedAgent || CurrentTier(entry) == AiSimulationTier::Suspended || !entry.pending.Any())
+            return;
+        if (tick - entry.waitingSince >= settings_.starvationTicks)
+            ++report_.starved;
+        if (entry.intents || entry.evaluatedTick == tick || report_.evaluated == settings_.evaluationsPerTick ||
+            report_.workUnits == settings_.workUnitsPerTick) {
+            ++report_.deferred;
+            return;
+        }
+        EvaluateEntry(entry);
+    }
+
+    /** @copydoc AiTaskScheduler::EvaluateAtDecisionWithPausedAgent */
+    Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecisionWithPausedAgent(const std::uint64_t tick, const AgentHandle pausedAgent) {
         if (const auto validated = ValidateDecisionTick(tick); validated.HasError())
             return Result<AiSchedulingReport>::Failure(validated.ErrorValue());
-        if (tick != report_.tick) {
+        const bool newTick = tick != report_.tick;
+        if (newTick) {
             report_ = {.tick = tick};
             committed_ = false;
             for (auto &entry : entries_) {
                 entry.submitted = 0;
                 entry.commands = 0;
+                if (std::exchange(entry.blackboardWakeQueued, false)) {
+                    if (!entry.pending.Any())
+                        entry.waitingSince = tick;
+                    entry.pending.blackboard = true;
+                }
             }
         }
         inPhase_ = true;
-        jobs_->Pump();
-        Order();
+        if (newTick && settings_.simulationProfile)
+            ApplyRelevance();
+        if (!closed_) {
+            jobs_->Pump();
+            Order(true);
+        }
         report_.deferred = 0;
         report_.starved = 0;
         for (const auto index : order_) {
             if (closed_)
                 break;
-            auto &entry = entries_[index];
-            if (RetireIfCancelled(entry))
-                continue;
-            if (!entry.pending.Any())
-                continue;
-            if (tick - entry.waitingSince >= settings_.starvationTicks)
-                ++report_.starved;
-            if (entry.intents || entry.evaluatedTick == tick || report_.evaluated == settings_.evaluationsPerTick ||
-                report_.workUnits == settings_.workUnitsPerTick) {
-                ++report_.deferred;
-                continue;
-            }
-            EvaluateEntry(entry);
+            EvaluateReadyEntry(entries_[index], tick, pausedAgent);
         }
         inPhase_ = false;
         if (closed_)
@@ -347,8 +905,10 @@ namespace Horo::AI {
             return;
         if (committed.HasError()) {
             ++report_.failed;
-            if (!report_.firstFailure)
+            if (!report_.firstFailure) {
                 report_.firstFailure = committed.ErrorValue();
+                report_.firstFailureOrigin = AiSchedulingFailureOrigin{entry.agent, entry.identity, AiSchedulingFailurePhase::Commit};
+            }
             entry.executor->Cancel();
             entry.intents = false;
         } else {
@@ -365,7 +925,7 @@ namespace Horo::AI {
         if (committed_)
             return Result<AiSchedulingReport>::Success(report_);
         inPhase_ = true;
-        Order();
+        Order(false);
         for (const auto index : order_) {
             if (closed_)
                 break;
@@ -381,6 +941,11 @@ namespace Horo::AI {
         if (closed_)
             Shutdown();
         return Result<AiSchedulingReport>::Success(report_);
+    }
+
+    /** @copydoc AiTaskScheduler::CompletedReportAtSafePoint */
+    const AiSchedulingReport *AiTaskScheduler::CompletedReportAtSafePoint() const noexcept {
+        return committed_ && !inPhase_ && !closed_ ? &report_ : nullptr;
     }
 
     /** @copydoc AiTaskScheduler::SubmitWorker */
@@ -415,6 +980,7 @@ namespace Horo::AI {
         for (auto &entry : entries_)
             if (entry.executor)
                 Retire(entry);
+        activeByHandle_.clear();
     }
 
     /** @copydoc AiTaskScheduler::~AiTaskScheduler */

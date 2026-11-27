@@ -74,6 +74,11 @@ namespace Horo::Editor::Ui {
         Pending,
         Success,
         Cancelled,
+        AiBlackboard,
+        AiBehaviorTree,
+        AiStateMachine,
+        AiUtility,
+        AiEnvironmentQuery,
         Count,
     };
 

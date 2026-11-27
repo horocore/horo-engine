@@ -1,7 +1,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "PCGAuthoringInspector.h"
 #include "PCGDocumentTestSupport.h"
-#include "PCGWorkspace.h"
+#include "pcg/PCGWorkspace.h"
 
 #include <algorithm>
 #include <cmath>

@@ -1,6 +1,6 @@
 #include "PrefabHierarchyTestSupport.h"
 #include "SceneDocumentTestSupport.h"
-#include "editor/screens/workspace/prefab/PrefabHierarchyProjection.h"
+#include "editor/screens/workspace/prefab/hierarchy/PrefabHierarchyProjection.h"
 
 namespace Horo::Editor {
     using namespace SceneDocumentTestSupport;

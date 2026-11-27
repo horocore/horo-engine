@@ -127,6 +127,36 @@ namespace Horo::Packages {
         std::vector<PackageRestorePackage> packages;
     };
 
+    /** @brief Immutable proof of a verified candidate for one exact lock document. */
+    class StagedPackageRestoreRecord final {
+    public:
+        /** @brief Returns the verified candidate graph. @return Owning immutable lease. */
+        [[nodiscard]] std::shared_ptr<const PackageRestoreGraph> Graph() const noexcept {
+            return graph_;
+        }
+
+        /** @brief Returns the identity of the exact staged lock bytes. @return SHA-256 digest. */
+        [[nodiscard]] const Sha256Digest &LockDigest() const noexcept {
+            return lockDigest_;
+        }
+
+        /** @brief Returns the project root used for restore admission. @return Borrowed path owned by this record. */
+        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
+            return projectRoot_;
+        }
+
+    private:
+        friend class PackageRestoreService;
+
+        StagedPackageRestoreRecord(std::shared_ptr<const PackageRestoreGraph> graph, const Sha256Digest &lockDigest,
+                                   std::filesystem::path projectRoot)
+            : graph_(std::move(graph)), lockDigest_(lockDigest), projectRoot_(std::move(projectRoot)) {}
+
+        std::shared_ptr<const PackageRestoreGraph> graph_;
+        Sha256Digest lockDigest_;
+        std::filesystem::path projectRoot_;
+    };
+
     /** @brief Thread-safe projection of one restore's progress and actionable terminal diagnostic. */
     struct PackageRestoreProgressSnapshot {
         PackageRestoreOperationId operationId;
@@ -217,6 +247,21 @@ namespace Horo::Packages {
         [[nodiscard]] Result<PackageRestoreOperationHandle> Start(const PackageRestoreRequest &request);
 
         /**
+         * @brief Verifies an explicit candidate lock using the normal cache and publisher policy.
+         * @param request Candidate restore request with the project root and non-empty lock bytes.
+         * @return Operation handle or typed admission failure.
+         * @post A successful operation retains staged evidence without replacing the active restored graph or installing packages.
+         */
+        [[nodiscard]] Result<PackageRestoreOperationHandle> StartStaged(const PackageRestoreRequest &request);
+
+        /**
+         * @brief Reads the verified candidate for one exact completed staging operation.
+         * @param operation Exact staging operation identity.
+         * @return Immutable evidence, or empty for a running, failed, non-staging, or evicted operation.
+         */
+        [[nodiscard]] std::optional<StagedPackageRestoreRecord> Staged(PackageRestoreOperationId operation) const;
+
+        /**
          * @brief Reads and, when terminal, finalizes an operation projection.
          * @param operation Generation-safe operation identity.
          * @return Snapshot or empty for an unknown/evicted operation.
@@ -252,6 +297,8 @@ namespace Horo::Packages {
         struct Impl;
 
         explicit PackageRestoreService(std::unique_ptr<Impl> state);
+        /** @brief Common restore admission for active and staging operations. */
+        [[nodiscard]] Result<PackageRestoreOperationHandle> StartImpl(const PackageRestoreRequest &request, bool staging);
         void RefreshLocked() const;
 
         std::unique_ptr<Impl> state_;

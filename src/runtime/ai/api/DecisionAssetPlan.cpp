@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <tuple>
 #include <utility>
 
 namespace Horo::AI {
@@ -40,6 +41,21 @@ namespace Horo::AI {
     DecisionAssetPlan::DecisionAssetPlan(ConstructionData data) noexcept
         : asset_(data.asset), kind_(data.kind), schemaVersion_(data.schemaVersion), blackboardSchema_(std::move(data.blackboardSchema)),
           nodes_(std::move(data.nodes)), bindings_(std::move(data.bindings)), dependencies_(std::move(data.dependencies)) {}
+
+    /** @copydoc DecisionAssetPlan::HasEquivalentBindings */
+    bool DecisionAssetPlan::HasEquivalentBindings(const DecisionAssetPlan &candidate) const noexcept {
+        if (asset_ != candidate.asset_ || kind_ != candidate.kind_ || schemaVersion_ != candidate.schemaVersion_ ||
+            blackboardSchema_ != candidate.blackboardSchema_)
+            return false;
+        const bool sameNodes = std::ranges::equal(nodes_, candidate.nodes_, [](const auto &a, const auto &b) {
+            return std::tie(a.id, a.type, a.origin, a.firstBlackboardBinding, a.blackboardBindingCount, a.intrinsic) ==
+                   std::tie(b.id, b.type, b.origin, b.firstBlackboardBinding, b.blackboardBindingCount, b.intrinsic);
+        });
+        return sameNodes && std::ranges::equal(bindings_, candidate.bindings_, [](const auto &a, const auto &b) {
+            return std::tie(a.key, a.schemaIndex, a.kind, a.cardinality, a.access, a.presence, a.defaultValue) ==
+                   std::tie(b.key, b.schemaIndex, b.kind, b.cardinality, b.access, b.presence, b.defaultValue);
+        });
+    }
 
     /** @copydoc DecisionAssetPlan::Nodes */
     std::span<const DecisionPlanNode> DecisionAssetPlan::Nodes() const noexcept {

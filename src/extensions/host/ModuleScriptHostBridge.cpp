@@ -68,6 +68,17 @@ namespace Horo::Extensions {
         return Result<void>::Success();
     }
 
+    /** @copydoc ModuleScriptHostAuthority::AuthoringApiRevision */
+    std::uint64_t ModuleScriptHostAuthority::AuthoringApiRevision() const noexcept {
+        const auto &state = *impl_->state;
+        return state.closed.load(std::memory_order_acquire) ? 0 : state.authoringApiRevision.load(std::memory_order_acquire);
+    }
+
+    /** @copydoc ModuleScriptHostAuthority::PublishBuiltinAuthoringChange */
+    void ModuleScriptHostAuthority::PublishBuiltinAuthoringChange() const noexcept {
+        impl_->state->authoringApiRevision.fetch_add(1, std::memory_order_release);
+    }
+
     Result<std::uint64_t> ModuleScriptHostAuthority::IssueGeneration() const {
         if (auto admitted = RequireOpenOwner(); admitted.HasError())
             return Result<std::uint64_t>::Failure(admitted.ErrorValue());

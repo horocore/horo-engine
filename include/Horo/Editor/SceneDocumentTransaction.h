@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Scene/SceneSourceModel.h"
 
+#include <functional>
 #include <memory>
 #include <thread>
 
@@ -45,6 +46,7 @@ namespace Horo::Editor {
         bool dirty{};
         std::vector<SceneSource::SceneObjectSnapshot> objects;
         std::vector<SceneSource::ScenePrefabInstance> prefabInstances;
+        std::vector<SceneSource::SceneChildReference> childScenes{};
     };
 
     /** @brief Explicit owner-phase permission and revision fence; default admission is denied. */
@@ -89,6 +91,15 @@ namespace Horo::Editor {
         bool committed{};
     };
 
+    /** @brief Impact derived from the effective, validated edits before approval. */
+    struct SceneReplacementImpact final {
+        std::size_t createdObjects{};
+        std::size_t updatedObjects{};
+        std::size_t removedObjects{};
+        bool changesWorldTransforms{}; /**< At least one existing object moves or changes parent. */
+        bool changesCameras{};         /**< Adds, removes or changes an authored camera component. */
+    };
+
     /** @brief Owner-thread headless port to the actual SceneDocument and EditorHistory, never a parallel authoring model.
      * @details Create owns those same canonical types for headless hosts. Bind borrows the existing editor document
      * and its one history; both outlive this port and the host admits only one port per opening. All preparation,
@@ -98,8 +109,55 @@ namespace Horo::Editor {
      */
     class SceneDocumentTransactions final {
         struct Prepared;
+        struct Lifetime;
 
     public:
+        /** @brief Move-only review of a validated batch, with no live editor state or staged history attached. */
+        class ReplacementPreview final {
+        public:
+            /** @brief Transfer the single-use review. @param other Source review. */
+            ReplacementPreview(ReplacementPreview &&other) noexcept = default;
+            /** @brief Replace this review. @param other Source review. @return This review. */
+            ReplacementPreview &operator=(ReplacementPreview &&other) noexcept = default;
+
+            /** @brief Borrow only the non-no-op replacements validated for review. @return Bounded typed changes. */
+            [[nodiscard]] std::span<const SceneObjectReplacement> Changes() const noexcept {
+                return changes_;
+            }
+
+            /** @brief Summarizes the exact effective changes presented by this review. @return Detached impact values. */
+            [[nodiscard]] SceneReplacementImpact Impact() const noexcept {
+                return impact_;
+            }
+
+        private:
+            friend class SceneDocumentTransactions;
+            ReplacementPreview() = default;
+            std::weak_ptr<Lifetime> owner_;
+            SceneTransactionContext context_;
+            SceneTransactionLimits limits_;
+            std::vector<SceneObjectReplacement> changes_;
+            SceneReplacementImpact impact_;
+        };
+
+        /** @brief Validate a detached batch for review without mutating the document or history.
+         * @param context Exact editable scene opening and revision at proposal time.
+         * @param changes Owned candidate operations; never read again from the caller after preview.
+         * @param limits Finite preparation and change ceilings.
+         * @return Single-use review with effective changes or a typed validation failure.
+         */
+        [[nodiscard]] Result<ReplacementPreview> PreviewReplacements(const SceneTransactionContext &context,
+                                                                     std::vector<SceneObjectReplacement> changes,
+                                                                     SceneTransactionLimits limits = {}) const;
+
+        /** @brief Apply the reviewed batch through the canonical history after explicit owner approval.
+         * @param approval Fresh owner fence with live edit permission and cancellation after approval.
+         * @param preview Consumed review from this opening. Dropping it discards the proposal.
+         * @return One coherent commit/no-op or a typed rejection with no mutation.
+         */
+        [[nodiscard]] Result<SceneTransactionResult> ApplyReviewedReplacements(const SceneTransactionContext &approval,
+                                                                               ReplacementPreview preview);
+
         /** @brief Fully reserved subtree-to-instance replacement; no authored state changes before CommitPrefabReplacement. */
         class PrefabReplacement final {
         public:
@@ -199,6 +257,7 @@ namespace Horo::Editor {
         friend class NavigationSettingsWorkflow;
         friend class NavigationSettingsReview;
         friend class NavigationProjectSettingsSession;
+        friend class PrefabApplyTransaction;
 
         struct Lifetime final {
             SceneDocumentTransactions *owner{};
@@ -211,6 +270,19 @@ namespace Horo::Editor {
                                                                 SceneTransactionLimits limits = {}, bool coordinated = false) const;
         /** @brief Stages canonical replay for an exclusively admitted multi-document coordinator. */
         [[nodiscard]] Result<std::shared_ptr<Prepared>> PrepareReplay(const SceneTransactionContext &context, bool redo);
+        /** @brief Reserves one coordinated history transition for exact value replacements of existing placements. */
+        [[nodiscard]] Result<std::shared_ptr<Prepared>> PreparePrefabValues(const SceneTransactionContext &context,
+                                                                            std::span<const SceneSource::ScenePrefabInstance> placements,
+                                                                            std::uint64_t expectedReplacementEpoch,
+                                                                            SceneTransactionLimits limits = {}) const;
+        /** @brief Identifies only an exact next coordinated prefab value history entry. */
+        [[nodiscard]] Result<std::optional<std::uint64_t>> NextPrefabValueState(const SceneTransactionContext &context, bool redo) const;
+        /** @brief Checks whether an exact coordinated value transition remains within the indicated direction. */
+        [[nodiscard]] bool HasPrefabValueHistory(std::uint64_t state, bool redo) const noexcept;
+        /** @brief Retires unreachable Prefab transitions and history beyond those boundaries without changing authored state. */
+        bool RetirePrefabValueHistory(const std::function<bool(std::uint64_t, bool)> &unavailable) noexcept;
+        /** @brief Encodes the already reserved canonical root without rereading live state. */
+        [[nodiscard]] std::string EncodePreparedScene(const Prepared &prepared) const;
         /** @brief Computes the post-publication fence from prepared owner state without copying a root. */
         [[nodiscard]] SceneTransactionContext PreparedContext(const Prepared &prepared) const noexcept;
         /** @brief Rechecks the exact prepared owner fence without mutation or callbacks. */

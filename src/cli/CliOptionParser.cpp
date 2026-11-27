@@ -215,10 +215,12 @@ namespace Horo::Cli {
                     auto result = ParseConfiguredInteger(option, configured);
                     const bool incompatible = !result.has_value();
                     return {.value = std::move(result), .incompatible = incompatible};
-                } else {
+                } else if constexpr (std::is_same_v<Value, std::string>) {
                     const bool incompatible = option.valueKind == Flag;
                     return {.value = incompatible ? std::nullopt : ParseConfiguredString(option, configured, normalizer, diagnostics),
                             .incompatible = incompatible};
+                } else {
+                    return {.incompatible = true};
                 }
             }, value);
             if (parsed.incompatible)
@@ -230,15 +232,6 @@ namespace Horo::Cli {
         [[nodiscard]] Error ParseFailure(DiagnosticCollector &diagnostics) {
             Error error = MakeError(CliErrors::ParseFailed);
             error.diagnostics = diagnostics.Take();
-            return error;
-        }
-
-        [[nodiscard]] Error InputParseFailure() {
-            Error error = MakeError(CliErrors::ParseFailed, "CLI stdin payload is malformed.");
-            error.diagnostics.push_back({.code = DiagnosticCode{"cli.stdin_malformed"},
-                                         .severity = DiagnosticSeverity::Error,
-                                         .message = "Selected stdin does not match the command's declared grammar.",
-                                         .location = {.source = "stdin", .line = 1, .column = 1}});
             return error;
         }
 
@@ -312,6 +305,12 @@ namespace Horo::Cli {
                                  const ICliPathNormalizer *normalizer) {
             if (descriptor == nullptr) {
                 diagnostics.Add("cli.option_unknown", "Unknown option.", index);
+                return;
+            }
+            if (descriptor->sensitive) {
+                diagnostics.Add("cli.sensitive_argument_forbidden", "Sensitive values require a protected credential channel.", index);
+                if (!inlineValue.has_value() && index + 1 < arguments.size() && arguments[index + 1] != "--")
+                    ++index;
                 return;
             }
             ParseOptionValue(arguments, index, inlineValue, *FindState(states, descriptor), diagnostics, normalizer);
@@ -414,31 +413,24 @@ namespace Horo::Cli {
                    std::get<bool>(state->values.back().value);
         }
 
-        [[nodiscard]] bool OptionHasValue(const std::span<const OptionState> states, const std::string_view name) noexcept {
+        /** @brief Requires the current invocation to explicitly supply a usable prompt alternative. */
+        [[nodiscard]] bool HasExplicitPromptAlternative(const std::span<const OptionState> states, const std::string_view name) noexcept {
             const OptionState *state = FindOptionState(states, name);
-            return state != nullptr && !state->values.empty();
+            return state != nullptr && std::ranges::any_of(state->values, [](const CliResolvedValue &entry) {
+                const auto *flag = std::get_if<bool>(&entry.value);
+                return entry.source == CliValueSource::Invocation && (flag == nullptr || *flag);
+            });
         }
 
-        [[nodiscard]] bool IsInputModeAdmitted(const CliCommandDescriptor &command, const CliParserContext &context) noexcept {
-            using enum CliStdinPolicy;
-            return command.stdinPolicy != None && context.selectedStdinPolicy != None &&
-                   context.selectedStdinPolicy == command.stdinPolicy && context.inputReader != nullptr;
-        }
-
-        [[nodiscard]] bool IsValidInputPayload(const CliStdinPolicy policy, const std::span<const std::byte> bytes,
-                                               const CliParserLimits &limits) {
-            using enum CliStdinPolicy;
-            switch (policy) {
-                case BinaryStream:
-                    return true;
-                case JsonDocument:
-                    return Detail::ValidJsonDocument(bytes);
-                case JsonLines:
-                    return Detail::ValidJsonLines(bytes, limits.maximumJsonLines);
-                case None:
-                    return false;
-            }
-            return false;
+        /** @brief Checks the parsed explicit deadline against command policy before any input or application work. */
+        void ValidateRequestedTimeout(const CliCommandDescriptor &command, const std::span<const OptionState> states,
+                                      DiagnosticCollector &diagnostics) {
+            const auto *timeout = FindOptionState(states, "timeout-ms");
+            if (timeout == nullptr || timeout->values.empty())
+                return;
+            const auto milliseconds = static_cast<std::uint64_t>(std::get<std::int64_t>(timeout->values.front().value));
+            if (milliseconds > command.timeout.maximumMilliseconds)
+                diagnostics.Add("cli.timeout_not_admitted", "Requested timeout exceeds the command's admitted deadline policy.", 0);
         }
 
         [[nodiscard]] Result<void> ValidateArgumentBounds(const std::span<const std::string_view> arguments,
@@ -482,7 +474,7 @@ namespace Horo::Cli {
             const bool nonInteractive = OptionIsTrue(states, "non-interactive") || !context.terminalAvailable;
             request.interactive = command.interactive != CliInteractivePolicy::Forbidden && !nonInteractive;
             if (command.interactive == CliInteractivePolicy::Required && nonInteractive &&
-                !OptionHasValue(states, *command.interactiveAlternativeOption))
+                !HasExplicitPromptAlternative(states, *command.interactiveAlternativeOption))
                 return Result<void>::Failure(MakeError(CliErrors::InteractiveInputUnavailable));
             return Result<void>::Success();
         }
@@ -495,23 +487,6 @@ namespace Horo::Cli {
             }
         }
 
-        [[nodiscard]] Result<std::optional<CliParsedInput>> ReadInput(const CliCommandDescriptor &command, const CliParserContext &context,
-                                                                      const CliParserLimits &limits) {
-            if (!context.stdinSelected)
-                return Result<std::optional<CliParsedInput>>::Success(std::nullopt);
-            if (!IsInputModeAdmitted(command, context))
-                return Result<std::optional<CliParsedInput>>::Failure(MakeError(CliErrors::InputModeUnsupported));
-            Result<std::vector<std::byte>> read = context.inputReader->Read(limits.maximumInputBytes);
-            if (read.HasError())
-                return Result<std::optional<CliParsedInput>>::Failure(
-                    WrapError(CliErrors::ParseFailed, read.ErrorValue(), "CLI stdin capture failed."));
-            std::vector<std::byte> bytes = std::move(read).Value();
-            if (bytes.size() > limits.maximumInputBytes)
-                return Result<std::optional<CliParsedInput>>::Failure(MakeError(CliErrors::InputCapacityExceeded));
-            if (!IsValidInputPayload(command.stdinPolicy, bytes, limits))
-                return Result<std::optional<CliParsedInput>>::Failure(InputParseFailure());
-            return Result<std::optional<CliParsedInput>>::Success(CliParsedInput{.policy = command.stdinPolicy, .bytes = std::move(bytes)});
-        }
     }  // namespace
 
     /** @copydoc CliOptionParser::Parse */
@@ -533,11 +508,12 @@ namespace Horo::Cli {
         CliCommandRequest request{.command = command->path};
         ParsePositionals(positionals, *command, request, diagnostics, context.pathNormalizer);
         ResolveFallbacks(states, context.configuration, diagnostics, context.pathNormalizer);
+        ValidateRequestedTimeout(*command, states, diagnostics);
         if (const Result<void> interaction = ApplyInteractionPolicy(*command, states, context, request); interaction.HasError())
             return Result<CliCommandRequest>::Failure(interaction.ErrorValue());
         if (!diagnostics.Empty())
             return Result<CliCommandRequest>::Failure(ParseFailure(diagnostics));
-        Result<std::optional<CliParsedInput>> input = ReadInput(*command, context, limits);
+        Result<std::optional<CliParsedInput>> input = Detail::ReadInput(*command, context, limits);
         if (input.HasError())
             return Result<CliCommandRequest>::Failure(input.ErrorValue());
         request.input = std::move(input).Value();

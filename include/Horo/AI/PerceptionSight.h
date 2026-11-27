@@ -8,6 +8,7 @@
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Physics/PhysicsQueryEventCapability.h"
 
+#include <memory>
 #include <optional>
 
 namespace Horo::AI {
@@ -80,11 +81,13 @@ namespace Horo::AI {
         bool pending{};
         bool candidatesTruncated{};
         Runtime::EntityRef listener; /**< Exact listener that produced this result. */
+        std::shared_ptr<const BlackboardValueAuthorization> spatialAuthorization; /**< Exact read lease captured by Begin. */
     };
 
     /** @brief Stages only current, Gameplay-admitted completed sight observations into memory at PerceptionSensePoll.
      * @param scene Fresh current Scene view. @param filtering Current spatial/filter publication.
-     * @param result Completed sight result with its exact publication fence. @param listenerType Memory descriptor identity.
+     * @param result Completed sight result from PerceptionSight; retain the publication lease in copies.
+     * @param listenerType Memory descriptor identity.
      * @param memory Recipient memory. @return Success or typed stale, invalid or memory failure.
      * @details Unknown evidence preserves memory; confirmed visible samples refresh last-known facts and confirmed loss marks lost.
      */
@@ -134,7 +137,9 @@ namespace Horo::AI {
          * @param spatialRevision Current candidate publication revision.
          * @param physics Current host-selected world/capability, scene generation, tick and publication.
          * @return Current copied result, pending while Physics has not processed it, or original typed Physics failure.
-         * @details Repeated Poll does not advance hysteresis. A replaced scene/listener invalidates all history.
+         * @details Repeated Poll does not advance hysteresis. Endpoint retirement cancels any pending batch
+         * and clears its confirmation history. The captured spatial authorization must remain current even
+         * when the caller repeats the original revision. A replaced scene/listener invalidates all history.
          */
         [[nodiscard]] Result<PerceptionSightResult> Poll(const Runtime::RuntimeSceneView &scene, std::uint64_t spatialRevision,
                                                          const PerceptionSightPhysicsPublication &physics);
@@ -154,8 +159,11 @@ namespace Horo::AI {
 
         /** @brief Applies exactly one confirmed sample; unknown/budget/stale results never call this helper. */
         void Confirm(std::size_t index, bool clear);
-        /** @brief Removes stale generation evidence even on repeated reads of already completed work. */
-        void Revalidate(const Runtime::RuntimeSceneView &scene, bool publicationCurrent);
+        /** @brief Removes stale generation evidence even on repeated reads of already completed work.
+         * @param scene Fresh owner-thread view. @param publicationCurrent Whether the provider fences still match.
+         * @return Whether the listener, publication and all captured sources are still current.
+         */
+        [[nodiscard]] bool Revalidate(const Runtime::RuntimeSceneView &scene, bool publicationCurrent);
         /** @brief Checks exact current Scene/listener binding without changing owned history. */
         [[nodiscard]] bool ListenerBindingCurrent(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialSnapshot &spatial,
                                                   const PerceptionSightFrame &frame) const;
@@ -194,6 +202,7 @@ namespace Horo::AI {
         PerceptionSightPolicy policy_;
         PerceptionSightFrame frame_;
         Physics::PhysicsQueryEventIdentity physicsIdentity_;
+        std::shared_ptr<const BlackboardValueAuthorization> policyAuthorization_;
         PerceptionSightResult result_;
         std::optional<Physics::PhysicsQueryBatchHandle> batch_;
         bool started_{};

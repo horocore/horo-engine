@@ -1,0 +1,179 @@
+#pragma once
+
+/** @file EditorDebugCapture.h @brief Bounded numeric debug capture at the editor owner boundary. */
+
+#include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/Result.h"
+#include "editor/renderer/EditorViewportImageCapture.h"
+
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <thread>
+
+namespace Horo::Editor {
+    struct EditorDebugCaptureRequest {
+        static constexpr std::uint32_t MaximumSamples = 16;
+        static constexpr std::uint32_t MinimumIntervalMs = 100;
+        static constexpr std::uint32_t MaximumIntervalMs = 1000;
+        std::uint64_t target{};
+        std::uint32_t samples{};
+        std::uint32_t intervalMs{};
+    };
+
+    enum class EditorDebugCapturePhase {
+        Sampling,
+        Ready,
+        Cancelled,
+        SceneChanged
+    };
+
+    struct EditorDebugCaptureSample {
+        std::uint32_t elapsedMs{};
+        std::array<float, 3> worldPosition{};
+    };
+
+    struct EditorDebugCaptureArtifact {
+        std::uint64_t id{};
+        EditorDebugCaptureRequest request;
+        EditorDebugCapturePhase phase{};
+        std::array<EditorDebugCaptureSample, EditorDebugCaptureRequest::MaximumSamples> samples{};
+        std::uint32_t count{};
+    };
+
+    /** @brief Detached numeric evidence and its revocable delivery deadline. */
+    struct EditorDebugCaptureSnapshot final {
+        EditorDebugCaptureArtifact artifact;
+        std::weak_ptr<const void> publication;
+        std::chrono::steady_clock::time_point expiresAt;
+    };
+
+    /** @brief One bounded ephemeral artifact. All methods belong to the editor owner thread. */
+    class EditorDebugCaptureStorage final {
+    public:
+        using Clock = std::chrono::steady_clock;
+        static constexpr auto Lifetime = std::chrono::seconds{30};
+        static constexpr auto StartSpacing = std::chrono::seconds{1};
+
+        /** @brief Admits an exact validated request if no capture is in flight and the rate limit allows it. */
+        std::optional<std::uint64_t> Start(EditorDebugCaptureRequest request, Clock::time_point now) {
+            Expire(now);
+            if (!Valid(request) || (slot_ && slot_->phase == EditorDebugCapturePhase::Sampling) ||
+                (started_ && now - *started_ < StartSpacing) || id_ == std::numeric_limits<std::uint64_t>::max())
+                return std::nullopt;
+            publication_ = std::make_shared<const bool>(true);
+            started_ = now;
+            nextSample_ = now;
+            slot_ = EditorDebugCaptureArtifact{.id = ++id_, .request = request, .phase = EditorDebugCapturePhase::Sampling};
+            return id_;
+        }
+
+        static bool Valid(const EditorDebugCaptureRequest &request) {
+            return request.target && request.samples > 0 && request.samples <= EditorDebugCaptureRequest::MaximumSamples &&
+                   request.intervalMs >= EditorDebugCaptureRequest::MinimumIntervalMs &&
+                   request.intervalMs <= EditorDebugCaptureRequest::MaximumIntervalMs;
+        }
+
+        /** @brief Returns an observation only when the owner is due to collect it. */
+        bool Due(Clock::time_point now) {
+            Expire(now);
+            return slot_ && slot_->phase == EditorDebugCapturePhase::Sampling && now >= nextSample_;
+        }
+
+        /** @brief Appends one redacted observation with no catch-up bursts. */
+        void Sample(const std::array<float, 3> position, Clock::time_point now) {
+            if (!Due(now))
+                return;
+            auto &capture = *slot_;
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - *started_);
+            capture.samples[capture.count++] = {.elapsedMs = static_cast<std::uint32_t>(elapsed.count()), .worldPosition = position};
+            nextSample_ = now + std::chrono::milliseconds{capture.request.intervalMs};
+            if (capture.count == capture.request.samples)
+                capture.phase = EditorDebugCapturePhase::Ready;
+        }
+
+        /** @brief Stops publication when the exact Play scene or entity changes. */
+        void RetireScene() {
+            if (slot_ && (slot_->phase == EditorDebugCapturePhase::Sampling || slot_->phase == EditorDebugCapturePhase::Ready)) {
+                slot_->phase = EditorDebugCapturePhase::SceneChanged;
+                WithdrawSamples();
+            }
+        }
+
+        /** @brief Returns a copied artifact or no evidence if it expired or belongs to another request. */
+        std::optional<EditorDebugCaptureSnapshot> Read(std::uint64_t id, Clock::time_point now) {
+            Expire(now);
+            if (!slot_ || slot_->id != id)
+                return std::nullopt;
+            return EditorDebugCaptureSnapshot{*slot_, publication_, *started_ + Lifetime};
+        }
+
+        /** @brief Cancels the exact sampling trace or withdraws its retained result. */
+        bool Cancel(std::uint64_t id, Clock::time_point now) {
+            Expire(now);
+            if (!slot_ || slot_->id != id || !publication_)
+                return false;
+            slot_->phase = EditorDebugCapturePhase::Cancelled;
+            WithdrawSamples();
+            return true;
+        }
+
+        /** @brief Withdraws all retained evidence before session teardown. */
+        void Clear() noexcept {
+            publication_.reset();
+            slot_.reset();
+        }
+
+    private:
+        void Expire(const Clock::time_point now) {
+            if (started_ && now - *started_ >= Lifetime)
+                Clear();
+        }
+
+        /** @brief Revokes queued deliveries while preserving the terminal phase for direct observation. */
+        void WithdrawSamples() noexcept {
+            publication_.reset();
+            slot_->samples = {};
+            slot_->count = 0;
+        }
+
+        std::shared_ptr<const bool> publication_;
+        std::uint64_t id_{};
+        std::optional<Clock::time_point> started_;
+        Clock::time_point nextSample_{};
+        std::optional<EditorDebugCaptureArtifact> slot_;
+    };
+
+    /** @brief Non-native identity and pixel extent of the authored viewport observed before capture approval. */
+    struct EditorDebugImageSource final {
+        std::uint64_t sceneEpoch{};
+        std::uint64_t sceneRevision{};
+        std::uint64_t viewportRevision{};
+        std::uint64_t projectionRevision{};
+        std::uint32_t width{};
+        std::uint32_t height{};
+
+        [[nodiscard]] constexpr bool operator==(const EditorDebugImageSource &) const noexcept = default;
+    };
+
+    /** @brief Workspace owner callbacks for approved debug capture and authenticated observation. */
+    struct EditorDebugCaptureEndpoint {
+        std::string project;
+        std::uint64_t authorizationRevision{};
+        std::thread::id owner;
+        std::function<Result<std::uint64_t>(const EditorDebugCaptureRequest &, std::function<bool()>)> start;
+        std::function<std::optional<EditorDebugCaptureSnapshot>(std::uint64_t)> read;
+        std::function<bool(std::uint64_t)> cancel;
+        std::function<std::optional<EditorDebugImageSource>()> readImageSource;
+        std::function<Result<std::uint64_t>(EditorDebugImageSource, EditorViewportImageRegion, std::function<bool()>)> startImage;
+        std::function<std::optional<EditorViewportImageSnapshot>(std::uint64_t)> readImage;
+        std::function<bool(std::uint64_t)> cancelImage;
+        std::function<void()> retireImage; /**< Owner-lane withdrawal when the authored viewport changes. */
+        CancellationToken lifetime;        /**< Revokes previously prepared MCP deliveries on workspace retirement. */
+    };
+}  // namespace Horo::Editor

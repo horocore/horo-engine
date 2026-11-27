@@ -2,7 +2,11 @@
 
 #include "JsonUtils.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <limits>
+#include <numbers>
 #include <ranges>
 #include <span>
 
@@ -31,8 +35,10 @@ namespace Horo::Application::Internal {
 
         /** @brief Fixed schema-one collection bounds, validated before allocating any entry. */
         bool Shape(const Json &root) {
-            if (!Foundation::HasAllowedFields(root, {"schemaVersion", "genericFallback", "profiles", "sets", "actions", "controls",
-                                                     "suggestions", "poses"}) ||
+            if (!Foundation::HasAllowedFields(root,
+                                              {"schemaVersion", "genericFallback", "profiles", "sets", "actions", "controls", "suggestions",
+                                               "poses"},
+                                              {"haptics", "worldUiPointer", "locomotion"}) ||
                 !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1 ||
                 !Number(root.at("genericFallback"), std::numeric_limits<std::uint32_t>::max(), true))
                 return false;
@@ -42,6 +48,10 @@ namespace Horo::Application::Internal {
                                     std::pair{"controls", XR::XRActionBindingLimits::MaximumBindings},
                                     std::pair{"suggestions", XR::XRActionBindingLimits::MaximumBindings},
                                     std::pair{"poses", std::size_t{4}}};
+            const auto haptics = root.find("haptics");
+            if (haptics != root.end() &&
+                (!haptics->is_array() || haptics->size() > XR::OpenXRInternal::NativeHapticActionPath::MaximumRoutes))
+                return false;
             return std::ranges::all_of(counts, [&root](const auto &count) {
                 const auto &[name, maximum] = count;
                 return root.at(name).is_array() && root.at(name).size() <= maximum;
@@ -140,6 +150,205 @@ namespace Horo::Application::Internal {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Retains only bounded physical output declarations from the already verified installer package. */
+        Result<void> Haptics(const Json &root, OpenXRApplicationBindings &output) {
+            const auto routes = root.find("haptics");
+            if (routes == root.end())
+                return Result<void>::Success();
+            for (const auto &entry : *routes) {
+                if (!Foundation::HasAllowedFields(entry, {"profile", "set", "role", "path", "label"}) || !Identity(entry.at("profile")) ||
+                    !Identity(entry.at("set")) || !Role(entry.at("role")) || !Text(entry.at("path"), XR_MAX_PATH_LENGTH - 1) ||
+                    !Text(entry.at("label"), XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1))
+                    return Result<void>::Failure(InvalidBindings());
+                output.haptics.push_back({{entry.at("profile").get<std::uint32_t>()},
+                                          {entry.at("set").get<std::uint32_t>()},
+                                          static_cast<XR::XRTrackedDeviceRole>(entry.at("role").get<std::uint64_t>()),
+                                          entry.at("path").get<std::string>(),
+                                          entry.at("label").get<std::string>()});
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Tests whether the signed document declares the required pose for the controller role. */
+        bool HasControllerPose(const OpenXRApplicationBindings &bindings, XR::XRTrackedDeviceRole role, XR::XRTrackedPoseKind kind) {
+            return std::ranges::any_of(bindings.poses, [=](const OpenXRApplicationPose &pose) {
+                return pose.role == role && pose.kind == kind;
+            });
+        }
+
+        /** @brief Selects a declared digital controller action with a matching aim pose. */
+        Result<void> WorldUiPointer(const Json &root, OpenXRApplicationBindings &output) {
+            const auto entry = root.find("worldUiPointer");
+            if (entry == root.end())
+                return Result<void>::Success();
+            if (!Foundation::HasAllowedFields(*entry, {"action", "maximumDistanceMeters"}) ||
+                !Text(entry->at("action"), XR::XRActionBindingLimits::MaximumNameBytes) || !entry->at("maximumDistanceMeters").is_number())
+                return Result<void>::Failure(InvalidBindings());
+            const auto limit = entry->at("maximumDistanceMeters").get<float>();
+            if (!std::isfinite(limit) || limit <= 0)
+                return Result<void>::Failure(InvalidBindings());
+            const Input::ActionId action{entry->at("action").get<std::string>()};
+            const auto declaration = std::ranges::find(output.schema.actions, action, &XR::XRActionDeclaration::action);
+            if (declaration == output.schema.actions.end() || declaration->valueType != Input::ActionValueType::Digital ||
+                !HasControllerPose(output, declaration->role, XR::XRTrackedPoseKind::Aim))
+                return Result<void>::Failure(InvalidBindings());
+            output.worldUiPointer.emplace(action, declaration->role, limit);
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves an authored name to exactly one action of the required value shape. */
+        std::optional<Input::ActionId> LocomotionAction(const Json &value, Input::ActionValueType type,
+                                                        const OpenXRApplicationBindings &bindings) {
+            if (!Text(value, XR::XRActionBindingLimits::MaximumNameBytes))
+                return std::nullopt;
+            const Input::ActionId id{value.get<std::string>()};
+            const auto &actions = bindings.schema.actions;
+            const auto match = std::ranges::find(actions, id, &XR::XRActionDeclaration::action);
+            if (match == actions.end() || match->valueType != type ||
+                std::ranges::count(actions, id, &XR::XRActionDeclaration::action) != 1)
+                return std::nullopt;
+            return id;
+        }
+
+        /** @brief Copies finite authored numbers without allowing string or Boolean coercion. */
+        std::optional<float> LocomotionNumber(const Json &value) {
+            if (!value.is_number())
+                return std::nullopt;
+            const auto number = value.get<float>();
+            return std::isfinite(number) ? std::optional{number} : std::nullopt;
+        }
+
+        /** @brief Validates the optional exact Axis1D snap route and its hysteresis. */
+        Result<OpenXRSnapTurnBinding> SnapTurn(const Json &entry, const OpenXRApplicationBindings &bindings) {
+            using Outcome = Result<OpenXRSnapTurnBinding>;
+            if (!Foundation::HasAllowedFields(entry, {"action", "angleRadians", "engage", "release"}))
+                return Outcome::Failure(InvalidBindings());
+            const auto action = LocomotionAction(entry.at("action"), Input::ActionValueType::Axis1D, bindings);
+            const auto angle = LocomotionNumber(entry.at("angleRadians"));
+            const auto engage = LocomotionNumber(entry.at("engage"));
+            const auto release = LocomotionNumber(entry.at("release"));
+            if (!action || !angle || !engage || !release || *angle <= 0.0F || *angle > std::numbers::pi_v<float> || *engage > 1.0F ||
+                *release < 0.0F || *release >= *engage)
+                return Outcome::Failure(InvalidBindings());
+            return Outcome::Success({*action, *angle, *engage, *release});
+        }
+
+        using TranslationOutcome = Result<OpenXRTranslationBinding>;
+
+        /** @brief Validates the exact digital teleport action and its bounded aim ray. */
+        Result<OpenXRTeleportBinding> TeleportBinding(const Json &entry, const OpenXRApplicationBindings &bindings) {
+            using Outcome = Result<OpenXRTeleportBinding>;
+            if (!Foundation::HasAllowedFields(entry, {"action", "maximumDistanceMeters"}))
+                return Outcome::Failure(InvalidBindings());
+            const auto action = LocomotionAction(entry.at("action"), Input::ActionValueType::Digital, bindings);
+            const auto distance = LocomotionNumber(entry.at("maximumDistanceMeters"));
+            if (!action || !distance || *distance <= 0.0F || *distance > 100.0F)
+                return Outcome::Failure(InvalidBindings());
+            const auto declaration = std::ranges::find(bindings.schema.actions, *action, &XR::XRActionDeclaration::action);
+            if (!HasControllerPose(bindings, declaration->role, XR::XRTrackedPoseKind::Aim))
+                return Outcome::Failure(InvalidBindings());
+            return Outcome::Success({*action, declaration->role, *distance});
+        }
+
+        /** @brief Validates the discontinuity limit for physical room-scale correction. */
+        TranslationOutcome RoomScaleBinding(const Json &entry) {
+            if (!Foundation::HasAllowedFields(entry, {"maximumSampleDistanceMeters", "maximumTrackingGapMilliseconds"}))
+                return TranslationOutcome::Failure(InvalidBindings());
+            const auto distance = LocomotionNumber(entry.at("maximumSampleDistanceMeters"));
+            const auto &gap = entry.at("maximumTrackingGapMilliseconds");
+            if (!distance || *distance <= 0.0F || !Number(gap, 1'000))
+                return TranslationOutcome::Failure(InvalidBindings());
+            return TranslationOutcome::Success(OpenXRRoomScaleBinding{*distance, gap.get<std::int64_t>() * 1'000'000});
+        }
+
+        /** @brief Validates paired controller grips and their authored tracking window. */
+        TranslationOutcome ArmSwingBinding(const Json &entry, const OpenXRApplicationBindings &bindings) {
+            if (!Foundation::HasAllowedFields(entry, {"gain", "maximumTrackingGapMilliseconds"}))
+                return TranslationOutcome::Failure(InvalidBindings());
+            const auto gain = LocomotionNumber(entry.at("gain"));
+            const auto &gap = entry.at("maximumTrackingGapMilliseconds");
+            if (!gain || *gain <= 0.0F || !Number(gap, 1'000) ||
+                !HasControllerPose(bindings, XR::XRTrackedDeviceRole::LeftController, XR::XRTrackedPoseKind::Grip) ||
+                !HasControllerPose(bindings, XR::XRTrackedDeviceRole::RightController, XR::XRTrackedPoseKind::Grip))
+                return TranslationOutcome::Failure(InvalidBindings());
+            return TranslationOutcome::Success(OpenXRArmSwingBinding{*gain, gap.get<std::int64_t>() * 1'000'000});
+        }
+
+        /** @brief Validates a complete Axis2D route and its radial dead zone. */
+        TranslationOutcome StickBinding(const Json &entry, const OpenXRApplicationBindings &bindings) {
+            if (!entry.contains("moveAction") || !entry.contains("deadZone"))
+                return TranslationOutcome::Failure(InvalidBindings());
+            const auto action = LocomotionAction(entry.at("moveAction"), Input::ActionValueType::Axis2D, bindings);
+            const auto deadZone = LocomotionNumber(entry.at("deadZone"));
+            if (!action || !deadZone || *deadZone < 0.0F || *deadZone >= 1.0F)
+                return TranslationOutcome::Failure(InvalidBindings());
+            return TranslationOutcome::Success(OpenXRStickMoveBinding{*action, *deadZone});
+        }
+
+        /** @brief Resolves one authored translation profile with no implicit fallback between modes. */
+        TranslationOutcome TranslationBinding(const Json &entry, const OpenXRApplicationBindings &bindings) {
+            const bool hasStick = entry.contains("moveAction") || entry.contains("deadZone");
+            const auto swing = entry.find("armSwing");
+            const auto room = entry.find("roomScale");
+            const auto teleport = entry.find("teleport");
+            const std::array selected{hasStick, swing != entry.end(), room != entry.end(), teleport != entry.end()};
+            if (std::ranges::count(selected, true) != 1)
+                return TranslationOutcome::Failure(InvalidBindings());
+            if (teleport != entry.end()) {
+                auto binding = TeleportBinding(*teleport, bindings);
+                return binding.HasValue() ? TranslationOutcome::Success(std::move(binding).Value())
+                                          : TranslationOutcome::Failure(binding.ErrorValue());
+            }
+            if (room != entry.end())
+                return RoomScaleBinding(*room);
+            if (swing != entry.end())
+                return ArmSwingBinding(*swing, bindings);
+            return StickBinding(entry, bindings);
+        }
+
+        /** @brief Attaches explicitly authored alternatives only after the primary translation has been admitted. */
+        Result<void> AddLocomotionOptions(const Json &entry, const OpenXRApplicationBindings &bindings,
+                                          OpenXRLocomotionBinding &selection) {
+            if (const auto turn = entry.find("snapTurn"); turn != entry.end()) {
+                auto parsed = SnapTurn(*turn, bindings);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                selection.turn.emplace(std::move(parsed).Value());
+            }
+            if (const auto teleport = entry.find("reducedMotionTeleport"); teleport != entry.end()) {
+                if (!selection.AllowsReducedMotionTeleport())
+                    return Result<void>::Failure(InvalidBindings());
+                auto parsed = TeleportBinding(*teleport, bindings);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                selection.reducedMotionTeleport.emplace(std::move(parsed).Value());
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Copies opt-in authored motions for one actor without choosing a player or establishing authority. */
+        Result<void> Locomotion(const Json &root, OpenXRApplicationBindings &bindings) {
+            const auto entry = root.find("locomotion");
+            if (entry == root.end())
+                return Result<void>::Success();
+            if (!Foundation::HasAllowedFields(*entry, {"actor", "speedMetersPerSecond"},
+                                              {"moveAction", "deadZone", "armSwing", "roomScale", "teleport", "snapTurn",
+                                               "reducedMotionTeleport"}) ||
+                !Number(entry->at("actor"), std::numeric_limits<std::uint64_t>::max()))
+                return Result<void>::Failure(InvalidBindings());
+            const auto speed = LocomotionNumber(entry->at("speedMetersPerSecond"));
+            if (!speed || *speed <= 0.0F)
+                return Result<void>::Failure(InvalidBindings());
+            auto translation = TranslationBinding(*entry, bindings);
+            if (translation.HasError())
+                return Result<void>::Failure(translation.ErrorValue());
+            OpenXRLocomotionBinding selection{entry->at("actor").get<std::uint64_t>(), *speed, std::move(translation).Value()};
+            if (auto options = AddLocomotionOptions(*entry, bindings, selection); options.HasError())
+                return options;
+            bindings.locomotion.emplace(std::move(selection));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ReadInstalledOpenXRBindings */
@@ -169,6 +378,12 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(controls.ErrorValue());
             if (auto poses = Poses(root, *output); poses.HasError())
                 return Outcome::Failure(poses.ErrorValue());
+            if (auto haptics = Haptics(root, *output); haptics.HasError())
+                return Outcome::Failure(haptics.ErrorValue());
+            if (auto pointer = WorldUiPointer(root, *output); pointer.HasError())
+                return Outcome::Failure(pointer.ErrorValue());
+            if (auto locomotion = Locomotion(root, *output); locomotion.HasError())
+                return Outcome::Failure(locomotion.ErrorValue());
             return Outcome::Success(std::move(output));
         } catch (const Foundation::Json::exception &) {
             return Outcome::Failure(InvalidBindings());

@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <stdexcept>
@@ -94,11 +95,22 @@ namespace {
 
         Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
+            return Publish(prepared, destination, receipt, false);
+        }
+
+        Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                 AtomicFileReplacementReceipt &receipt) override {
+            return Publish(prepared, destination, receipt, true);
+        }
+
+        Result<void> Publish(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                             AtomicFileReplacementReceipt &receipt, const bool requireAbsent) {
             if (beforeReplace)
                 beforeReplace();
             if (failReplace)
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
-            auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
+            auto result = requireAbsent ? native.PublishFileNoReplaceTracked(prepared, destination, receipt)
+                                        : native.AtomicReplaceTracked(prepared, destination, receipt);
             if (receipt.WasCommitted() && afterCommit)
                 afterCommit();
             if (receipt.WasCommitted() && failAfterCommit)
@@ -120,7 +132,68 @@ namespace {
     SourceSaveRequest Request(const SourceDocumentSnapshot &snapshot) {
         return {snapshot.Identity().instance, snapshot.Revision(), {}};
     }
+
+    /** @brief Stops the child at the selected native publication boundary without running save cleanup. */
+    void InterruptSave(SourceFileOpenService &open, Files &files, const SourceDocumentSnapshot &edited, const std::string_view phase) {
+        constexpr auto interrupt = [] {
+            std::_Exit(73);
+        };
+        if (phase == "before")
+            files.beforeReplace = interrupt;
+        else {
+            REQUIRE(phase == "after");
+            files.afterCommit = interrupt;
+        }
+        static_cast<void>(open.Documents().Save(Request(edited), files));
+        FAIL("The native save never reached the requested interruption point.");
+    }
 }  // namespace
+
+TEST_CASE("Source save interruption and restart subprocess", "[.][source-save-process]") {
+    const auto *mode = std::getenv("HORO_SOURCE_SAVE_TEST_PHASE");
+    REQUIRE(mode);
+    const std::string_view phase{mode};
+    const auto root = std::filesystem::current_path();
+    REQUIRE(std::filesystem::is_regular_file(root / "source-save-test-fixture"));
+    const std::filesystem::path source{u8"kaynak ü 日本.cpp"};
+    constexpr std::string_view editedBytes = "edited ü\r\n";
+    SourceFileOpenService open(root);
+    Files files;
+
+    if (phase == "restart-after") {
+        const auto reopened = open.Open({.path = source});
+        REQUIRE(reopened.HasValue());
+        REQUIRE(reopened.Value().sourceSnapshot);
+        const auto &snapshot = *reopened.Value().sourceSnapshot;
+        CHECK(snapshot.Text() == editedBytes);
+        CHECK(snapshot.DiskBase() == editedBytes);
+        CHECK_FALSE(snapshot.Dirty());
+        return;
+    }
+
+    const auto edited = OpenEdit(open, source);
+    REQUIRE(edited.DiskBase() == "base\n");
+    if (phase == "restart-before") {
+        const auto rejected = open.Documents().Save(Request(edited), files);
+        REQUIRE(rejected.HasError());
+        const auto current = open.Documents().Snapshot(edited.Identity().instance);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().SharesStateWith(edited));
+        CHECK(current.Value().Dirty());
+        return;
+    }
+
+    if (phase == "retry") {
+        const auto saved = open.Documents().Save(Request(edited), files);
+        REQUIRE(saved.HasValue());
+        CHECK(saved.Value().disposition == SourceSaveDisposition::Durable);
+        CHECK(saved.Value().snapshot.DiskBase() == editedBytes);
+        CHECK_FALSE(saved.Value().snapshot.Dirty());
+        return;
+    }
+
+    InterruptSave(open, files, edited, phase);
+}
 
 TEST_CASE("Source save advances durable base while retained snapshots keep original bytes", "[source][save]") {
     Project project;
@@ -128,12 +201,15 @@ TEST_CASE("Source save advances durable base while retained snapshots keep origi
     SourceFileOpenService open(project.root);
     Files files;
     const auto edited = OpenEdit(open);
+    CHECK_FALSE(edited.WasSavedInPlace());
     const auto result = open.Documents().Save(Request(edited), files);
     REQUIRE(result.HasValue());
     CHECK(result.Value().disposition == SourceSaveDisposition::Durable);
     CHECK_FALSE(result.Value().snapshot.Dirty());
     CHECK(result.Value().snapshot.Revision() == edited.Revision() + 1);
     CHECK(result.Value().snapshot.BaseRevision() == result.Value().snapshot.Revision());
+    CHECK(edited.WasSavedInPlace());
+    CHECK_FALSE(result.Value().snapshot.WasSavedInPlace());
     CHECK(project.Read("code.cpp") == edited.Text());
     CHECK(edited.Dirty());
     CHECK(edited.DiskBase() == "base\n");
@@ -199,6 +275,7 @@ TEST_CASE("Source visible unconfirmed replacement never reports rollback or clea
     auto result = open.Documents().Save(Request(edited), files);
     REQUIRE(result.HasValue());
     CHECK(result.Value().disposition == SourceSaveDisposition::VisibleDurabilityUnconfirmed);
+    CHECK_FALSE(edited.WasSavedInPlace());
     REQUIRE(result.Value().diagnostic);
     CHECK(result.Value().snapshot.Dirty());
     CHECK_FALSE(result.Value().snapshot.SharesStateWith(edited));
@@ -219,6 +296,7 @@ TEST_CASE("Source Save As publishes the same instance and leaves original file a
     auto saved = open.SaveAs(Request(edited), destination, files);
     REQUIRE(saved.HasValue());
     const auto identity = saved.Value().snapshot.Identity();
+    CHECK_FALSE(edited.WasSavedInPlace());
     CHECK(identity.instance == edited.Identity().instance);
     const auto encoded = destination.generic_u8string();
     CHECK((identity.key.source.Value() == std::string{encoded.begin(), encoded.end()}));
@@ -604,7 +682,7 @@ TEST_CASE("Source autosave retains failed text and retries with bounded backoff"
     CHECK_FALSE(documents.UpdateAutosave(300, 1, files));
 }
 
-TEST_CASE("Source Save As rejects destinations created during private staging even with matching base bytes", "[source][save][conflict]") {
+TEST_CASE("Source Save As rejects a concurrent destination even with matching base bytes", "[source][save][conflict]") {
     const std::string base = GENERATE(std::string{}, std::string{"base"});
     Project project;
     project.Put("code.cpp", base);
@@ -612,9 +690,15 @@ TEST_CASE("Source Save As rejects destinations created during private staging ev
     Files files;
     const auto edited = OpenEdit(open);
     const std::filesystem::path destination{u8"concurrent ü.cpp"};
-    files.afterWrite = [&] {
+    const auto createDestination = [&] {
         project.Put(destination, base);
     };
+    SECTION("The destination appears during private staging") {
+        files.afterWrite = createDestination;
+    }
+    SECTION("The destination appears after the final disk check") {
+        files.beforeReplace = createDestination;
+    }
 
     const auto denied = open.SaveAs(Request(edited), destination, files);
     REQUIRE(denied.HasError());
@@ -630,6 +714,7 @@ TEST_CASE("Source Save As rejects destinations created during private staging ev
     CHECK_FALSE(std::filesystem::exists(temporary));
 
     files.afterWrite = {};
+    files.beforeReplace = {};
     auto approved = Request(edited);
     approved.approvedDiskBytes = base;
     const auto saved = open.SaveAs(approved, destination, files);

@@ -2,6 +2,8 @@
 
 #include "Horo/Audio/AudioStreamDecoderErrors.h"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace Horo::Audio {
@@ -23,6 +25,17 @@ namespace Horo::Audio {
                 spec.requiredWorkingBytes > limits.maximumWorkingBytes)
                 return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::CapacityExceeded));
             return Result<void>::Success();
+        }
+
+        /** @brief Keeps provider exceptions inside the serialized worker decode boundary. */
+        Result<AudioStreamDecodeProgress> DecodeProvider(const AudioStreamDecoderProvider &provider, const std::uint64_t firstFrame,
+                                                         const std::span<AudioSample> output, const std::span<std::byte> workingMemory,
+                                                         const std::atomic_bool &cancelled) {
+            try {
+                return provider.decode(provider.context, firstFrame, output, workingMemory, cancelled);
+            } catch (...) {  // NOSONAR
+                return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::ProviderFailed));
+            }
         }
     }  // namespace
 
@@ -71,17 +84,9 @@ namespace Horo::Audio {
             return Result<AudioStreamDecodedBlock>::Success({cursor_, 0, true});
 
         const std::uint64_t firstFrame = cursor_;
-        auto produced = [&]() {
-            // Provider exceptions, including non-std ones, must not escape this worker boundary.
-            try {
-                return provider_.decode(provider_.context, firstFrame,
-                                        output.first(static_cast<std::size_t>(requestedFrames) *
-                                                     spec_.outputFormat.layout.orderedChannels.size()),
-                                        workingMemory.first(spec_.requiredWorkingBytes), cancelled_);
-            } catch (...) {  // NOSONAR
-                return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::ProviderFailed));
-            }
-        }();
+        const auto sampleCount = static_cast<std::size_t>(requestedFrames) * spec_.outputFormat.layout.orderedChannels.size();
+        auto produced =
+            DecodeProvider(provider_, firstFrame, output.first(sampleCount), workingMemory.first(spec_.requiredWorkingBytes), cancelled_);
         if (cancelled_.load()) {
             state_ = AudioStreamDecoderState::Cancelled;
             return Result<AudioStreamDecodedBlock>::Failure(MakeError(AudioStreamDecoderErrors::Cancelled));
@@ -94,6 +99,13 @@ namespace Horo::Audio {
         const AudioStreamDecodeProgress progress = produced.Value();
         if (progress.frames > requestedFrames || progress.frames > spec_.frameCount - cursor_ ||
             (progress.frames == 0 && !progress.endOfStream) || progress.endOfStream != (cursor_ + progress.frames == spec_.frameCount)) {
+            state_ = AudioStreamDecoderState::Failed;
+            return Result<AudioStreamDecodedBlock>::Failure(MakeError(AudioStreamDecoderErrors::ProtocolViolation));
+        }
+        if (const auto samples = output.first(static_cast<std::size_t>(progress.frames) * spec_.outputFormat.layout.orderedChannels.size());
+            !std::ranges::all_of(samples, [](const auto sample) {
+            return std::isfinite(sample);
+        })) {
             state_ = AudioStreamDecoderState::Failed;
             return Result<AudioStreamDecodedBlock>::Failure(MakeError(AudioStreamDecoderErrors::ProtocolViolation));
         }

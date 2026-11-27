@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdio>
+#include <functional>
 #include <iterator>
 #include <thread>
 
@@ -190,6 +191,7 @@ namespace Horo::Packages::Tests::Support {
             {Parse<HoroPackageId>("com.example.transaction"), Parse<PackagePath>("extensions/native/extension.json")}};
         std::vector<std::string> loadedIds;
         std::vector<std::string> retiredIds;
+        std::string fixtureLibraryPath;
         unsigned loads{};
         bool failLoad{};
         bool cancelOnLoad{};
@@ -198,14 +200,17 @@ namespace Horo::Packages::Tests::Support {
         bool shutdownOnLoad{};
         bool progress{};
 
-        explicit Fixture(std::size_t maximumRetired = 16U)
+        explicit Fixture(std::size_t maximumRetired = 16U, std::function<void(Fixture &)> onLoad = {})
             : install(std::move(PackageInstallService::Create(files, std::filesystem::canonical(project.Path()))).Value()) {
             PackageLifecycleConfiguration configuration{.temporaryRoot = std::filesystem::canonical(temporary.Path()),
                                                         .artifactGate = ::Horo::Tests::CreateAcceptingArtifactGate()};
             configuration.maximumRetiredCompositions = maximumRetired;
-            configuration.libraryLoader = [this](const std::string &path) -> Result<std::unique_ptr<Platform::DynamicLibrary>> {
+            configuration.libraryLoader = [this, onLoad = std::move(onLoad)](
+                                              const std::string &path) -> Result<std::unique_ptr<Platform::DynamicLibrary>> {
                 ++loads;
                 journalObserved = service->State().outcome == PackageActivationOutcome::Preparing;
+                if (onLoad)
+                    onLoad(*this);
                 if (replaceInstallOnLoad)
                     REQUIRE(install.Install(Graph(HORO_PACKAGE_NATIVE_FIXTURE), CancellationSource{}.Token()).HasValue());
                 if (cancelOnLoad)
@@ -214,7 +219,7 @@ namespace Horo::Packages::Tests::Support {
                     service->Shutdown();
                 if (failLoad)
                     return Result<std::unique_ptr<Platform::DynamicLibrary>>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-                auto library = Platform::LoadDynamicLibrary(path);
+                auto library = Platform::LoadDynamicLibrary(fixtureLibraryPath.empty() ? path : fixtureLibraryPath);
                 if (library.HasError())
                     return library;
                 const auto descriptor = nlohmann::json::parse(FileBytes(std::filesystem::path{path}.parent_path() / "extension.json"));

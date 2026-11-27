@@ -303,6 +303,9 @@ def test_session_reuse_requires_exact_selected_extension_identity(monkeypatch, t
 
 def test_sonar_report_names_only_the_active_extension_not_stale_cached_versions(monkeypatch, tmp_path):
     source, extensions, profile = profile_inputs(tmp_path)
+    sessions.write_json(source / "User/settings.json", {
+        "sonarlint.connectedMode.connections.sonarcloud": [{"connectionId": "cloud"}],
+    })
     next(extensions.glob('*/package.json')).write_text('{"version":"6.1.1"}', encoding="utf-8")
     sessions.seed_profile(profile, source, extensions)
     active = profile.parent / "extensions/sonarsource.sonarlint-vscode-6.2.0-win32-x64"

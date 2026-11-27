@@ -1,0 +1,259 @@
+#pragma once
+
+#include "../runtime/CharacterWorldInternal.h"
+
+#include <cmath>
+
+namespace Horo::Character::Detail {
+    struct SpawnRecovery final {
+        Math::Vec3 position;
+        std::uint32_t iterations{};
+    };
+
+    /** @brief Keeps controller records resident while an owner-thread adapter callback is in flight. */
+    template <typename Impl> struct PlacementOperationGuard final {
+        explicit PlacementOperationGuard(Impl &world) noexcept
+            : impl(world), entryState(world.state.load()), previous(std::exchange(impl.placementActive, true)) {}
+
+        ~PlacementOperationGuard() noexcept {
+            impl.debug.End();
+            impl.placementActive = previous;
+            DrainDeferredShutdown(impl);
+        }
+
+        PlacementOperationGuard(const PlacementOperationGuard &) = delete;
+        PlacementOperationGuard &operator=(const PlacementOperationGuard &) = delete;
+
+        Impl &impl;
+        const CharacterWorldState entryState;
+        bool previous{};
+    };
+
+    /** @brief Checks a Character root against the Physics local-origin safety envelope. */
+    [[nodiscard]] inline Result<void> ValidatePlacementPosition(const Math::Vec3 position) {
+        if (!Math::IsFinite(position) || std::abs(position.x) > Physics::MaximumPhysicsLocalHalfExtentMeters ||
+            std::abs(position.y) > Physics::MaximumPhysicsLocalHalfExtentMeters ||
+            std::abs(position.z) > Physics::MaximumPhysicsLocalHalfExtentMeters)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::PlacementInvalid, "Character placement is outside the Physics local-origin envelope."));
+        return Result<void>::Success();
+    }
+
+    /** @brief Checks one qualified Character displacement against the world work budget. */
+    [[nodiscard]] inline Result<void> ValidatePlacementDisplacement(const Math::Vec3 from, const Math::Vec3 to,
+                                                                    const float maximumDisplacement) {
+        if (const auto fromValid = ValidatePlacementPosition(from); fromValid.HasError())
+            return fromValid;
+        if (const auto toValid = ValidatePlacementPosition(to); toValid.HasError())
+            return toValid;
+        const auto displacement = to - from;
+        const auto squared = static_cast<double>(Math::LengthSquared(displacement));
+        if (const auto maximumSquared = static_cast<double>(maximumDisplacement) * maximumDisplacement;
+            !std::isfinite(squared) || squared > maximumSquared)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::PlacementInvalid, "Character placement exceeds its qualified displacement bound."));
+        return Result<void>::Success();
+    }
+
+    /** @brief Maps one placement operation to the exact world and Physics snapshot query contract. */
+    [[nodiscard]] Result<void> ValidateQueryContext(const auto &impl, const CharacterPhysicsQueryContext &query,
+                                                    const std::uint64_t expectedTick) {
+        if (query.overlap == nullptr)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::OperationUnsupported, "Character placement requires a Physics overlap probe."));
+        const auto expected = QueryExpectations(impl, expectedTick);
+        return ValidateCharacterPhysicsQueryContext(query, expected);
+    }
+
+    /** @brief Revalidates owner state and exact controller liveness after an adapter callback. */
+    [[nodiscard]] Result<void> ValidatePlacementContinuation(auto &impl, const CharacterControllerHandle &handle,
+                                                             const CharacterWorldState entryState) {
+        if (impl.state.load() != entryState || !impl.placementActive || impl.shutdownRequested)
+            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+        const auto registryLock = impl.synchronization.LockRegistry();
+        if (const auto record = impl.controllers.Resolve(handle); record.HasError())
+            return Result<void>::Failure(record.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    /** @brief Performs bounded overlap recovery and re-probes after the final allowed displacement. */
+    [[nodiscard]] Result<SpawnRecovery> RecoverSpawnPosition(auto &impl, const CharacterControllerHandle &handle,
+                                                             const CharacterControllerDescriptor &descriptor,
+                                                             const CharacterPhysicsQueryContext &query, const std::uint64_t expectedTick,
+                                                             const Math::Vec3 initialPosition, const CharacterWorldState entryState) {
+        if (const auto valid = ValidateQueryContext(impl, query, expectedTick); valid.HasError())
+            return Result<SpawnRecovery>::Failure(valid.ErrorValue());
+
+        if (const auto valid = ValidatePlacementPosition(initialPosition); valid.HasError())
+            return Result<SpawnRecovery>::Failure(valid.ErrorValue());
+        Math::Vec3 position = initialPosition;
+        const auto maximumIterations = impl.settings.Values().work.maximumRecoveryIterations;
+        for (std::uint32_t iteration{};; ++iteration) {
+            const CharacterOverlapProbeRequest request{
+                handle,
+                impl.descriptor.sceneGeneration,
+                impl.descriptor.identity,
+                impl.descriptor.physicsWorld,
+                descriptor.capsule,
+                position,
+                descriptor.up,
+                descriptor.collisionProfile,
+                descriptor.queryChannel,
+                iteration,
+                descriptor.selectors,
+            };
+            const auto probe = query.overlap(query.context, request);
+            if (const auto continuation = ValidatePlacementContinuation(impl, handle, entryState); continuation.HasError())
+                return Result<SpawnRecovery>::Failure(continuation.ErrorValue());
+            if (probe.HasError())
+                return Result<SpawnRecovery>::Failure(probe.ErrorValue());
+            if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
+                return Result<SpawnRecovery>::Failure(valid.ErrorValue());
+            impl.debug.RecordOverlap(request, probe.Value(), CharacterDebugProbePurpose::SpawnRecovery);
+            if (probe.Value().overlapCount == 0)
+                return Result<SpawnRecovery>::Success({position, iteration});
+            if (iteration >= maximumIterations)
+                return Result<SpawnRecovery>::Failure(MakeError(CharacterErrors::OverlapRecoveryFailed));
+            position += probe.Value().recoveryDisplacement;
+            if (const auto valid =
+                    ValidatePlacementDisplacement(initialPosition, position, impl.settings.Values().work.maximumDisplacementMetersPerTick);
+                valid.HasError())
+                return Result<SpawnRecovery>::Failure(valid.ErrorValue());
+        }
+    }
+
+    /** @brief Requires a teleport target to be clear without applying spawn recovery. */
+    [[nodiscard]] Result<void> ValidateTeleportClearance(auto &impl, const CharacterControllerHandle &handle,
+                                                         const CharacterControllerDescriptor &descriptor,
+                                                         const CharacterPhysicsQueryContext &query, const std::uint64_t expectedTick,
+                                                         const Math::Vec3 position, const CharacterWorldState entryState) {
+        if (const auto valid = ValidateQueryContext(impl, query, expectedTick); valid.HasError())
+            return valid;
+        if (const auto valid = ValidatePlacementPosition(position); valid.HasError())
+            return valid;
+        const CharacterOverlapProbeRequest request{
+            handle,
+            impl.descriptor.sceneGeneration,
+            impl.descriptor.identity,
+            impl.descriptor.physicsWorld,
+            descriptor.capsule,
+            position,
+            descriptor.up,
+            descriptor.collisionProfile,
+            descriptor.queryChannel,
+            0,
+            descriptor.selectors,
+        };
+        const auto probe = query.overlap(query.context, request);
+        if (const auto continuation = ValidatePlacementContinuation(impl, handle, entryState); continuation.HasError())
+            return continuation;
+        if (probe.HasError())
+            return Result<void>::Failure(probe.ErrorValue());
+        if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
+            return valid;
+        impl.debug.RecordOverlap(request, probe.Value(), CharacterDebugProbePurpose::TeleportRecovery);
+        if (probe.Value().overlapCount != 0)
+            return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Teleport target overlaps Physics geometry."));
+        return Result<void>::Success();
+    }
+
+    /** @brief Reserves one exact next tick before a teleport invokes the overlap adapter. */
+    [[nodiscard]] Result<CharacterControllerDescriptor> ReserveTeleport(auto &impl, const CharacterTeleportRequest &request) {
+        const auto queueLock = impl.synchronization.LockCommands();
+        const auto registryLock = impl.synchronization.LockRegistry();
+        const auto record = impl.controllers.ResolveMutable(request.controller);
+        if (record.HasError())
+            return Result<CharacterControllerDescriptor>::Failure(record.ErrorValue());
+        if (!record.Value()->spawned)
+            return Result<CharacterControllerDescriptor>::Failure(
+                MakeError(CharacterErrors::InvalidState, "A Character controller must be spawned before teleport."));
+        if (impl.closedTick.load() == std::numeric_limits<std::uint64_t>::max() || request.tick != impl.closedTick.load() + 1 ||
+            record.Value()->reservedTeleportTick.has_value() || record.Value()->lastTeleportTick >= request.tick)
+            return Result<CharacterControllerDescriptor>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterQueuedMovement &queued) {
+            return !queued.revocation.IsCancellationRequested() && queued.request.controller == request.controller &&
+                   queued.request.tick == request.tick;
+        }))
+            return Result<CharacterControllerDescriptor>::Failure(
+                MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
+        record.Value()->reservedTeleportTick = request.tick;
+        auto descriptor = record.Value()->descriptor;
+        descriptor.capsule = record.Value()->capsule;
+        return Result<CharacterControllerDescriptor>::Success(descriptor);
+    }
+
+    /** @brief Releases a failed teleport reservation without changing the prior publication. */
+    void ReleaseTeleportReservation(auto &impl, const CharacterControllerHandle &handle, const std::uint64_t tick) noexcept {
+        const auto registryLock = impl.synchronization.LockRegistry();
+        const auto record = impl.controllers.ResolveMutable(handle);
+        if (record.HasValue() && record.Value()->reservedTeleportTick == tick)
+            record.Value()->reservedTeleportTick.reset();
+    }
+
+    /** @brief Copies the current published root while retaining registry lifetime synchronization. */
+    [[nodiscard]] Result<Math::Vec3> CurrentControllerPosition(const auto &impl, const CharacterControllerHandle &handle) {
+        const auto registryLock = impl.synchronization.LockRegistry();
+        const auto record = impl.controllers.Resolve(handle);
+        if (record.HasError())
+            return Result<Math::Vec3>::Failure(record.ErrorValue());
+        return Result<Math::Vec3>::Success(record.Value()->publication.position);
+    }
+
+    /** @brief Preflights the exact placement publication without changing the resident record. */
+    [[nodiscard]] Result<CharacterTransformPublication> BuildPlacementPublication(const auto &impl, const CharacterControllerRecord &record,
+                                                                                  CharacterControllerHandle handle,
+                                                                                  CharacterPlacementOperation operation, std::uint64_t tick,
+                                                                                  Math::Vec3 position, Math::Quaternion heading) {
+        using Output = Result<CharacterTransformPublication>;
+        if (record.publication.publicationRevision == std::numeric_limits<std::uint64_t>::max())
+            return Output::Failure(MakeError(CharacterErrors::PublicationRevisionExhausted));
+        if (operation == CharacterPlacementOperation::Teleport && record.reservedTeleportTick != tick)
+            return Output::Failure(MakeError(CharacterErrors::InvalidState));
+        const CharacterTransformPublication
+            publication{handle, tick, record.publication.publicationRevision + 1,      position, heading, record.descriptor.up, false,
+                        false,  true, CharacterTransformAuthority::CharacterController};
+        if (const auto valid =
+                ValidateCharacterTransformPublication(publication, impl.descriptor.sceneGeneration, impl.descriptor.identity);
+            valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        return Output::Success(publication);
+    }
+
+    /** @brief Writes an already preflighted placement with registry and publication ownership held. */
+    inline void ApplyPlacementPublication(CharacterControllerRecord &record, CharacterPlacementOperation operation,
+                                          const CharacterTransformPublication &publication) noexcept {
+        record.publication = publication;
+        record.spawned = true;
+        if (operation == CharacterPlacementOperation::Teleport) {
+            record.lastMovement.reset();
+            record.locomotion.reset();
+            record.lastTeleportTick = publication.sourceTick;
+            record.reservedTeleportTick.reset();
+        }
+    }
+
+    /** @brief Commits one validated placement after re-resolving the exact live controller record. */
+    [[nodiscard]] Result<CharacterPlacementResult> PublishPlacement(const auto &guard, const CharacterControllerHandle &handle,
+                                                                    const CharacterPlacementOperation operation, const std::uint64_t tick,
+                                                                    const Math::Vec3 position, const Math::Quaternion heading,
+                                                                    const std::uint32_t recoveryIterations) {
+        auto &impl = guard.impl;
+        const auto entryState = guard.entryState;
+        const auto registryLock = impl.synchronization.LockRegistry();
+        if (impl.state.load() != entryState || !impl.placementActive || impl.shutdownRequested)
+            return Result<CharacterPlacementResult>::Failure(MakeError(CharacterErrors::InvalidState));
+        const auto resolved = impl.controllers.ResolveMutable(handle);
+        if (resolved.HasError())
+            return Result<CharacterPlacementResult>::Failure(resolved.ErrorValue());
+        auto *record = resolved.Value();
+        const auto publicationLock = impl.synchronization.LockPublication();
+        const auto publication = BuildPlacementPublication(impl, *record, handle, operation, tick, position, heading);
+        if (publication.HasError())
+            return Result<CharacterPlacementResult>::Failure(publication.ErrorValue());
+        ApplyPlacementPublication(*record, operation, publication.Value());
+        impl.debug.Commit(handle, tick, impl.descriptor.physicsSnapshotRevision);
+        return Result<CharacterPlacementResult>::Success(
+            {handle, operation, publication.Value(), recoveryIterations, recoveryIterations != 0});
+    }
+
+}  // namespace Horo::Character::Detail

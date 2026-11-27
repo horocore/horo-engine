@@ -2,6 +2,7 @@
 
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/Internal/Sdl3AudioBackend.h"
+#include "Sdl3CaptureStream.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -18,6 +19,18 @@
 namespace Horo::Audio::Backend {
     namespace Sdl3Detail {
         constexpr std::size_t EventCapacity = 64;
+
+#if defined(HORO_SDL3_MAC_CAPTURE_PERMISSION)
+        /**
+         * @brief Observes macOS microphone authorization without requesting access.
+         * @return The operating system's reported permission, or Unknown when observation is unavailable.
+         */
+        [[nodiscard]] AudioCapturePermission ReadMacCapturePermission() noexcept;
+        /** @brief Checks the current process bundle usage description and code-signing entitlement. */
+        [[nodiscard]] bool MacCapturePackageReady() noexcept;
+        /** @brief Requests authorization asynchronously on the application main thread. */
+        [[nodiscard]] Result<Sdl3CapturePermissionRequest> RequestMacCapturePermission();
+#endif
 
         inline Result<void> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<void>::Failure(MakeError(descriptor));
@@ -84,6 +97,8 @@ namespace Horo::Audio::Backend {
             bool operator==(const DeviceBinding &) const noexcept = default;
         };
 
+        using CaptureDeviceBinding = Sdl3Detail::CaptureDeviceBinding;
+
         struct NativeOpenFacts final {
             SDL_AudioSpec actual{};
             int periodFrames{};
@@ -130,7 +145,9 @@ namespace Horo::Audio::Backend {
             }
 
             bool operator()(const Quiesce &request) const noexcept {
-                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Rendering && request.epoch == backend.epoch;
+                const auto phase = backend.callback.lifecycle.load();
+                return (phase == Sdl3AudioBackendState::Priming || phase == Sdl3AudioBackendState::Rendering) &&
+                       request.epoch == backend.epoch;
             }
 
             bool operator()(const Stop &request) const noexcept {
@@ -143,9 +160,12 @@ namespace Horo::Audio::Backend {
             }
         };
 
-        explicit Impl(const Sdl3AudioBackendConfig &value) noexcept : config(value), defaultDevice{value.owner, 1, 1} {}
+        explicit Impl(const Sdl3AudioBackendConfig &value) noexcept
+            : config(value), defaultDevice{value.owner, 1, 1},
+              capture{.snapshot = {.owner = value.owner, .backend = AudioBackendKind::SDL3Audio, .revision = 1}} {}
 
         ~Impl() {
+            capture.Stop();
             if (stream) {
                 if (logicalDevice)
                     SDL_PauseAudioDevice(logicalDevice);
@@ -162,6 +182,7 @@ namespace Horo::Audio::Backend {
         AudioDeviceId defaultDevice;
         std::vector<DeviceBinding> devices;
         AudioDeviceSnapshot snapshot;
+        Sdl3Detail::CaptureControl capture;
         OperationState operations;
         std::uint64_t discoveryRevision{1};
         std::uint32_t nextDeviceSlot{2};
@@ -170,6 +191,21 @@ namespace Horo::Audio::Backend {
         SDL_AudioDeviceID logicalDevice{};
         SDL_AudioStream *stream{};
         AudioDeviceEpoch epoch;
+
+        /** @brief Uses only the currently rendering, non-faulted playback epoch as a monitor destination. */
+        [[nodiscard]] AudioDeviceEpoch MonitorOutput() const noexcept {
+            if (callback.lifecycle.load() != Sdl3AudioBackendState::Rendering || callback.faultLatched.load() ||
+                epoch.device == defaultDevice)
+                return {};
+            const auto native = NativeDevice(epoch.device);
+            int count{};
+            const std::unique_ptr<SDL_AudioDeviceID, decltype(&SDL_free)> endpoints{SDL_GetAudioPlaybackDevices(&count), &SDL_free};
+            if (!native || !endpoints || count <= 0 || static_cast<std::size_t>(count) > MaximumAudioDiscoveredDevices)
+                return {};
+            const std::span playback{endpoints.get(), static_cast<std::size_t>(count)};
+            return std::ranges::find(playback, native) != playback.end() ? epoch : AudioDeviceEpoch{};
+        }
+
         AudioProcessingFormat format;
         std::uint32_t callbackFrames{};
         std::vector<AudioSample> planarStorage;
@@ -185,6 +221,33 @@ namespace Horo::Audio::Backend {
             initialized = SDL_InitSubSystem(SDL_INIT_AUDIO);
             return initialized;
         }
+
+        /** @brief Stages a recording refresh and its identity changes on the control thread. */
+        Result<AudioCaptureDiscovery> DiscoverCapture();
+
+        /** @brief Builds a complete candidate using only native identities and previously admitted capture slots. */
+        Result<void> ReadCaptureEndpoints(std::span<const SDL_AudioDeviceID> ids, std::vector<CaptureDeviceBinding> &bindings,
+                                          std::uint32_t &nextSlot, AudioCaptureDeviceSnapshot &candidate) const;
+
+        /**
+         * @brief Retains the generation of a live recording endpoint or reserves a new slot.
+         * @param native SDL physical recording device ID.
+         * @param bindings Staged native mappings for the candidate catalog.
+         * @param nextSlot Next unused slot, advanced only for new endpoints.
+         * @return The bound capture identity, or an invalid ID if slots are exhausted.
+         */
+        [[nodiscard]] AudioCaptureDeviceId BindCaptureEndpoint(SDL_AudioDeviceID native, std::vector<CaptureDeviceBinding> &bindings,
+                                                               std::uint32_t &nextSlot) const;
+
+        /**
+         * @brief Publishes a complete recording inventory and permission observation together.
+         * @param candidate The observed catalog with the current revision.
+         * @param bindings The native device mapping for the candidate.
+         * @param nextSlot The next unused slot after constructing the candidate.
+         * @return The published catalog and membership changes, or an error without publishing.
+         */
+        Result<AudioCaptureDiscovery> PublishCaptureEndpoints(AudioCaptureDeviceSnapshot candidate,
+                                                              std::vector<CaptureDeviceBinding> bindings, std::uint32_t nextSlot);
 
         void PushCallbackEvent(const Event &event) noexcept {
             const auto write = callback.write.load();
@@ -421,7 +484,7 @@ namespace Horo::Audio::Backend {
                                                    : AudioFormatDeviationReason::DeviceConstraint;
             negotiated.deviations.layout = format.layout == request.format.preferred.layout ? AudioFormatDeviationReason::None
                                                                                             : AudioFormatDeviationReason::DeviceConstraint;
-            negotiated.deviations.callbackPeriod = static_cast<std::uint32_t>(nativeFrames) == request.format.period.preferredFrames
+            negotiated.deviations.callbackPeriod = callbackFrames == request.format.period.preferredFrames
                                                        ? AudioFormatDeviationReason::None
                                                        : AudioFormatDeviationReason::DeviceConstraint;
             return negotiated;
@@ -506,6 +569,8 @@ namespace Horo::Audio::Backend {
         }
 
         Result<void> Apply(const Quiesce &, const OperationId &operation) {
+            if (capture.activeGrant.intent.monitor)
+                capture.Stop();
             if (!callback.quiesced.load()) {
                 callback.lifecycle.store(Sdl3AudioBackendState::Quiescing);
                 return Result<void>::Success();
@@ -535,7 +600,7 @@ namespace Horo::Audio::Backend {
             epoch = {};
             format = {};
             callbackFrames = 0;
-            if (initialized) {
+            if (initialized && !capture.stream) {
                 SDL_QuitSubSystem(SDL_INIT_AUDIO);
                 initialized = false;
             }

@@ -428,6 +428,24 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor CapturePermissionDenied{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.capture.permission_denied"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Recording does not have current host and platform authorization.",
+        .remediationHint = "Check the recording purpose and operating system microphone permission before retrying.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CaptureDeviceLost{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.capture.device_lost"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The active recording endpoint was removed or failed.",
+        .remediationHint = "Refresh recording discovery and obtain a new grant before reopening capture.",
+        .retryable = true,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor OperationUnsupported{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.operation.unsupported"},

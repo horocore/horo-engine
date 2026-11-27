@@ -1,0 +1,179 @@
+# Configuration foundation qualification
+
+This record covers CFG-001.5 / HORO-1781 / #1825, CFG-001.6 / HORO-1782 /
+#1826 and CFG-001.7 / HORO-1783 / #1827 under CFG-001 / HORO-1765 / #1809.
+It records executable coverage separately from execution evidence. Native
+credential-provider qualification remains SEC-001 work; CLI integration remains
+owned by its consuming host.
+
+## Whole-family acceptance audit
+
+Read-only GitHub and Jira checks on 2026-11-11 identified seven child tickets.
+Their tracking states differ: GitHub has closed the first four, while Jira has
+only marked the ratification ticket Done. No tracking state was changed by this
+audit, and a closed ticket is not treated as execution evidence.
+
+| Child | Jira / GitHub state | Current implementation evidence | Remaining acceptance evidence |
+|---|---|---|---|
+| CFG-001.1 / HORO-1777 / #1821 | Done / closed | ADR-009 records deviations, ownership and canonical precedence; ancestor `60d836468` | Preserve the decision and verify subsequent contracts against it; no reimplementation required |
+| CFG-001.2 / HORO-1778 / #1822 | In Review / closed | Resolver, immutable captures, host environment seam and Platform persistence; ancestor `45623cb8d` | Rerun affected tests after current source/provenance/persistence changes; supported-platform qualification remains pending |
+| CFG-001.3 / HORO-1779 / #1823 | To Do / closed | Inert module contributions, typed conflict checks and stable order; ancestor `649976b1c`; ModuleHostCompositionTests captures a snapshot through shutdown | Rerun composition tests with the changed descriptor/value contract; no new contribution implementation required |
+| CFG-001.4 / HORO-1780 / #1824 | To Do / closed | Staged reload, coalescing and queued owner delivery; ancestor `b23d6b915`; reload storm/boundary/reader tests | Rerun after prepared-writer integration and check notification counts and delivery affinity |
+| CFG-001.5 / HORO-1781 / #1825 | To Do / open | Current uncommitted descriptor session, combined durable modal Apply, typed validation, stale rejection and preview rollback | Compile and execute model/lifecycle/presentation tests; verify both theme layers and manual localized interaction |
+| CFG-001.6 / HORO-1782 / #1826 | To Do / open | Current uncommitted typed reference, Security lifecycle provider seam, operation-local secure result and redaction tests | Build public consumers and execute persistence/log/diagnostic/read-time failure tests; downstream native provider qualification is separate |
+| CFG-001.7 / HORO-1783 / #1827 | To Do / open | Current uncommitted hostile-input, recovery, concurrent writer, path and modal tests plus the matrix below | Execute those tests and required quality checks; obtain supported-platform and permission/filesystem evidence |
+
+All four prerequisite SHAs were verified as ancestors of the current worktree
+HEAD. Parent CFG-001 / HORO-1765 / #1809 remains open/To Do: current evidence does
+not yet prove identical results across supported platforms, complete reader
+isolation, or the complete integrated notification and persistence contract.
+
+The local branch is `feat/HORO-1782_configuration_completion` in worktree `6c5e`.
+It was rebased with autostash onto the verified local parent
+`5d0aff9d63b03b3370f0f09fab49893ec0e4ae08`. All 48 changed/untracked paths were
+preserved: 47 retained identical content hashes; `tests/CMakeLists.txt` contains
+the new parent C11 fixture configuration plus the same two task additions.
+At that initial audit there was no task-specific commit, remote branch or PR.
+The subsequent delivery checkpoint is recorded below; neither record establishes
+completed acceptance.
+
+## Diagnostic and transaction matrix
+
+| Input or transition | Required outcome | Executable coverage |
+|---|---|---|
+| Every source layer, explicit Session exception | Canonical precedence and winning provenance | `ConfigurationTests.cpp`: Resolver Applies Every Canonical Precedence Layer; Session Override Policy |
+| Unknown key, forbidden source, wrong type in any layer | Sorted safe diagnostics; no partial activation, including shadowed inputs | Resolver Rejects All Invalid Sources; Failed Multi Source Resolution |
+| Missing/duplicate environment aliases, unadmitted binding | Reject binding before reading; use injected process only | Environment Capture Uses Only The Injected Host Provider; Environment Capture Rejects Missing Aliases |
+| Descriptor ranges and string rules | Same validation at schema, source, environment and draft ingress | Descriptor Rules Reject Invalid Shadowed Values; descriptor session tests |
+| Duplicate JSON key, unsupported version/member/type, oversized input | Fail before activation, with bounded diagnostics | Versioned Documents Are Strict Bounded And Deterministic |
+| Excessive depth, malformed UTF-8, surrogate, NUL or trailing input | Stop bounded SAX validation before DOM construction | Hostile Documents Reject Nesting Encoding And Trailing Data; Invalid UTF8 Cannot Enter Snapshots |
+| Host numeric locale changes | Byte-identical canonical serialization | Configuration Serialization Is Independent Of The Host Numeric Locale |
+| Copied snapshot/provenance outlives service | Immutable captured values remain owned | Copied Configuration Provenance Owns Its Captured Inputs |
+| Preview, Cancel, invalid edit | Active snapshot and events unchanged; typed inline error | Draft Previews Retain Precedence; `ConfigurationSettingsSessionTests.cpp` |
+| Shadowed source changes externally | Advance revision; stale Apply requires reload/review | Draft Previews Retain Precedence; Modal stale configuration review |
+| Read-only, invocation-only or sensitive field | No ordinary editable control or draft write | Read Only And Invocation Only Descriptors; descriptor session and presentation tests |
+| Prepared persistence fails or transaction is abandoned | Keep active snapshot and prior durable document | Prepared Configuration Writes Cancel Cleanly; Configuration File Store Never Publishes Partial Or Failed Writes |
+| Configuration callback during combined editor Apply | New durable editor projection and configuration revision already observable | Shared descriptors commit with legacy controls through one durable modal operation |
+| No-op Apply/reload | No extra configuration notification | Prepared Configuration Writes; Reload Of Unchanged Values Does Not Notify |
+| Reload storm, invalid replacement, direct commit, policy boundary | Latest valid complete candidate only; cancellation and host-owned activation | Configuration reload policy, storm and concurrent-reader tests |
+| Concurrent native writers/readers, orphan preparation | Old/new complete document only; exclusive private preparation | `PlatformTests.cpp`: Concurrent Configuration Writers; Configuration Preparation Recovers Orphans |
+| Relative, space/Unicode and Windows long paths, missing input, injected I/O failures | Preserve path identity and typed failure; retain prior file | Configuration File Store tests and native durable filesystem tests, including a long-path configuration round trip |
+| Credential reference ingress | Exact bounded opaque identity; strings rejected; no provider lookup | Credential References Round Trip Without Admitting Plain Strings |
+| Primitive CLI option bound to a reference-valued setting | Typed incompatible-value failure without reference coercion or disclosure | `CliOptionParserTests.cpp`: CLI primitive options reject credential references |
+| Operation credential resolution | Explicit lifecycle provider, short-lived `SecureBytes`, expiry/revocation/unavailable fail closed | `SecurityBaselineTests.cpp`: Configuration credentials resolve only through the operation provider |
+| Provider error payload contains a dummy secret | Strip message, diagnostics and causes; logs/files/events contain no material | Same Security test exercises actual persistence and logger output |
+| Shared modal plus legacy controls | One durable User-source transaction; source overrides preserved | `SettingsModalLifecycleTests.cpp` |
+| Light/dark, narrow/wide, long text, English/Turkish | Render without changing active configuration | `SettingsModalPresentationTests.cpp` |
+| Cancel theme preview after an external commit | Restore both ImGui colors and design tokens to the current committed theme; preserve its revision | Cancelling a shared theme preview restores both committed theme layers |
+| Explicit Unicode theme resource roots | Comments remain supported; duplicate/deep resources rejected | `EditorThemeBehaviorTests.cpp` |
+
+Foundation tests are in `tests/unit/foundation/ConfigurationTests.cpp`; other
+filenames in the matrix refer to the corresponding `tests/unit` subtree. A test
+source entry describes intended coverage and does not by itself establish a pass.
+
+## Execution evidence
+
+### Published-base integration and local native attempt
+
+The delivery branch incorporates published target
+`139f8a5ed63ca8698bb3852c9e0cb1eff421dc8d` through an ordinary integration
+merge, preserving the already-published delivery history. CI membership combines
+the target's additions with configuration, security and settings qualification.
+After integration, the Python CI-grouping, build-cache and two localization
+suites reported **70 passed, two skipped**. The skips concern optional native
+compiler/cache prerequisites; this result does not establish C++ qualification.
+
+The first admitted native batch verified the canonical physical Windows lock,
+configured this worktree and compiled 280 selected build steps. MSVC then found
+an unparenthesized conditional expression in the concurrent-reader test's Catch
+`INFO` macro. The diagnostic expression is corrected without changing the test's
+assertions. CTest did not start. The batch released its lock; the next
+nonblocking attempt found another owner using it and returned without starting
+work. Native confirmation of the Windows reader and complete local quality
+analysis remain pending. No local Sonar IDE, secrets or Codacy pass is claimed.
+
+### CI follow-up on the first delivery head
+
+All three workflows for `e7b809b3326f493d6642aa4e5e4600fe4d003b2a` reached
+terminal state before the next delivery update. Android package qualification
+passed. Windows/MSVC completed compilation, then its selected native CTest run
+reported one failure among 5,214 cases: the concurrent configuration reader.
+The new core configuration, module, security and editor-store suites were absent
+from that focused Windows selection; their pass cannot be inferred from this
+run. The follow-up adds them and their public consumers to Windows membership.
+
+Linux/GCC and macOS/Clang compilation failed because adding the owned-directory
+fixture exposed both `Horo::Tests` and `Horo::Editor::Tests` to unqualified fixture
+lookups. Follow-up source fully qualifies those GUI fixtures. Windows follow-up
+uses a retained delete-shared read handle and bounded transient-open handling;
+the existing concurrent-reader assertions remain mandatory and unchanged in
+strength. These changes still need executable confirmation.
+
+The Sonar coverage producer failed downloading Lua with a TLS error. Its
+dependent analysis job reported missing complete coverage inputs. Neither result
+establishes clean configuration analysis. Codacy's read-only API mapped 42 of 50
+changed paths to the exact first head and returned 28 findings; eight unmapped
+paths remain unknown. New long transaction/render/test flows are being split by
+responsibility while retaining assertions. Contextual file-size findings and
+the remaining server findings are retained rather than declared pre-existing
+or silently accepted. Local evidence files are under ignored `build/` and are
+not committed as generated reports.
+
+Follow-up static CI grouping and localization checks: 45 tests passed. Native
+and complete local Sonar IDE/secrets/Codacy qualification remain incomplete.
+
+The current implementation has **not yet completed C++ qualification**. On
+2026-11-13 the user replaced named-grant scheduling with nonblocking physical
+lock admission. The first resumed core batch found the canonical lock busy and
+returned immediately without starting configure, compilation, CTest or analysis.
+No background waiter was created. A named main-chat grant is no longer required.
+
+The branch now includes published parent
+`3df476ff430a2ad28cd62a8a0c1780ae0fea71bc`. Its only autostash conflict was in the
+editor JSON reader; resolution retains the bounded SAX validation and ordinary
+DOM parse, including duplicate-key rejection. The saved source checkpoint is
+retained locally outside delivery artifacts.
+
+Two traceable commits were pushed to the normal delivery branch on 2026-11-13:
+`d87e7b8ff1a2504aaeeab473a106172b88206c15` adds nonblocking physical-lock
+admission; `fd8aff61b4800b3a9c3984d5498486ab4601e154` contains the configuration
+integration and regressions. A full quality-preflight admission attempt also
+found the physical lock busy. Consequently Sonar IDE, CLI secrets and Codacy
+have **not run** and there is no analysis report to cite. A review/CI draft may
+carry these explicit gaps under the user's 2026-11-13 delivery authorization;
+the branch must not be represented as qualified or ready to merge.
+
+Completed local checks:
+
+- `python -m pytest -q --tb=short tests/python/test_configuration_settings_localization.py tests/python/test_navigation_settings_localization.py`:
+  five tests passed on Windows, 2026-11-11.
+- `git diff --check`: passed after the current source edits.
+- Changed C++ files were formatted with the repository's available clang-format.
+- On 2026-11-13, `python -m pytest -q --tb=short
+  tests/python/test_local_build_cache.py
+  tests/python/test_configuration_settings_localization.py
+  tests/python/test_navigation_settings_localization.py`: 30 passed, two skipped.
+  This includes real OS-lock contention/release coverage through
+  `heavy_build_lock(..., blocking=False)`; it does not establish a C++ pass.
+
+Pending validation, to be recorded with actual command/result evidence:
+
+1. Configure the exact worktree; build configuration, module descriptor and
+   composition, security, platform, CLI, editor settings and all affected
+   public-header consumers with one compiler worker.
+2. Run the corresponding CTest targets, including GUI headless lifecycle,
+   presentation and theme tests in a GUI-enabled composition.
+3. Validate affected headless and GUI CMake target/dependency combinations and
+   compile the editor host composition.
+4. Run the final worktree-aware `scripts/analyze.py check --base
+   origin/codex/editor-improvements`, and record Sonar IDE, CLI secrets and Codacy
+   findings/completeness separately. A prerequisite-only doctor run is not
+   analysis evidence.
+5. Obtain Linux/macOS native filesystem results and any platform-dependent skip
+   details, plus manual modal interaction for hover, focus, active, disabled,
+   popup, localized and constrained-width states. Headless draw tests do not
+   establish manual visual acceptance or native credential-store qualification.
+
+Windows heavy work must own the repository's physical shared heavy-build lock;
+an isolated sandbox lock is not coordination evidence. No CI, GPU smoke, native
+credential-store or cross-platform result is claimed by this record.

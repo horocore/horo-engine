@@ -7,9 +7,12 @@
 #include "Horo/Runtime/Ui/UiElementTree.h"
 
 namespace Horo::Runtime::Ui::AnimationInternal {
-    /** @brief Binds authored target/property to actual tree and registry; no source parsing or target mutation occurs. */
+    /** @brief Binds authored target/property to actual tree and registry; no source parsing or target mutation occurs.
+     * @param paintOnly True for a flash track whose suppression may change paint effects only.
+     */
     [[nodiscard]] Result<UiElementHandle> ValidatePropertyTrack(const UiAnimationPropertyTrack &track, const UiElementTree &tree,
-                                                                const RuntimeStyleRegistry &registry, std::uint32_t maximumKeyframes);
+                                                                const RuntimeStyleRegistry &registry, std::uint32_t maximumKeyframes,
+                                                                bool paintOnly = false);
     /** @brief Samples an admitted immutable track with exact endpoints and integer segment selection. */
     [[nodiscard]] Result<UiStyleValue> SamplePropertyTrack(const UiAnimationPropertyTrack &track, std::uint32_t progress);
 }  // namespace Horo::Runtime::Ui::AnimationInternal

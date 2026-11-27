@@ -7,6 +7,7 @@
 #include "Horo/Runtime/Ui/UiHotReload.h"
 #include "Horo/Runtime/Ui/UiLayoutInspector.h"
 #include "Horo/Runtime/Ui/UiPointerInteraction.h"
+#include "Horo/Runtime/Ui/UiVisualAccessibility.h"
 
 namespace Horo::Runtime::Ui {
     class RuntimeUiService;
@@ -72,6 +73,8 @@ namespace Horo::Runtime::Ui {
         UiLayoutCanvasRevision canvas;
         UiLayoutPolicyRevision policy;
         std::optional<UiAnimationPresentationEvidence> presentation;
+        UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Physical placement direction for this view. */
+        std::uint32_t minimumControlTargetDips{}; /**< View policy for control geometry; zero leaves legacy layout unchanged. */
         [[nodiscard]] auto operator<=>(const UiAnimationViewport &) const noexcept = default;
     };
 
@@ -90,6 +93,12 @@ namespace Horo::Runtime::Ui {
         std::optional<UiLayoutSnapshot> layout;
         std::optional<UiLayoutClipSnapshot> clipping;
         std::span<const UiAnimationFocusGeometry> focusGeometry; /**< Copied projected bounds; requires the containing frame lease. */
+    };
+
+    /** @brief Borrowed geometry for one view, pinned by the containing animation frame lease. */
+    struct UiAnimationViewGeometry final {
+        const UiLayoutSnapshot &layout;
+        const UiLayoutClipSnapshot *clipping{};
     };
 
     /** @brief Exact immutable evaluated timeline correlated to one atomic successful UI publication. */
@@ -128,6 +137,7 @@ namespace Horo::Runtime::Ui {
     };
 
     class UiAnimationOwner;
+    class UiFeedbackQueue;
 
     /** @brief Call-duration production pointer composition; actual tree, controls and capture owners never escape. */
     struct UiAnimationPointerInput final {
@@ -142,6 +152,7 @@ namespace Horo::Runtime::Ui {
         std::span<UiControlDefaultAction> defaults; /**< At least 65 output slots; caller retains an applied prefix on failure. */
         std::uint32_t &writtenDefaults;             /**< Set before return, including an error after earlier admitted defaults. */
         std::optional<UiAccessibleGesture> accessible;
+        UiFeedbackQueue *feedback{}; /**< Optional same-presentation semantic sink. Cue admission never changes input outcomes. */
     };
 
     /** @brief Synchronous pointer admission at the actual canvas owner or its privately owning runtime participant.
@@ -207,6 +218,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiPresentationProfileSelection *PresentationSelection() const noexcept;
         /** @brief Borrows secondary attachment geometry sharing the exact primary interaction issuer. @return Immutable derived frames. */
         [[nodiscard]] std::span<const UiAnimationAttachmentFrame> Attachments() const noexcept;
+        /** @brief Resolves the geometry of the exact view in this immutable frame.
+         * @param view Issued view identity, including its generation.
+         * @return Matching primary or attachment geometry, or absence for an invalid or unpublished view.
+         * @details The returned geometry must not outlive this lease.
+         */
+        [[nodiscard]] std::optional<UiAnimationViewGeometry> FindViewGeometry(UiRenderViewId view) const noexcept;
         /** @brief Borrows actual bounded route-stack state copied at this publication. @return Immutable route instances. */
         [[nodiscard]] std::span<const UiRouteInstance> Routes() const noexcept;
         /** @brief Returns the last admitted route operation's exact copied progress, without completion authority. */
@@ -352,6 +369,11 @@ namespace Horo::Runtime::Ui {
          *       old frame records remain readable and the old raw timeline handle cannot admit commands.
          */
         [[nodiscard]] Result<UiAnimationTimelineId> Start(UiAnimationId animation);
+        /** @brief Admits one monotonic immutable accessibility policy before the next derived update.
+         * @param policy Flags from the exact same host configuration revision.
+         * @return Success, typed malformed/stale/conflicting revision, or owner lifecycle failure. No snapshot changes until publication.
+         */
+        [[nodiscard]] Result<void> SetVisualAccessibility(const UiVisualPresentationPolicy &policy);
         /** @brief Queues exactly one typed cancellation for a live timeline.
          * @param timeline Actual current owner-issued incarnation.
          * @param reason Explicit terminal cancellation correlation.
@@ -566,6 +588,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> PreparePresentation(Storage &storage, const UiAnimationViewport &viewport);
         /** @brief Stages dependent clipping, focus, attachments and control identities after the primary layout candidate. */
         [[nodiscard]] static Result<void> PrepareDerivedPresentation(Storage &storage);
+        /** @brief Adds the active view floor to actual admitted value controls after responsive style resolution. */
+        static void ApplyControlTargetPolicy(Storage &storage, std::uint32_t minimumDips);
+        /** @brief Prepares the exact view's scroll and clipping without mutating any admitted focus/scroll state. */
+        [[nodiscard]] static Result<UiLayoutClipEngine::PreparedUpdate> PrepareClipping(Storage &storage, UiLayoutClipEngine &engine,
+                                                                                        const UiLayoutSnapshot &layout);
         /** @brief Resolves exact route-incarnation or canvas operation ownership for one retained control. */
         [[nodiscard]] static UiActionRouter *ControlActionOwner(Storage &storage, UiElementHandle element);
         /** @brief Checks bounded actual retained-tree lineage against an authored route root. */

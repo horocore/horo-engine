@@ -164,6 +164,18 @@ namespace Horo::Packages {
             return archive;
         }
 
+        /** @brief Reads bounded cache bytes and keeps a missing entry distinct from a failed read. */
+        Result<std::optional<std::vector<std::byte>>> ReadArchiveAt(const std::filesystem::path &path, const std::uint64_t limit) {
+            using Archive = Result<std::optional<std::vector<std::byte>>>;
+            std::error_code error;
+            if (!std::filesystem::exists(path, error))
+                return error ? Archive::Failure(MakeError(IoFailure)) : Archive::Success(std::nullopt);
+            auto bytes = ReadBounded(path, limit);
+            if (bytes.HasError())
+                return Archive::Failure(bytes.ErrorValue());
+            return Archive::Success(std::move(bytes).Value());
+        }
+
         [[nodiscard]] Result<void> MakeReadOnly(const std::filesystem::path &path) {
             std::error_code error;
             std::filesystem::permissions(path, std::filesystem::perms::owner_read, std::filesystem::perm_options::replace, error);
@@ -404,20 +416,31 @@ namespace Horo::Packages {
     /** @copydoc PackageCacheStore::LoadLocked */
     Result<std::optional<ValidatedPackageArchive>> PackageCacheStore::LoadLocked(const Sha256Digest &digest) {
         const std::filesystem::path path = ArchivePath(root_, digest);
-        if (std::error_code existsError; !std::filesystem::exists(path, existsError)) {
-            if (existsError)
-                return Result<std::optional<ValidatedPackageArchive>>::Failure(MakeError(IoFailure));
-            return Result<std::optional<ValidatedPackageArchive>>::Success(std::nullopt);
-        }
-        auto bytes = ReadBounded(path, limits_.archiveBytes);
+        auto bytes = ReadArchiveAt(path, limits_.archiveBytes);
         if (bytes.HasError())
             return Result<std::optional<ValidatedPackageArchive>>::Failure(bytes.ErrorValue());
-        if (auto archive = VerifyExpected(bytes.Value(), digest, limits_); archive.HasValue())
+        if (!bytes.Value())
+            return Result<std::optional<ValidatedPackageArchive>>::Success(std::nullopt);
+        if (auto archive = VerifyExpected(*bytes.Value(), digest, limits_); archive.HasValue())
             return Result<std::optional<ValidatedPackageArchive>>::Success(
                 std::optional<ValidatedPackageArchive>{std::move(archive).Value()});
-        auto quarantined = QuarantineLocked(files_, root_, bytes.Value(), PackageQuarantineReason::CorruptCacheEntry, digest, path);
+        auto quarantined = QuarantineLocked(files_, root_, *bytes.Value(), PackageQuarantineReason::CorruptCacheEntry, digest, path);
         return Result<std::optional<ValidatedPackageArchive>>::Failure(quarantined.HasError() ? WrapError(Corrupt, quarantined.ErrorValue())
                                                                                               : MakeError(Corrupt));
+    }
+
+    /** @copydoc PackageCacheStore::InspectArchive */
+    Result<std::optional<ValidatedPackageArchive>> PackageCacheStore::InspectArchive(const Sha256Digest &digest) const {
+        using Output = Result<std::optional<ValidatedPackageArchive>>;
+        const auto bytes = ReadArchiveAt(ArchivePath(root_, digest), limits_.archiveBytes);
+        if (bytes.HasError())
+            return Output::Failure(bytes.ErrorValue());
+        if (!bytes.Value())
+            return Output::Success(std::nullopt);
+        auto verified = VerifyExpected(*bytes.Value(), digest, limits_);
+        if (verified.HasError())
+            return Output::Failure(WrapError(Corrupt, verified.ErrorValue()));
+        return Output::Success(std::move(verified).Value());
     }
 
     /** @copydoc PackageCacheStore::Publish(const ValidatedPackageArchive&, const Security::DetachedSignatureEnvelope&) */

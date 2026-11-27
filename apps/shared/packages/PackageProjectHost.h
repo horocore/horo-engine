@@ -3,6 +3,13 @@
 #include "PackageProjectSession.h"
 
 namespace Horo::Application::Internal {
+    /** @brief Exact owner and published activation identity; activation counters can repeat after a Project rebind. */
+    struct PackageDecisionCatalogStamp final {
+        std::uint64_t project{};
+        std::uint64_t activation{};
+        [[nodiscard]] auto operator<=>(const PackageDecisionCatalogStamp &) const = default;
+    };
+
     /** @brief Fixed-capacity owner of one live/retiring project and one bounded metadata preparation.
      * @details The executable pumps this owner even without a modal or MCP call. Complete metadata samples
      * linearize policy generations. An observed change/error revokes old admission before any further activation.
@@ -57,6 +64,29 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<std::shared_ptr<const Packages::VerifiedPackageInstallRecord>> InstalledRecord(
             const std::filesystem::path &root, std::uint64_t generation) const;
+        /** @brief Reads inert removal evidence for the exact currently admitted project generation.
+         * @param root Exact bound project. @param generation Previously captured canonical Generation().
+         * @return Owned observed registration metadata or typed stale/observation failure. */
+        [[nodiscard]] Result<std::shared_ptr<const PackageRemovalRegistrationEvidence>> RemovalRegistrations(
+            const std::filesystem::path &root, std::uint64_t generation) const;
+        /** @brief Observes a trust denial only for the exact current admitted project binding.
+         * @param root Exact bound project. @return True for an evidenced denial, false for unavailable or other outcomes.
+         * @details Does not acquire, bind, load, or pump a project session.
+         */
+        [[nodiscard]] bool ActivationTrustRequired(const std::filesystem::path &root) const;
+        /** @brief Observes an admitted package Decision catalog for the exact live project. @param root Bound project.
+         * @return Stamp or absence without preparing, pumping or acquiring an executable generation. */
+        [[nodiscard]] std::optional<PackageDecisionCatalogStamp> DecisionCatalog(const std::filesystem::path &root) const;
+        /** @brief Reacquires only the live module leaves behind a prior observation.
+         * @param root Exact project. @param stamp Exact owner and activation. @return Short-lived leaves or typed stale failure. */
+        [[nodiscard]] Result<PackageDecisionNodeLeaves> AcquireDecisionNodes(const std::filesystem::path &root,
+                                                                             const PackageDecisionCatalogStamp &stamp) const;
+        /** @brief Composes importers for the current exact project without preparing or activating packages. */
+        [[nodiscard]] Result<PackageImporterCatalog> ComposeImporters(const std::filesystem::path &root, PackageImporterCatalog host) const;
+        /** @brief Reports whether the executable has configured a gameplay package role owner, without granting execution. */
+        [[nodiscard]] bool HasGameplayModuleOwner() const noexcept;
+        /** @brief Reports whether composition supplied an importer role owner. @return Availability of explicit importer activation. */
+        [[nodiscard]] bool HasImporterModuleOwner() const noexcept;
         /** @brief Cancels admission and drains completed callbacks without waiting or destroying borrowed services.
          * @return Success once every owned callback/session is closed, otherwise typed busy. */
         [[nodiscard]] Result<void> Close();

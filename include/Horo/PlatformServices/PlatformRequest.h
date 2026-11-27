@@ -101,6 +101,8 @@ namespace Horo::PlatformServices {
     private:
         template <typename> friend struct PlatformRequestSnapshot;
         friend class PlatformRequestStore;
+        friend class PlatformServicesFrontend;
+        std::weak_ptr<void> store_;
         std::shared_ptr<const T> value_;
         std::optional<Error> error_;
     };
@@ -126,6 +128,8 @@ namespace Horo::PlatformServices {
     private:
         template <typename> friend struct PlatformRequestSnapshot;
         friend class PlatformRequestStore;
+        friend class PlatformServicesFrontend;
+        std::weak_ptr<void> store_;
         std::optional<Error> error_;
     };
 
@@ -137,6 +141,7 @@ namespace Horo::PlatformServices {
         PlatformRequestTiming timing;
         bool cancellationRequested{};
         std::optional<PlatformTerminalResult<T>> terminal;
+
     };
 
     /**
@@ -150,12 +155,18 @@ namespace Horo::PlatformServices {
         PlatformRequestHandle &operator=(const PlatformRequestHandle &) = delete;
 
         PlatformRequestHandle(PlatformRequestHandle &&other) noexcept
-            : id_(std::exchange(other.id_, {})), generation_(std::exchange(other.generation_, {})) {}
+            : id_(std::exchange(other.id_, {})), generation_(std::exchange(other.generation_, {})),
+              frontendAuthority_(std::move(other.frontendAuthority_)), providerAuthority_(std::move(other.providerAuthority_)),
+              providerSessionRevision_(std::exchange(other.providerSessionRevision_, 0)), store_(std::move(other.store_)) {}
 
         PlatformRequestHandle &operator=(PlatformRequestHandle &&other) noexcept {
             if (this != &other) {
                 id_ = std::exchange(other.id_, {});
                 generation_ = std::exchange(other.generation_, {});
+                frontendAuthority_ = std::move(other.frontendAuthority_);
+                providerAuthority_ = std::move(other.providerAuthority_);
+                providerSessionRevision_ = std::exchange(other.providerSessionRevision_, 0);
+                store_ = std::move(other.store_);
             }
             return *this;
         }
@@ -178,12 +189,20 @@ namespace Horo::PlatformServices {
     private:
         friend class PlatformRequestStore;
         friend class PlatformProviderLifecycleHost;
+        friend class PlatformServicesFrontend;
 
         PlatformRequestHandle(const PlatformRequestId id, const PlatformRequestGeneration generation) noexcept
             : id_(id), generation_(generation) {}
 
         PlatformRequestId id_;
         PlatformRequestGeneration generation_;
+        // A weak issuance capability never keeps frontend/backend/request state alive.
+        std::weak_ptr<const void> frontendAuthority_;
+        // Native-host admission evidence survives terminal record retention without retaining the provider.
+        std::weak_ptr<const void> providerAuthority_;
+        std::uint64_t providerSessionRevision_{};
+        // Retains observation provenance without extending backend request-store lifetime.
+        std::weak_ptr<void> store_;
     };
 
     /** @brief Outcome of an idempotent request-state mutation. */
@@ -308,7 +327,9 @@ namespace Horo::PlatformServices {
             auto admitted = AdmitErased(typeid(T));
             if (admitted.HasError())
                 return Result<PlatformRequestHandle<T>>::Failure(admitted.ErrorValue());
-            return Result<PlatformRequestHandle<T>>::Success(PlatformRequestHandle<T>{admitted.Value(), Generation()});
+            auto handle = PlatformRequestHandle<T>{admitted.Value(), Generation()};
+            handle.store_ = state_;
+            return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
         }
 
         /**
@@ -479,7 +500,7 @@ namespace Horo::PlatformServices {
             auto queried = QueryErased(handle.Id(), handle.Generation(), typeid(T));
             if (queried.HasError())
                 return Result<PlatformRequestSnapshot<T>>::Failure(queried.ErrorValue());
-            return Result<PlatformRequestSnapshot<T>>::Success(ToTypedSnapshot<T>(queried.Value()));
+            return Result<PlatformRequestSnapshot<T>>::Success(ToTypedSnapshot<T>(queried.Value(), state_));
         }
 
         /**
@@ -491,11 +512,7 @@ namespace Horo::PlatformServices {
         template <typename T>
         [[nodiscard]] Result<PlatformRequestSubscription> OnComplete(const PlatformRequestHandle<T> &handle,
                                                                      std::function<void(const PlatformRequestSnapshot<T> &)> observer) {
-            auto erasedObserver = [observer = std::move(observer)](const ErasedSnapshot &snapshot) {
-                const auto typed = ToTypedSnapshot<T>(snapshot);
-                observer(typed);
-            };
-            return SubscribeErased(handle.Id(), handle.Generation(), typeid(T), std::move(erasedObserver));
+            return SubscribeTyped(state_, handle, std::move(observer));
         }
 
         /** @brief Delivers up to maxCount queued observers outside locks; wrong-thread, recursive, or overlapping provider-drain dispatch
@@ -513,6 +530,7 @@ namespace Horo::PlatformServices {
         [[nodiscard]] std::uint64_t CallbackFailureCount() const noexcept;
 
     private:
+        friend class PlatformServicesFrontend;
         friend struct PlatformRequestSubscription::Slot;
 
         enum class Observation : std::uint8_t {
@@ -548,13 +566,40 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<PlatformRequestMutation> CompleteErased(PlatformRequestId id, PlatformRequestGeneration generation,
                                                                      std::type_index type, PlatformRequestState terminalState,
                                                                      std::shared_ptr<const void> value, std::optional<Error> error);
+        /** @brief Publishes terminal evidence after applying the result contract's privacy projection. */
+        [[nodiscard]] Result<PlatformRequestMutation> PublishCompletion(PlatformRequestId id, PlatformRequestGeneration generation,
+                                                                        std::type_index type, PlatformRequestState terminalState,
+                                                                        std::shared_ptr<const void> value, std::optional<Error> error);
         [[nodiscard]] Result<ErasedSnapshot> QueryErased(PlatformRequestId id, PlatformRequestGeneration generation,
                                                          std::type_index type) const;
-        [[nodiscard]] Result<PlatformRequestSubscription> SubscribeErased(PlatformRequestId id, PlatformRequestGeneration generation,
-                                                                          std::type_index type,
-                                                                          std::function<void(const ErasedSnapshot &)> observer);
+        [[nodiscard]] static Result<PlatformRequestSubscription> SubscribeErased(
+            const std::shared_ptr<State> &store, PlatformRequestId id, PlatformRequestGeneration generation, std::type_index type,
+            std::function<void(const ErasedSnapshot &)> observer);
 
-        template <typename T> [[nodiscard]] static PlatformRequestSnapshot<T> ToTypedSnapshot(const ErasedSnapshot &snapshot) {
+        /** @brief Subscribes via the exact store that minted this frontend-admitted request. */
+        template <typename T>
+        [[nodiscard]] static Result<PlatformRequestSubscription> ObserveAdmitted(
+            const PlatformRequestHandle<T> &handle, std::function<void(const PlatformRequestSnapshot<T> &)> observer) {
+            const auto store = std::static_pointer_cast<State>(handle.store_.lock());
+            if (!store)
+                return Result<PlatformRequestSubscription>::Failure(MakeError(RequestErrors::Stale));
+            return SubscribeTyped(store, handle, std::move(observer));
+        }
+
+        /** @brief Projects a store terminal record into its admitted result type. */
+        template <typename T>
+        [[nodiscard]] static Result<PlatformRequestSubscription> SubscribeTyped(
+            const std::shared_ptr<State> &store, const PlatformRequestHandle<T> &handle,
+            std::function<void(const PlatformRequestSnapshot<T> &)> observer) {
+            return SubscribeErased(store, handle.Id(), handle.Generation(), typeid(T),
+                                   [authority = std::weak_ptr<void>{store},
+                                    observer = std::move(observer)](const ErasedSnapshot &snapshot) {
+                                       observer(ToTypedSnapshot<T>(snapshot, authority));
+                                   });
+        }
+
+        template <typename T> [[nodiscard]] static PlatformRequestSnapshot<T> ToTypedSnapshot(
+            const ErasedSnapshot &snapshot, const std::weak_ptr<void> &authority) {
             PlatformRequestSnapshot<T> typed{.id = snapshot.id,
                                              .generation = snapshot.generation,
                                              .state = snapshot.state,
@@ -562,6 +607,7 @@ namespace Horo::PlatformServices {
                                              .cancellationRequested = snapshot.cancellationRequested};
             if (snapshot.terminal) {
                 PlatformTerminalResult<T> terminal;
+                terminal.store_ = authority;
                 if constexpr (!std::is_void_v<T>)
                     terminal.value_ = std::static_pointer_cast<const T>(snapshot.value);
                 terminal.error_ = snapshot.error;

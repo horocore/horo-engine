@@ -1,9 +1,13 @@
 #include "AITaskSchedulerTestSupport.h"
+#include "AllocationProbe.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 namespace Horo::AI {
@@ -169,14 +173,16 @@ namespace Horo::AI {
         struct Population final {
             static constexpr std::size_t Count = 32;
             TestSupport::ActivationFixture seed{TestSupport::MakeFixture(100, 200, 7, 0)};
-            AiSceneRuntime runtime{std::move(AiSceneRuntime::Create({.maximumAgents = Count})).Value()};
+            AiSceneRuntime runtime;
             std::vector<AiSceneAgentDescriptor> agents;
             std::unique_ptr<Runtime::RuntimeScene> scene;
             std::unique_ptr<AiSceneActivationCandidate> publication;
 
-            Population() {
+            explicit Population(const std::size_t count = Count)
+                : runtime(std::move(AiSceneRuntime::Create({.maximumAgents = count})).Value()) {
                 Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{7}, Runtime::SceneDefinitionRevision{1}};
-                for (std::uint32_t index = 0; index < Count; ++index) {
+                agents.reserve(count);
+                for (std::uint32_t index = 0; index < count; ++index) {
                     auto agent = seed.agent;
                     agent.agent.agent = MakeIdentity<AgentId>(100 + index);
                     agent.owner.entity.index = index;
@@ -275,6 +281,93 @@ namespace Horo::AI {
                 CHECK(probe->cancelled == 1);
             ExpectError(population.runtime.TaskSchedulerAtSafePoint(), AIErrors::RuntimeUnavailable);
             jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+
+        /** @brief Models one reactive decision and records its one committed command in preallocated storage. */
+        class ReferenceDecision final : public IAiScheduledDecision {
+        public:
+            ReferenceDecision(const AgentId identity, std::vector<AgentId> &commands) : identity_(identity), commands_(commands) {}
+
+            Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &, AiWorkBudget &budget) noexcept override {
+                return Result<AiSliceOutcome>::Success(budget.Consume() ? AiSliceOutcome::Complete : AiSliceOutcome::BudgetExhausted);
+            }
+
+            Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &budget) noexcept override {
+                if (!budget.Consume() || commands_.size() == commands_.capacity())
+                    return Result<bool>::Success(false);
+                commands_.push_back(identity_);
+                return Result<bool>::Success(true);
+            }
+
+            void Cancel() noexcept override {
+                ++retirements;
+            }
+
+            std::size_t retirements{};
+
+        private:
+            AgentId identity_;
+            std::vector<AgentId> &commands_;
+        };
+
+        /** @brief Measures the declared reference population and returns its ordered committed commands. */
+        std::vector<AgentId> RunReferencePopulation(const bool reverseAdmission) {
+            const AiTaskSchedulerSettings settings{.mode = AiSchedulingMode::BestEffort};
+            const auto count = settings.maximumAgents;
+            const auto tickCount = (count + settings.evaluationsPerTick - 1) / settings.evaluationsPerTick;
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            std::vector<AgentId> commands;
+            commands.reserve(count);
+            Population population{count};
+            REQUIRE(population.runtime.ConfigureTaskSchedulerAtSafePoint(jobs, settings).HasValue());
+            const auto image = std::make_shared<int>(1);
+            const auto snapshot = population.runtime.Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto agents = snapshot.Value().Agents();
+            REQUIRE(agents.size() == count);
+            auto *scheduler = population.runtime.TaskSchedulerAtSafePoint().Value();
+            std::vector<std::shared_ptr<ReferenceDecision>> decisions;
+            decisions.reserve(count);
+            const AiAgentSchedulePolicy policy{.intervalTicks = 0, .workUnitsPerTick = 1, .commandsPerTick = 1};
+            for (std::size_t index = 0; index < count; ++index) {
+                const auto &agent = agents[reverseAdmission ? count - index - 1 : index];
+                auto decision = std::make_shared<ReferenceDecision>(agent.agent.agent, commands);
+                REQUIRE(population.runtime.RegisterDecisionAtSafePoint(agent.handle, policy, image, decision).HasValue());
+                REQUIRE(scheduler->Wake(agent.handle, {.explicitRequest = true}).HasValue());
+                decisions.push_back(std::move(decision));
+            }
+
+            std::chrono::steady_clock::duration peak{};
+            for (std::uint64_t tick = 1; tick <= tickCount; ++tick) {
+                const auto begin = std::chrono::steady_clock::now();
+                const auto [evaluated, committed, allocations] = [&] {
+                    Tests::AllocationProbe::ScopedMeasurement measurement;
+                    auto evaluated = scheduler->EvaluateAtDecision(tick);
+                    auto committed = scheduler->CommitAtIntentDispatch(tick);
+                    return std::tuple{std::move(evaluated), std::move(committed), measurement.Snapshot().requests};
+                }();
+                peak = std::max(peak, std::chrono::steady_clock::now() - begin);
+                REQUIRE(evaluated.HasValue());
+                REQUIRE(committed.HasValue());
+                CHECK(allocations == 0);
+                CHECK(evaluated.Value().evaluated <= settings.evaluationsPerTick);
+                CHECK(evaluated.Value().workUnits <= settings.workUnitsPerTick);
+                CHECK(committed.Value().commands == evaluated.Value().evaluated);
+            }
+            const auto peakMicroseconds = std::chrono::duration_cast<std::chrono::microseconds>(peak).count();
+            CAPTURE(reverseAdmission, count, tickCount, peakMicroseconds);
+            REQUIRE(commands.size() == count);
+            population.runtime.BeginShutdown();
+            for (const auto &decision : decisions)
+                CHECK(decision->retirements == 1);
+            ExpectError(population.runtime.TaskSchedulerAtSafePoint(), AIErrors::RuntimeUnavailable);
+            return commands;
+        }
+
+        TEST_CASE("AI reference population converges within fixed-tick budgets across admission orders", "[ai][qualification][scale]") {
+            const auto forward = RunReferencePopulation(false);
+            const auto reverse = RunReferencePopulation(true);
+            CHECK(forward == reverse);
         }
     }  // namespace
 }  // namespace Horo::AI

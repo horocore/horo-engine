@@ -89,6 +89,14 @@ The editor camera used by inline chat is not a gameplay camera component. It is
 the authoring viewport camera owned by the editor host. Runtime scenes must not
 depend on it.
 
+The local chat composer offers a separate numeric viewport review. It shows
+camera position, target, up, projection and clipping values, the active edit
+tool and bounded selected IDs. The viewport lease is retired by camera, tool,
+selection, Scene, preview or Play transitions. The viewport action opens the
+local chat and stages this review before any prompt is sent. The user can add
+or remove authored local transforms for the same selected IDs. Selection-only
+review keeps its own lease and does not admit camera data.
+
 ```cpp
 struct ViewportInlineInvocation {
     EditorViewportId viewportId;
@@ -156,20 +164,210 @@ Ownership rules:
 - A provider-neutral speech service owns partial/final transcription, locale,
   confidence, cancellation, and local/cloud adapters. A transcript is evidence,
   never approval.
+- The worker transcription session accepts one admitted Audio capture generation
+  and one explicitly selected provider. It bounds input duration and transcript
+  updates, rejects gaps and provider timestamps outside the admitted PCM window,
+  and issues final evidence only after input is explicitly sealed. The Editor
+  rechecks context and cancellation when it adopts evidence. PCM is borrowed
+  for one provider call and is never replayed into a replacement provider.
+- The macOS adapter requires speech authorization and checks that the selected
+  locale supports device-local recognition before creating a Speech request.
+  It uses Audio-owned PCM and retains only the latest framework result. Its
+  authorization action is separate from microphone permission and stream opening.
+- The macOS microphone owner reserves one foreground speech lease, separate
+  from test and recording purposes. Reads use the exact Audio grant and report
+  interruption instead of delivering queued PCM after a drop. Explicit sealing
+  detaches the device before handing the last PCM blocks to the worker. The
+  editor rechecks the lease after every live read, including an empty read,
+  and after detaching the tail. The microphone owner also revalidates native
+  permission on its own tick, independently of the listening panel.
+  Project replacement and cancellation
+  revoke the lease even after detachment.
+- The speech worker receives live PCM through a bounded single-producer queue.
+  After sealing, it consumes the detached tail after the live blocks and then
+  finalizes provider input. The editor polls one latest partial or the terminal
+  result without waiting. The capture lease revokes both and queued PCM is
+  cleared at worker retirement.
 - XR owns session identity, poses, rays, actions, tracking validity, and
   interaction-profile state. AIA consumes time-aligned snapshots and does not
   poll OpenXR.
+- The editor aligns final speech with bounded XR observations in the Audio
+  capture clock domain. Each PCM block must start at the floor or ceiling of its
+  exact sample position measured from the first block. An overlap or unreported
+  clock gap interrupts capture and withdraws the draft before provider delivery.
+  Each XR observation carries the host's before/after
+  measurement around its XR cutoff. XR timestamps order publications within
+  that session. Uncertain phrase boundaries and overlapping observations fail
+  explicitly. Missing spatial evidence produces a speech-only result. The
+  envelope retains the speech lease and rechecks the spatial capture lifetime,
+  XR origin and binding revisions when the editor adopts it. A retired spatial
+  capture invalidates the combined envelope until the editor discards its
+  spatial observations. The local transcript can then remain available.
+- The native XR Input owner brackets its actual runtime time sample when the
+  host supplies an admitted Audio capture clock. It publishes that interval
+  only with the matching committed pose cutoff. A separate interval brackets
+  synchronization of the controller action state.
+- The macOS listening owner lends that clock only while its exact microphone
+  lease accepts input. A pose batch must match both the measured XR cutoff
+  and the listening generation before the editor retains it.
+  Command assembly accepts finite World-space points, positive-radius spheres,
+  and nonempty ray segments from that cutoff. The complete capture must share
+  one exact World space identity, including observations outside the phrase.
+  The local panel retains eligible final speech when spatial geometry or timing
+  is unusable, or when the spatial history exceeds its capacity. It marks the
+  spatial evidence as unavailable and carries no rejected coordinates forward.
+- The editor observes the existing player-scoped XR pointer after Input commits.
+  A new selection press during the same listening operation retains its measured
+  ray. Held buttons and source replacement do not create new observations.
+  The ray carries its own pose interval. When both adjacent states have valid
+  action intervals, the press carries the range between the observed released
+  and pressed states. The ray and transition must independently fit inside the
+  same phrase window. An uncertain press cannot be inferred from the ray's time.
+  A press that overlaps speech without a usable pose withdraws the spatial
+  preview, including earlier candidates. A press entirely outside speech
+  remains irrelevant to that phrase.
+  Press order is validated across the complete bounded capture before phrase
+  selection. A speech-only preview still belongs to its original XR session.
+- On macOS, the local Agent panel offers explicit listening controls for the
+  current authored scene in focused XR Play. The scene selection is optional.
+  Speech and microphone permission are
+  requested separately. Play capture retains only a transient transcript preview
+  and does not grant model, tool or mutation authority. The panel clears capture
+  when presentation, selection or the Play lineage is withdrawn.
+  Before capture starts, the panel identifies the on-device path. A recording
+  limit, unavailable recognizer, or low-confidence result releases that capture
+  and reports the reason. A new recording requires a new user action.
+  One elapsed-time budget covers provider open, input, and result polling.
+  Expiration signals cooperative provider cancellation even during a provider call.
+  The panel reports PCM accepted by the recognizer even before a draft arrives.
+  After microphone detachment it separately reports elapsed time until receipt
+  of final text. These transient measurements disappear when the scope retires.
+  The local panel displays only the latest admitted partial as a draft. Final
+  recognition replaces it and enables reference review. Cancellation or context
+  withdrawal clears the draft.
+  Each new hypothesis revokes access to the prior draft, including copies
+  already delivered to the editor. A low-confidence update withdraws the draft
+  while recognition continues. The final remains bound to the listening scope.
+  The editor clears its owned transcript byte storage on release. The macOS
+  adapter clears its own UTF-8 scratch before polling another result and on
+  cancellation.
+- The local Agent panel can request a read-only review of captured selection
+  references. The workspace checks the exact authored revision and active Play
+  scene, then reports each candidate's visibility, lock, or scope status.
+  Multiple captured candidates require clarification.
+- In authored XR Play, an admitted controller press can record the nearest mesh
+  triangle hit per intersected draw. The query borrows the latest committed
+  authored geometry on the owner lane and applies a fixed triangle and hit budget.
+  The Agent panel can review the same-world hits aligned to the speech interval.
+  Incomplete or malformed hit evidence produces an unavailable result.
+  If some presses hit and others miss, the mesh and physical surface reviews
+  keep the candidates visible and ask the user to point again. An utterance
+  with only verified misses has an empty result.
+  Location review shows press-time world coordinates in meters for eligible
+  objects. Separate points on one object remain separate location candidates.
+  Physical surface review uses the separate one-session plane grant. The
+  controller press copies bounded hit coordinates and plane identities from
+  the admitted publication. Each preview checks the exact World space of the
+  recorded ray and that the same grant and all referenced plane identities are
+  still live. It also verifies that every captured coordinate remains on its
+  current finite surface with the captured classification. Review preserves
+  the original coordinates and withdraws the candidate set if a point no
+  longer has that support.
+  Play mesh hits and listening lineage retain the structural revision of the
+  draws, so recycled object identities require a new observation.
+  World UI dispatch owns its targeted and reserved gestures. Scene evidence
+  observes the raw button edge after that routing decision, including releases
+  and UI-owned presses. A held UI press cannot become a later scene reference.
+  Mounted XR Play resolves hits against the prepared origin-relative cell
+  geometry. The review carries the exact Scene structural revision and uses
+  runtime membership for read-only cell references. Cell or origin retirement
+  withdraws the captured review. Switching between authored and mounted Play
+  sources revokes the previous capture before the next preview.
+- Each listening operation retains at most one fixed-capacity spatial history
+  on the editor owner lane. A batch that exceeds the remaining capacity makes
+  that history unusable for the utterance. Sealing stops both PCM and spatial
+  input before the worker completes, and cancellation clears the observations.
 - Physics, XR interaction, and gameplay own point, grab, contact, throw, and
   trigger mechanics. AIA may adapt those events into spatial evidence but does
   not own the mechanics or gameplay meaning.
+  The on-demand Physics preview reads contact starts and ends, and trigger
+  entries and exits, for the selected object in one completed Play tick. It filters by the object's
+  resident body handles when they fit the Physics filter budget and uses the
+  complete tick otherwise. The local panel makes this review available during
+  Play without starting speech capture. It displays the tick alongside the
+  events and clears the preview when Play stops or pauses. Internal contacts
+  between bodies of the selected object are ignored. Each peer must resolve
+  through its exact live entity generation. Incomplete batches and hidden,
+  locked, deleted, or recycled peers suppress the preview. A new selection,
+  document revision, or Scene structural revision withdraws the captured review.
+  Leaving active Play also revokes the shared selection capture, so resuming
+  the same Scene cannot restore a previous reference or contact review.
 - MCP validates admitted tools. The editor document/command owner validates and
   commits mutations. AIA owns orchestration and presentation only.
+  The plan-only agent turn performs one bounded model round. It holds proposed
+  tools inert, validates the complete batch against host policy and the selected
+  registry generation, and discards it if admission is withdrawn. Registry
+  inspection uses the same input schema and bounds as execution and consumes no
+  approvals. The host passes the lifetime of the exact approved tool and
+  capability set when capturing the catalog. Withdrawing that lifetime stops
+  inference and retires existing drafts even when the registry is unchanged.
+  The draft retains the registered read, presentation, or mutation effect for
+  each proposed call and any provider-reported token usage. The Editor can read
+  it only under the original authoring generation while the request is current.
+  A proposed mutation requires the exact authoring document opening and revision.
+  The review rechecks authority after each live target inspection so an
+  invalidated draft cannot inspect additional targets.
+  The shared turn runtime also rechecks the deadline and cancellation after
+  context validation, before handing off a tool call or showing a live text delta.
+  The desktop viewport keeps committed geometry in place and appends tinted,
+  non-pickable copies at proposed transforms. The copies carry no object or
+  motion-history identity. If the renderer's draw budget cannot hold the
+  complete preview, the same review displays the proposed values as text.
+  A registry-backed request advertises only definitions derived from its
+  host-selected, capability-granted catalog. Replacing the MCP registry blocks
+  new inference and withdraws any draft from the old catalog. During planning,
+  a deadline thread observes the captured document, context and catalog lifetime
+  so authority withdrawal stops a cooperative model even before its next event.
+  Plans with consented context also observe the exact project trust revision
+  that admitted it. Replacing trust or retiring the policy stops inference and
+  withdraws the draft even when the project remains open.
+  Scene proposal inspection and staging share one input decoder. The decoder
+  rejects competing edits to the same property and invalid rotations before
+  projecting the affected objects. Different properties of one object may
+  appear together and contribute one review target.
+  A host can source planning schemas from the current authenticated editor MCP
+  session. The scope intersects that session's grants with a separate tool
+  selection for the plan and pins the project identity before inference.
+  Disconnect, principal expiry, or withdrawal of the selected tools invalidates
+  retained drafts without giving the planner an MCP execution channel.
+  A local Edit action can take one validated batched Scene proposal to the
+  normal viewport preview owner. The exact session's workspace endpoint
+  revalidates each target first, then uses the same typed decoder as the MCP
+  proposal tool. The viewport retains the plan's revocation checks and still
+  requires its separate transaction confirmation.
+  Approval rechecks the retained authority after removing the viewport preview,
+  before handing the edit to the document transaction. A replacement review
+  supersedes the previous approval.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,
 confidence, object generation, scene revision, and XR session generation.
 Destroyed, stale, cross-project, hidden, locked, or unauthorized identities are
 rejected before planning.
+The retained Play reference review remains visible only while its document
+opening, selection, live Scene topology, and mounted or authored source still
+match. Pointing and location reviews also retain the exact spatial capture
+lifetime. Losing or replacing its pointer withdraws retained observations and
+their derived reviews while the final transcript and selection remain available.
+The panel checks these lifetimes without rescanning the candidates.
+Reference requests must carry the cancellation token from their
+`AgentSceneSelectionSnapshot`. Both reference and contact reviews retain that
+workspace lifetime. Switching the mounted or authored Play source revokes the
+old lifetime permanently, even if the user returns to the original source.
+During authored Play, the local Agent panel can also request the current
+selection without microphone permission, speech recognition or a model. The
+owner returns the same bounded reference receipt, and the panel withdraws it
+when the selection, scene or Play mode changes.
 
 Immersive requests follow an explicit presentation state machine:
 
@@ -196,13 +394,39 @@ Authoring mode is part of admission, not presentation state:
 
 Mode, document, project or XR-session replacement invalidates outstanding
 approval. A retained proposal remains non-authoritative and must be reviewed
-against fresh context.
+against fresh context. A Simulate Scene proposal can retain its tool intent for
+the immediate transition to Edit on the same project, document revision, XR
+session and workspace owner. Edit requires a fresh catalog and revalidates the
+target objects before staging the normal viewport review. Only the editor owner's
+explicit transition from the live Simulate scope can admit that candidate.
+Ordinary Edit publication and context revocation discard handoff eligibility.
+Planning uses the earlier of the admitted project deadline and the turn limit.
+Expiration stops cooperative inference and prevents review publication. Elapsed
+inference and tool inspection times remain available on terminal outcomes for
+stages that ran, including when the draft is discarded.
+The immersive MCP tool catalog is admitted for one exact authoring generation.
+An unchanged registry and tool grant cannot carry that catalog into a new
+project, document revision or mode. An authenticated Editor workflow also binds
+the context to the exact MCP principal, session and generation. A second session
+for the same project must publish its own context and obtain its own approval.
+
+The `[immersive][replay]` case in `HoroEditorAgentTurnTests` runs the Simulate
+path from synthetic speech and a measured controller press through the
+registered Scene proposal schema. It verifies that planning never stages an
+edit and exercises stale revisions, malformed arguments, provider failure,
+cancellation and context retirement. Physical tracking, presentation and
+explicit approval are qualified separately.
 
 Long-running transcription, planning, tool execution, and preview generation
 are cancellable and expose stable progressive feedback. They do not hide
 latency with speculative authoritative world mutation. Feedback supports
 captions, non-voice input, reduced motion, handedness, localization, and more
 than color/audio alone for critical states.
+
+The Play listening preview keeps speech and pointing data on the device.
+When the pointing source retires, the capture revokes derived reference
+reviews and the panel discards its copied spatial observations. An otherwise
+valid local transcript can continue without those references.
 
 ## Numeric-First Agent Perception
 
@@ -453,9 +677,23 @@ struct AgentContext {
 };
 ```
 
-The context is assembled on the C++ side by the `AgentContextProvider` and
-serialized into the system prompt (or tool-call preamble) before each
-request reaches the LLM.
+The C++ context provider assembles the selected evidence before the request
+reaches the model.
+
+The editor Agent turn's explicit attachment path captures an ordered typed preview
+bound to one project generation, trust revision, request and provider residence.
+Source ranges use an already-open immutable source snapshot. A selected file may
+use the bounded rooted file reader. Diagnostics and build status use the
+authenticated read-only MCP query route. An editor owner may use the owned result
+of a query prepared on a worker while the MCP owner pumps its queue. Selected
+scene evidence, build output, notes and reports can arrive as revisioned text
+attachments from their owners. No document is opened during this preparation.
+
+The preview exposes the exact redacted provider payload and its provenance.
+After the user confirms it, the turn rechecks the project, trust and producer
+revisions and consumes the matching consent. Attachment text travels as
+user-role evidence. The completed conversation excludes these ephemeral context
+messages, so a later request must separately confirm its selected context.
 
 ## Request Pipeline
 
@@ -518,6 +756,29 @@ admission and authorization. The effective tool set is derived from host role,
 project trust, user policy, context scope, capabilities, and operation approval.
 The model may request a tool; it never decides its own authority.
 
+The editor turn runtime receives a host-selected provider and an existing
+authenticated in-process MCP session. It waits on a host worker while the
+canonical MCP controller dispatches through its registered owners. Each turn
+admits one inference or tool operation at a time, bounds its history, rounds,
+stream events, tool calls, output-token allowance and deadline, and returns one
+terminal outcome. One editor runtime admits one active turn and rejects
+concurrent or reentrant work. Malformed or repeated tool intents are rejected before their
+round submits any tool. Tool execution keeps the controller's approval check,
+and termination of the turn cancels a still-pending exact operation. The
+runtime does not retry provider requests or publish partial conversation history.
+
+For the local scene count tool, the chat composer presents the tool, its empty
+argument list, the current project and the exact count before sending a turn.
+The user may deny the review or approve one read-only call for that turn. The
+composer drops the review when it is hidden, the project is detached, the
+observed count changes, or the review expires. The worker receives only the
+approved count and owns the bounded, single-use tool session. Stopping the
+turn revokes that session's exact principal, including during provider I/O.
+Once the controller accepts the call, chat can open the MCP dock at its exact
+audit identity. The history view matches the numeric principal, session,
+generation and operation. The renderer receives no tool arguments or results
+through this link.
+
 ## Internal IDE Communication
 
 The agent integration uses three distinct channels. They must not be collapsed
@@ -577,6 +838,33 @@ struct AgentEditTransaction {
 
 The command system owns undo/redo, dirty-state updates, selection restoration,
 and UI refresh. Agent tools do not bypass it.
+
+For authored object replacements, `SceneDocumentTransactions::PreviewReplacements`
+validates the complete batch and returns the effective typed changes for review.
+The same validated changes determine the counts of created, updated, and removed
+objects and flag camera or world-transform changes. The viewport review displays
+a spatial impact warning and requires a separate local confirmation before
+approval when either flag is set.
+The review owns detached values tied to the original document opening and
+revision. After approval, the owner calls `ApplyReviewedReplacements` with fresh
+edit admission. It revalidates the reviewed batch against the live document and
+records one canonical history entry.
+The next enabled Scene autosave can checkpoint that exact committed state with
+a redacted approval receipt. The receipt records the review identity, base
+revision, committed state, affected-object count and spatial confirmation. Its
+checksum binds it to the canonical Scene path, saved baseline and recovered
+payload. Invalid receipt metadata leaves the ordinary Scene recovery available.
+
+`scene.propose_transforms` accepts a bounded batch of local transforms for
+visible authored objects on the exact Scene revision returned by inspection.
+`scene.propose_edits` can combine local transforms, object renames, and enabled
+state changes on existing authored lights in the same review and undo entry.
+The viewport displays the name and light changes alongside the visual transform
+preview. Light state takes effect only when the operator applies the review.
+The MCP proposal grant admits the preview. Apply and discard are local viewport
+controls. The preview is retired when the originating authority expires or the
+authored Scene is replaced. Rebinding or closing the workspace inspection
+port cancels the originating scope for its callbacks and pending previews.
 
 ### Communication Flow
 
@@ -705,6 +993,192 @@ deterministic tools, but it cannot let model output, voice, gaze, pointing, or a
 gesture approve its own mutation. Destructive and immersive scene changes always
 retain the visible proposal and revision-bound approval boundary.
 
+Structured source patches use a versioned object with a files array. A file
+record declares an operation, its project-relative path, and the operation's
+allowed text, destination, or original-byte hunks. The editor supplies the
+proposal identity and the exact source snapshots offered to the model. Parsing
+checks duplicate fields, finite limits, project path policy, and the original
+hunk bytes. It returns a typed proposal without opening, editing, or saving any
+file. Recovery uses its separate committed envelope.
+
+Unified text diffs use paired project-relative paths, declared old and new
+line ranges, and exact source context. The decoder accepts plain unified
+headers and matching Git text headers, preserves source line endings, and
+recognizes the missing-final-newline marker. Creates and complete deletions
+use the unified null-file sentinel. Renames are represented explicitly in the
+structured format. Git hash text supplies no source revision authority.
+
+Workspace edit planning binds one admitted proposal to explicit read-only
+observations of its source and destination paths. Current source leases must
+match both the buffer and saved-base evidence. The workspace host supplies
+observed absence for creates and renames. The planner produces one bounded
+preview or typed conflict per operation in canonical proposal order. Its output
+retains the exact proposal digest and never changes source, history, or disk.
+Permissions, paths, and revision evidence are checked again by the mutation
+owner before application.
+
+The source editor projects the selected operation from that plan into its
+existing gutter and text decorations. It maps original byte coordinates to
+display coordinates and retains the exact source publication. Navigation
+only moves the caret. A newer source publication or a tentative widget edit
+retires the markers and reports a conflict until a new plan is selected.
+The local model panel offers review for a complete JSON change or unified diff
+returned to a turn with explicitly selected whole source files. The open-tab
+picker retains the exact selected snapshots across pages. One consent action
+covers all displayed redacted context. Proposal admission is limited to the
+unredacted file snapshots sent in that turn. Each completed-reply card shows
+the admitted path and queues the corresponding existing source tab through
+the workspace command lane. Reviews remain scoped to each tab. Rejecting a
+proposal records the choice against its digest and disables its chat actions.
+
+A review decision set binds its canonical file and hunk indices to the
+proposal digest. File and bulk decisions update their selected units
+atomically. Structural operations have one file decision. Acceptance and
+undo validate current workspace evidence before publishing a decision.
+The detached review encoding retains the current unit states and proposal
+digest for recovery. It carries no source bytes or mutation authority.
+The chat shows one change range at a time for each selected edit. Its
+controls use the original byte range and the canonical hunk index for the
+decision, even if the displayed file later becomes stale.
+Deleting a source with unsaved edits is a planning conflict, even when the
+proposal captures the current revision. The review also identifies a case-only
+rename as a portable path conflict. Both checks reject acceptance independently
+of the preview so a supplied preview cannot bypass them.
+For create or rename review the user may name one exact project-relative
+destination for the current reply. An I/O worker walks the existing parent
+directories and distinguishes absent leaves, occupied names, missing parents,
+case aliases and redirects. The destination grants read-only review scope.
+New file text is shown as a bounded excerpt. Restoring a saved review checks
+its structural destinations again before restoring accepted decisions.
+Applying one accepted creation stages an ordinary dirty Source tab without a
+disk base. Even an empty draft stays dirty until an explicit Save or Save All
+publishes the file with an exclusive rename. The grouped Undo action can close
+the exact unchanged draft. A later user edit or save retires that undo
+authority, and rejected creation leaves the live document registry intact.
+An accepted deletion requires an explicit move to project Trash. The worker
+captures the exact saved bytes. Under the project and source writer leases the
+owner rechecks the clean source and its native identity before moving it. The
+Trash entry preserves the original relative path and complete bytes. The tab
+closes after the native move reaches durability. A post-move failure attempts
+an exclusive move back to the original name, preserving any new occupant.
+The grouped Undo action restores the current deletion's witnessed payload
+only to its original project-relative path. It checks the path with the same
+no-follow destination inspection as the review and refuses a new file, case
+alias, redirect, open document, or replaced Trash payload. A failed restore
+after a visible move attempts to return the payload to Trash. Once restored,
+the file can be reopened through the normal Source route.
+Confirming a single reviewed rename moves the existing disk base with an
+exclusive same-filesystem rename. The editor rekeys the same document instance
+only after a durable move, retaining the open tab and text history. Accepted
+rename hunks and existing unsaved edits stay in the resulting buffer. A later
+source save publishes the buffer at its new name. On failure the owner keeps
+the original routing and attempts an exclusive rollback after a visible move.
+The grouped Undo action can restore the old spelling and pre-review buffer
+while the rename's published document state is current. A worker verifies the
+renamed disk base before the owner moves it back. Undo uses the same exclusive
+move and leaves either path intact when the old name has acquired a new
+occupant. Saving or editing the renamed document retires its grouped undo.
+
+The Local Model panel can explicitly replace the recovery checkpoint at
+`.horo/local/agent/source-review` with the admitted proposal and its current decisions. The
+checkpoint keeps the exact proposal, including the reviewed change text, and
+the allowed path identities. It excludes the provider conversation and its
+request context. The editor publishes the file durably on its storage worker
+under an exclusive project-file lease. Restoring builds a new read-only plan
+from current open source snapshots. Each restored acceptance requires matching
+path, buffer and saved-base digests, and valid original ranges. Editor
+revision counters may differ after reopening a byte-identical source. The
+checkpoint preserves the decisions at save time. Undo tracks decisions made
+in the current review session.
+
+The Local Model panel queues an explicit Apply command with the accepted review
+and its exact offered-file policy. The workspace dispatches it after drawing.
+The preparation worker uses one plan, aggregate text budget, and audit for
+the entire accepted selection. It renders accepted text from original ranges,
+inspects each structural destination, and records saved-file evidence before
+returning the detached candidate. Text-only publication rejects candidates
+that also carry structural operations.
+When the accepted file operations are creations, the source owner stages
+the draft identities and buffers alongside any text replacements. It
+revalidates the edit bases before exposing the group. Creation remains
+unsaved until ordinary Save. Grouped Undo replays the edits and retires the
+drafts together while every affected publication is still current.
+Groups may include confirmed renames and deletions alongside edits and drafts.
+Each deletion has its own reserved payload and durable origin manifest in
+project Trash. A successful group closes the deleted source sessions.
+The source owner stages all rekeys and acquires the writer leases before any
+move. It makes the new buffers and routing identities visible only after
+every rename is durable. A later failure rolls visible moves back in reverse
+order using exclusive moves. If an original name is now occupied, recovery
+keeps the source review and Trash evidence available. The workspace keeps
+the pre-application document roots.
+After a successful group, Undo restores the prior names and working buffers,
+replays the text edits, and closes the unsaved drafts. It verifies the
+renamed disk bases and the captured Trash payload identities before using
+them. Every original destination must be free. An unavailable payload, a
+new occupant, or a newer user edit prevents completion of the group. Files
+restored from Trash can be reopened through the ordinary Source route.
+Exclusive moves use the Windows, macOS, or Linux native rename primitive.
+The review reports cross-volume moves and unavailable exclusive rename support
+as distinct refusals. Recovery uses the same native primitive and does not
+copy files between volumes.
+The source owner rechecks the policy, the live publications and the saved disk
+bases before publishing one batch of buffer changes. Only accepted text ranges
+enter that batch. The workspace retains its latest receipt for a single grouped
+Undo action while every affected publication is still current. Source files are
+written through the ordinary save flow.
+
+Queued Apply and Undo commands carry the current workspace attachment's
+cancellation token. Detaching the workspace cancels that admission before an
+old command can publish. The owner serializes accepted transactions with manual
+source edits and checks current leases and disk bases at execution. A competing
+command that loses its evidence reports a conflict. An older review never
+rebases onto new user or external edits without another review.
+
+The command shares its immutable preview with one workspace-owned preparation
+job. Policy validation, reconstruction of the accepted text, and exact reads
+of the saved disk bytes run on an I/O worker. The editor polls completion
+without waiting. The source owner compares the current leases and native file
+mutation evidence, then publishes the group. A manual edit
+can advance a source while the job is running. In that case the owner rejects
+the stale preparation before publishing any buffer.
+Missing native file identity evidence also prevents publication.
+
+Successful review application attaches content-free attribution to the exact
+source owner receipt. It contains proposal and policy commitments, canonical
+decision states, and the previous and published revisions of accepted files by
+proposal index. Source paths, ranges, text, and provider responses stay outside
+the attribution. The panel identifies the last successful proposal by its digest.
+
+The application audit has a separate versioned, bounded encoding with a
+checksum over its canonical payload. Each accepted file has exactly one
+ordered before-and-after revision pair. Decoding provides attribution only
+and cannot open a document, dispatch an edit, or restore undo authority.
+The workspace appends the audit on an I/O worker after the source owner returns
+its receipt. Atomic publication retains the most recent 16 applications in
+`.horo/local/agent/source-review-history` under the project and destination
+leases. Reopening a workspace reads historical attribution without restoring a
+live transaction or touching source files. Corrupt history stays on disk and
+the panel reports a read or publication error.
+Each record has a project-local sequence, assigned under the writer lease.
+The editor advances only the outcome of that exact record. An application is
+saved when every changed revision has a durable in-place source save receipt.
+Post-apply validation captures a live saved review from the source owner.
+Later edits, closed buffers, and history restored on reopen cannot supply that
+receipt. The disk check compares the saved bytes and verifies that deleted or
+renamed source paths are still absent. It runs on an I/O worker and may reject
+changes that the workspace has not observed yet.
+The source review panel offers separate build and test approvals. Build
+approval captures the saved application on the workspace command lane and
+starts an isolated native build. Test approval is available after that
+specific build succeeds. The result belongs to the live audit and its source
+revisions. Undo, edits, or workspace retirement invalidate that result.
+Source Save As, later edits, and unconfirmed writes cannot supply that proof.
+An explicit group undo records a reverted application. An invalidated unsaved
+revision or an applied-only record reopened without live ownership is stale.
+The reader retains older records without outcome evidence as historical
+attribution. It never authorizes replay or replaces source bytes.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:
@@ -722,6 +1196,11 @@ support returns `UnsupportedCapability` before transport work. HTTP and provider
 JSON types remain private to the adapter target. This seam belongs only to the
 editor agent, never `HoroAI` gameplay or packaged runtime composition.
 
+`HoroModelProviderAdapters` privately consumes the security credential contract
+and zeroizing byte owner. The model contract remains independent of security.
+The editor host owns credential provider selection and lifetime. The adapter
+receives only the injected provider and opaque reference for dispatch.
+
 ```cpp
 enum class AgentProvider {
     Local,
@@ -738,6 +1217,17 @@ enum class AgentProvider {
 - Reports model capabilities, context limits, cost class, and availability
   through the same provider contract as remote adapters
 
+`HoroEditor --local-agent` enables the Local Model panel in the workspace.
+Enter the loopback HTTP service address and an installed model, or discover
+models from that address. Discovery and explicitly submitted text run on a
+worker. The workspace keeps running while the service responds. The panel sends
+the entered message, and workspace detachment cancels pending work.
+
+The panel can authorize a single read-only MCP query for the displayed scene
+object count. The worker checks that the selected installed model supports
+tools before sending the prompt. Its authenticated session exposes only the
+approved count, and releases the snapshot when the turn ends.
+
 ### Cloud Provider
 
 - Connects through a provider adapter selected by host/project policy
@@ -746,11 +1236,30 @@ enum class AgentProvider {
 - Receives only the context admitted and disclosed for the current request
 - Declares retry, quota, streaming, tool-call, and data-residency capabilities
 
+The host-bound OpenAI-compatible adapter resolves typed credential references
+through the shared security provider for each HTTPS operation. The adapter
+checks the endpoint before lookup and keeps resolved bytes in zeroizing
+application-owned storage. Endpoint and model consent remain host-owned.
+
+The desktop chat panel exposes cloud mode when the host supplies a native
+credential backend. Each model list or inference request requires approval of
+the displayed HTTPS endpoint. The inference review also displays the selected
+model and exact message. The worker sends one user message and has no project
+context, history, or tool capability. The editor restores the model, endpoint,
+and opaque credential reference from a user-level profile. The native
+credential store owns the key, and the panel exposes explicit removal.
+
 ### Provider Selection
 
 The active provider is selected in the chat panel header. Per-conversation
 override is supported. System administrators can lock the provider via
 project settings.
+
+Use `--local-agent --ai-local-only` to restrict the editor AI panel to the
+loopback model service and existing on-device speech recognition. The host
+omits the cloud credential backend and the panel displays the active policy.
+Saved cloud profiles remain available in a future session that permits cloud
+models. A local provider failure ends the operation without switching models.
 
 ### Provider Budget And Degraded Operation
 
@@ -759,11 +1268,45 @@ model inference. The policy can limit requests, tokens/audio duration, monetary
 estimate, concurrency, retries, and session/project totals. Usage presentation
 must distinguish an estimate from provider-authoritative billing.
 
+When the AI panel is enabled, `--ai-session-operations <count>` caps provider
+operations across the editor process and `--ai-project-operations <count>`
+caps them independently for each attached project in that process. An omitted
+option leaves its scope uncapped. Zero disallows provider operations. Local
+models, cloud models, and on-device speech share the counts. Detaching or
+reopening the dock or project preserves them. Restarting the editor starts a
+new session. A model turn, model-list load, or speech capture counts once when
+accepted by its worker, including operations that later fail or are cancelled.
+The speech budget is checked before opening the microphone. The panel displays
+the accepted operations against each enabled ceiling.
+
+Before cloud approval the panel displays the reviewed message size in UTF-8
+bytes and the output token ceiling. The completed response displays any
+provider-reported token counts for the final inference only. Play listening
+displays its audio duration limit and the PCM duration submitted to the
+recognizer with the current hypothesis. These figures do not represent charges.
+
 Rate limiting, quota exhaustion, offline state, credential loss, and provider
 failure are normal lifecycle results. They may offer an admitted local provider,
 queue a user-visible retry, or stop the request. They never trigger unbounded
 background retries, silently switch data residency, or mutate scene state.
-Cancellation and shutdown revoke retries and release provider work.
+HTTP model adapters expose a positive `Retry-After` on a throttled response as
+an optional duration, capped at five minutes so a remote hint cannot suspend an
+editor route indefinitely. The panel uses a monotonic deadline for the configured
+provider and endpoint. A throttled capability probe for an approved scene tool
+updates that backoff deadline and stops before opening the tool session.
+Within an admitted scene turn, the capability probe, tool session setup and
+model rounds share one request deadline. An expired turn cannot dispatch the
+approved query or publish a response. Until the route backoff expires, explicit
+discovery and model turn retries for that route consume no additional quota.
+Speech and other routes retain their
+own admission paths. An absent hint leaves existing manual retry behavior intact.
+An immersive plan review exposes the failure class and throttle hint only to
+the current authoring context. Cancellation or scope retirement withdraws that
+metadata before presentation.
+Cancellation and shutdown revoke retries and release provider work. While a
+recognition operation is active, the speech deadline watchdog also observes the
+immutable authoring context. Retirement of the document or context generation
+signals the recognizer even when it has not delivered a callback.
 
 ## Conversation Management
 
@@ -784,14 +1327,113 @@ struct ConversationRecord {
 };
 ```
 
+The private history owner publishes bounded SQLite images under
+`.horo/local/agent/conversations.sqlite`. It uses an exclusive project-file
+lease and durable atomic replacement. The host opens the store on an editor
+worker. Corrupt, foreign-project, and unsupported images produce an empty,
+unavailable view.
+The original images remain available for recovery. Committed streaming
+responses reopen as incomplete. The history owner requires its own host text
+filter and keeps only admitted display text, numeric usage, and opaque typed
+attachment and tool references. Provider request envelopes and tool payloads
+remain ephemeral.
+Version 1 images remain readable. The next durable write publishes the current
+version, which adds a build output reference kind.
+
+The Local Model panel opens the committed project's history on the editor I/O
+lane. After a plain text exchange, the panel shows the exact redacted prompt
+and response before offering a save. Approval writes both messages as a single
+project-scoped operation. The editor owns the background model operation and
+continues to poll history and turn completion while the panel is hidden.
+Detaching the workspace cancels the operation and discards late replies.
+
+The panel also offers recovery for an explicitly approved plain-text request.
+It commits the reviewed, redacted prompt and an empty response checkpoint on
+the history worker before starting inference. While a plain response streams,
+the user can freeze and approve a redacted draft of the complete lines received
+so far. Later deltas never change that preview. A successful reply requires its
+own review before the panel completes the same checkpoint. A restart after an
+interruption shows the saved prompt, any approved draft, and an incomplete-response
+marker.
+
+Saved conversation management uses the same project worker and is bound to the
+selected conversation. The panel supports rename, archive, restore, and deletion
+after confirmation. An export reads the sanitized JSON projection. The user can
+copy that exact preview from the panel.
+
 History is searchable from the chat panel. Old conversations are
 auto-archived after 30 days (configurable).
 
 ### Context Injection
 
-Users can explicitly add context to a prompt:
+The Local Model panel can review a Source document chosen from the open tabs,
+the active Source document, or the explicit selection in its existing editor widget.
+The workspace supplies an immutable editor snapshot, without opening or
+reading a file. The panel shows the redacted bytes and local destination
+before issuing one-use approval. Range approval also checks that the same
+selection still exists. Redaction checks any intersecting sensitive line
+and enclosing private-key block before clipping to the selected range.
+Source edits, close, and workspace detachment invalidate the preview before
+provider dispatch. After a successful contextual turn, a separate history
+approval records only the displayed numeric document or build output reference.
+An executed scene count tool can be recorded through the same review. These
+conversation records contain localized host labels and an opaque reference
+scoped to the turn.
 
-- **Selection**: "Use the selected object" — current selection is injected
+The separate saved-file action takes an explicit project-relative path. The
+workspace's rooted read authority reads a bounded text file on the agent worker
+without opening a Source tab. The panel previews the redacted result and the
+inference worker verifies the same saved revision before using the approval.
+These saved-file attachments and responses remain ephemeral.
+
+The user can explicitly capture bounded clipboard text as a note or report.
+The panel freezes the selected bytes at capture, identifies the attachment type
+and revision, and displays the redacted preview before consent. Later clipboard
+changes have no effect on the frozen preview. The clipboard is read only on
+that selection, and the attachment and response remain out of conversation history.
+
+The panel offers separate previews for the active gameplay build and the last
+completed build of the current project. It reads only the retained output for
+the selected operation, marks omitted output, and redacts the text before review.
+The active and completed builds also offer separate diagnostics previews. The
+selected operation contributes a bounded capture of its warnings and errors to
+an authenticated, read-only MCP session on the agent worker. The session exposes
+only the project's diagnostic query for that capture and is closed before model
+inference. The worker returns the revisioned page for redaction and review.
+The active Decision Graph can expose its current Problems through the same
+query. The workspace supplies only bounded findings from that open document and
+revokes the review when the active document, its revision, or its validation
+result changes.
+Changes to the selected operation's output invalidate its approval. Other
+builds and process logs have no effect while the selected output is retained.
+
+An inline source proposal review shows error and warning counts for the open
+source revision behind the proposal. The counts come from the existing language
+service publication. They describe the current buffer and never certify the
+proposed replacement text. When the source changes, the original review
+conflicts and its counts are withdrawn.
+After the user applies a review, an open source tab can show the language
+findings for its exact applied buffer. A later edit retires this association.
+The buffer remains in the source owner and applying the review grants no build
+or test authority.
+The chat review can also check the syntax of a proposed HoroScript file before
+application. The bounded Lua parser runs on a worker against the immutable
+preview, without opening the script's libraries or executing it. The result is
+visible only for that exact proposal plan and current file base. The check
+leaves the review decisions and workspace files untouched.
+For C++ files, the same review can ask the host's configured Clangd to check
+the proposed bytes against the project's compilation database. A separate
+language process owns the one-file preview, with a deadline and indexing
+disabled. The result describes that file's compilation context and stays within
+the review. It does not replace the open editor buffer's language publication.
+
+The workspace can also capture up to sixteen selected IDs from the current
+ordinary Scene for a separate local-model review. The capture identifies the
+scene and selection revisions. A scene edit, replacement, or selection change
+revokes its witness before the next dispatch. It stays out of conversation history.
+
+Other intended editor context surfaces include:
+
 - **Viewport**: "What's in front of the camera?" — viewport frustum snapshot
 - **Console**: "Check the last error" — recent console log entries
 - **File**: drag-and-drop a file reference into the chat input
@@ -878,6 +1520,25 @@ its authoritative owner.
 3. Clicking the AI Chat button in the right activity bar toggles it open
 4. Opening the panel establishes (or resumes) a conversation
 5. Closing the panel hides it; the conversation persists in the background
+
+The local chat panel displays completed, redacted lines while an inference
+without tools is running, including turns with explicitly approved attachments.
+The display polls the bounded worker draft without waiting for the producer.
+The turn checks each text delta against its byte allowance and requires complete
+UTF-8 scalar values without embedded NUL. An invalid delta is withheld from the
+preview and stops the turn before final delivery.
+Final delivery uses the terminal response. A live display does not approve
+conversation storage or create a history checkpoint.
+Regenerate resubmits the last plain prompt to the same selected model and
+endpoint. The separate composer keeps its current draft. Context-bearing and
+tool turns require a new explicit selection and approval.
+The panel reports when the approved scene-count tool starts and how it settles.
+This transient status is emitted only for admitted dispatch and carries no tool
+arguments or result payload. The query can finish before the assistant response.
+The chat's text fields own workspace keyboard focus only while active. Hiding
+the panel releases that input context while the editor continues polling the
+turn. Actions use the dock's available width and expose clipped labels through
+focused and hovered tooltips.
 
 ### Activity Bar Button
 
@@ -1010,6 +1671,15 @@ The agent may choose how to modify candidates inside the region, but it may not
 expand scope silently. If it needs more objects, it must ask or present a larger
 preview scope.
 
+The command host registers `viewport.propose_light_state` in the same immutable
+tool catalog as the inspection and Scene review tools. The tool requires both
+inspection and proposal grants, the exact Scene revision, and a bounded list of
+visible object identities. An optional world-space stroke restricts that list to
+committed pivots inside its swept radius. It accepts at most 16 points, a 100 m
+radius and a 256 m total stroke length. An out-of-scope target rejects the whole
+request. The review uses typed light edits and the same local Apply, discard,
+history and authority checks as other Scene proposals.
+
 ### Auto Alignment
 
 Auto alignment should use explicit constraints rather than vague transforms:
@@ -1033,6 +1703,11 @@ The LLM should choose strategy; the editor tool should execute the strategy.
 
 - Inline prompt context gathering must be incremental and bounded. Do not block
   the render thread on full-scene serialization.
+- An explicit viewport context request includes at most 16 selected objects.
+  Camera-only context skips authored transform lookup. When transforms are
+  requested, the workspace resolves the bounded selection in one pass over the
+  authored objects, preserves selection order, and revokes the snapshot when
+  the selection changes.
 - Viewport raycasts and neighborhood queries run through existing editor query
   services and must respect editor frame budget.
 - Agent-driven debug captures must be bounded by explicit target, time range,
@@ -1049,6 +1724,46 @@ The LLM should choose strategy; the editor tool should execute the strategy.
   gaze, pose, or environment history is not retained as ordinary context.
 - Disabled immersive/provider paths do not add work to the XR frame loop or
   audio callback.
+
+### Disabled Viewport Agent Frame Cost
+
+With the Local Agent panel disabled, the workspace leaves the viewport review
+callback empty. The viewport frame skips the review control and gathers no
+agent context.
+
+The opt-in `[viewport-agent-frame-cost]` case in `HoroViewportPanelRenderTests`
+times `ViewportPanel::DrawPanel` with an 800 × 500 logical viewport, 4,096
+viewport model entries, and a ready test renderer. It warms up 100 frames and
+reports the mean of 10,000 timed frames. Invoke the test binary with
+`'[viewport-agent-frame-cost]' -s` to see the timing and draw counts.
+
+On macOS arm64 in Debug, 11 alternating pairs compared the current disabled
+path with the same panel compiled with the offer predicate fixed to false and
+the agent button and action dispatch removed. The baseline median was 40.13 µs
+per frame (40.00–45.69 µs across runs). The disabled median was 40.25 µs
+(39.99–40.98 µs), with a median paired difference of +0.049 µs. Both produced
+1,506 vertices and 5,229 indices. The difference was below the observed
+run-to-run variation. This fixture measures panel CPU work and leaves GPU
+frame cost and native renderer parity to backend qualification.
+
+### Viewport Agent Qualification
+
+| Configuration | Evidence |
+|---|---|
+| Windows editor panel | The `[viewport]` cases in `HoroEditorLocalAgentPanelRenderTests` exercise the numeric preview and the transform disclosure controls. A selection replaced during the component read withdraws the review. A new selection needs its own review. |
+| Windows workspace lifecycle | The `[debug-capture]` cases in `HoroEditorWorkspaceControllerTests` verify that a Play attempt cancels the renderer's authored capture. In the scene without an authored camera, returning to Edit rejects the old capture approval and admits a fresh one. |
+| Windows native OpenGL | The `[image-capture]` case in `HoroEditorViewportOpenGLSmoke` checks the requested crop pixels and withdrawal after authorization ends. |
+| Linux Vulkan with Xvfb and software rendering | The `[image-capture]` case in `HoroEditorVulkanPresentationSmoke` uses the locked viewport shader package. It checks crop pixels, revocation after copy submission, and presentation of the next frame. |
+
+For the manual editor sequence, open a scene with two distinguishable objects.
+Open a viewport review with the first object selected and toggle transform
+disclosure. Select the other object and check that the previous review clears.
+Open a new review, enter Play, and check that the authoring review clears again.
+After leaving Play, review a proposed transform, approve it explicitly, then
+undo it as a single operation. Repeat with the Local Agent panel disabled and
+verify the viewport review action is absent. Record the renderer, OS, and
+editor build with the result. Manual application runs and Linux hardware
+Vulkan coverage remain open.
 
 ## Failure Handling
 

@@ -1,7 +1,10 @@
 #include "Horo/AI/AISceneComponents.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 
+#include <algorithm>
+#include <array>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -33,7 +36,66 @@ namespace Horo::AI {
         [[nodiscard]] bool IsValid(const DecisionPlanKind kind) noexcept {
             return kind < DecisionPlanKind::Count;
         }
+
+        /** @brief Resolves one projection key against the stable schema inventory. */
+        [[nodiscard]] Result<std::size_t> CollectionCapacity(const BlackboardSchema &schema, const BlackboardKeyId key,
+                                                             const BlackboardValueKind kind) {
+            const auto keys = schema.Keys();
+            const auto found = std::ranges::lower_bound(keys, key, {}, &BlackboardKeyDescriptor::key);
+            if (found == keys.end() || found->key != key)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardUnknownValueRejected));
+            if (found->access != BlackboardKeyAccess::ReadWrite)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardBatchInvalid));
+            if (found->kind != kind || found->cardinality != BlackboardValueCardinality::Collection)
+                return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardValueTypeMismatch));
+            return Result<std::size_t>::Success(found->maximumCollectionElements);
+        }
+
+        /** @brief Admits only available listener routes and known source senses from the authored registry. */
+        [[nodiscard]] Result<void> ValidatePerceptionEndpoints(const AiControllerPerceptionEndpoints &endpoints) {
+            if (!endpoints.registry || (endpoints.listeners.empty() && endpoints.sources.empty()))
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorInvalid));
+            if (endpoints.listeners.size() > AiControllerPerceptionEndpoints::MaximumSenses ||
+                endpoints.sources.size() > AiControllerPerceptionEndpoints::MaximumSenses)
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));
+            if (auto policy = ValidatePerceptionParticipant(endpoints.participant, endpoints.listenerFilter); policy.HasError())
+                return policy;
+            std::array<SenseTypeId, AiControllerPerceptionEndpoints::MaximumSenses> resolved{};
+            auto next = resolved.begin();
+            const auto listeners = endpoints.registry->Listeners();
+            for (const auto listener : endpoints.listeners) {
+                const auto found = std::ranges::find_if(listeners, [listener](const auto &entry) {
+                    return entry.descriptor.identity == listener;
+                });
+                if (found == listeners.end() || found->availability != PerceptionListenerAvailability::Available)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                if (std::find(resolved.begin(), next, found->descriptor.sense) != next)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorConflict));
+                *next++ = found->descriptor.sense;
+            }
+            const auto senses = endpoints.registry->Senses();
+            for (auto source = endpoints.sources.begin(); source != endpoints.sources.end(); ++source) {
+                if (std::ranges::find(senses, *source, &SenseTypeDescriptor::identity) == senses.end())
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                if (std::find(endpoints.sources.begin(), source, *source) != source)
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionDescriptorConflict));
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
+
+    /** @copydoc PerceptionBlackboardProjection::Validate */
+    Result<std::size_t> PerceptionBlackboardProjection::Validate(const BlackboardSchema &schema) const {
+        if (!sources.IsValid() || !positions.IsValid() || sources == positions)
+            return Result<std::size_t>::Failure(MakeError(AIErrors::BlackboardBatchInvalid));
+        const auto sourceCapacity = CollectionCapacity(schema, sources, BlackboardValueKind::EntityReference);
+        if (sourceCapacity.HasError())
+            return sourceCapacity;
+        const auto positionCapacity = CollectionCapacity(schema, positions, BlackboardValueKind::WorldCoordinate);
+        if (positionCapacity.HasError())
+            return positionCapacity;
+        return Result<std::size_t>::Success(std::min(sourceCapacity.Value(), positionCapacity.Value()));
+    }
 
     /** @copydoc ValidateAiAgentComponent */
     Result<void> ValidateAiAgentComponent(const AiAgentComponent &component) {
@@ -67,7 +129,25 @@ namespace Horo::AI {
             descriptor.blackboardSchema->Version() != planSchema->Version())
             return Failure(AIErrors::ControllerDescriptorIncompatible,
                            "AI controller descriptor dependencies do not agree on decision asset, kind, or blackboard schema.");
-        return Result<void>::Success();
+        if (descriptor.cookedPlan) {
+            const auto graphs = descriptor.cookedPlan->Graphs();
+            const auto root = std::ranges::find(graphs, descriptor.decisionAsset, &DecisionCompiledGraph::asset);
+            if (!descriptor.cookedPlan->IsCurrent() || descriptor.cookedPlan->Root() != descriptor.decisionAsset || root == graphs.end() ||
+                root->bindings != descriptor.decisionPlan)
+                return Failure(AIErrors::ControllerDescriptorIncompatible,
+                               "AI cooked decision is stale or does not own the controller's exact root bindings.");
+        }
+        if (!descriptor.perceptionEndpoints)
+            return Result<void>::Success();
+        const auto &endpoints = *descriptor.perceptionEndpoints;
+        if (endpoints.blackboardProjection) {
+            if (endpoints.listeners.empty())
+                return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+            const auto admitted = endpoints.blackboardProjection->Validate(*descriptor.blackboardSchema);
+            if (admitted.HasError())
+                return Result<void>::Failure(admitted.ErrorValue());
+        }
+        return ValidatePerceptionEndpoints(endpoints);
     }
 
     /** @copydoc ValidateAiSceneComponents */

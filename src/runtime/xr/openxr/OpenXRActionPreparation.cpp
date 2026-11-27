@@ -25,6 +25,7 @@ namespace Horo::XR::OpenXRInternal {
         if (owner_.IsValid() || preparation_ || sampling_ || session == attached_.owner)
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationIncompatible, "Retire the previous action owner and replace the attached session first."));
+        const auto observationRevision = session_->observationRevision_;
         const auto borrowed = [&] {
             const Operation operation{sampling_};
             return session_->Borrow(session);
@@ -33,6 +34,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(borrowed.ErrorValue());
         native_ = borrowed.Value();
         owner_ = session;
+        tracking_.gazeObservationRevision = observationRevision;
         if (const auto prepared = PrepareTransaction(request, native_.maximumActions); prepared.HasError())
             return prepared;
         if (const auto spaces = tracking_.BindSpaces(session); spaces.HasError()) {
@@ -50,6 +52,7 @@ namespace Horo::XR::OpenXRInternal {
             return lane;
         if (owner_.IsValid() || preparation_ || sampling_ || !actions_.empty() || !sets_.empty())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto observationRevision = session_->observationRevision_;
         const auto borrowed = [&] {
             const Operation operation{sampling_};
             return session_->BorrowPreparedSession(preparation);
@@ -60,6 +63,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationIncompatible, "OpenXR action sets attach only once to the same prepared native session."));
         preparation_.emplace(preparation.preflight, preparation.activeAttempt, maximumActions);
+        tracking_.gazeObservationRevision = observationRevision;
         native_ = borrowed.Value();  // maximumActions remains zero: creation is not admission to frame work.
         auto prepared = PrepareTransaction(request, maximumActions);
         if (prepared.HasValue())
@@ -83,8 +87,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (current.Value().maximumActions < preparation_->maximumActions)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (tracking_.request &&
-            current.Value().maximumSpaces < tracking_.actions.size() + 2 + (tracking_.request->worldFromBase.has_value() ? 1U : 0U))
+        if (tracking_.request && current.Value().maximumSpaces < tracking_.SpaceCount())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (auto spaces = tracking_.BindSpaces(session); spaces.HasError())
             return spaces;
@@ -111,7 +114,13 @@ namespace Horo::XR::OpenXRInternal {
         };
         Result<void> prepared = Result<void>::Success();
         try {
-            prepared = tracking_.ValidatePosePaths(request, maximumActions);
+            const auto gazeCount = request.tracking && request.tracking->consentedGazeSet ? 1U : 0U;
+            if (gazeCount != 0 && request.schema.actions.size() >= maximumActions)
+                return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+            const auto actionBudget = maximumActions - gazeCount;
+            const auto haptics = ValidateHapticPaths(request, actionBudget);
+            prepared = haptics.HasError() ? Result<void>::Failure(haptics.ErrorValue())
+                                          : tracking_.ValidatePosePaths(request, actionBudget - haptics.Value());
             if (prepared.HasValue()) {
                 tracking_.request = request.tracking;
                 prepared = dispatch_.Resolve(request, native_.instance);

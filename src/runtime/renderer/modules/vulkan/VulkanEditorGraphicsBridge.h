@@ -1,13 +1,30 @@
 #pragma once
 /** @file VulkanEditorGraphicsBridge.h
  * @brief Non-installed selected-device composition seam for the matching Vulkan editor pair. */
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "VulkanBackendModule.h"
 
 namespace Horo::Render::Detail {
+    /** @brief Cold reducer inputs resolved by the selected viewport's frontend resource owner. */
+    struct VulkanStereoCoveragePreparation final {
+        std::span<const std::uint8_t> artifact;
+        std::array<std::uint64_t, 2> eyes;
+        std::array<MultiviewRenderRectangle, 2> rectangles;
+        std::uint64_t reset{}, result{}, parameters{};
+        RenderQueueId queue;
+    };
+
     /** @brief Canonical retired retention slot, independent of swapchain image and encoder call counts. */
     struct VulkanFrameRetentionSlot {
         std::uint32_t index{};
         std::uint32_t count{};
+    };
+
+    /** @brief Exact completion state plus optional timing evidence for a measured graph. */
+    struct VulkanGraphGpuDuration {
+        bool completed{};
+        std::optional<std::chrono::nanoseconds> elapsed;
     };
 
     /** @brief Borrowed exact device children held by the existing completion owner. */
@@ -75,8 +92,96 @@ namespace Horo::Render::Detail {
         [[nodiscard]] virtual Result<void> PreparePrimaryOutput(FrameToken frame, PrimaryOutputAttachment attachment) = 0;
         [[nodiscard]] virtual Result<void> ExecuteGui(const GuiCompositionRequest &request, IVulkanGuiEncoder &encoder) = 0;
         [[nodiscard]] virtual Result<void> WriteFrameBuffer(FrameToken frame, std::uint64_t instance, std::span<const std::byte> bytes) = 0;
+        /** @brief Polls prior GPU readers/writers of a frontend-resolved buffer without beginning a frame.
+         * @param instance Exact live native buffer instance from the selected frontend.
+         * @return True for a reusable preparation slot, false while native work remains, or typed owner/lifecycle failure.
+         */
+        [[nodiscard]] virtual Result<bool> ObservePreparationBuffer(std::uint64_t instance) = 0;
+
+        /** @brief Reports the selected native image-copy route for bounded stereo coverage observations. */
+        [[nodiscard]] virtual bool SupportsStereoCoverageReadback() const noexcept {
+            return false;
+        }
+
+        /** @brief Copies exact native completed pixels without allocating or waiting.
+         * @return True for copied bytes, false when the route or completion is unavailable, or a typed error.
+         */
+        [[nodiscard]] virtual Result<bool> ReadCompletedStereoCoverage(std::uint64_t, RenderTimelinePoint, std::span<std::byte>) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Reports the closed compute route only on the exact selected graphics queue. */
+        [[nodiscard]] virtual bool SupportsStereoCoverageReduction(RenderQueueId) const noexcept {
+            return false;
+        }
+
+        /** @brief Materializes immutable descriptors and the closed reduction pipeline outside normal frame recording. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+            const VulkanStereoCoveragePreparation &) {
+            return Result<std::shared_ptr<IResidentStereoCoverageReducer>>::Failure(
+                MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+        }
+
+        /** @brief Returns completed exact full-eye counters without waiting or reading a different submission. */
+        [[nodiscard]] virtual Result<bool> ReadCompletedStereoCoverageReduction(std::uint64_t, RenderTimelinePoint,
+                                                                                RenderGraphStereoCoverageReduction::Tallies &) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Writes a whole host-visible uniform only after its exact prior native use retires.
+         * @param instance Exact live uniform buffer instance from the selected frontend.
+         * @param bytes Prepared full-size native uniform contents.
+         * @return Success or typed busy, owner, lifecycle or resource failure. Never waits or starts a native frame.
+         */
+        [[nodiscard]] virtual Result<void> WritePreparationUniform(std::uint64_t instance, std::span<const std::byte> bytes) = 0;
+        /** @brief Checks exact queue acceptance of previously recorded editor graph work.
+         * @param signal That graph submission's frontend-issued point, independent of the later GUI/WSI tail.
+         * @param deviceIncarnation The originating selected frontend's device incarnation.
+         * @return True for native queue acceptance, false if still unissued, or typed identity/owner failure.
+         * @details Call on the owner immediately after Present/cancel. No presentation success, GPU completion or wait is implied.
+         */
+        [[nodiscard]] virtual Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const = 0;
+
+        /** @brief Reports timing availability for the selected queue without admitting a frame. */
+        [[nodiscard]] virtual Result<bool> SupportsGraphGpuDuration(RenderQueueId) const {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Selects one exact graph signal for GPU timing in the active frame.
+         * @return True when armed, false when native timing is unsupported, or a typed ownership/admission error. */
+        [[nodiscard]] virtual Result<bool> ArmGraphGpuDuration(FrameToken, RenderTimelinePoint) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Revokes an unconsumed timing request when frontend graph admission fails before reaching Vulkan. */
+        virtual void DisarmGraphGpuDuration(FrameToken, RenderTimelinePoint) noexcept {
+            // Ports without GPU timing never arm a request.
+        }
+
+        /** @brief Polls timing availability without waiting and preserves the selected device incarnation. */
+        [[nodiscard]] virtual Result<VulkanGraphGpuDuration> ObserveGraphGpuDuration(RenderTimelinePoint, std::uint64_t) {
+            return Result<VulkanGraphGpuDuration>::Success({});
+        }
+
         [[nodiscard]] virtual Result<void> AttachDeviceChild(IVulkanEditorDeviceChild &child) = 0;
         virtual void DetachDeviceChild(IVulkanEditorDeviceChild &child) noexcept = 0;
+
+        /** @brief Copies tightly packed RGBA8 bytes from an exact completed color readback receipt.
+         * @param instance Exact live host staging instance resolved by the selected frontend.
+         * @param completion Timeline point accepted for that color copy.
+         * @param destination Output span with the exact captured byte count.
+         * @return True when copied, false for a missing route or incomplete receipt, or a typed failure.
+         */
+        [[nodiscard]] virtual Result<bool> ReadCompletedColor([[maybe_unused]] std::uint64_t instance,
+                                                              [[maybe_unused]] RenderTimelinePoint completion,
+                                                              [[maybe_unused]] std::span<std::byte> destination) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Reports the selected device's native image-to-buffer copy route. */
+        [[nodiscard]] virtual bool SupportsColorReadback() const noexcept {
+            return false;
+        }
     };
 
     /** @brief Host-owned borrowed connection; runtime attachment never selects or creates another renderer. */

@@ -87,7 +87,7 @@ namespace Horo::Render {
         const auto groups = snapshot.Groups();
         const bool root = groupIndex == NoPaintRole;
         const auto pass =
-            static_cast<std::uint32_t>(root ? slot.workloads.size() - 1 : source.masks.size() + groups.size() - 1 - groupIndex);
+            static_cast<std::uint32_t>(root ? slot.PaintWorkloads().size() - 1 : source.masks.size() + groups.size() - 1 - groupIndex);
         const auto begin = root ? 0U : groups[groupIndex].firstCommand;
         const auto end = root ? static_cast<std::uint32_t>(snapshot.Commands().size()) : begin + groups[groupIndex].commandCount;
         const auto batches = submission.geometry->Batches();

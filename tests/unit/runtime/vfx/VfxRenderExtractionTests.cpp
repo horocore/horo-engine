@@ -23,6 +23,7 @@ namespace {
         unsigned owned{};
         unsigned immutable{};
         bool failSecond{};
+        bool photosensitiveFlash{};
     };
 
     class PreparedCandidate final : public Runtime::SceneActivationCandidate {
@@ -49,6 +50,7 @@ namespace {
             binding.effect.scope = scope;
             binding.emitter.scope = scope;
             binding.particles.buffer.scope = scope;
+            binding.photosensitiveFlash = trace_.photosensitiveFlash;
             auto budget = Budget();
             budget.frameSlots = 1;
             const std::array bindings{binding};
@@ -383,6 +385,24 @@ TEST_CASE("Canonical emitter and render origins preserve local millimeters far f
     CHECK(Math::NearlyEqual(extracted.snapshot.Instances()[0].position.x, 0.001F));
 }
 
+TEST_CASE("Tagged fixed CPU emitters are omitted before any VFX draw budget is charged", "[vfx][extraction]") {
+    std::array bindings{Binding(0), Binding(1)};
+    bindings[0].photosensitiveFlash = true;
+    auto budget = Budget();
+    budget.maximumBatches = 1;
+    auto world = World(bindings, budget);
+    for (const auto &binding : bindings)
+        Populate(*world, binding);
+    const auto safe = world->Extract(1, {}, 1, VfxFlashPolicy::Suppress);
+    REQUIRE(safe.report.status == VfxExtractionStatus::Complete);
+    REQUIRE(safe.snapshot.Batches().size() == 1);
+    CHECK(safe.snapshot.Batches()[0].id.effectSlot == bindings[1].effect.slot);
+    const auto visible = world->Extract(2, {}, 1);
+    REQUIRE(visible.report.status == VfxExtractionStatus::BudgetExceeded);
+    REQUIRE(visible.snapshot.Batches().size() == 1);
+    CHECK(visible.snapshot.Batches()[0].id.effectSlot == bindings[0].effect.slot);
+}
+
 TEST_CASE("Normal scene preparation completes owners before immutable capture and feeds frontend extraction", "[vfx][scene][graph]") {
     PreparationTrace trace;
     Runtime::RuntimeSceneService service;
@@ -424,6 +444,33 @@ TEST_CASE("Normal scene preparation completes owners before immutable capture an
     CHECK(cloned.ErrorValue().code.Value() == VfxErrors::SceneCloneUnavailable.code.Value());
     service.Shutdown();
     CHECK(service.VfxFrame().snapshot.Frame() == 0);
+}
+
+TEST_CASE("Scene applies staged flash policy on its next extraction", "[vfx][scene]") {
+    PreparationTrace trace{.photosensitiveFlash = true};
+    Runtime::RuntimeSceneService service;
+    REQUIRE(service.AddActivationParticipant(std::make_unique<VfxHostAdapter>(trace, true)).HasValue());
+    REQUIRE(service.AddActivationParticipant(std::make_unique<VfxHostAdapter>(trace, false)).HasValue());
+    REQUIRE(service.Startup({}).HasValue());
+    REQUIRE(service.QueuePreparation(EmptyDefinition()).HasValue());
+    const CancellationToken cancellation;
+    Runtime::FrameContext context{.frameNumber = 1, .cancellation = cancellation};
+    REQUIRE(service.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, context).HasValue());
+    REQUIRE(service.OnPhase(Runtime::RuntimePhase::RenderExtraction, context).HasValue());
+    service.StageVfxFlashPolicy(VfxFlashPolicy::Suppress);
+    CHECK(service.VfxFrame().snapshot.Instances().size() == 2);
+
+    ++context.frameNumber;
+    REQUIRE(service.OnPhase(Runtime::RuntimePhase::RenderExtraction, context).HasValue());
+    CHECK(service.VfxFrame().report.status == VfxExtractionStatus::Complete);
+    CHECK(service.VfxFrame().snapshot.Frame() == 2);
+    CHECK(service.VfxFrame().snapshot.Batches().empty());
+
+    service.StageVfxFlashPolicy(VfxFlashPolicy::Present);
+    ++context.frameNumber;
+    REQUIRE(service.OnPhase(Runtime::RuntimePhase::RenderExtraction, context).HasValue());
+    CHECK(service.VfxFrame().snapshot.Instances().size() == 2);
+    service.Shutdown();
 }
 
 TEST_CASE("Failed unpublished VFX owner preparation cannot leak into the active scene", "[vfx][scene]") {

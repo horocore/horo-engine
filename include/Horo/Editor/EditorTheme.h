@@ -344,23 +344,28 @@ namespace Horo::Editor::Theme {
     };
 
     struct ScopedFontScale {
-        explicit ScopedFontScale(float scale) {
-            ImGui::SetWindowFontScale(scale);
-        }
-
-        ~ScopedFontScale() {
-            ImGui::SetWindowFontScale(1.0F);
-        }
+        /** @brief Applies a native window font multiplier for this draw scope. @param scale Relative multiplier. */
+        explicit ScopedFontScale(float scale);
+        /** @brief Restores the containing draw scope's window multiplier. */
+        ~ScopedFontScale();
 
         ScopedFontScale(const ScopedFontScale &) = delete;
         ScopedFontScale &operator=(const ScopedFontScale &) = delete;
+
+    private:
+        float previous_{1.0F};
     };
 
     struct ScopedTextStyle {
         [[no_unique_address]] ScopedFont font;
         [[no_unique_address]] ScopedFontScale scale;
 
-        ScopedTextStyle(ImFont *f, float targetPx, float basePx) : font(f), scale(Scale(targetPx, basePx)) {}
+        ScopedTextStyle(ImFont *f, float targetPx, float basePx)
+            : font(f), scale(Scale(std::max(16.0F, targetPx), NativeFontPixels(basePx))) {}
+
+    private:
+        /** @brief Cancels the global scale for role sizes already resolved by the design system. */
+        [[nodiscard]] static float NativeFontPixels(float fallback) noexcept;
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -431,8 +436,10 @@ namespace Horo::Editor::Theme {
     /** @brief Returns the list of all discovered themes (built-in + custom). */
     [[nodiscard]] const std::vector<ThemeEntry> &GetThemeList();
 
-    /** @brief Scans `~/.horo/themes/` for JSON theme files. Call once at startup. */
-    void RefreshThemeList(const char *additionalPath = nullptr);
+    /** @brief Rebuilds builtin themes and scans explicitly supplied UTF-8 resource roots.
+     * @param additionalPath Optional additional theme directory. @param userThemesPath Optional captured user theme directory.
+     * @note Absent roots produce builtin themes only. The composition root supplies user-directory discovery. */
+    void RefreshThemeList(const char *additionalPath = nullptr, const char *userThemesPath = nullptr);
 
     /** @brief Publishes a package theme during owner startup; rejects missing/duplicate identities.
      * @param theme Owned parsed theme. @return Whether publication succeeded.
@@ -443,7 +450,8 @@ namespace Horo::Editor::Theme {
     /** @brief Selects a published stable package theme identity. @return False without changing appearance when absent. */
     [[nodiscard]] bool SelectThemeById(std::string_view id);
 
-    /** @brief Loads a single theme JSON from the given path. Returns true on success. */
+    /** @brief Loads one bounded theme JSON resource. @param path UTF-8 file path, or null for no resource.
+     * @param outEntry Validated theme assigned only on success. @return True when the resource was loaded. */
     [[nodiscard]] bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry);
 
     /** @brief Installs a validated candidate only if its source still owns the active theme.
@@ -489,16 +497,46 @@ namespace Horo::Editor::Theme {
     /** @brief Activates a theme by index into GetThemeList(). */
     void SelectThemeByIndex(int index);
 
-    /**
-     * @brief Compatibility hook for the temporarily disabled global UI scale setting.
-     * @param percent Persisted scale value; currently ignored while UI scaling is disabled.
-     */
+    /** @brief User preferences captured together by the editor frame owner. */
+    struct VisualPreferences final {
+        bool highContrast{};
+        bool reduceMotion{};
+        bool suppressFlash{};
+        auto operator<=>(const VisualPreferences &) const noexcept = default;
+    };
+
+    /** @brief Applies the captured preferences to the active theme and native style before the next GUI frame.
+     * @param preferences Current validated settings for the active ImGui context. */
+    void ApplyVisualPreferences(VisualPreferences preferences) noexcept;
+
+    /** @brief Returns the host preferences for the active theme.
+     * @return Last applied preferences, or defaults before the common configuration is available. */
+    [[nodiscard]] VisualPreferences GetVisualPreferences() noexcept;
+
+    /** @brief Applies a user scale at the neutral display scale before drawing the next GUI frame.
+     * @param percent Persisted percentage in the editor appearance range. */
     void SetUiScalePercent(int percent);
+
+    /** @brief Resolves native style, token geometry, and font sizing from the unscaled theme.
+     * @param percent Persisted editor appearance percentage.
+     * @param displayToWindowScale Display content scale divided by the framebuffer pixel density.
+     * @pre Called before starting a GUI frame on the owner thread. */
+    void ApplyUiScale(int percent, float displayToWindowScale) noexcept;
+
+    /** @brief Applies the global accessibility scale together with the editor appearance and display scales.
+     * @param percent Persisted editor appearance percentage.
+     * @param displayToWindowScale Display content scale divided by the framebuffer pixel density.
+     * @param accessibilityScale Validated global UI accessibility multiplier in [0.5, 3].
+     * @pre Called before starting a GUI frame on the owner thread. */
+    void ApplyUiScale(int percent, float displayToWindowScale, float accessibilityScale) noexcept;
 
     /** @brief Returns the currently active theme index. */
     [[nodiscard]] int GetActiveThemeIndex();
 
-    void Apply(ImGuiStyle &style);
+    /** @brief Initializes both theme layers from an explicitly captured optional theme resource.
+     * @param style Native ImGui style. @param overridePath Optional UTF-8 theme file selected by host configuration.
+     * @param userThemesPath Optional UTF-8 directory captured by the host's user-directory adapter. */
+    void Apply(ImGuiStyle &style, const char *overridePath = nullptr, const char *userThemesPath = nullptr);
     void SetThemePreset(Preset preset);
     [[nodiscard]] Preset GetThemePreset();
     void ApplyCurrentTheme();

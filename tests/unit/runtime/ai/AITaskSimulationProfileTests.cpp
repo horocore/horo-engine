@@ -1,0 +1,302 @@
+#include "AITaskSchedulerTestSupport.h"
+#include "BehaviorTreeAsyncTestSupport.h"
+
+namespace Horo::AI {
+    namespace {
+        using SchedulerTestSupport::Harness;
+        using SchedulerTestSupport::Probe;
+        using TestSupport::ExpectError;
+        using TestSupport::MakeIdentity;
+
+        /** @brief Uses distinct host-authored boundaries to exercise all policy states. */
+        AiTaskSchedulerSettings Settings() {
+            return {.mode = AiSchedulingMode::BestEffort,
+                    .simulationProfile = AiDecisionSimulationProfile{.fullDistanceMillimeters = 10'000,
+                                                                     .reducedDistanceMillimeters = 20'000,
+                                                                     .suspensionDistanceMillimeters = 30'000,
+                                                                     .reducedIntervalTicks = 3,
+                                                                     .demotionDelayTicks = 2}};
+        }
+
+        /** @brief Runs the same owner phases used by Scene scheduling. */
+        std::size_t EvaluateTick(AiTaskScheduler &scheduler, const std::uint64_t tick) {
+            const auto decision = scheduler.EvaluateAtDecision(tick);
+            REQUIRE(decision.HasValue());
+            REQUIRE(scheduler.CommitAtIntentDispatch(tick).HasValue());
+            return decision.Value().evaluated;
+        }
+
+        /** @brief Reads the exact live registration after an owner tick. */
+        AiSimulationTier Tier(AiTaskScheduler &scheduler, const AgentHandle agent) {
+            const auto tier = scheduler.SimulationTier(agent);
+            REQUIRE(tier.HasValue());
+            return tier.Value();
+        }
+
+        TEST_CASE("AI simulation profiles require increasing bands and best-effort scheduling", "[unit][ai][simulation-tier]") {
+            Harness fixture;
+            auto settings = Settings();
+            SECTION("deterministic mode rejects reduced simulation") {
+                settings.mode = AiSchedulingMode::Deterministic;
+            }
+            SECTION("equal bands are invalid") {
+                settings.simulationProfile->reducedDistanceMillimeters = settings.simulationProfile->fullDistanceMillimeters;
+            }
+            SECTION("reduced cadence must differ from full rate") {
+                settings.simulationProfile->reducedIntervalTicks = 1;
+            }
+            SECTION("demotion must have positive hysteresis") {
+                settings.simulationProfile->demotionDelayTicks = 0;
+            }
+            ExpectError(AiTaskScheduler::Create(fixture.jobs, fixture.incarnation, settings), AIErrors::SchedulerPolicyInvalid);
+        }
+
+        TEST_CASE("AI stable relevance lowers cadence without renderer data and wakes from gameplay events",
+                  "[unit][ai][simulation-tier]") {
+            Harness fixture(Settings());
+            const auto agent = fixture.Handle(0);
+            const auto probe = fixture.Register(0);
+            auto &scheduler = *fixture.scheduler;
+            auto stale = agent;
+            ++stale.slot.generation;
+            ExpectError(scheduler.SetRelevanceAtSafePoint(stale, {}), AIErrors::TaskContextInvalid);
+            REQUIRE(scheduler.SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 15'000}).HasValue());
+            CHECK(EvaluateTick(scheduler, 1) == 1);
+            CHECK(Tier(scheduler, agent) == AiSimulationTier::Full);
+            REQUIRE(scheduler.SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 10'000}).HasValue());
+            CHECK(EvaluateTick(scheduler, 2) == 1);
+
+            REQUIRE(scheduler.SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 20'000}).HasValue());
+            CHECK(EvaluateTick(scheduler, 3) == 1);
+            CHECK(EvaluateTick(scheduler, 4) == 1);
+            CHECK(Tier(scheduler, agent) == AiSimulationTier::Full);
+            CHECK(EvaluateTick(scheduler, 5) == 0);
+            CHECK(Tier(scheduler, agent) == AiSimulationTier::Reduced);
+
+            REQUIRE(scheduler.Wake(agent, {.polling = true}).HasValue());
+            REQUIRE(
+                scheduler.SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 31'000, .activeSimulationRegion = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 6) == 0);
+            CHECK(EvaluateTick(scheduler, 7) == 1);
+            CHECK(probe->reasons.polling);
+            CHECK(EvaluateTick(scheduler, 8) == 0);
+            CHECK(Tier(scheduler, agent) == AiSimulationTier::EventOnly);
+            REQUIRE(scheduler.Wake(agent, {.polling = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 9) == 0);
+            REQUIRE(scheduler.Wake(agent, {.blackboard = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 10) == 1);
+            CHECK(probe->reasons.blackboard);
+
+            REQUIRE(scheduler.SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 31'000, .urgentStimulus = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 11) == 1);
+            CHECK(Tier(scheduler, agent) == AiSimulationTier::Full);
+            CHECK(probe->cancelled == 0);
+        }
+
+        TEST_CASE("A rejected relevance batch preserves all previously accepted facts", "[unit][ai][simulation-tier]") {
+            auto settings = Settings();
+            settings.maximumAgents = 2;
+            settings.evaluationsPerTick = 2;
+            Harness fixture(settings);
+            const auto first = fixture.Handle(0);
+            const auto second = fixture.Handle(1);
+            const auto probe = fixture.Register(0);
+            CancellationSource peer;
+            fixture.Register(1, {}, peer.Token());
+            auto &scheduler = *fixture.scheduler;
+            const AiDecisionRelevance distant{.anchorDistanceMillimeters = 31'000};
+            std::array updates{AiDecisionRelevanceUpdate{first, distant}, AiDecisionRelevanceUpdate{second, distant}};
+            SECTION("a stale generation follows a valid one") {
+                ++updates.back().agent.slot.generation;
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::TaskContextInvalid);
+            }
+            SECTION("a cancelled generation follows a valid one") {
+                peer.RequestCancellation();
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::TaskContextInvalid);
+            }
+            SECTION("duplicate observations are ambiguous") {
+                updates.back().agent = first;
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::SchedulerPolicyInvalid);
+            }
+            SECTION("the host supplies a noncanonical batch order") {
+                std::swap(updates.front(), updates.back());
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::SchedulerPolicyInvalid);
+            }
+            SECTION("the batch exceeds the admitted agent capacity") {
+                const std::array oversized{updates.front(), updates.back(), AiDecisionRelevanceUpdate{fixture.Handle(2), distant}};
+                ExpectError(scheduler.SetRelevanceBatchAtSafePoint(oversized), AIErrors::TaskCapacityExceeded);
+            }
+            for (std::uint64_t tick = 1; tick <= 3; ++tick)
+                EvaluateTick(scheduler, tick);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Full);
+            CHECK(probe->cancelled == 0);
+            CHECK(probe->evaluations == 3);
+        }
+
+        TEST_CASE("Accepted relevance batches keep omitted agents and apply per-agent tiers", "[unit][ai][simulation-tier]") {
+            Harness fixture(Settings());
+            const auto first = fixture.Handle(0);
+            const auto second = fixture.Handle(1);
+            const auto firstProbe = fixture.Register(0);
+            const auto secondProbe = fixture.Register(1);
+            auto &scheduler = *fixture.scheduler;
+            const AiDecisionRelevance distant{.anchorDistanceMillimeters = 31'000};
+            const std::array updates{AiDecisionRelevanceUpdate{first, distant},
+                                     AiDecisionRelevanceUpdate{second, {.anchorDistanceMillimeters = 15'000}}};
+            REQUIRE(scheduler.SetRelevanceBatchAtSafePoint(updates).HasValue());
+            REQUIRE(scheduler.EvaluateAtDecision(1).HasValue());
+            ExpectError(scheduler.SetRelevanceBatchAtSafePoint(updates), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler.CommitAtIntentDispatch(1).HasValue());
+            EvaluateTick(scheduler, 2);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Full);
+            EvaluateTick(scheduler, 3);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Suspended);
+            CHECK(Tier(scheduler, second) == AiSimulationTier::Reduced);
+            const std::array promotion{AiDecisionRelevanceUpdate{first, {.gameplayPinned = true}}};
+            REQUIRE(scheduler.SetRelevanceBatchAtSafePoint(promotion).HasValue());
+            EvaluateTick(scheduler, 4);
+            CHECK(Tier(scheduler, first) == AiSimulationTier::Full);
+            CHECK(Tier(scheduler, second) == AiSimulationTier::Reduced);
+            CHECK(firstProbe->cancelled == 1);
+            CHECK(secondProbe->cancelled == 0);
+        }
+
+        TEST_CASE("Dense AI tier batches preserve exact identity across suspended slot reuse", "[unit][ai][simulation-tier]") {
+            constexpr std::uint32_t population = 4'096;
+            auto settings = Settings();
+            settings.maximumAgents = population;
+            settings.evaluationsPerTick = 1;
+            settings.simulationProfile->demotionDelayTicks = 1;
+            Harness fixture(settings);
+            auto &scheduler = *fixture.scheduler;
+            std::vector<AiScheduledDecisionRegistration> registrations;
+            std::vector<AiDecisionRelevanceUpdate> observations;
+            registrations.reserve(population);
+            observations.reserve(population);
+            for (std::uint32_t slot = 0; slot < population; ++slot) {
+                const auto agent = fixture.Handle(slot);
+                registrations.push_back({.agent = agent,
+                                         .identity = MakeIdentity<AgentId>(slot + 1),
+                                         .image = fixture.image,
+                                         .executor = std::make_shared<Probe>()});
+                observations.push_back({agent, {.anchorDistanceMillimeters = 31'000}});
+            }
+            auto admission = scheduler.PreparePopulationChange(registrations, {});
+            REQUIRE(admission.HasValue());
+            REQUIRE(admission.Value()->ValidatePublication().HasValue());
+            admission.Value()->Publish();
+            REQUIRE(scheduler.SetRelevanceBatchAtSafePoint(observations).HasValue());
+            CHECK(EvaluateTick(scheduler, 1) == 1);
+            CHECK(EvaluateTick(scheduler, 2) == 0);
+            CHECK(Tier(scheduler, fixture.Handle(population - 1)) == AiSimulationTier::Suspended);
+
+            const auto original = fixture.Handle(0);
+            REQUIRE(scheduler.Wake(original, {.explicitRequest = true}).HasValue());
+            REQUIRE(scheduler.Unregister(original).HasValue());
+            auto replacement = original;
+            ++replacement.slot.generation;
+            const auto replacementProbe = std::make_shared<Probe>();
+            REQUIRE(scheduler.Register(replacement, registrations.front().identity, {}, fixture.image, replacementProbe).HasValue());
+            ExpectError(scheduler.SetRelevanceBatchAtSafePoint(observations), AIErrors::TaskContextInvalid);
+            CHECK(EvaluateTick(scheduler, 3) == 1);
+            CHECK(Tier(scheduler, replacement) == AiSimulationTier::Full);
+            CHECK(replacementProbe->reasons.activation);
+            CHECK_FALSE(replacementProbe->reasons.explicitRequest);
+            CHECK(Tier(scheduler, fixture.Handle(population - 1)) == AiSimulationTier::Suspended);
+        }
+
+        TEST_CASE("Suspended Scene decision drops optional work and preserves canonical agent state",
+                  "[unit][ai][simulation-tier][scene]") {
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            TestSupport::RestoreHarness scene;
+            auto settings = Settings();
+            settings.simulationProfile->demotionDelayTicks = 1;
+            REQUIRE(scene.runtime.ConfigureTaskSchedulerAtSafePoint(jobs, settings).HasValue());
+            auto image = std::make_shared<int>(1);
+            auto probe = std::make_shared<Probe>();
+            probe->remaining = 4;
+            REQUIRE(scene.runtime.RegisterDecisionAtSafePoint(scene.handle, {.commandsPerTick = 1}, image, probe).HasValue());
+            const auto borrowed = scene.runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(borrowed.HasValue());
+            auto &scheduler = *borrowed.Value();
+            const auto capability = scene.runtime.CapabilityAtSafePoint();
+            const auto key = scene.fixtures.front().schema->Keys().front().key;
+            auto batch = capability.BeginBlackboardWrite(scene.handle);
+            REQUIRE(batch.HasValue());
+            auto write = std::move(batch).Value();
+            REQUIRE(write.Stage({key, BlackboardScalarValue{true}}).HasValue());
+            REQUIRE(capability.CommitBlackboardWrite(scene.handle, std::move(write)).HasValue());
+            const auto canonical = scene.Capture();
+
+            const AiDecisionRelevance distant{.anchorDistanceMillimeters = 31'000};
+            REQUIRE(scheduler.SetRelevanceAtSafePoint(scene.handle, distant).HasValue());
+            CHECK(EvaluateTick(scheduler, 1) == 1);
+            CHECK(probe->committed == 1);
+            CHECK(probe->intents == 3);
+            CHECK(EvaluateTick(scheduler, 2) == 0);
+            CHECK(Tier(scheduler, scene.handle) == AiSimulationTier::Suspended);
+            CHECK(probe->cancelled == 1);
+            CHECK(probe->committed == 1);
+            CHECK(probe->intents == 0);
+
+            REQUIRE(scheduler.Wake(scene.handle, {.blackboard = true, .task = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 3) == 0);
+            CHECK(probe->cancelled == 1);
+            CHECK(scene.Capture() == canonical);
+            const auto current = capability.ResolveAgent(scene.fixtures.front().agent.agent.agent);
+            REQUIRE(current.HasValue());
+            CHECK(current.Value() == scene.handle);
+
+            REQUIRE(scheduler.Wake(scene.handle, {.perception = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 4) == 1);
+            CHECK(Tier(scheduler, scene.handle) == AiSimulationTier::EventOnly);
+            CHECK(probe->reasons.perception);
+            REQUIRE(
+                scheduler.SetRelevanceAtSafePoint(scene.handle, {.anchorDistanceMillimeters = 31'000, .gameplayPinned = true}).HasValue());
+            CHECK(EvaluateTick(scheduler, 5) == 1);
+            CHECK(Tier(scheduler, scene.handle) == AiSimulationTier::Full);
+            CHECK(scene.Capture() == canonical);
+        }
+
+        /** @brief Finishes before the next owner phase, leaving only a pending scheduler publication. */
+        struct CompletedWorker final : IAiBudgetedTaskJob {
+            CompletedWorker() : IAiBudgetedTaskJob(1) {}
+
+            Result<void> RunSlice(const AiTaskOperationContext &, const CancellationToken &, AiWorkBudget &budget) const override {
+                if (!budget.Consume())
+                    return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+                return Result<void>::Success();
+            }
+        };
+
+        TEST_CASE("Suspending AI fences completed worker publication before pumping mailboxes", "[unit][ai][simulation-tier][jobs]") {
+            BehaviorTreeAsyncTestSupport::StartedTask task;
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            const auto continuation = task.async->continuations[1];
+            const auto agent = continuation.Operation().agent;
+            auto settings = Settings();
+            settings.simulationProfile->demotionDelayTicks = 1;
+            auto created = AiTaskScheduler::Create(jobs, agent.incarnation, settings);
+            REQUIRE(created.HasValue());
+            auto scheduler = std::move(created).Value();
+            auto image = std::make_shared<int>(1);
+            auto probe = std::make_shared<Probe>();
+            probe->scheduler = scheduler.get();
+            probe->continuation = continuation;
+            probe->worker.emplace(image, std::make_shared<CompletedWorker>());
+            REQUIRE(scheduler->Register(agent, MakeIdentity<AgentId>(1), {}, image, probe).HasValue());
+            REQUIRE(scheduler->SetRelevanceAtSafePoint(agent, {.anchorDistanceMillimeters = 31'000}).HasValue());
+            const auto initial = scheduler->EvaluateAtDecision(1);
+            REQUIRE(initial.HasValue());
+            CHECK(initial.Value().workerSubmissions == 1);
+            ExpectError(scheduler->SetRelevanceAtSafePoint(agent, {}), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+
+            CHECK(EvaluateTick(*scheduler, 2) == 0);
+            CHECK(Tier(*scheduler, agent) == AiSimulationTier::Suspended);
+            CHECK(probe->cancelled == 1);
+            CHECK(task.fixture.Evaluate(*task.instance, 2) == AiTaskState::Running);
+        }
+    }  // namespace
+}  // namespace Horo::AI

@@ -12,13 +12,15 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace Horo {
     class DurableFileSystem;
-}
+    struct FileEntryIdentity;
+}  // namespace Horo
 
 namespace Horo::Editor {
     namespace SourceDocumentErrors {
@@ -89,12 +91,25 @@ namespace Horo::Editor {
          * @details This is not semantic text equality. Both leases retain their roots throughout comparison, preventing
          *          address reuse from identifying another publication as the same root. */
         [[nodiscard]] bool SharesStateWith(const SourceDocumentSnapshot &other) const noexcept;
+        /** @brief Observe whether the source owner still publishes this exact revision.
+         * @return False for an inert snapshot, a newer publication, or a retired owner.
+         * @details The witness can be read from a worker without calling the owner-only document service.
+         * A stale snapshot remains an immutable byte lease.
+         */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Observes whether this exact revision was durably saved to its original source identity.
+         * @return True after an in-place durable save started from this revision.
+         * @details The owner marks the receipt once. Detached snapshots retain it after later edits or close.
+         */
+        [[nodiscard]] bool WasSavedInPlace() const noexcept;
         /** @brief Returns the monotonic committed observation/edit revision. @return Zero when inert. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the revision of the last explicitly loaded or durably saved disk base. @return Zero when inert. */
         [[nodiscard]] std::uint64_t BaseRevision() const noexcept;
         /** @brief Returns exact validated current bytes. @return Read-only call-independent borrowed view. */
         [[nodiscard]] std::string_view Text() const noexcept;
+        /** @brief Share the exact immutable text with a bounded consumer without copying the document. */
+        [[nodiscard]] std::shared_ptr<const std::string> TextLease() const noexcept;
         /** @brief Returns exact last explicitly loaded or durably saved disk bytes. @return Read-only base view. */
         [[nodiscard]] std::string_view DiskBase() const noexcept;
         /** @brief Compares current authored bytes to the saved base, not notification revisions. @return False when equal and durability is
@@ -111,6 +126,13 @@ namespace Horo::Editor {
         friend class SourceDocumentService;
         explicit SourceDocumentSnapshot(std::shared_ptr<const Detail::SourceDocumentRoot> root) noexcept;
         std::shared_ptr<const Detail::SourceDocumentRoot> root_;
+    };
+
+    /** @brief Nonempty half-open byte selection in one exact source document revision. */
+    struct SourceContextRange final {
+        std::size_t offset{};
+        std::size_t length{};
+        auto operator<=>(const SourceContextRange &) const = default;
     };
 
     /** @brief Host-issued editor-view identity, scoped to a project session; zero denotes a non-view edit. */
@@ -151,6 +173,96 @@ namespace Horo::Editor {
         std::string_view insert; /**< Synchronously borrowed, copied before publication; never retained. */
         std::optional<SourceEditingView> beforeView{};
         std::optional<SourceEditingView> afterView{};
+    };
+
+    /** @brief A patch tied to an exact owner publication, including its document incarnation. */
+    struct SourceBatchEdit final {
+        SourceDocumentSnapshot source;
+        SourceTextEdit edit;
+    };
+
+    /** @brief Immutable worker observation of exact saved bytes and their native mutation witnesses. */
+    class SourceBatchDiskEvidence final {
+    public:
+        /** @brief Reads and checks the saved bytes of every supplied source without accessing the editor owner.
+         * @param root Existing authorized project root. @param sources Exact immutable source leases in batch order.
+         * @param files Host filesystem metadata authority. @param cancellation Cooperative observer.
+         * @return Detached disk evidence or a typed refusal.
+         */
+        [[nodiscard]] static Result<SourceBatchDiskEvidence> Capture(const std::filesystem::path &root,
+                                                                     std::span<const SourceDocumentSnapshot> sources,
+                                                                     const DurableFileSystem &files, CancellationToken cancellation = {});
+        /** @brief Rechecks one exact loaded source under the caller's publication lease.
+         * @return Canonical single-link source path with the same worker-observed native identity, or a conflict.
+         */
+        [[nodiscard]] Result<std::filesystem::path> RecheckSingle(const std::filesystem::path &root, const SourceDocumentSnapshot &source,
+                                                                  const DurableFileSystem &files,
+                                                                  CancellationToken cancellation = {}) const;
+
+    private:
+        friend class SourceDocumentService;
+        struct Data;
+        std::shared_ptr<const Data> data_;
+    };
+
+    /** @brief One document result in request order, including unchanged documents. */
+    struct SourceBatchItem final {
+        SourceDocumentSnapshot snapshot;
+        bool changed{};
+    };
+
+    /** @brief An owner-issued receipt for one atomic buffer transaction. */
+    class SourceEditBatch final {
+    public:
+        /** @brief Reads the outcome for each requested document. */
+        [[nodiscard]] std::span<const SourceBatchItem> Items() const noexcept {
+            return data_ ? std::span<const SourceBatchItem>{data_->items} : std::span<const SourceBatchItem>{};
+        }
+
+        /** @brief Reports whether each changed document retained its undo entry at publication. */
+        [[nodiscard]] bool CanUndo() const noexcept {
+            return data_ && data_->undoable;
+        }
+
+        /** @brief Checks exact nonempty receipt identity. @param other Receipt to compare.
+         * @return True if both receipts refer to the same owner publication.
+         */
+        [[nodiscard]] bool SharesStateWith(const SourceEditBatch &other) const noexcept {
+            return data_ && data_ == other.data_;
+        }
+
+    private:
+        friend class SourceDocumentService;
+
+        struct Data final {
+            std::vector<SourceBatchItem> items;
+            bool undoable{};
+        };
+
+        std::shared_ptr<const Data> data_;
+    };
+
+    /** @brief Receipt for edits, unsaved creations and renamed sources published together. */
+    struct SourceFileReviewBatch final {
+        SourceEditBatch edits;
+        std::vector<SourceDocumentSnapshot> drafts;
+        std::vector<SourceDocumentSnapshot> renames;
+        std::vector<SourceDocumentSnapshot> renamedFrom;
+        std::size_t deletions{};
+    };
+
+    /** @brief A clean source and its payload reserved by the project mutation owner. */
+    struct SourceReviewDeletion final {
+        SourceDocumentSnapshot source;
+        std::filesystem::path payload;
+        const SourceBatchDiskEvidence &disk;
+    };
+
+    /** @brief A retired source and the exact native Trash payload observed at deletion. */
+    struct SourceReviewTrashRestore final {
+        SourceDocumentSnapshot original;
+        std::filesystem::path payload;
+        const FileEntryIdentity &identity;
     };
 
     /** @brief One history publication plus originating view metadata.
@@ -212,6 +324,14 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Open(const DocumentIdentity &identity, const std::filesystem::path &absolutePath,
                                                           CancellationToken cancellation = {});
+
+        /** @brief Opens one unsaved source draft at an absent project path without writing any file.
+         * @param identity Reserved workspace document identity. @param absolutePath Exact absent source path.
+         * @param text Complete validated source content. @param cancellation Cooperative cancellation.
+         * @return Dirty initial draft, or failure preserving the current owner and disk.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> StageNew(const DocumentIdentity &identity, const std::filesystem::path &absolutePath,
+                                                              std::string text, CancellationToken cancellation = {});
         /** @brief Queries an owner session without I/O. @param instance Exact session identity.
          * @return Snapshot or typed unknown/closed/thread failure.
          */
@@ -221,6 +341,25 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Edit(DocumentInstanceId instance, const SourceTextEdit &edit,
                                                           CancellationToken cancellation = {});
+        /** @brief Publishes one distinct-document batch on the owner lane after checking live snapshots and disk bases.
+         * @param edits Exact source snapshots and patches, borrowed only for this call. @param cancellation Cooperative observer.
+         * @return Per-document results or a typed failure. Failure leaves buffers and history intact. No disk writes occur.
+         */
+        [[nodiscard]] Result<SourceEditBatch> EditBatch(std::span<const SourceBatchEdit> edits, CancellationToken cancellation = {});
+        /** @brief Publishes an atomic batch after rechecking the worker's disk evidence through the same authority.
+         * @param edits Exact source snapshots and patches. @param evidence Worker-verified disk bases in edit order.
+         * @param files Active host filesystem authority. @param cancellation Cooperative observer.
+         * @return Receipt or failure with all buffers intact. Revalidation reads metadata only.
+         */
+        [[nodiscard]] Result<SourceEditBatch> EditBatchWithEvidence(std::span<const SourceBatchEdit> edits,
+                                                                    const SourceBatchDiskEvidence &evidence, const DurableFileSystem &files,
+                                                                    CancellationToken cancellation = {});
+        /** @brief Replays all changed documents in an exact batch receipt backward as one owner-lane operation.
+         * @param batch Receipt for the current publications. @param cancellation Cooperative observer.
+         * @return Updated snapshots in the order of changed items, or failure preserving all buffers and history.
+         */
+        [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoBatch(const SourceEditBatch &batch,
+                                                                            CancellationToken cancellation = {});
         /** @brief Queries bounded history without I/O. @param instance Exact admitted session.
          * @return Availability or lifecycle/thread failure. */
         [[nodiscard]] Result<SourceHistoryState> History(DocumentInstanceId instance) const;
@@ -277,6 +416,45 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        /** @brief Owned destination and borrowed text for one draft prepared by the registry owner. */
+        struct DraftRequest final {
+            DocumentIdentity identity;
+            std::filesystem::path path;
+            std::string_view text;
+        };
+
+        /** @brief A prepared rekey with exact source, replacement buffer and worker disk evidence. */
+        struct RenameRequest final {
+            SourceDocumentSnapshot from;
+            DocumentIdentity to;
+            std::filesystem::path destination;
+            std::string_view text;
+            const SourceBatchDiskEvidence &disk;
+        };
+
+        /** @brief A clean source and its reserved payload path in project Trash. */
+        struct DeleteRequest final {
+            SourceDocumentSnapshot from;
+            std::filesystem::path payload;
+            const SourceBatchDiskEvidence &disk;
+        };
+
+        /** @brief Stages and atomically publishes one text-only edit batch. */
+        [[nodiscard]] Result<SourceEditBatch> PublishBatch(std::span<const SourceBatchEdit> edits, const SourceBatchDiskEvidence *evidence,
+                                                           const DurableFileSystem *files, CancellationToken cancellation);
+        /** @brief Prepares all roots and disk checks before publishing edits and drafts together. */
+        [[nodiscard]] Result<SourceFileReviewBatch> PublishReviewGroup(std::span<const SourceBatchEdit> edits,
+                                                                       const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                       CancellationToken cancellation, std::span<const DraftRequest> drafts,
+                                                                       std::span<const RenameRequest> renames,
+                                                                       std::span<const DeleteRequest> deletions);
+        /** @brief Replays edit history and retires unchanged drafts only after validating the complete receipt. */
+        [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoWithDrafts(const SourceEditBatch &batch,
+                                                                                 std::span<const SourceDocumentSnapshot> drafts,
+                                                                                 CancellationToken cancellation,
+                                                                                 std::span<const RenameRequest> reverseRenames = {},
+                                                                                 DurableFileSystem *files = nullptr,
+                                                                                 std::span<const SourceReviewTrashRestore> restores = {});
         friend class SourceFileOpenService;
         /** @brief Prepares a history replay completely before changing its cursor or publishing. */
         [[nodiscard]] Result<SourceHistoryResult> ReplayHistory(DocumentInstanceId instance, std::uint64_t expectedRevision, bool redo,
@@ -284,6 +462,15 @@ namespace Horo::Editor {
         /** @brief Saves to a host-validated replacement identity without postcommit identity allocation. */
         [[nodiscard]] Result<SourceSaveResult> SaveTo(const SourceSaveRequest &request, DurableFileSystem &files, DocumentIdentity identity,
                                                       std::filesystem::path path, CancellationToken cancellation);
+
+        /** @brief Moves the exact saved source, then publishes its new identity and history without allocation.
+         * @param request Current source, reserved destination identity and reviewed text.
+         * @param files Native filesystem authority.
+         * @param cancellation Cooperative observer. @return Rekeyed snapshot or typed failure.
+         * @pre The caller retains project mutation authority for both paths.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> RenameReviewed(const RenameRequest &request, DurableFileSystem &files,
+                                                                    CancellationToken cancellation);
         /** @brief Checks owner-thread lifecycle before accessing service storage. */
         [[nodiscard]] Result<void> CheckAccess() const;
         struct Storage;

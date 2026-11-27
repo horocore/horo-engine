@@ -30,6 +30,7 @@ namespace Horo::Editor {
         std::vector<ScenePrefabInstance> prefabInstances;
         bool existed{};
         SceneFileFingerprint fingerprint;
+        std::vector<SceneChildReference> childScenes{};
     };
 
     /** @brief Conflict-aware outcome of one canonical scene save attempt. */
@@ -57,6 +58,23 @@ namespace Horo::Editor {
         SceneFileFingerprint fingerprint;
     };
 
+    /** @brief Redacted evidence that one reviewed edit produced a recovery snapshot. */
+    struct SceneApprovalRecoveryReceipt {
+        std::uint64_t reviewId{};
+        DocumentRevision baseRevision;
+        DocumentStateId committedState;
+        std::size_t affectedObjects{};
+        bool spatialImpactConfirmed{};
+        [[nodiscard]] bool operator==(const SceneApprovalRecoveryReceipt &) const noexcept = default;
+        /** @brief Tests whether the snapshot is the exact revision published by this approval.
+         * @param revision Snapshot revision. @param state Snapshot state.
+         * @return Whether both identities match the approved commit.
+         */
+        [[nodiscard]] bool Matches(DocumentRevision revision, DocumentStateId state) const noexcept {
+            return revision.value != 0 && baseRevision.value == revision.value - 1 && committedState == state;
+        }
+    };
+
     /** @brief Validated autosave recovery state that never mutates the canonical scene implicitly. */
     struct ProjectSceneRecoveryRecord {
         std::filesystem::path absoluteCanonicalPath;
@@ -66,6 +84,8 @@ namespace Horo::Editor {
         DocumentStateId recoveredState;
         std::vector<SceneObjectSnapshot> objects;
         std::vector<ScenePrefabInstance> prefabInstances;
+        std::vector<SceneChildReference> childScenes{};
+        std::optional<SceneApprovalRecoveryReceipt> approval;
     };
 
     /**
@@ -160,6 +180,19 @@ namespace Horo::Editor {
                                                          const SceneDocumentSnapshot &snapshot, DocumentRevision savedRevision,
                                                          DocumentStateId savedState, const ProjectMutationCoordinator &mutations,
                                                          DurableFileSystem &files);
+
+    /** @brief Writes a recovery snapshot with optional redacted approval evidence bound to that exact state.
+     * @param absoluteProjectRoot Absolute project root. @param absoluteScenePath Scene represented by the record.
+     * @param snapshot Immutable dirty scene. @param savedRevision Last saved canonical revision.
+     * @param savedState Last saved canonical state. @param mutations Shared project mutation coordinator.
+     * @param files Durable filesystem authority. @param approval Redacted receipt or no approval evidence.
+     * @return Success once the recovery file is durable, or a typed validation or publication failure.
+     */
+    [[nodiscard]] Result<void> WriteProjectSceneRecovery(const std::filesystem::path &absoluteProjectRoot,
+                                                         const std::filesystem::path &absoluteScenePath,
+                                                         const SceneDocumentSnapshot &snapshot, DocumentRevision savedRevision,
+                                                         DocumentStateId savedState, const ProjectMutationCoordinator &mutations,
+                                                         DurableFileSystem &files, const std::optional<SceneApprovalRecoveryReceipt> &approval);
 
     /**
      * @brief Inspects and validates a recovery record without restoring or modifying canonical state.

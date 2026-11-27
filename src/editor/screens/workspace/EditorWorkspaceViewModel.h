@@ -1,8 +1,14 @@
 #pragma once
 
+#include "EditorPlaySceneHost.h"
 #include "EditorPlayState.h"
+#include "Horo/AI/AISceneComponents.h"
+#include "Horo/AI/DecisionControl.h"
+#include "Horo/AI/DecisionNodeRegistration.h"
+#include "Horo/AI/EnvironmentQueryAuthoring.h"
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/AudioComponentPreview.h"
+#include "Horo/Editor/BlackboardSchemaDocument.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Editor/NavigationInspector.h"
@@ -16,36 +22,71 @@
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Editor/WorldStreamingPreview.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/document/SceneDocument.h"
+#include "editor/language/LspResultProjection.h"
 #include "editor/project_model/EditorTransformTool.h"
 #include "editor/project_model/EditorViewportModel.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
-#include "editor/screens/workspace/ContentBrowserModel.h"
-#include "editor/screens/workspace/GameplayBehaviorRequest.h"
-#include "editor/screens/workspace/InspectorExtensionEdit.h"
-#include "editor/screens/workspace/PCGWorkspace.h"
-#include "editor/screens/workspace/WorldLayerOutliner.h"
-#include "editor/screens/workspace/prefab/PrefabCreation.h"
-#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
-#include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
+#include "editor/screens/workspace/ai/decisions/graph/DecisionGraphLayout.h"
+#include "editor/screens/workspace/ai/decisions/panels/DecisionStateMachineAuthoring.h"
+#include "editor/screens/workspace/ai/queries/EnvironmentQueryDocumentFence.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
+#include "editor/screens/workspace/assets/browser/ContentBrowserModel.h"
+#include "editor/screens/workspace/extensions/InspectorExtensionEdit.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequest.h"
+#include "editor/screens/workspace/pcg/PCGWorkspace.h"
+#include "editor/screens/workspace/prefab/assets/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/document/PrefabDocumentSession.h"
+#include "editor/screens/workspace/prefab/hierarchy/PrefabHierarchyCommand.h"
+#include "editor/screens/workspace/world/WorldLayerOutliner.h"
+#include "editor/source_editor/HoroScriptAuthoringConfig.h"
 #include "editor/ui/UiCanvasPreview.h"
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <variant>
 #include <vector>
+
+namespace Horo::AI {
+    class DecisionAssetValidationReport;
+    class DecisionBlackboardProviderMetadata;
+    class EnvironmentQueryAsset;
+    struct QueryDebugSnapshot;
+    struct DecisionGraphSource;
+    class QuerySchemaRegistry;
+}  // namespace Horo::AI
 
 namespace Horo::Application {
     struct TerrainAuthoringCookCompletion;
     struct TerrainAuthoringAssetCreated;
+    struct BlackboardUsageReview;
 }  // namespace Horo::Application
 
 namespace Horo::Editor {
+    class SourceReviewOverlay;
+    struct SourceReviewApplication;
+
+    namespace Proposals {
+        struct SourceReviewAudit;
+    }
     class TerrainDocumentHost;
+    struct PrefabApplyRecoveryCandidate;
+
+    /** @brief Workspace presentation of the paired authoring recovery route. */
+    enum class PrefabApplyRecoveryNotice : std::uint8_t {
+        None,
+        Reopen,
+        Invalid,
+        Blocked,
+        Failed,
+    };
     struct TerrainToolCommand;
     struct TerrainToolSelection;
     /** @brief Typed presentation kind projected from authored scene components. */
@@ -104,7 +145,10 @@ namespace Horo::Editor {
         DiscardAndReload,
         Recover,
         DiscardRecovery,
-        DiscardAndClose
+        DiscardAndClose,
+        CompareExternal,
+        KeepExternalDraft,
+        SaveAs
     };
 
     enum class EditorWorkspaceViewCommand {
@@ -131,6 +175,12 @@ namespace Horo::Editor {
         EditPCGGraph,
         ReturnToWelcome,
         SourceDocumentInteraction,
+        RequestSourceLanguage,
+        ApplySourceCompletion,
+        OpenSourceReference,
+        SelectSourceSymbol,
+        ReviewSourceCodeAction,
+        ReviewSourceProposal,
         SaveSourceDocument,
         SaveSourceDocumentAs,
         SaveAllSourceDocuments,
@@ -147,6 +197,8 @@ namespace Horo::Editor {
         UiCanvasUpdatePreview,
         UiCanvasCommitLayout,
         UiCanvasReload,
+        UiCanvasRecover,
+        UiCanvasDiscardRecovery,
         SaveScene,
         SaveSceneAs,
         SaveSceneCopyAs,
@@ -154,10 +206,15 @@ namespace Horo::Editor {
         ReloadExternalScene,
         OverwriteExternalScene,
         RestoreSceneRecovery,
+        ReviewPrefabApplyRecovery,
+        RestorePrefabApplyRecovery,
         DiscardSceneRecovery,
         UndoScene,
         RedoScene,
         StartPlay,
+        NavigatePlayDecisionProblem,
+        NavigatePlayDecisionGraphProblem,
+        ControlPlayDecision,
         PausePlay,
         ResumePlay,
         StepPlay,
@@ -182,6 +239,7 @@ namespace Horo::Editor {
         PreviewObjectTransform,
         CommitObjectTransform,
         CancelObjectTransformPreview,
+        ResolveAgentSceneReview,
         PreviewLightComponent,
         CancelLightComponentPreview,
         UpdateObjectName,
@@ -219,11 +277,29 @@ namespace Horo::Editor {
         TransferContentBrowserAsset,
         CancelContentBrowserClipboard,
         CreateContentBrowserFolder,
+        CreateEnvironmentQuery,
+        CreateBlackboardSchema,
+        CreateStateMachine,
+        CreateTaskDecision,
         CreateLuaBehavior,
         CreateNativeBehavior,
         ReimportContentBrowserAsset,
         RevealContentBrowserEntry,
         OpenSourceFile,
+        OpenRecentAiAsset,
+        PreviewEnvironmentQuery,
+        EditEnvironmentQuery,
+        EditDecisionStateMachine,
+        EditDecisionBehaviorTree,
+        EditDecisionUtilityGraph,
+        EditDecisionLayout,
+        ResolveDecisionExternalChange,
+        OpenDecisionDiagnosticKey,
+        ReloadExternalDecisionGraph,
+        MergeExternalDecisionGraph,
+        KeepLocalDecisionGraph,
+        RestoreDecisionGraphRecovery,
+        DiscardDecisionGraphRecovery,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -234,6 +310,13 @@ namespace Horo::Editor {
         TerrainTool,
         CreateTerrainLayerSet,
         CreateTerrainFoliageType,
+        OpenGyroscopeBinding,
+        BlackboardDocument,
+        ApplySourceReview,
+        UndoSourceReview,
+        BuildSourceReview,
+        TestSourceReview,
+        NavigatePlayDecisionDiagnostic,
     };
 
     enum class BottomDockMode {
@@ -290,10 +373,230 @@ namespace Horo::Editor {
     };
 
     /** @brief Native absolute path, optionally line-addressed diagnostic source requested by an output panel. */
+    /** @brief UI request carrying the exact source presented when the user chose an action. */
+    struct SourceLanguageIntent final {
+        SourceDocumentSnapshot source;
+        SourceLanguageRequestKind kind{};
+        SourceEditingView view;
+    };
+
+    /** @brief One result set and the exact presentation that requested it. */
+    struct SourceLanguageCompletions final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        Language::LanguageCompletions completions;
+        bool fromScriptModule{};
+    };
+
+    /** @brief Hover text associated with the current source and caret. */
+    struct SourceLanguageHover final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        std::string text;
+        bool fromScriptModule{};
+    };
+
+    /** @brief Explicit acceptance of one item from the current presentation. */
+    struct SourceCompletionIntent final {
+        std::shared_ptr<const SourceLanguageCompletions> result;
+        std::size_t index{};
+    };
+
+    /** @brief Project references returned for one exact source publication and selection. */
+    struct SourceLanguageReferences final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        Language::LanguageNavigation navigation;
+    };
+
+    /** @brief User selection from the currently presented reference results. */
+    struct SourceReferenceIntent final {
+        std::shared_ptr<const SourceLanguageReferences> result;
+        std::size_t index{};
+    };
+
+    /** @brief Symbol list tied to the source bytes used to project its ranges. */
+    struct SourceLanguageSymbols final {
+        SourceDocumentSnapshot source;
+        Language::LanguageSymbols symbols;
+    };
+
+    /** @brief Selection from the published source symbol list. */
+    struct SourceSymbolIntent final {
+        std::shared_ptr<const SourceLanguageSymbols> result;
+        std::size_t index{};
+    };
+
+    /** @brief Inert code actions for an exact source selection. */
+    struct SourceLanguageCodeActions final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        Language::LanguageCodeActions actions;
+    };
+
+    enum class SourceCodeActionDecision {
+        Preview,
+        Apply,
+        Dismiss
+    };
+
+    /** @brief User decision on one published code action. */
+    struct SourceCodeActionIntent final {
+        std::shared_ptr<const SourceLanguageCodeActions> result;
+        std::size_t index{};
+        SourceCodeActionDecision decision{};
+    };
+
+    enum class SourceLanguageStatusKind : std::uint8_t {
+        Waiting,
+        Refused,
+        NoDefinition,
+        NoReferences,
+        NoDocumentSymbols,
+        NoCodeActions,
+        NoCompletion,
+        NoSymbol,
+        ScriptModuleUnavailable
+    };
+
+    /** @brief A language request notice only visible on its originating source publication. */
+    struct SourceLanguageStatus final {
+        SourceDocumentSnapshot source;
+        SourceLanguageStatusKind kind{};
+    };
+
     struct DiagnosticSourceRequest {
         std::filesystem::path absolutePath;
         std::uint32_t line{};
         std::uint32_t column{};
+    };
+
+    /** @brief Confirmed creation with an explicit directory and typed native query options. */
+    struct EnvironmentQueryCreationRequest final {
+        std::string directory;
+        std::string name;
+        AI::QueryPointLattice lattice;
+        std::uint32_t maximumResults{};
+        std::optional<AI::QueryPointDistanceTest> distance;
+        std::optional<AI::QueryPerceptionMatch> perception; /**< Present for an Actor Perception query. */
+        AI::AlternatePointGenerator alternateGenerator;
+    };
+
+    /** @brief Result of checking a saved query against the application's current descriptor registry. */
+    enum class QueryDescriptorAvailability : std::uint8_t {
+        RegistryUnavailable,
+        Incompatible,
+        Validated
+    };
+
+    /** @brief Owner-published state of a read-only Scene preview. */
+    enum class EnvironmentQueryPreviewStatus : std::uint8_t {
+        Idle,
+        Running,
+        Ready,
+        Stale,
+        Cancelled,
+        Failed
+    };
+
+    /** @brief Exact authored Scene and installed preview scene pinned before worker submission. */
+    struct EnvironmentQueryPreviewScene final {
+        DocumentRevision document;
+        SceneObjectId anchor;
+        Runtime::SceneRuntimeId runtime;
+        std::uint64_t structure{};
+        std::optional<SceneObjectId> target; /**< The distinct secondary Scene selection when required by the query. */
+    };
+
+    /** @brief Workspace-only evidence, with no runtime apply or navigation capability. */
+    struct EnvironmentQueryPreviewView final {
+        EnvironmentQueryPreviewStatus status{EnvironmentQueryPreviewStatus::Idle};
+        EnvironmentQueryPreviewScene scene;
+        std::shared_ptr<const AI::QueryDebugSnapshot> snapshot;
+        std::optional<Error> diagnostic;
+    };
+
+    /** @brief One workspace-only preview action. */
+    enum class EnvironmentQueryPreviewAction : std::uint8_t {
+        Run,
+        Cancel,
+        FocusCandidate
+    };
+
+    /** @brief A request correlated to the exact saved query and current authored Scene. */
+    struct EnvironmentQueryPreviewRequest final {
+        DocumentInstanceId instance;
+        Sha256Digest source;
+        DocumentRevision scene;
+        std::optional<SceneObjectId> anchor;
+        EnvironmentQueryPreviewAction action{EnvironmentQueryPreviewAction::Run};
+        std::optional<SceneObjectId> target;
+        std::shared_ptr<const AI::QueryDebugSnapshot> previewEvidence; /**< Exact presented publication for candidate navigation. */
+        std::optional<std::uint32_t> candidate;
+    };
+
+    /** @brief Ordinary semantic edit and history actions from the saved Query tab. */
+    enum class EnvironmentQueryEditAction : std::uint8_t {
+        Apply,
+        Undo,
+        Redo,
+        Save,
+        ReloadExternal,
+        MergeExternal,
+        KeepLocal,
+        RestoreRecovery,
+        DiscardRecovery
+    };
+
+    struct EnvironmentQueryVisibilityStageAddition final {
+        std::array<std::uint8_t, 16> channel;
+    };
+
+    struct EnvironmentQueryNavigationStageAddition final {
+        std::optional<double> maximumScoredCost;
+        std::uint32_t scoreWeight{1};
+    };
+
+    /** @brief Native point-test edit, keyed by exact descriptor and optional existing stage identity. */
+    struct EnvironmentQueryGameplayStageEdit final {
+        AI::QueryTestId test;
+        AI::QueryStageId stage;                                        /**< Empty when appending a test. */
+        std::optional<std::vector<AI::QueryPropertyValue>> properties; /**< Empty optional removes a stage. */
+    };
+
+    /** @brief An optional structural edit: append a typed test or remove one exact stage. */
+    using EnvironmentQueryStageChange =
+        std::variant<std::monostate, AI::QueryPointDistanceTest, EnvironmentQueryVisibilityStageAddition,
+                     EnvironmentQueryNavigationStageAddition, AI::QueryStageId, EnvironmentQueryGameplayStageEdit>;
+
+    /** @brief A typed transaction correlated to exactly one authoring revision. */
+    struct EnvironmentQueryEditRequest final {
+        EnvironmentQueryDocumentFence fence;
+        EnvironmentQueryEditAction action{EnvironmentQueryEditAction::Apply};
+        std::optional<AI::BuiltinPointQuerySettings> settings;
+        EnvironmentQueryStageChange stageChange;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
+        std::optional<AI::BuiltinPerceptionQuerySettings> perception;
+    };
+
+    /** @brief An immutable, registered Environment Query source in a normal workspace document. */
+    struct EnvironmentQueryWorkspaceDocument final {
+        DocumentIdentity identity;
+        Assets::AssetId asset;
+        Sha256Digest source;
+        std::shared_ptr<const AI::EnvironmentQueryAsset> query;
+        QueryDescriptorAvailability descriptors{QueryDescriptorAvailability::RegistryUnavailable};
+        EnvironmentQueryPreviewView preview;
+        std::optional<AI::BuiltinPointQuerySettings> settings;
+        std::optional<AI::BuiltinPerceptionQuerySettings> perception;
+        std::uint64_t revision{1};
+        bool dirty{};
+        bool canUndo{};
+        bool canRedo{};
+        bool conflict{};
+        std::optional<Error> diagnostic;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
+        std::shared_ptr<const AI::QuerySchemaRegistry> authoringSchema;
     };
 
     /** @brief Workspace-owned source lease and separate transient presentation state. */
@@ -306,7 +609,10 @@ namespace Horo::Editor {
     struct UiCanvasPreviewPresentation final {
         UiCanvasPreviewState state;
         std::optional<UiCanvasPreview> layout;
+        std::optional<UiCanvasPreviewBox> selectedLayout;
         std::optional<Error> diagnostic;
+        std::optional<Runtime::Ui::UiDiagnosticRecord> problem;
+        Runtime::Ui::UiStylePropertyId problemStyleProperty;
     };
 
     /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
@@ -327,6 +633,7 @@ namespace Horo::Editor {
         std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
         std::vector<UiCanvasHierarchyRow> rows;
         std::string search;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
         std::optional<Error> diagnostic;
         bool canUndo{};
         bool canRedo{};
@@ -367,8 +674,229 @@ namespace Horo::Editor {
         std::vector<ColliderTransformEdit> edits;
     };
 
+    /** @brief Optional exact binding replacement; absence in a request means append without replacing peers. */
+    struct GyroscopeBindingReplacement final {
+        std::size_t index{};
+        Input::InputBinding expected;
+    };
+
+    /** @brief Owned user intent for one revision-fenced gyro creation/edit modal. */
+    struct GyroscopeBindingEditRequest final {
+        Input::ActionId action;
+        std::uint64_t configurationRevision{};
+        std::optional<GyroscopeBindingReplacement> replacement;
+    };
+
+    /** @brief One exact saved blackboard option available to the initial decision source author. */
+    struct DecisionSchemaChoice final {
+        Assets::AssetId asset;
+        std::string path;
+    };
+
+    /** @brief Confirmed initial State Machine with an explicit saved schema and terminal outcome. */
+    struct StateMachineCreationRequest final {
+        std::string directory;
+        std::string name;
+        Assets::AssetId schema;
+        AI::DecisionStateTerminal outcome{AI::DecisionStateTerminal::Succeeded};
+    };
+
+    /** @brief Authoring restrictions derived from the current provider catalog. */
+    enum class DecisionPaletteAdmission : std::uint8_t {
+        Allowed,
+        UnsupportedRole,
+        CapabilitiesUnavailable,
+        PortWiringRequired,
+        UnsupportedProperties,
+        ImplementationUnavailable
+    };
+
+    /** @brief Inert label, exact identity and authoring status of a registered provider. */
+    struct DecisionTaskChoice final {
+        AI::DecisionNodeTypeId type;
+        AI::DecisionProviderId provider;
+        std::uint32_t version{};
+        std::string label;
+        bool queryOutput{};
+        AI::AiCapabilitySet capabilities{};
+        AI::DecisionDescriptorSourceKind source{AI::DecisionDescriptorSourceKind::Native};
+        AI::DecisionNodeRole role{AI::DecisionNodeRole::Task};
+        DecisionPaletteAdmission admission{DecisionPaletteAdmission::Allowed};
+        std::vector<AI::BehaviorTreeProperty> editableProperties{};
+    };
+
+    /** @brief Explicit first Utility score input from a saved scalar key. */
+    struct InitialUtilityScore final {
+        AI::BlackboardKeyId key;
+        Sha256Digest schemaSource; /**< Exact saved schema shown when the key was offered. */
+        double minimum{};
+        double maximum{1};
+    };
+
+    /** @brief Confirmed first Behavior Tree or Utility with an exact native task and registry revision. */
+    struct TaskDecisionCreationRequest final {
+        std::string directory;
+        std::string name;
+        Assets::AssetId schema;
+        AI::DecisionPlanKind family{AI::DecisionPlanKind::BehaviorTree};
+        AI::DecisionNodeTypeId task;
+        AI::DecisionProviderId provider;
+        std::uint32_t version{};
+        std::uint64_t catalogRevision{};
+        std::optional<InitialUtilityScore> score;
+    };
+
+    /** @brief Saved inputs and compatible writable keys for the reviewed task and revision. */
+    struct BehaviorTreeQueryReview final {
+        Assets::AssetId asset;
+        AI::DecisionNodeId node;
+        std::uint64_t documentRevision{};
+        Sha256Digest queryDigest;
+        Sha256Digest schemaDigest;
+        AI::QueryId query;
+        AI::QueryResultSchemaId result;
+        std::uint32_t resultVersion{};
+        AI::QueryItemTypeId item;
+        std::vector<std::pair<AI::BlackboardKeyId, std::string>> keys;
+        std::optional<DecisionTaskSelection> task;
+    };
+
+    /** @brief Explicit choices for the reviewed Decision source pair. */
+    enum class DecisionExternalAction : std::uint8_t {
+        Review,
+        Reload,
+        Merge,
+        KeepDraft,
+        AcceptDiskPair
+    };
+
+    namespace DecisionExternalErrors {
+        extern const ErrorCodeDescriptor Overlap;
+    }
+
+    struct DecisionExternalReview final {
+        Assets::AssetSourceIdentity source;
+        Assets::AssetSourceIdentity layout;
+        std::uint64_t revision{};
+        bool graphChanged{};
+        bool layoutChanged{};
+        std::optional<Assets::AssetSourceIdentity> interruptedSave;
+        bool operator==(const DecisionExternalReview &) const = default;
+    };
+
+    struct DecisionExternalRequest final {
+        DecisionGraphDocumentFence fence;
+        DecisionExternalAction action{DecisionExternalAction::Review};
+        std::optional<DecisionExternalReview> reviewed;
+    };
+
+    /** @brief Immutable authored source projection independently of runtime graphs. */
+    struct DecisionGraphWorkspaceDocument final {
+        DocumentIdentity identity;
+        Assets::AssetId asset;
+        Sha256Digest source;
+        std::shared_ptr<const AI::DecisionGraphSource> graph;
+        std::uint64_t revision{};
+        bool editable{};
+        AI::DecisionPlanKind family{AI::DecisionPlanKind::StateMachine};
+        std::shared_ptr<const DecisionGraphLayout> layout;
+        bool layoutWritable{};
+        std::optional<BehaviorTreeSubtreeReview> subtreeReview;
+        std::optional<BehaviorTreeQueryReview> queryReview;
+        bool dirty{};
+        bool canUndo{};
+        bool canRedo{};
+        std::optional<Error> diagnostic;
+        std::shared_ptr<const AI::DecisionAssetValidationReport> validation; /**< Typed targets from the last failed validation. */
+        bool conflict{};
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
+        std::optional<DecisionExternalReview> externalReview;
+        std::optional<Assets::AssetSourceIdentity> interruptedSave;
+    };
+
+    /** @brief Confirmed first Blackboard asset and an explicitly authored initial key. */
+    struct BlackboardCreationRequest final {
+        std::string directory;
+        std::string name;
+        std::string keyName;
+        AI::BlackboardKeyDescriptor key;
+    };
+
+    /** @brief Commands emitted by Blackboard presentation for an exact document revision. */
+    enum class BlackboardDocumentOperation : std::uint8_t {
+        Edit,
+        Undo,
+        Redo,
+        Save,
+        Reload,
+        ReloadDiscardingDraft,
+        MergeExternal,
+        KeepLocal,
+        RestoreRecovery,
+        DiscardRecovery,
+        ReviewUsages,
+        ApplyReviewedEdit
+    };
+
+    struct BlackboardWorkspaceRequest final {
+        BlackboardDocumentFence fence;
+        BlackboardDocumentOperation operation{BlackboardDocumentOperation::Edit};
+        std::optional<BlackboardSchemaEdit> edit;
+        std::optional<AI::BlackboardKeyId> reviewKey;
+        std::optional<AI::BlackboardKeyId> replacement;
+        std::shared_ptr<const Application::BlackboardUsageReview> expectedReview;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
+    };
+
+    struct BlackboardWorkspaceDocument final {
+        BlackboardSchemaDocumentSnapshot snapshot;
+        std::optional<Error> diagnostic;
+        bool usageReviewAvailable{};
+        bool reviewingUsages{};
+        std::shared_ptr<const Application::BlackboardUsageReview> usageReview;
+        std::optional<BlackboardReferenceEditPreview> referencePreview;
+        bool referenceEditReady{};
+        bool referenceEditStaged{};
+        AI::BlackboardKeyId diagnosticKey;
+        std::uint64_t diagnosticKeyRequest{};
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
+    };
+
+    /** @brief Requests the exact Blackboard target from a published Decision validation finding. */
+    struct DecisionDiagnosticKeyRequest final {
+        DecisionGraphDocumentFence fence;
+        AI::BlackboardSchemaId schema;
+        AI::BlackboardKeyId key;
+    };
+
+    /** @brief Exact typed entity navigation issued for the on-screen Decision problem. */
+    struct PlayDecisionNavigationRequest final {
+        std::uint64_t tick{};
+        AI::AgentId agent;
+        Runtime::EntityRef entity;
+    };
+
+    /** @brief Build Output source stage for committed Play Decision problems. */
+    inline constexpr std::string_view PlayDecisionDiagnosticStage = "ai.decision_play";
+
+    /** @brief Exact runtime report and semantic source target selected from the Game panel. */
+    struct PlayDecisionGraphNavigationRequest final {
+        Runtime::SceneRuntimeId scene;
+        std::uint64_t tick{};
+        AI::AgentId agent;
+        AI::DecisionGraphAssetId graph;
+        AI::DecisionNodeId node;
+    };
+
+    struct PlayDecisionGraphFocus final {
+        DecisionGraphDocumentFence fence;
+        AI::DecisionNodeId node;
+        std::uint64_t request{};
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
+        std::optional<GyroscopeBindingEditRequest> gyroscopeBinding;
         std::optional<WorldBrowserQuery> worldBrowserQuery;
         std::optional<WorldDocumentFence> worldDocumentFence;
         std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */
@@ -376,16 +904,30 @@ namespace Horo::Editor {
         std::shared_ptr<const TerrainToolCommand> terrainTool;
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
+        std::optional<PlayDecisionNavigationRequest> playDecisionNavigation;
+        std::optional<PlayDecisionGraphNavigationRequest> playDecisionGraphNavigation;
+        std::optional<AI::AgentHandle> visiblePlayDecisionInspector;
+        std::optional<EditorPlayDecisionDebugCommand> playDecisionDebugCommand;
         std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<PrefabDocumentFence> prefabFence;
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
+        std::shared_ptr<const PrefabApplyRecoveryCandidate> prefabApplyRecovery;
         std::optional<PrefabSourceEdit> prefabEdit;
+        std::shared_ptr<const PrefabExternalComparison> prefabExternalComparison;
+        std::optional<std::filesystem::path> prefabSaveDestination;
         PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
         std::optional<SourceEditingCommand> sourceInteraction;
+        std::optional<SourceLanguageIntent> sourceLanguageIntent;
+        std::optional<SourceCompletionIntent> sourceCompletionIntent;
+        std::optional<SourceReferenceIntent> sourceReferenceIntent;
+        std::optional<SourceSymbolIntent> sourceSymbolIntent;
+        std::optional<SourceCodeActionIntent> sourceCodeActionIntent;
+        std::shared_ptr<const SourceReviewOverlay> sourceReview;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         UiCanvasDocumentStateId uiCanvasState;
+        std::shared_ptr<const DocumentRecoveryRecord> uiCanvasRecovery;
         Runtime::Ui::UiElementId uiCanvasElement;
         Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
         std::optional<UiCanvasPreviewState> uiCanvasPreviewState;
@@ -398,6 +940,11 @@ namespace Horo::Editor {
         Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
         std::uint64_t uiCanvasInspectorResourcePublication{};
         Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
+        std::optional<BlackboardWorkspaceRequest> blackboard;
+        std::optional<EnvironmentQueryCreationRequest> newEnvironmentQuery;
+        std::optional<BlackboardCreationRequest> newBlackboard;
+        std::optional<StateMachineCreationRequest> newStateMachine;
+        std::optional<TaskDecisionCreationRequest> newTaskDecision;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -409,6 +956,15 @@ namespace Horo::Editor {
         std::optional<Runtime::PrimitiveId> primitivePayload = std::nullopt;
         std::optional<Math::Transform> transformPayload = std::nullopt;
         std::optional<std::vector<SceneObjectTransformUpdate>> transformUpdates = std::nullopt;
+
+        /** @brief Explicit local decision for the exact currently displayed review. */
+        struct AgentSceneReviewDecision final {
+            enum class Action : std::uint8_t { Discard, ConfirmSpatialImpact, Apply };
+            std::uint64_t id{};
+            Action action{Action::Discard};
+        };
+
+        std::optional<AgentSceneReviewDecision> agentSceneReviewDecision;
         std::optional<ViewportPickRequest> viewportPickPayload = std::nullopt;
         std::optional<EditorViewportNavigationDelta> viewportNavigationPayload = std::nullopt;
         std::optional<EditorViewportAxisView> viewportAxisPayload = std::nullopt;
@@ -423,6 +979,7 @@ namespace Horo::Editor {
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
         std::optional<DocumentRevision> audioPreviewRevision;
+        std::optional<AudioComponentPreviewOutputSwitch> audioPreviewOutputSwitch;
         std::optional<SceneObjectEditorState> editorStatePayload = std::nullopt;
         std::optional<ComponentType> componentTypePayload = std::nullopt;
         std::optional<Gameplay::BehaviorTypeId> behaviorTypePayload = std::nullopt;
@@ -441,9 +998,29 @@ namespace Horo::Editor {
         std::optional<WorkspacePanelDropTarget> workspaceDropTarget = std::nullopt;
         std::optional<ContentBrowserAssetTransferRequest> contentBrowserTransfer = std::nullopt;
         std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
+        std::optional<Assets::AssetId> recentAiAsset = std::nullopt;
+        std::optional<EnvironmentQueryPreviewRequest> environmentQueryPreview;
+        std::optional<EnvironmentQueryEditRequest> environmentQueryEdit;
+        std::optional<StateMachineEditRequest> stateMachineEdit = std::nullopt;
+        std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
+        std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
+        std::optional<DecisionGraphLayoutRequest> decisionLayoutEdit = std::nullopt;
+        std::optional<DecisionExternalRequest> decisionExternal;
+        std::optional<DecisionDiagnosticKeyRequest> decisionDiagnosticKey;
+        std::optional<DecisionGraphDocumentFence> decisionGraphFence;
+        std::shared_ptr<const DocumentRecoveryRecord> decisionGraphRecovery;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
+        std::shared_ptr<const SourceReviewApplication> sourceReviewApplication;
+        SourceEditBatch sourceReviewUndo;
+        SourceDocumentSnapshot sourceReviewDraftUndo;
+        std::shared_ptr<const SourceFileReviewBatch> sourceReviewDraftGroupUndo;
+        SourceDocumentSnapshot sourceReviewRenameUndo;
+        SourceDocumentSnapshot sourceReviewDeleteUndo;
+        CancellationToken sourceReviewLifetime;
+        std::shared_ptr<const Proposals::SourceReviewAudit> sourceReviewValidationAudit;
+        std::uint64_t playDecisionDiagnosticSequence{};
     };
 
     /** @brief Pending project-local Content Browser clipboard operation. */
@@ -473,10 +1050,71 @@ namespace Horo::Editor {
         std::string name;
     };
 
+    struct PhysicsQueryChannelChoice final {
+        Physics::PhysicsQueryChannelId id;
+        std::string name;
+    };
+
     /** @brief Name and stable identity of a registered Physics material. */
     struct PhysicsMaterialChoice {
         Assets::AssetId id;
         std::string name;
+    };
+
+    /** @brief Makes an exact Query edit or history command for the active workspace document. */
+    inline EditorWorkspaceViewCommandData MakeEnvironmentQueryEditCommand(const EnvironmentQueryWorkspaceDocument &document,
+                                                                          EnvironmentQueryEditAction action,
+                                                                          std::optional<AI::BuiltinPointQuerySettings> settings = {},
+                                                                          EnvironmentQueryStageChange stageChange = {}) {
+        return {.command = EditorWorkspaceViewCommand::EditEnvironmentQuery,
+                .environmentQueryEdit = EnvironmentQueryEditRequest{{document.identity.instance, document.revision},
+                                                                    action,
+                                                                    std::move(settings),
+                                                                    std::move(stageChange),
+                                                                    document.recovery}};
+    }
+
+    /** @brief Routes the shared Decision save/undo/redo action to the focused family. */
+    inline EditorWorkspaceViewCommandData MakeDecisionHistoryCommand(const DecisionGraphWorkspaceDocument &document,
+                                                                     DecisionHistoryAction action) {
+        if (document.family == AI::DecisionPlanKind::Utility) {
+            auto operation = UtilityGraphEditOperation::Save;
+            if (action == DecisionHistoryAction::Undo)
+                operation = UtilityGraphEditOperation::Undo;
+            if (action == DecisionHistoryAction::Redo)
+                operation = UtilityGraphEditOperation::Redo;
+            return {.command = EditorWorkspaceViewCommand::EditDecisionUtilityGraph,
+                    .utilityGraphEdit = UtilityGraphEditRequest{.instance = document.identity.instance,
+                                                                .revision = document.revision,
+                                                                .operation = operation}};
+        }
+        if (document.family == AI::DecisionPlanKind::BehaviorTree) {
+            auto operation = BehaviorTreeEditOperation::Save;
+            if (action == DecisionHistoryAction::Undo)
+                operation = BehaviorTreeEditOperation::Undo;
+            if (action == DecisionHistoryAction::Redo)
+                operation = BehaviorTreeEditOperation::Redo;
+            return {.command = EditorWorkspaceViewCommand::EditDecisionBehaviorTree,
+                    .behaviorTreeEdit = BehaviorTreeEditRequest{.instance = document.identity.instance,
+                                                                .revision = document.revision,
+                                                                .operation = operation}};
+        }
+        auto operation = StateMachineEditOperation::Save;
+        if (action == DecisionHistoryAction::Undo)
+            operation = StateMachineEditOperation::Undo;
+        if (action == DecisionHistoryAction::Redo)
+            operation = StateMachineEditOperation::Redo;
+        return {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                .stateMachineEdit =
+                    StateMachineEditRequest{.instance = document.identity.instance, .revision = document.revision, .operation = operation}};
+    }
+
+    /** @brief Project-workspace recency keyed by a registered asset identity and type. */
+    struct RecentAiAsset final {
+        Assets::AssetId asset;
+        Assets::AssetTypeId type;
+        std::string path;
+        bool available{true};
     };
 
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
@@ -506,6 +1144,7 @@ namespace Horo::Editor {
         std::filesystem::path navigationScenePath; /**< Exact project-relative Scene namespace for saved navigation overlays. */
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;
+        std::vector<RecentAiAsset> recentAiAssets;
         std::string contentBrowserOperationError;
         ContentBrowserClipboardState contentBrowserClipboard;
         bool contentBrowserCanNavigateBack{false};
@@ -519,6 +1158,7 @@ namespace Horo::Editor {
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
         std::vector<PhysicsProfileChoice> physicsProfiles;
+        std::vector<PhysicsQueryChannelChoice> physicsQueryChannels;
         std::vector<PhysicsMaterialChoice> physicsMaterials;
         std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
         std::string navigationEditError;
@@ -541,6 +1181,42 @@ namespace Horo::Editor {
         std::optional<SceneObjectId> primarySelection;
         std::vector<SceneObjectId> selectedObjects;
         EditorTransformTool activeTransformTool{EditorTransformTool::Select};
+
+        /** @brief Bounded impact shown beside the transient authored viewport. */
+        struct AgentSceneReviewView final {
+            /** @brief Names displayed before and after a proposed rename. */
+            struct Rename final {
+                std::uint64_t object{};
+                std::string before;
+                std::string after;
+            };
+
+            /** @brief Effective enabled-state change for an existing light on an authored object. */
+            struct Light final {
+                std::uint64_t object{};
+                std::string name;
+                bool enabled{};
+            };
+
+            /** @brief Before and after local pose of a target in the validated preview. */
+            struct Transform final {
+                std::uint64_t object{};
+                std::string name;
+                Math::Transform before;
+                Math::Transform after;
+            };
+
+            std::uint64_t id{};
+            std::size_t objectCount{};
+            std::vector<Rename> renames;
+            std::vector<Light> lights;
+            std::vector<Transform> transforms;
+            bool requiresSpatialWarning{};
+            bool spatialImpactConfirmed{};
+            bool hasSpatialPreview{};
+        };
+
+        std::optional<AgentSceneReviewView> agentSceneReview;
         EditorTransformSpace activeTransformSpace{EditorTransformSpace::Local};
         EditorViewportCamera viewportCamera;
         std::optional<Math::Mat4> primarySelectionWorldTransform;
@@ -551,12 +1227,22 @@ namespace Horo::Editor {
         bool isDirty = false;
         bool sceneExternalConflict = false;
         bool recoveryAvailable = false;
+        std::shared_ptr<const PrefabApplyRecoveryCandidate> prefabApplyRecovery;
+        PrefabApplyRecoveryNotice prefabApplyRecoveryNotice{};
         bool canUndo = false;
         bool canRedo = false;
         EditorPlayState playState{EditorPlayState::Idle};
         EditorPlayViewSource playViewSource{EditorPlayViewSource::AuthoredCamera}; /**< Actual host-selected private projection. */
         bool simulatorPreviewAvailable{}; /**< Actual current consumed simulator view; false forbids stale texture display. */
         std::string playError;
+        std::optional<EditorPlayDecisionProblem> playDecisionProblem;
+        std::optional<PlayDecisionGraphFocus> playDecisionGraphFocus;
+        bool playDecisionGraphUnavailable{};
+        std::vector<EditorPlayAgentInspection> playAgentInspection;
+        DocumentInstanceId playQueryDocument;
+        EditorPlayQueryInspection playQueryInspection;
+        std::optional<EditorPlayDecisionDebugState> playDecisionDebug;
+        bool playDecisionObjectAvailable{};
         float fps = 0.0F;
 
         std::string activeLeftPanelId = "horo.hierarchy";
@@ -573,10 +1259,36 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<EnvironmentQueryWorkspaceDocument> environmentQueryDocuments;
+        bool environmentQueryCreationAvailable{};
+        std::vector<BlackboardWorkspaceDocument> blackboardDocuments;
+        bool blackboardCreationAvailable{};
+        std::vector<DecisionSchemaChoice> decisionSchemaChoices;
+        std::vector<DecisionSchemaChoice> behaviorTreeSubtreeChoices;
+        std::vector<DecisionSchemaChoice> behaviorTreeQueryChoices;
+        std::vector<DecisionTaskChoice> decisionTaskChoices;
+        std::vector<DecisionTaskChoice> decisionTaskPaletteChoices; /**< All observed contracts, including unavailable authoring roles. */
+        std::vector<DecisionTaskChoice> behaviorTreeTaskChoices;
+        std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionProviderMetadata; /**< Detached current Project catalog. */
+        bool decisionPackageActivationTrustRequired{}; /**< Current package activation failure from the exact Project package owner. */
+        std::vector<DecisionGraphWorkspaceDocument> decisionGraphDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        SourceDocumentSnapshot appliedReviewSource; /**< Exact active buffer from the latest live source review receipt. */
+        std::map<DocumentInstanceId, std::shared_ptr<const Language::LanguageResult>> sourceLanguageDiagnostics;
+        std::shared_ptr<const Language::LanguageSourceFocus> sourceLanguageFocus;
+        std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;
+        std::shared_ptr<const SourceLanguageReferences> sourceReferences;
+        std::shared_ptr<const SourceLanguageSymbols> sourceSymbols;
+        std::shared_ptr<const SourceLanguageCodeActions> sourceCodeActions;
+        std::optional<SourceCodeActionIntent> sourceCodeActionPreview;
+        std::vector<Language::ScriptModuleSourceBinding> sourceScriptBindings;
+        std::optional<SourceLanguageHover> sourceLanguageHover;
+        std::optional<SourceLanguageStatus> sourceLanguageStatus;
+        bool sourceLanguageConfigured{};
+        bool sourceLanguageUnavailable{}; /**< Native source editing remains available. */
         std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
         std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;
         std::shared_ptr<const TerrainDocumentHost> terrainPaletteDocument;
@@ -592,6 +1304,8 @@ namespace Horo::Editor {
         std::optional<Error> terrainDocumentError;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::optional<Error> prefabDocumentError;
+        std::optional<Error> prefabOverrideError;
+        bool prefabApplyAvailable{};
         bool prefabRecoveryAvailable{};
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
         std::vector<SourceHistoryState> sourceHistory;

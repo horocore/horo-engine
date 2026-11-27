@@ -257,6 +257,25 @@ namespace Horo::Audio {
                    reader.Digest(manifest.payloadDigest) && reader.U64(manifest.payloadByteCount);
         }
 
+        /** @brief Bound loop storage before allocation and validate the same authored half-open contract. */
+        [[nodiscard]] bool ReadLoops(Reader &reader, AudioCookManifest &manifest) {
+            std::uint32_t count{};
+            if (!reader.U32(count) || count > MaximumAudioAssetLoopRegions || count > reader.Remaining() / 20U)
+                return false;
+            manifest.loops.reserve(count);
+            for (std::uint32_t index = 0; index < count; ++index) {
+                AudioLoopRegion loop;
+                if (!reader.U32(loop.id.value) || !reader.U64(loop.startFrame) || !reader.U64(loop.endFrame) || !loop.id.IsValid() ||
+                    loop.startFrame >= loop.endFrame || loop.endFrame > manifest.frameCount ||
+                    std::ranges::any_of(manifest.loops, [&loop](const auto &previous) {
+                    return previous.id == loop.id;
+                }))
+                    return false;
+                manifest.loops.push_back(loop);
+            }
+            return true;
+        }
+
         [[nodiscard]] bool ValidateChunks(Reader &reader, const AudioCookManifest &manifest) {
             if (!((manifest.sourceContainer == AudioContainerIds::Wave && manifest.sourceCodec == AudioCodecIds::Pcm) ||
                   (manifest.sourceContainer == AudioContainerIds::Ogg && manifest.sourceCodec == AudioCodecIds::Vorbis)) ||
@@ -306,8 +325,8 @@ namespace Horo::Audio {
             !reader.Take(4, magic) || !std::ranges::equal(magic, std::array<std::uint8_t, 4>{'H', 'A', 'C', '1'}))
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         AudioCookManifest manifest;
-        if (!ReadManifestFields(reader, manifest) || !ReadAnalysis(reader, manifest) || !ValidateChunks(reader, manifest) ||
-            reader.Remaining() != manifest.payloadByteCount)
+        if (!ReadManifestFields(reader, manifest) || !ReadAnalysis(reader, manifest) || !ReadLoops(reader, manifest) ||
+            !ValidateChunks(reader, manifest) || reader.Remaining() != manifest.payloadByteCount)
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         if (std::span<const std::uint8_t> payload; !reader.Take(static_cast<std::size_t>(manifest.payloadByteCount), payload) ||
                                                    ComputeSha256(std::as_bytes(payload)) != manifest.payloadDigest ||

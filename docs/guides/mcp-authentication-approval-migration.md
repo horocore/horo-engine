@@ -107,3 +107,10 @@ other session/authorization case. Windows Release additionally executes the full
 session suite, including the unchanged admission/callback allocation offset sweep.
 The Release qualification is required, with missing tests treated as a failure,
 and its JUnit report is uploaded alongside the other platform reports.
+
+## Workspace history navigation
+
+The optional `PanelContext::requestMcpAudit` callback lets a built-in panel
+stage a link to an existing redacted operation. Supply the principal, session,
+session generation and controller-issued operation ID. Hosts without the MCP
+dock leave the callback empty. The link grants no tool or session authority.

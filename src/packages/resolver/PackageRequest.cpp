@@ -1,5 +1,6 @@
 #include "Horo/Packages/PackageRequest.h"
 
+#include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Packages/PackagePath.h"
 #include "PackageJsonGuard.h"
 #include "PackageValidation.h"
@@ -16,6 +17,48 @@ namespace Horo::Packages {
         const ErrorCodeDescriptor Stale{ErrorDomainId{"packages.request"}, ErrorCode{"packages.request.stale"}, ErrorSeverity::Error,
                                         "Package lock does not match current portable intent.",
                                         "Resolve and review the current request before cooking."};
+        const ErrorCodeDescriptor WithdrawalBlocked{ErrorDomainId{"horo.packages.request"}, ErrorCode{"packages.request.removal_blocked"},
+                                                    ErrorSeverity::Error, "A locked dependency cannot be removed directly.",
+                                                    "Review its dependent packages."};
+        const ErrorCodeDescriptor Dependent{WithdrawalBlocked.domain, ErrorCode{"packages.request.removal_required_by"}, ErrorSeverity::Error,
+                                            "A locked package requires this dependency.", "Review the dependent package."};
+
+        /** @brief Coalesces large fan-in for the host error envelope while retaining each locked identity. */
+        void AppendDependentGroups(Error &error, std::span<const LockedPackageReference> remaining, const HoroPackageId &package) {
+            constexpr auto groupSize = 8U;
+            while (!remaining.empty()) {
+                const auto group = remaining.first(std::min(remaining.size(), std::size_t{groupSize}));
+                std::string message{"Packages requiring " + package.Value() + ": "};
+                std::string_view separator;
+                for (const auto &dependent : group) {
+                    message.append(separator).append(dependent.package.Value()).append(" ").append(dependent.version.ToString());
+                    separator = ", ";
+                }
+                error.diagnostics.emplace_back(DiagnosticCode{Dependent.code.Value()}, DiagnosticSeverity::Error, std::move(message),
+                                               SourceLocation{"packages.lock"}, group.front().package.Value());
+                remaining = remaining.subspan(group.size());
+            }
+        }
+
+        /** @brief Explains every retained dependency edge to a package that cannot be withdrawn directly. */
+        Error ExplainWithdrawalBlock(const ValidatedPackageLockfileV1 &lock, const HoroPackageId &package) {
+            const auto graph = lock.PreviewRemoval(package);
+            if (graph.HasError() || graph.Value().requiredBy.empty())
+                return MakeError(Invalid, "Only a direct package request can be withdrawn.");
+            auto error = MakeError(WithdrawalBlocked);
+            const auto &dependents = graph.Value().requiredBy;
+            constexpr std::size_t maximumHostDiagnostics = 64;
+            if (dependents.size() > maximumHostDiagnostics) {
+                AppendDependentGroups(error, dependents, package);
+                return error;
+            }
+            for (const auto &dependent : dependents) {
+                error.diagnostics.emplace_back(DiagnosticCode{Dependent.code.Value()}, DiagnosticSeverity::Error,
+                                               dependent.package.Value() + " " + dependent.version.ToString() + " requires " + package.Value(),
+                                               SourceLocation{"packages.lock"}, dependent.package.Value());
+            }
+            return error;
+        }
 
         /** @brief Requires an exact shape with explicitly supported optional fields only. */
         bool Fields(const Json &value, const std::initializer_list<std::string_view> required,
@@ -228,5 +271,72 @@ namespace Horo::Packages {
             }))
                 return Result<void>::Failure(MakeError(Stale));
         return Result<void>::Success();
+    }
+
+    /** @copydoc PackageUpdatePreview::Prepare */
+    Result<PackageUpdatePreview> PackageUpdatePreview::Prepare(const ValidatedPackageRequest &current,
+                                                               const ValidatedPackageLockfileV1 &currentLock,
+                                                               const ValidatedPackageRequest &candidate,
+                                                               const ValidatedPackageLockfileV1 &candidateLock) {
+        using Output = Result<PackageUpdatePreview>;
+        if (const auto valid = current.ValidateLock(currentLock); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        if (const auto valid = candidate.ValidateLock(candidateLock); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+
+        PackageUpdatePreview preview{.requestChanged = current.Digest() != candidate.Digest()};
+        auto before = currentLock.Packages();
+        auto after = candidateLock.Packages();
+        while (!before.empty() && !after.empty()) {
+            const auto &prior = before.front();
+            const auto &next = after.front();
+            if (prior.package < next.package) {
+                preview.changes.emplace_back(prior, std::nullopt);
+                before = before.subspan(1);
+            } else if (next.package < prior.package) {
+                preview.changes.emplace_back(std::nullopt, next);
+                after = after.subspan(1);
+            } else {
+                if (prior != next)
+                    preview.changes.emplace_back(prior, next);
+                before = before.subspan(1);
+                after = after.subspan(1);
+            }
+        }
+        for (const auto &prior : before)
+            preview.changes.emplace_back(prior, std::nullopt);
+        for (const auto &next : after)
+            preview.changes.emplace_back(std::nullopt, next);
+        return Output::Success(std::move(preview));
+    }
+
+    /** @copydoc PackageRemovalErrorDomain */
+    ModuleErrorDomainDescriptor PackageRemovalErrorDomain() {
+        return {.id = WithdrawalBlocked.domain, .descriptors = {&WithdrawalBlocked, &Dependent}};
+    }
+
+    /** @copydoc PackageRemovalPlan::Prepare */
+    Result<PackageRemovalPlan> PackageRemovalPlan::Prepare(const ValidatedPackageRequest &current, const ValidatedPackageLockfileV1 &locked,
+                                                           const HoroPackageId &package) {
+        using Output = Result<PackageRemovalPlan>;
+        if (const auto valid = current.ValidateLock(locked); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        auto document = Json::parse(current.SerializeCanonical());
+        if (document.at("dependencies").erase(package.Value()) == 0)
+            return Output::Failure(ExplainWithdrawalBlock(locked, package));
+        auto replacement = ValidatedPackageRequest::Parse(document.dump());
+        if (replacement.HasError())
+            return Output::Failure(replacement.ErrorValue());
+        PackageRemovalGraphPreview graph;
+        if (std::ranges::find(locked.Packages(), package, &LockedPackage::package) != locked.Packages().end()) {
+            auto preview = locked.PreviewRemoval(package);
+            if (preview.HasError())
+                return Output::Failure(preview.ErrorValue());
+            graph = std::move(preview).Value();
+        }
+        auto newLock = locked.WithRootWithdrawn(package, replacement.Value().Digest(), graph.removed);
+        if (const auto valid = replacement.Value().ValidateLock(newLock); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        return Output::Success({std::move(replacement).Value(), std::move(newLock), std::move(graph)});
     }
 }  // namespace Horo::Packages

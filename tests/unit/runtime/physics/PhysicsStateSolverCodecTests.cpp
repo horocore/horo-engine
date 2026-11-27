@@ -1,6 +1,6 @@
 #include "AllocationProbe.h"
-#include "PhysicsStateSolverCodecInternal.h"
-#include "PhysicsStateSolverStorage.h"
+#include "state/solver/PhysicsStateSolverCodecInternal.h"
+#include "state/solver/PhysicsStateSolverStorage.h"
 
 #include <array>
 #include <bit>

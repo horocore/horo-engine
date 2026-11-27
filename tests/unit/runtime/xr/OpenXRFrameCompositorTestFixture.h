@@ -4,12 +4,16 @@
 /** @file OpenXRFrameCompositorTestFixture.h
  * @brief Scripted official-dispatch fixture shared by compositor lifecycle cases. */
 #include "OpenXRFrameCompositor.h"
+#include "support/OpenXRCensusTestSupport.h"
+#include "support/OpenXRPassthroughTestSupport.h"
 #include "support/OpenXRSwapchainTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <thread>
+#include <utility>
 
 namespace Horo::Tests::OpenXR {
     namespace {
@@ -26,8 +30,12 @@ namespace Horo::Tests::OpenXR {
         public:
             bool stale{};
             XRCoordinateSpace reference;
+            OpenXRNativeSession *providerOwner{};
+            const NativeReprojectionProvider *revokeDuringBorrow{};
 
             Result<XrSpace> Borrow(const XRCoordinateSpace &space) const override {
+                if (revokeDuringBorrow)
+                    providerOwner->RevokeReprojectionProvider(*revokeDuringBorrow);
                 return stale || space != reference ? Result<XrSpace>::Failure(MakeError(XRErrors::IdentityStale))
                                                    : Result<XrSpace>::Success(NativeHandle<XrSpace>(8));
             }
@@ -36,6 +44,7 @@ namespace Horo::Tests::OpenXR {
         class Images final : public IOpenXRSwapchainImages {
         public:
             bool complete{};
+            std::uint32_t textureSlot{1};
 
             Result<void> Validate(const NativeSwapchainRequest &) const override {
                 return Result<void>::Success();
@@ -50,7 +59,7 @@ namespace Horo::Tests::OpenXR {
             }
 
             Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &, const XRSwapchainImageId &, std::uint32_t) override {
-                return Result<Render::RenderTextureHandle>::Success({{1}, 1, 1});
+                return Result<Render::RenderTextureHandle>::Success({{1}, textureSlot, 1});
             }
 
             Result<void> Retire(Render::RenderTextureHandle) override {
@@ -67,7 +76,9 @@ namespace Horo::Tests::OpenXR {
         };
 
         struct CompositorFixture final {
+            PassthroughScript passthrough;
             Fixture native;
+            CensusScript census;
             Resources resources;
             XRSessionLifecycle sessions{resources};
             XRFrameLifecycle frames{sessions};
@@ -75,15 +86,68 @@ namespace Horo::Tests::OpenXR {
             FrameScript script;
             SwapchainScript swapScript;
             Images images;
-            OpenXRSwapchain color{native.owner, images};
+            Images motionImages;
+            Images synthesisDepthImages;
+            OpenXRSwapchain color;
             OpenXRSwapchain depthOwner{native.owner, images};
+            OpenXRSwapchain motionOwner{native.owner, motionImages};
+            OpenXRSwapchain synthesisDepthOwner{native.owner, synthesisDepthImages};
             OpenXRFrameCompositor compositor{native.owner, frames, spaces};
             XRSessionId session;
             XRViewConfigurationId configuration;
             XRCoordinateSpace local;
             NativeSwapchainRequest allocation;
+            NativeReprojectionRoute synthesisRoute;
+            std::array<Render::FramebufferExtent, 2> synthesisExtents{};
 
-            explicit CompositorFixture(bool enableDepth = false) {
+            static XRAPI_ATTR XrResult XRAPI_CALL ResolveSynthesisProperties(XrInstance instance, const char *name,
+                                                                             PFN_xrVoidFunction *function) {
+                if (std::string_view{name} == "xrGetSystemProperties")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&CensusScript::System);
+                else if (std::string_view{name} == "xrEnumerateViewConfigurationViews")
+                    *function = std::bit_cast<PFN_xrVoidFunction>(&CensusScript::Views);
+                else
+                    return FrameScript::GetProc(instance, name, function);
+                return XR_SUCCESS;
+            }
+
+            explicit CompositorFixture(XRFeatureProfile profile)
+                : CompositorFixture(false, false, false, NativeReprojectionRoute::None, false, 1, XRReprojectionCadenceMode::FixedInterval,
+                                    {}, profile) {}
+
+            explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false,
+                                       NativeReprojectionRoute route = NativeReprojectionRoute::SpaceWarpFb, bool enablePassthrough = false,
+                                       std::uint32_t maximumLayers = 1,
+                                       XRReprojectionCadenceMode cadence = XRReprojectionCadenceMode::FixedInterval,
+                                       const NativeSwapchainMetricHandles &swapchainMetrics = {},
+                                       XRFeatureProfile profile = XRFeatureProfile::Projection1_0)
+                : color(native.owner, images, swapchainMetrics), synthesisRoute(route) {
+                if (profile == XRFeatureProfile::FoveatedInsetProjection) {
+                    native.capabilities = Capabilities(16, false, true);
+                    const auto &evidence = native.capabilities;
+                    const auto quad = NegotiateXRFeatures(evidence, evidence.System(), evidence.Revision(),
+                                                          {.profile = profile, .requestedLimits = {4, 2, 8, 1}});
+                    REQUIRE(quad.plan);
+                    native.plan = *quad.plan;
+                }
+                script.expectedViews = native.plan.Limits().maximumViews;
+                if (enableSynthesis) {
+                    native.capabilities = Capabilities(16, true);
+                    native.script.resolveExtra = &ResolveSynthesisProperties;
+                    native.script.spaceWarpExtension = route == NativeReprojectionRoute::SpaceWarpFb;
+                    native.script.synthesisExtension = route == NativeReprojectionRoute::FrameSynthesisExt;
+                    ++native.script.extensionCount;
+                    requestSpaceWarp = true;
+                }
+                if (requestSpaceWarp) {
+                    constexpr std::array requested{XRFeatureRequest{XRCapability::SpaceWarp, XRFeatureRequirementKind::Optional,
+                                                                    XRFeatureFallback::BaselineProjection}};
+                    const auto planned =
+                        NegotiateXRFeatures(native.capabilities, native.capabilities.System(), native.capabilities.Revision(),
+                                            {native.plan.Profile(), native.plan.Limits(), requested});
+                    REQUIRE(planned.plan.has_value());
+                    native.plan = *planned.plan;
+                }
                 auto activated =
                     sessions.Activate(native.capabilities, native.capabilities.System(), native.capabilities.Revision(), native.plan);
                 REQUIRE(activated.HasValue());
@@ -97,17 +161,52 @@ namespace Horo::Tests::OpenXR {
                     native.script.extensionCount = 2;
                     request.extensions = extensions;
                 }
+                const std::array synthesisExtensions{NativeExtensionRequest{native.script.synthesisExtension
+                                                                                ? XR_EXT_FRAME_SYNTHESIS_EXTENSION_NAME
+                                                                                : XR_FB_SPACE_WARP_EXTENSION_NAME,
+                                                                            true}};
+                if (enableSynthesis)
+                    request.extensions = synthesisExtensions;
+                static constexpr std::array<std::string_view, 1> passthroughNames{XR_FB_PASSTHROUGH_EXTENSION_NAME};
+                const std::array passthroughExtensions{NativeExtensionRequest{passthroughNames.front(), true, 3}};
+                if (enablePassthrough) {
+                    native.script.extraExtensions = passthroughNames;
+                    native.script.extraExtensionVersion = 3;
+                    ++native.script.extensionCount;
+                    native.script.resolveExtra = &PassthroughScript::Resolve;
+                    census.passthroughCapabilities = XR_PASSTHROUGH_CAPABILITY_BIT_FB;
+                    request.extensions = passthroughExtensions;
+                    REQUIRE(sessions.ApplyEvent(session, XRSessionEvent::BecameVisible).HasValue());
+                    REQUIRE(sessions.ApplyEvent(session, XRSessionEvent::BecameFocused).HasValue());
+                }
                 REQUIRE(native.owner.Create(request).HasValue());
                 configuration = {session, {3, 1}};
                 local = {.id = {session, {7, 1}},
-                         .kind = XRSpaceKind::Local,
+                         .kind = enablePassthrough ? XRSpaceKind::World : XRSpaceKind::Local,
                          .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)};
                 spaces.reference = local;
-                REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 2, 1}) == XRFrameStatus::Ok);
+                if (enableSynthesis) {
+                    const auto offer = native.owner.DiscoverReprojection(native.preflight.Attempt(), session);
+                    REQUIRE(offer.HasValue());
+                    synthesisExtents = offer.Value().extents;
+                    XRReprojectionPolicy policy{.viewCount = static_cast<std::uint32_t>(synthesisExtents.size()),
+                                                .motion = XRReprojectionMotionConvention::CurrentNdcMinusPreviousNdcXYZ};
+                    std::ranges::copy(synthesisExtents, policy.viewExtents.begin());
+                    if (cadence == XRReprojectionCadenceMode::FixedInterval) {
+                        REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1}, policy) ==
+                                XRFrameStatus::InvalidInput);
+                        policy.maximumPredictionIntervalNanoseconds = 20'000'000;
+                    }
+                    policy.cadence = cadence;
+                    REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {2, 3, 1}, policy) == XRFrameStatus::Ok);
+                } else {
+                    REQUIRE(frames.BindConfiguration(configuration, native.capabilities, {script.expectedViews, 2, maximumLayers}) ==
+                            XRFrameStatus::Ok);
+                }
                 allocation = {.target = {session, {4, 1}},
                               .texture = {.extent = {800, 600},
                                           .format = Render::RenderTextureFormat::Rgba8Unorm,
-                                          .layerCount = 2,
+                                          .layerCount = script.expectedViews,
                                           .usage = Render::RenderTextureUsage::RenderAttachment}};
                 REQUIRE(color.Create(allocation, &SwapchainScript::GetProc).HasValue());
                 if (enableDepth) {
@@ -119,6 +218,27 @@ namespace Horo::Tests::OpenXR {
                 }
             }
 
+            void CreateSynthesisPair() {
+                const Render::FramebufferExtent extent{std::max(synthesisExtents[0].width, synthesisExtents[1].width),
+                                                       std::max(synthesisExtents[0].height, synthesisExtents[1].height)};
+                NativeSwapchainRequest request{.target = {session, {5, 1}},
+                                               .texture = {.extent = extent,
+                                                           .format = Render::RenderTextureFormat::Rgba16Float,
+                                                           .layerCount = 2,
+                                                           .usage = Render::RenderTextureUsage::Sampled |
+                                                                    Render::RenderTextureUsage::RenderAttachment},
+                                               .role = NativeSwapchainRole::Motion,
+                                               .reprojection = NativeReprojectionAllocation{native.preflight.Attempt(), synthesisRoute,
+                                                                                            synthesisExtents}};
+                motionImages.textureSlot = 2;
+                synthesisDepthImages.textureSlot = 3;
+                REQUIRE(motionOwner.Create(request, &SwapchainScript::GetProc).HasValue());
+                request.target.slot.index = 6;
+                request.role = NativeSwapchainRole::ReprojectionDepth;
+                request.texture.format = Render::RenderTextureFormat::Depth32Float;
+                REQUIRE(synthesisDepthOwner.Create(request, &SwapchainScript::GetProc).HasValue());
+            }
+
             ~CompositorFixture() {
                 CHECK(frames.Snapshot().phase == XRFramePhase::Idle);
                 CHECK(compositor.ResetAfterQuiescence().HasValue());
@@ -126,6 +246,11 @@ namespace Horo::Tests::OpenXR {
                 images.complete = true;
                 CHECK(color.Close().HasValue());
                 CHECK(depthOwner.Close().HasValue());
+                swapScript.timeoutSwapchain = XR_NULL_HANDLE;
+                motionImages.complete = true;
+                synthesisDepthImages.complete = true;
+                CHECK(motionOwner.Close().HasValue());
+                CHECK(synthesisDepthOwner.Close().HasValue());
             }
 
             void Bind() {
@@ -142,7 +267,7 @@ namespace Horo::Tests::OpenXR {
 
             /** @brief Acquires one actual fixture image and records it in the same canonical frame gate. */
             XRSwapchainImageId Acquire(const XRFrameId &frame) {
-                REQUIRE(frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
+                REQUIRE(frames.LocateViews(frame, allocation.texture.layerCount) == XRFrameStatus::Ok);
                 REQUIRE(color.Acquire().HasValue());
                 REQUIRE(color.Wait(0).Value());
                 const auto imported = color.Import();
@@ -188,8 +313,22 @@ namespace Horo::Tests::OpenXR {
                         .maximumExtent = {800, 600}};
             }
 
+            /** @brief Records the native Local-to-World sample from the same active scripted frame. */
+            void RecordReference(const XRFrameId &frame, const Math::Vec3 offset = {}, const std::uint32_t worldGeneration = 1) {
+                const auto prediction = frames.Snapshot().predictedDisplayTime;
+                auto pose = View(0, prediction).pose;
+                pose.source = local;
+                pose.target = {.id = {session, {30, worldGeneration}},
+                               .kind = XRSpaceKind::World,
+                               .worldOriginRevision = local.worldOriginRevision};
+                pose.components.positionMeters.value = offset;
+                const auto observed = XRPoseSample::Create(pose, session, local.worldOriginRevision);
+                REQUIRE(observed.HasValue());
+                REQUIRE(frames.RecordReprojectionReference(frame, observed.Value()) == XRFrameStatus::Ok);
+            }
+
             XRViewRenderPlan Plan(const XRFrameId &frame, const XRSwapchainImageId &image, const XRSwapchainImageId *depthImage = nullptr,
-                                  bool requireSampling = false) {
+                                  bool requireSampling = false, std::uint32_t scale = NativeProjectionResolution::FullPercent) {
                 const auto prediction = frames.Snapshot().predictedDisplayTime;
                 std::array<XRViewDescriptor, 2> views{};
                 std::array<XRExternalRenderTargetDescriptor, 4> targets{};
@@ -203,7 +342,7 @@ namespace Horo::Tests::OpenXR {
                                                                            Render::RenderTextureUsage::Sampled
                                                                      : Render::RenderTextureUsage::RenderAttachment,
                                             .allocationExtent = {800, 600},
-                                            .renderRectangle = {0, 0, 800, 600},
+                                            .renderRectangle = NativeProjectionResolution::Rectangle({800, 600}, scale),
                                             .arrayLayer = index,
                                             .arrayLayerCount = 2};
                     if (depthImage) {

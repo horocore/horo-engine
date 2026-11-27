@@ -1,0 +1,218 @@
+"""Verify an XR 1.0 matrix against the declared release evidence."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+from pathlib import Path
+
+from qualify_xr_android import check_android_preflight_file, validate_android_preflight
+from qualify_xr_device import (
+    CATEGORIES, DESKTOP_HOSTS, DESKTOP_RENDERER, LEVELS, MAX_DESKTOP_PREFLIGHT_BYTES, MAX_RECORD_BYTES, OPTIONAL_CHECKS, STATUSES,
+    artifact_path, check_desktop_preflight, check_display_capture, check_physical_gate, check_render_timing_file, decode_record,
+    desktop_receipt_digest, fields, in_set, is_digest, is_source_revision, is_token, load_record, physical_check_evidence, require,
+    validate_declaration, validate_record,
+    validate_timing_limits, verify_artifact, verify_physical_observations,
+)
+
+
+REVIEWS = {"foundation", "backend", "input", "renderer", "interaction"}
+MAX_TUPLES = 64
+PRIMARY_STEREO_VIEW_COUNT = 2
+
+
+class Evidence:
+    """Verifies the local content-addressed artifacts required by the matrix."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.verified: set[str] = set()
+
+    def path(self, digest: str) -> Path:
+        return artifact_path(self.root, digest)
+
+    def verify(self, digest: str) -> None:
+        require(is_digest(digest), "Missing or invalid artifact digest")
+        if digest in self.verified:
+            return
+        verify_artifact(self.path(digest), digest)
+        self.verified.add(digest)
+
+    def desktop_preflight(self, digest: str, identity: dict, component_digest: str | None) -> None:
+        with self.path(digest).open("rb") as source:
+            view_count = check_desktop_preflight(source.read(MAX_DESKTOP_PREFLIGHT_BYTES + 1), identity, digest, component_digest)
+        if view_count is not None:
+            require(view_count == PRIMARY_STEREO_VIEW_COUNT, "Desktop preflight must report primary stereo for XR 1.0")
+
+    def android_preflight(self, expected: dict, record: dict) -> frozenset[str]:
+        return check_android_preflight_file(self.path(expected["receiptSha256"]), self.path(expected["apkSha256"]), expected, record)
+
+    def smoke_record(self, digest: str) -> dict:
+        with self.path(digest).open("rb") as source:
+            data = source.read(MAX_RECORD_BYTES + 1)
+        require(hashlib.sha256(data).hexdigest() == digest, f"Smoke record content does not match {digest}")
+        return validate_record(decode_record(data))
+
+    def display_capture(self, record: dict) -> None:
+        with self.path(record["display"]["evidenceSha256"]).open("rb") as source:
+            check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
+
+    def render_timing(self, record: dict, limits: dict) -> None:
+        digest = record["checks"]["renderTiming"]["evidenceSha256"]
+        check_render_timing_file(self.path(digest), record, limits)
+
+    def mixed_reality_capture(self, record: dict) -> bytes:
+        with self.path(record["checks"]["optionalMR"]["evidenceSha256"]).open("rb") as source:
+            return source.read(MAX_RECORD_BYTES + 1)
+
+
+def validate_preflight_declarations(row: dict) -> None:
+    preflight = row.get("desktopPreflightSha256")
+    require(preflight is None or is_digest(preflight), "Invalid Desktop preflight digest")
+    component = row.get("desktopComponentSha256")
+    require(component is None or is_digest(component), "Invalid Desktop component digest")
+    if "androidPreflight" in row:
+        validate_android_preflight(row["androidPreflight"])
+
+
+def validate_row(value: object) -> dict:
+    required = {"id", "category", "owner", "releaseClaim", "declaration", "requiredOptionalChecks", "recordSha256"}
+    if isinstance(value, dict):
+        required |= value.keys() & {"desktopPreflightSha256", "desktopComponentSha256", "androidPreflight", "renderTimingLimits"}
+    row = fields(value, required, "matrix row")
+    require(is_token(row["id"]) and is_token(row["owner"]), "Each matrix row requires an ID and owner")
+    require(in_set(row["category"], CATEGORIES), "Invalid matrix planning category")
+    require(type(row["releaseClaim"]) is bool, "Release claim must be explicit")
+    if row["releaseClaim"]:
+        require(row["category"] not in {"Conditional", "Future"}, "Conditional and Future rows are planning only")
+        require(row["declaration"] is not None, "Claimed tuple requires a release declaration")
+        require("renderTimingLimits" in row, "Claimed tuple requires render timing limits")
+    if "renderTimingLimits" in row:
+        validate_timing_limits(row["renderTimingLimits"])
+    optional = row["requiredOptionalChecks"]
+    require(isinstance(optional, list) and all(in_set(name, OPTIONAL_CHECKS) for name in optional),
+            "Invalid optional physical checks")
+    require(len(optional) == len(set(optional)), "Duplicate optional physical checks")
+    if row["declaration"] is not None:
+        validate_declaration(row["declaration"], set(optional))
+    require(row["recordSha256"] is None or is_digest(row["recordSha256"]), "Invalid smoke record digest")
+    validate_preflight_declarations(row)
+    return row
+
+
+def verify_review(value: object, evidence: Evidence, revision: str) -> None:
+    review = fields(value, {"owner", "status", "sourceRevision", "evidenceLevel", "artifactSha256"}, "subsystem review")
+    require(is_token(review["owner"]), "Subsystem review needs an owner")
+    require(in_set(review["status"], STATUSES), "Invalid subsystem review status")
+    require(review["status"] == "Passed", f"Subsystem review {review['status']}")
+    require(review["sourceRevision"] == revision, "Subsystem review is from another source revision")
+    require(in_set(review["evidenceLevel"], LEVELS), "Invalid subsystem evidence level")
+    evidence.verify(review["artifactSha256"])
+
+
+def verify_desktop_route(row: dict, evidence: Evidence, identity: dict) -> None:
+    component = row.get("desktopComponentSha256")
+    if identity["connectionMode"] == "Standalone":
+        require(row.get("desktopPreflightSha256") is None and component is None,
+                "Desktop preflight is unavailable for this tuple")
+        return
+    require(identity["hostPlatform"].lower() in DESKTOP_HOSTS and identity["renderer"].lower() == DESKTOP_RENDERER,
+            "Unsupported PCVR host or renderer for the packaged OpenXR route")
+    digest = row.get("desktopPreflightSha256", identity["packageReceiptSha256"])
+    require(digest is not None, "Required Desktop preflight was not run")
+    expected = desktop_receipt_digest(identity["packageReceiptSha256"], digest, component)
+    evidence.desktop_preflight(expected, identity, component)
+
+
+def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set[str]]:
+    record = evidence.smoke_record(row["recordSha256"])
+    require(record["category"] == row["category"], "Evidence category does not match the matrix row")
+    optional = set(row["requiredOptionalChecks"])
+    claimed_mr_passed = "optionalMR" in optional and record["checks"]["optionalMR"]["status"] == "Passed"
+    mr_capture = evidence.mixed_reality_capture(record) if claimed_mr_passed else None
+    check_physical_gate(record, row["declaration"], optional, mr_capture=mr_capture)
+    require(len(record["display"]["viewExtents"]) == PRIMARY_STEREO_VIEW_COUNT, "XR 1.0 requires a primary stereo display capture")
+    observed_revision = record["provenance"].get("sourceRevision")
+    require(observed_revision is not None, "Device evidence does not record a source revision")
+    require(observed_revision == revision, "Device evidence is from another source revision")
+    identity = record["tuple"]
+    evidence.verify(identity["buildSha256"])
+    evidence.verify(identity["packageReceiptSha256"])
+    verify_desktop_route(row, evidence, identity)
+    android_artifacts = evidence.android_preflight(row["androidPreflight"], record) if "androidPreflight" in row else frozenset()
+    evidence.display_capture(record)
+    evidence.render_timing(record, row["renderTimingLimits"])
+    observations = {record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]}
+    if mr_capture is not None:
+        observations.add(record["checks"]["optionalMR"]["evidenceSha256"])
+    receipts, physical_observations = physical_check_evidence(evidence.root, record, optional)
+    check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - receipts - {None}
+    verify_physical_observations(evidence.root, record, physical_observations, preflight_artifacts=android_artifacts)
+    for digest in sorted(check_digests - physical_observations):
+        evidence.verify(digest)
+    return record["status"], observations | receipts | physical_observations
+
+
+def assess(value: object, evidence: Evidence) -> tuple[list[str], list[str]]:
+    matrix = fields(value, {"schemaVersion", "sourceRevision", "reviews", "tuples"}, "release matrix")
+    require(type(matrix["schemaVersion"]) is int and matrix["schemaVersion"] == 1, "Unsupported release matrix schema")
+    revision = matrix["sourceRevision"]
+    require(is_source_revision(revision), "Missing exact release source revision")
+    reviews = fields(matrix["reviews"], REVIEWS, "subsystem reviews")
+    raw_rows = matrix["tuples"]
+    require(isinstance(raw_rows, list) and len(raw_rows) <= MAX_TUPLES, "Invalid matrix tuple inventory")
+    rows = [validate_row(row) for row in raw_rows]
+    require(len({row["id"] for row in rows}) == len(rows), "Duplicate matrix row IDs")
+    claims = [row for row in rows if row["releaseClaim"]]
+    identities = [row["declaration"]["tuple"] for row in claims]
+    require(all(identity not in identities[:position] for position, identity in enumerate(identities)),
+            "Duplicate claimed product tuple")
+    messages = []
+    failures = []
+    reference_modes = {row["declaration"]["tuple"]["connectionMode"] for row in claims if row["category"] == "Reference"}
+    if "Standalone" not in reference_modes:
+        failures.append("Missing declared standalone reference tuple")
+    if not reference_modes.intersection({"Tethered", "WirelessStreaming"}):
+        failures.append("Missing declared PCVR reference tuple")
+    for name, review in sorted(reviews.items()):
+        try:
+            verify_review(review, evidence, revision)
+        except (OSError, ValueError) as error:
+            owner = review.get("owner") if isinstance(review, dict) else None
+            label = f"{name} ({owner})" if is_token(owner) else name
+            failures.append(f"{label}: {error}")
+    claimed_observations: set[str] = set()
+    for row in rows:
+        label = f"{row['id']} ({row['owner']})"
+        if not row["releaseClaim"]:
+            messages.append(f"{label}: {row['category']} planning")
+            continue
+        try:
+            status, observations = verify_claim(row, evidence, revision)
+            require(claimed_observations.isdisjoint(observations), "Physical observation artifact was reused across smoke runs")
+            claimed_observations.update(observations)
+            messages.append(f"{label}: {status}")
+        except (OSError, ValueError, RecursionError) as error:
+            failures.append(f"{label}: {error}")
+    return messages, failures
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("matrix", type=Path)
+    parser.add_argument("--evidence-dir", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        messages, failures = assess(load_record(args.matrix), Evidence(args.evidence_dir))
+    except (OSError, ValueError, RecursionError) as error:
+        parser.exit(1, f"XR matrix rejected: {error}\n")
+    for message in messages:
+        print(message)
+    if failures:
+        parser.exit(1, "\n".join(failures) + "\n")
+    print("XR 1.0 matrix evidence passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

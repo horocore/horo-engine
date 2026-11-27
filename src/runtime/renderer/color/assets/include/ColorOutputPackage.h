@@ -18,6 +18,8 @@ namespace Horo::Render::Internal {
         ColorOutputAnalyticBundle analytic;
         std::array<CompiledShaderArtifact, 3> programs;
         std::size_t programCount{2};
+        ShaderTargetRequirement target; /**< Exact selected scene and encode recipe for this package. */
+        bool accessibilityEncoder{};    /**< Encoder revision with reflected RGB matrix rows. */
 
         /** @brief Borrows the real optional look variant without substituting the baseline scene artifact.
          * @return Third native artifact, or null when the published package does not contain it. */
@@ -30,13 +32,17 @@ namespace Horo::Render::Internal {
     [[nodiscard]] std::span<const std::string_view, 7> ColorOutputAnalyticFilenames() noexcept;
     /** @brief Returns baseline scene/encode package prefixes. @return Two stable legacy identities. */
     [[nodiscard]] std::span<const std::string_view, 2> ColorOutputCookPrefixes() noexcept;
-    /** @brief Returns one actual variant prefix. @param index Scene0,encode1,look2. @return Exact prefix or empty for invalid index. */
-    [[nodiscard]] std::string_view ColorOutputCookPrefix(std::size_t index) noexcept;
+    /** @brief Returns one exact native variant prefix. @param index Scene0, encode1, look2.
+     * @param backend Explicit known target. @return Exact prefix or empty when this backend lacks the variant. */
+    [[nodiscard]] std::string_view ColorOutputCookPrefix(std::size_t index,
+                                                         ShaderTargetBackend backend = ShaderTargetBackend::Metal) noexcept;
     /** @brief Returns fixed complete source filenames in scene-combined/wrapper,encode,look-combined/wrapper order.
      * @return Five inventory paths; baseline packages use the first three. */
     [[nodiscard]] std::span<const std::string_view, 5> ColorOutputSourceFilenames() noexcept;
     /** @brief Returns the fixed product Metal descriptor. @return Inert bounded target metadata, no device/tool activity. */
     [[nodiscard]] ShaderTargetRequirement ColorOutputMetalCookTarget();
+    /** @brief Returns the fixed Vulkan manual-exposure product descriptor. @return Portable target recipe. */
+    [[nodiscard]] ShaderTargetRequirement ColorOutputVulkanManualCookTarget();
     /** @brief Resolves an explicit ordinary directory. @param root Absolute supplied root. @return Canonical root or typed IO/schema error.
      */
     [[nodiscard]] Result<std::filesystem::path> ResolveColorPackageRoot(const std::filesystem::path &root);
@@ -47,16 +53,20 @@ namespace Horo::Render::Internal {
                                                                          std::size_t maximum);
     /** @brief Loads original analytic data only. @param root Exact producer directory. @return Owned validated bytes/program or failure. */
     [[nodiscard]] Result<ColorOutputAnalyticBundle> LoadColorOutputAnalyticBundle(const std::filesystem::path &root);
-    /** @brief Decodes complete baseline schema1 or look-enabled schema2 product data.
-     * @param root Exact published package. @return Actual artifact pairs and pinned analytic bytes, without trust/native qualification. */
-    [[nodiscard]] Result<ColorOutputCookPackage> LoadColorOutputCookPackage(const std::filesystem::path &root);
+    /** @brief Decodes the explicit selected backend's complete postprocess package.
+     * @param root Exact published package. @param backend Explicit Metal family or Vulkan manual-exposure route.
+     * @return Actual artifact pairs and pinned analytic bytes, without trust/native qualification. */
+    [[nodiscard]] Result<ColorOutputCookPackage> LoadColorOutputCookPackage(const std::filesystem::path &root,
+                                                                            ShaderTargetBackend backend = ShaderTargetBackend::Metal);
     /** @brief Encodes the shared generation schema from actual artifacts/source bytes; compiler provenance remains the cooker's authority.
      * @param analytic Exact original producer generation. @param programs Actual ordered2or3 artifacts.
      * @param sources Ordered scene-combined,scene-wrapper,encode,optional-look-combined,optional-look-wrapper bytes.
+     * @param accessibilityEncoder Whether the encoder was compiled with the accessibility matrix interface.
      * @return Canonical finite generation JSON bytes or typed inconsistency. */
     [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeColorOutputGeneration(const ColorOutputAnalyticBundle &analytic,
                                                                                 std::span<const CompiledShaderArtifact> programs,
-                                                                                std::span<const std::vector<std::uint8_t>> sources);
+                                                                                std::span<const std::vector<std::uint8_t>> sources,
+                                                                                bool accessibilityEncoder = false);
     /** @brief Returns fixed clear/build/adapt Metal data metadata. @return Inert bounded target descriptor. */
     [[nodiscard]] ShaderTargetRequirement ExposureGpuMetalCookTarget();
     /** @brief Returns exact exposure package names. @return Three ordered prefixes; no discovery. */

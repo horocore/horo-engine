@@ -155,6 +155,32 @@ own clocks; callback observations are evidence returned through control, not
 authority to rewrite a gameplay, sequence or animation playhead. Wall time is for
 deadlines/diagnostics and never schedules audible work directly.
 
+
+### Offline PCM and WAVE export
+
+`HoroAudioOffline` is the synchronous headless processing adapter. The host
+prepares a separate Audio epoch with resident voices, one mixer publication and optional sealed sample automation.
+Export callers decode admitted stream media to bounded resident PCM before
+creating their export voices. Live stream owners have latency-driven underrun
+behavior and the offline adapter rejects them before processing.
+The adapter advances that epoch by sample count and converts the mixer's
+planar output to an owned interleaved float buffer. The source cutoff splits
+the export block exactly. The mixer then receives silent input for the host's
+declared bounded tail. The adapter holds no native device and leaves Null's
+lifecycle simulation independent.
+
+`HoroApplicationAudioExport` uses the same processing path to write float32
+speaker WAVE through the caller's scoped publication authority. It retains
+finite headroom, encodes speaker semantics in WAVE channel-mask order and
+publishes complete output atomically. Cancellation and pre-commit failure
+preserve previous destination bytes. The operation receipt records irreversible
+publication independently of later durability errors.
+
+Cinematic callers supply a prepared Audio plan at this application boundary.
+Sequencer retains authored timing intent under ADR-120. Audio owns the clock
+correlation, media readiness, sample automation and retirement.
+
+
 ## Runtime Ownership
 
 ```text
@@ -519,6 +545,59 @@ Audio cache or publication authority. AST owns generic artifact staging and
 publication, while the Audio strategy validates its manifest on both fresh cooks
 and exact cache hits.
 
+Cook schema v3 additionally retains source-authored loop regions as validated
+half-open frame ranges. The independent PCM chunk entries are exact byte/frame
+seek anchors; PCM has zero encoder delay, padding and preroll. The explicit
+`preRollFrames` and `loopCrossfadeFrames` profile fields currently admit zero only:
+the policy is exact wrap, without an implicit overlap or frame subtraction.
+Unsupported nonzero requests fail planning.
+WAV sampler loops requiring reverse/ping-pong playback, fractional-frame endpoints
+or finite repeat counts are rejected as unsupported before decoding because the
+current schema cannot preserve those semantics. A loop need not align to a chunk;
+the worker caps decoding at its exclusive end and seeks to its begin. Reference
+PCM tests require zero cursor error and bit-exact samples, including the authored
+boundary jump; they do not promise to remove a discontinuity already in the source.
+
+`AudioStreamingService::StageReplacement` binds one separately retained immutable
+provider generation and reserves its complete stream charge alongside the old
+stream. Only the same asset and processing format are compatible; duration and
+codec may change after ordinary validation. Candidate ports remain unavailable
+until `CommitReplacement` observes valid prefetched media. Failed/cancelled or
+abandoned candidates retire independently and preserve the last good stream.
+The selected baseline policy retains existing voices on their old ports and
+starts new replacement ports at frame zero. Commit never retargets an existing
+voice, fades samples, or releases the predecessor. Voice control owns any explicit
+fade/restart transition and detached retirement, using the ordinary voice lifecycle
+contract. Candidate preparation creates no second asset registry, cache or worker
+pool. Per-stream source leases keep provider code alive through decoder release.
+
+Stream snapshots expose ring fill/capacity, reserved sample/scratch/package bytes,
+cumulative worker decode nanoseconds, scheduler submission rejections, terminal
+failure and underrun counts. The aggregate snapshot retains invalid-request and
+byte/slot-budget rejection counters separately from callback starvation, even after
+stream retirement. Decode timing excludes open, seek, scheduler wait and callback
+work; it is diagnostic evidence, not a deadline guarantee. Current control-observed
+starvation causes distinguish pending workers, positioning, suspension, scheduler
+overload and terminal states. These observations do not reconstruct historical
+callback causality. Rate limiting coalesces exact underrun deltas without a diagnostic
+queue or dropped reports; counters saturate instead of wrapping. No callback
+formats text, measures wall time, submits jobs, decodes media or releases leases.
+
+Migration: schema v1/v2 cooked artifacts require ordinary AST recooking and cache
+invalidation through the changed `AudioCookSchemaVersion` fingerprint. Runtime
+never falls back to source files. Rebuild native consumers of the additive cook,
+stream snapshot and service declarations. Their public headers remain owned by
+`HoroAudioCook` and `HoroAudioApi`; generated consumers plus the explicit streaming
+consumer cover the existing target boundaries. Authored media duration is bounded
+to 2^40 frames, matching the ordinary runtime streaming envelope; larger descriptors
+fail validation without normalization. Direct runtime decoder calls now reject
+non-finite PCM before committing cursor progress; callers discard failed output.
+Stream admission now borrows its request for the call and creates its owned copy
+inside the typed allocation-failure boundary. Existing lvalue/rvalue calls remain
+source-compatible; member-function pointer declarations must use the new const-reference
+signature. This avoids an allocating MSVC Debug container move terminating before
+the service can return its typed capacity failure.
+
 ### Loudness And Metering Metadata
 
 Cooked audio assets carry loudness metadata for mixing, normalization, and
@@ -546,13 +625,13 @@ manufactured from RMS or sample peak. Normalization gain targets -23 LUFS only
 when integrated loudness is available. The pinned analysis implementation is a
 private AudioImport dependency, never a public or callback dependency.
 
-Cook schema v2 embeds the analysis result alongside the PCM payload in one AST
+Cook schema v3 retains the v2 analysis result alongside the PCM payload in one AST
 artifact. The analysis has its own version and digest; cooked inspection validates
 the bounded waveform pyramid and finite measurements before exposing it to editor
 or runtime callers. Inspection receives only cooked bytes and never opens or
 re-decodes the source. Resident PCM, import decode-block, and waveform storage
 estimates are derived from admitted counts, not observed allocator usage. Existing
-schema v1 artifacts require an ordinary AST recook; there is no parallel Audio
+schema v1/v2 artifacts require an ordinary AST recook; there is no parallel Audio
 metadata cache or source-of-truth sidecar.
 
 The importer result now groups its former flat `waveform`, `loudness`, and
@@ -1014,6 +1093,15 @@ real-time path. Core ships no built-in sidechain; packages provide the node when
 a project needs broadcast-style auto-ducking.
 
 ## Voice Model
+
+Persistent resident playback uses an explicit host-admitted
+`AudioRepeatedPlaybackConfig::hostContext`. A KeepAlive request's voice and
+scheduled command scope belong to that context from admission; its producer lane
+remains tied to the source scene. Source unload closes the lane, while host
+retirement cancels the retained playback and pending starts. No callback resource
+is transferred during unload. Missing host opt-in rejects the request. See the
+[voice qualification and migration ledger](audio-voice-qualification.md) for the
+additive configuration contract and validation status.
 
 ### AUD-003.8 immutable callback voice state
 
@@ -2114,6 +2202,22 @@ stream destruction prove callback detachment before `Close`. The adapter reports
 native hotplug as unsupported until the explicit switching/recovery transaction owns
 loss, default-role migration, and retained delivery end to end.
 
+`HORO_BUILD_AUDIO_PIPEWIRE` builds the Linux-only `HoroAudioPipeWire`
+peer against PipeWire 1.0 or later. The host explicitly owns shared library
+initialization and the backend lifecycle. Native node and default metadata
+become bounded, generation-scoped discovery facts. An open stream negotiates
+with silence, then pauses before reporting the observed sample rate and
+channel order. `Start` installs the retained Horo callback only for that
+epoch. Missing endpoint class or hardware period stays unknown. The private
+PipeWire loop publishes loss and completes detachment through a retained
+retirement worker before a replacement can open.
+
+`HORO_ENABLE_PIPEWIRE_DAEMON_TESTS` runs the native lifecycle against a
+private PipeWire daemon, WirePlumber and a virtual sink. The test retires and
+restarts the daemon, checks old callback detachment and verifies a new
+negotiated format. Physical endpoint, latency and operating-system real-time
+scheduling qualification remain separate.
+
 The application composition root links and registers only admitted backend
 targets, then resolves one stable backend ID before device construction. Backend
 identity remains fixed for the AudioRuntime lifetime; selecting another peer
@@ -2179,6 +2283,31 @@ Physical hardware/end-to-end measurements require loopback provenance; callback
 measurements use callback or deterministic clocks. Null reports physical latency
 Unsupported. Latency components are not implicitly additive.
 
+The frontend publishes the requested buffering profile, sample rate and period
+bounds alongside admitted Open facts for the exact device epoch and clock
+domain. Balanced and Interactive describe stable and low-latency preferences.
+The backend still negotiates within the explicit bounds. A replacement output
+publishes its own callback size, native period when known, and latency
+observations. Closing or losing output clears the admitted facts from the
+current snapshot. The prepared mixer DSP delay, converter input look-ahead and
+current decoder queue depth use separate frame-rate pairs. These fields retain
+their own meanings and provenance. End-to-end latency stays unavailable without
+separate backend or measurement evidence. PipeWire provides a submission-to-playback
+estimate after the exact output epoch begins rendering. Its timing API accounts for
+stream-queued frames, converter buffering and graph delay in their respective domains.
+The snapshot preserves Estimated and BackendApi provenance. This excludes earlier
+engine processing and decoder buffering and carries no physical measurement claim.
+Closing the output withdraws the observation. Audio frontend snapshot consumers
+rebuild for the appended fields. No persisted format or backend ownership changes.
+
+Loss and interruption facts carry the opened device, format revision and
+callback epoch together. Audio frontend applies them only to that exact output.
+A closing frontend can quiesce an attached output during priming and retain its
+render resources until native detachment. A native catalog refresh can report a
+new role default while the selected output renders. Control owns the separate
+decision to retire that output, admit a fresh epoch, and apply voice and clock
+policy.
+
 `AudioCallbackEvent` is a trivially copyable bounded record with epoch, sample
 cursor, monotonic timestamp and a typed Ready, Quiesced, Underrun or Fault payload.
 Ready/Quiesced/first-Fault delivery must be retained under saturation; underrun
@@ -2213,11 +2342,101 @@ timestamped PCM format, bounded capture buffers, monitoring, and recording
 publication. Capture and output may share a platform device service, but they
 have separate stream generations, queues, permission states, and failure paths.
 
+Capture discovery uses `AudioCaptureDeviceSnapshot` and generation-scoped
+`AudioCaptureDeviceId` values. Recording roles resolve within the capture
+catalog and never fall back to playback or another role. Adapters may omit
+unavailable format evidence. Discovery reports platform permission as a
+separate fact. SDL3 and PipeWire attach endpoint additions, removals and metadata
+changes, changed role bindings, and observed permission transitions to the same
+discovery revision. An endpoint metadata change preserves its identity.
+Withdrawal has an empty current binding. A default change does not retire the
+old endpoint while it remains in the catalog. Opening a capture stream still
+requires the host's permission and consent decision.
+
+SDL3 binds a single system default as Multimedia on drivers that provide one route.
+On Windows with WASAPI or DirectSound it reads the Console, Multimedia and
+Communications capture roles independently through MMDevice. SDL's single Windows default alias follows
+Console, so it does not supply evidence for the other Windows roles.
+A role resolves to an enumerated input only when
+the complete native name and supported preferred PCM uniquely match. If that
+evidence is missing, ambiguous or changes during discovery, the role stays
+unresolved and callers can still choose an explicit input. A resolved name
+can be used to present a device, while capture opens the pinned physical ID.
+
 Capture producers write into preallocated or policy-bounded buffers and never
 block the real-time callback. Consumers receive owner-backed timestamped spans
-or bounded stream reads; they do not retain native device handles. Device change,
-permission revocation, focus loss, overrun, and shutdown terminate or replace a
-capture generation explicitly.
+or bounded stream reads without retaining native device handles. The control
+owner explicitly ends or replaces the capture generation on device change,
+permission revocation, focus loss or shutdown.
+
+The internal capture buffer reserves one callback-to-consumer queue for an exact
+device, capture generation, clock domain and semantic PCM layout. It drops the
+newest whole block on overflow. The producer still advances source chronology
+and records cumulative dropped frames. Accepted blocks and the last discarded
+block also carry cumulative frames missing from the producer's timeline after
+its first observation. Consumers can distinguish a source discontinuity from
+queue backpressure, including when a gap precedes the last discarded block.
+A short destination leaves the block queued. Cancellation closes admission
+while the host retains storage until both participants detach. The reader
+scrubs consumed samples before releasing their slot. If it observes cancellation
+after copying, it also scrubs the copied samples before returning. After
+detachment, the buffer scrubs all remaining PCM before releasing storage.
+
+SDL3 can attach the buffer to an explicitly selected recording endpoint. It
+requires a matching purpose and background policy in the host grant and
+current platform permission before open. The capture owner checks native
+permission again immediately before resuming callbacks and before publishing
+the opened generation. Failed admission closes the device and discards
+any provisional PCM. The host reconciles current focus and
+consent on Audio control independently of consumer reads. Revocation detaches
+the recording callback and retires the current generation.
+The host can observe activity without consuming PCM or querying the OS.
+The observation carries the capture generation and purpose, distinguishes
+an open stream awaiting its first samples from an active callback, and
+reports a fault until the control owner detaches the stream. Presentation
+reconciles permission and device health independently of this observation.
+The recording postmix callback copies the selected mono or stereo float PCM
+without a bound SDL stream queue. SDL supplies no hardware timestamp here.
+The callback estimates the start on the SDL monotonic clock from the first
+buffer arrival, then timestamps later blocks by source sample position.
+Audio control checks permission and endpoint health before delivering blocks
+and requires a current purpose-scoped host grant on each read. It checks native
+permission again before returning PCM or read status and overflow metadata.
+Withdrawal scrubs any samples copied by that read and retires the generation.
+Audio control detaches the callback on cancellation. A virtual system default is
+available for discovery but capture requires an explicit endpoint to prevent
+silent hardware changes.
+
+The Core Audio adapter can request microphone permission after an explicit
+host action on the main thread. It checks the running application's usage
+description and signed audio-input entitlement before requesting access or
+opening a recording device. The asynchronous system decision is observed
+through recording discovery. It remains separate from the host's purpose grant.
+The macOS editor exposes the request and current status in its Audio settings.
+The control does not initialize the audio device backend and does not start
+recording. It refreshes the permission display while the settings page is open.
+The same page offers an explicitly selected five-second connection test.
+The input owner processes start and stop before GUI drawing and requires the
+Settings modal to have foreground focus. Leaving the audio page cancels the
+test. The live indicator reflects actual callback activity. Test PCM stays in
+the bounded capture buffer and is scrubbed on teardown without creating assets
+or writing recording data to disk.
+The macOS Audio Settings page also offers local monitoring through the optional
+`IEditorMicrophoneMonitor` port in `EditorGuiContext`. The host owns device
+discovery and capture. A user selects both endpoints and confirms headphone use
+before starting. Leaving the page or losing foreground focus or permission
+withdraws capture, and output retirement continues on the control lane.
+A live source revocation stops the ring reader and discards PCM already staged in
+the voice converter. The callback checks revocation again before publishing its
+mix input. The detached voice owner scrubs its render scratch before release.
+The macOS SDL3 editor bundle carries microphone and speech usage descriptions.
+Xcode uses the editor capture entitlements file when signing. The Ninja release
+job stages the complete `HoroEditor.app` through the Editor install component
+in a destination without an existing editor bundle and applies the same
+entitlements to the newly installed bundle. It verifies the bundle
+signature and the embedded audio-input entitlement before creating the archive.
+The job uses an ad-hoc signature. Developer ID distribution and notarization
+require their own signing identity and release workflow.
 
 Audio does not own speech recognition, language inference, model providers,
 agent intent, or network voice transport. A provider-neutral speech service may
@@ -2230,7 +2449,9 @@ Raw microphone data is privacy-sensitive. It is excluded from ordinary logs,
 conversation history, diagnostic bundles, and telemetry by default. Recording
 or retaining it requires a separate explicit user action and storage policy.
 
-Recorded candidates enter AST staging and atomic publication; the capture callback
+Recorded candidates enter AST staging and atomic publication. A native capacity
+error during private staging remains visible after the initial free-space check
+and the incomplete take is withdrawn. The capture callback
 never writes project files. Network voice consumes capture through a bounded PCM
 adapter and returns validated remote PCM as an ordinary Audio source. Audio never
 sees sockets, packets, credentials or peer authority, and a slow NET/Speech/
@@ -2525,6 +2746,26 @@ transitions. Device loss, reopen, and reconfigure events are reported by the
 middleware backend so that Horo's `AudioRuntime` remains in a typed state even
 when the middleware owns the device.
 
+### Explicit Editor Preview Output Replacement
+
+The editor preview owner admits a switch only for the selected object, current
+document revision and exact active device/format/callback epoch. The request
+chooses a backend-local default role and a restart or preserve policy. Restart
+retires the old output and resolves the requested role in the selected backend's
+fresh catalog. It then creates a new runtime and restarts the originally
+admitted clip from its beginning. The host retains one bounded decoded source
+off the callback so later file changes cannot alter the restarted preview.
+
+The preview publishes one receipt per accepted switch. Application requires the
+replacement callback's exact Start receipt. The workspace can revoke a pending
+switch through its normal preview stop or selection/revision invalidation. An
+unsupported preserve policy leaves current playback running, since this
+composition has no exact fractional cursor transfer contract. A native device
+notification alone does not authorize a replacement. If the exact source reports
+device loss while an admitted restart is retiring it, the restart waits for
+the same native detachment and closure proof. Other retirement failures still
+fail the switch, and revoking it prevents replacement.
+
 ## Platform Focus And Suspension Policy
 
 Audio focus behavior is explicit per host/profile:
@@ -2714,6 +2955,10 @@ scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blockin
 wait, or unbounded scan is added by the instrumentation itself.
 
 ## Testing
+
+The [Voice Playback Qualification](audio-voice-qualification.md) ledger maps
+AUD-003 source/test coverage and records its remaining device-recovery evidence
+gates. A listed test is not a claim that its hardware/platform lane has passed.
 
 The following is the cumulative contract catalogue. The 1.0 qualification gate
 requires the AUD-001 through AUD-011 items that are implemented by that checkpoint.

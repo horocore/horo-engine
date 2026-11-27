@@ -6,6 +6,34 @@
 #include "PackageProjectHost.h"
 
 namespace Horo::Application::Internal {
+    /** @brief Declares the read-only package update preview command. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageUpdatePreviewCommand();
+
+    /** @brief Creates the headless adapter for the package update preview. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageUpdatePreviewCommandAdapter();
+
+    /** @brief Declares the approved package update command. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageApplyUpdateCommand();
+    /** @brief Creates the approved package update adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageApplyUpdateCommandAdapter();
+    /** @brief Describes the read-only rollback preview. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageRollbackPreviewCommand();
+    /** @brief Describes the approved rollback operation. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageRollbackUpdateCommand();
+    /** @brief Creates the rollback preview adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRollbackPreviewCommandAdapter();
+    /** @brief Creates the approved rollback adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRollbackUpdateCommandAdapter();
+
+    /** @brief Describes the read-only withdrawal preview. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageRemovalPreviewCommand();
+    /** @brief Describes the approved asset withdrawal. @return Inert dispatcher metadata. */
+    [[nodiscard]] Cli::CliCommandDescriptor DescribePackageApplyRemovalCommand();
+    /** @brief Creates the withdrawal preview adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageRemovalPreviewCommandAdapter();
+    /** @brief Creates the approved withdrawal adapter. @return Owned dispatcher registration. */
+    [[nodiscard]] Cli::CliCommandAdapterRegistration MakePackageApplyRemovalCommandAdapter();
+
     /** @brief Concrete services for one CLI/MCP process invocation, retained until all package callbacks are acknowledged. */
     class PackageCliHost final {
     public:

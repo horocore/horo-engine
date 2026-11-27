@@ -26,14 +26,15 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::PrepareVisualState */
     Result<void> UiAnimationOwner::PrepareVisualState(Storage &storage) {
         const auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        const auto inherited = storage.accessibility.highContrast ? UiVisualStateMask{UiVisualState::HighContrast} : UiVisualStateMask{};
         for (auto &input : storage.work.elementInputs)
-            input.state = {};
+            input.state = inherited;
         for (const auto &control : canvas->controls) {
             const auto &state = control.control.PreparedInteractionState();
             const auto input = std::ranges::find(storage.work.elementInputs, control.control.Element(), &UiStyleElementInput::element);
             if (input == storage.work.elementInputs.end())
                 return Result<void>::Failure(MakeError(UiErrors::AnimationTargetStale));
-            input->state = ControlVisualState(state);
+            input->state = UiVisualStateMask{static_cast<std::uint16_t>(ControlVisualState(state).bits | inherited.bits)};
         }
         if (canvas->focus) {
             const auto focused = canvas->focus->CurrentFocus();

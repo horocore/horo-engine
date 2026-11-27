@@ -57,4 +57,6 @@ namespace Horo::Editor::Offline::ColorCookDetail {
      */
     [[nodiscard]] Result<void> Publish(const std::filesystem::path &destination, const Family &family,
                                        const Application::Internal::AuthenticatedMetalCookConfiguration &host);
+    /** @brief Publishes the validated Vulkan manual variant with the already locked production host adapter. */
+    [[nodiscard]] Result<void> PublishVulkan(const std::filesystem::path &destination, const Family &family);
 }  // namespace Horo::Editor::Offline::ColorCookDetail

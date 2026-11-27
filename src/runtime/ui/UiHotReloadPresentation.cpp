@@ -16,7 +16,19 @@ namespace Horo::Runtime::Ui {
         const auto tracker = std::ranges::find(canvas->presentations, receipt.view, &UiPresentedInteractionState::View);
         if (tracker == canvas->presentations.end())
             return Result<bool>::Failure(MakeError(UiErrors::HandleStale));
-        return tracker->Apply(receipt);
+        if (!canvas->captures || !tracker->WorldProjection() || receipt.worldProjection)
+            return tracker->Apply(receipt);
+
+        // Cancel the old view's leases at publication even if no input is pumped while the plane is missing.
+        auto replacement = *tracker;
+        const auto accepted = replacement.Apply(receipt);
+        if (accepted.HasError())
+            return accepted;
+        const auto cancelled = canvas->captures->CancelView(receipt.view, UiPointerCaptureCancellationReason::Suspended);
+        if (cancelled.HasError())
+            return Result<bool>::Failure(cancelled.ErrorValue());
+        *tracker = replacement;
+        return accepted;
     }
 
     /** @copydoc UiHotReload::InputEligible */

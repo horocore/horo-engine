@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <functional>
 
 namespace Horo::Tests::OpenXR {
     /** @brief Official native frame dispatch script, never a physical-device qualification. */
@@ -20,13 +21,19 @@ namespace Horo::Tests::OpenXR {
         bool render{true};
         bool missingEnd{};
         NativeFramePacingPolicy *mutatePacing{};
+        std::function<void()> onEnd;
         std::uint32_t waits{};
         std::uint32_t begins{};
         std::uint32_t ends{};
         std::uint32_t layers{};
         std::uint32_t views{};
-        std::array<XrCompositionLayerProjectionView, 2> encoded{};
-        std::array<XrCompositionLayerDepthInfoKHR, 2> depths{};
+        std::uint32_t expectedViews{2};
+        XrPassthroughLayerFB passthroughLayer{XR_NULL_HANDLE};
+        XrCompositionLayerFlags projectionFlags{};
+        std::array<XrCompositionLayerProjectionView, XRHardLimits::MaximumViews> encoded{};
+        std::array<XrCompositionLayerDepthInfoKHR, XRHardLimits::MaximumViews> depths{};
+        std::array<XrFrameSynthesisInfoEXT, 2> ext{};
+        std::array<XrCompositionLayerSpaceWarpInfoFB, 2> fb{};
 
         FrameScript() {
             active = this;
@@ -54,18 +61,53 @@ namespace Horo::Tests::OpenXR {
             CHECK(info->displayTime == active->prediction);
             CHECK(info->environmentBlendMode == XR_ENVIRONMENT_BLEND_MODE_OPAQUE);
             active->layers = info->layerCount;
-            if (info->layerCount == 1) {
-                const auto *layer = reinterpret_cast<const XrCompositionLayerProjection *>(info->layers[0]);
+            active->passthroughLayer = XR_NULL_HANDLE;
+            active->projectionFlags = 0;
+            if (info->layerCount == 2) {
+                const auto *underlay = reinterpret_cast<const XrCompositionLayerPassthroughFB *>(info->layers[0]);
+                REQUIRE(underlay->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB);
+                CHECK(underlay->space == XR_NULL_HANDLE);
+                CHECK(underlay->flags == XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
+                active->passthroughLayer = underlay->layerHandle;
+            }
+            if (info->layerCount != 0) {
+                const auto *layer = reinterpret_cast<const XrCompositionLayerProjection *>(info->layers[info->layerCount - 1]);
+                active->projectionFlags = layer->layerFlags;
                 CHECK(layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION);
                 active->views = layer->viewCount;
-                REQUIRE(layer->viewCount == 2);
-                for (std::size_t index = 0; index < 2; ++index) {
+                REQUIRE(layer->viewCount == active->expectedViews);
+                REQUIRE(layer->viewCount <= active->encoded.size());
+                active->depths = {};
+                active->ext = {};
+                active->fb = {};
+                for (std::size_t index = 0; index < layer->viewCount; ++index) {
                     active->encoded[index] = layer->views[index];
-                    if (layer->views[index].next)
-                        active->depths[index] = *static_cast<const XrCompositionLayerDepthInfoKHR *>(layer->views[index].next);
+                    active->CaptureViewExtension(index, layer->views[index].next);
                 }
             }
+            if (active->onEnd)
+                active->onEnd();
             return active->endResult;
+        }
+
+        void CaptureViewExtension(std::size_t index, const void *next) {
+            if (!next)
+                return;
+            switch (static_cast<const XrBaseInStructure *>(next)->type) {
+                case XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR:
+                    depths[index] = *static_cast<const XrCompositionLayerDepthInfoKHR *>(next);
+                    break;
+                case XR_TYPE_FRAME_SYNTHESIS_INFO_EXT:
+                    REQUIRE(index < ext.size());
+                    ext[index] = *static_cast<const XrFrameSynthesisInfoEXT *>(next);
+                    break;
+                case XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB:
+                    REQUIRE(index < fb.size());
+                    fb[index] = *static_cast<const XrCompositionLayerSpaceWarpInfoFB *>(next);
+                    break;
+                default:
+                    FAIL("Unexpected projection view extension");
+            }
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance, const char *name, PFN_xrVoidFunction *function) {

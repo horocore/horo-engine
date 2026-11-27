@@ -23,6 +23,7 @@ namespace Horo::Runtime::Ui {
         std::optional<UiComputedStyleSnapshot> styles;
         std::optional<UiLayoutSnapshot> layout;
         std::optional<UiLayoutClipSnapshot> clipped;
+        UiRenderViewId primaryView;
         UiReloadLease generation;
         std::optional<UiPresentationProfileSelection> selection;
         std::vector<UiAnimationAttachmentFrame> attachments;
@@ -156,6 +157,7 @@ namespace Horo::Runtime::Ui {
         RuntimeStyleRegistry registry;
         UiStyleResolver resolver;
         UiAnimationCanvasDefinition definition;
+        UiVisualPresentationPolicy accessibility;
         UiAnimationLimits limits;
         UiElementSlotRange range;
         std::vector<Timeline> timelines;

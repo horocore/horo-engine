@@ -86,6 +86,38 @@ namespace Horo::Assets {
     // AssetImporterCatalogSnapshot
     // ---------------------------------------------------------------------------
 
+    /** @copydoc AssetImporterCatalogSnapshot::Compose */
+    Result<std::shared_ptr<const AssetImporterCatalogSnapshot>> AssetImporterCatalogSnapshot::Compose(
+        std::shared_ptr<const AssetImporterCatalogSnapshot> host,
+        const std::span<const std::shared_ptr<const AssetImporterCatalogSnapshot>> project) {
+        using Snapshot = Result<std::shared_ptr<const AssetImporterCatalogSnapshot>>;
+        if (!host)
+            return Snapshot::Failure(MakeError(CookErrors::MalformedArtifact));
+        if (project.empty())
+            return Snapshot::Success(std::move(host));
+
+        std::vector<AssetImporterContribution> entries = host->entries_;
+        for (const auto &catalog : project) {
+            if (!catalog)
+                return Snapshot::Failure(MakeError(CookErrors::MalformedArtifact));
+            entries.insert(entries.end(), catalog->entries_.begin(), catalog->entries_.end());
+        }
+        AssetImporterCatalog candidate;
+        if (auto valid = candidate.ValidateBatch(entries); valid.HasError())
+            return Snapshot::Failure(std::move(valid).ErrorValue());
+        struct RetainedCatalog final {
+            std::shared_ptr<const AssetImporterCatalogSnapshot> host;
+            std::vector<std::shared_ptr<const AssetImporterCatalogSnapshot>> project;
+            std::shared_ptr<const AssetImporterCatalogSnapshot> catalog;
+        };
+        // Retire the composed view before releasing its owning module snapshots.
+        auto retained = std::make_shared<RetainedCatalog>(RetainedCatalog{std::move(host), {project.begin(), project.end()},
+                                                                         std::make_shared<const AssetImporterCatalogSnapshot>(
+                                                                             std::move(entries))});
+        const auto *catalog = retained->catalog.get();
+        return Snapshot::Success({std::move(retained), catalog});
+    }
+
     const IAssetImporter *AssetImporterCatalogSnapshot::FindByExtension(std::string_view extension) const noexcept {
         for (const auto &entry : entries_) {
             if (entry.HandlesExtension(extension))

@@ -1,9 +1,11 @@
 #include "Horo/Gameplay/LuaBehavior.h"
 
 #include "GameplayVfxHostAccess.h"
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Physics/CharacterErrors.h"
+#include "LuaAnimationBinding.h"
 #include "LuaBehaviorMetadata.h"
 #include "LuaBehaviorSandbox.h"
 #include "LuaCharacterBinding.h"
@@ -31,6 +33,20 @@ namespace Horo::Gameplay {
     namespace {
         using Detail::BudgetAllocate;
         using Detail::LuaBudget;
+
+        /** @brief Copies the callback's desired visual preferences without exposing its borrowed owner. */
+        void PushColorAccessibility(lua_State *state, const Accessibility::IColorAccessibilityQuery *query) {
+            if (query == nullptr)
+                return;
+            lua_createtable(state, 0, 3);
+            lua_pushinteger(state, static_cast<lua_Integer>(query->GetActiveColorblindMode()));
+            lua_setfield(state, -2, "mode");
+            lua_pushnumber(state, query->GetColorblindSeverity());
+            lua_setfield(state, -2, "severity");
+            lua_pushboolean(state, query->IsHighContrastEnabled());
+            lua_setfield(state, -2, "high_contrast");
+            lua_setfield(state, -2, "color_accessibility");
+        }
 
         void InstructionLimitHook(lua_State *state, lua_Debug *) {
             luaL_error(state, "Lua behavior instruction budget exceeded");
@@ -120,7 +136,7 @@ namespace Horo::Gameplay {
         }
 
         void OnFixedUpdate(BehaviorContext &context, const FixedDeltaTime delta) override {
-            Call("on_fixed_update", context, delta.seconds);
+            Call("on_fixed_update", context, delta.seconds, nullptr, nullptr, context.AssistPreferences());
         }
 
         void OnPresentationUpdate(BehaviorContext &context, const FrameDeltaTime delta) override {
@@ -144,6 +160,7 @@ namespace Horo::Gameplay {
             std::optional<CancellationSource> navigationLifetime;
             CancellationToken navigationToken;
             std::shared_ptr<const Runtime::Ui::RuntimeUiClient> ui;
+            Detail::LuaAnimationCallbackState animationCallback;
             bool uiBound{};
         };
 
@@ -261,8 +278,11 @@ namespace Horo::Gameplay {
 
         void PushContext(lua_State *state, BehaviorContext &context, const std::shared_ptr<const GameplayPhysicsContext> &physics,
                          const std::shared_ptr<const GameplayNavigationContext> &navigation,
-                         const std::shared_ptr<const GameplayVfxContext> &vfx) const {
+                         const std::shared_ptr<const GameplayVfxContext> &vfx,
+                         const std::shared_ptr<const GameplayAnimationContext> &animation) const {
             lua_newtable(state);
+            Detail::PushLuaAnimationContext(state, animation, context.Entity(), vm_.animationCallback);
+            lua_setfield(state, -2, "animation");
             Detail::PushLuaVfxContext(state, vfx);
             lua_setfield(state, -2, "vfx");
             Detail::PushLuaNavigationContext(state, navigation, vm_.navigationToken);
@@ -387,9 +407,13 @@ namespace Horo::Gameplay {
 
         /** @brief Marshals only borrowed callback arguments inside the protected Lua boundary. */
         static int PushCallbackArguments(lua_State *state, const std::optional<double> &delta, const GameplayInputAction *action,
-                                         const GameplayEvent *event) {
+                                         const GameplayEvent *event, const GameplayAssistPreferences *assists) {
             if (delta.has_value()) {
                 lua_pushnumber(state, *delta);
+                if (assists) {
+                    PushAssistPreferences(state, *assists);
+                    return 3;
+                }
                 return 2;
             }
             if (action != nullptr) {
@@ -403,8 +427,48 @@ namespace Horo::Gameplay {
             return 1;
         }
 
+        /** @brief Reads an explicit preference opt-in from the behavior table below the callback on the stack. */
+        [[nodiscard]] static bool RequestsPreferenceTable(lua_State *state, const char *key) {
+            lua_pushstring(state, key);
+            lua_rawget(state, -3);
+            const bool requested = lua_isboolean(state, -1) && lua_toboolean(state, -1);
+            lua_pop(state, 1);
+            return requested;
+        }
+
+        [[nodiscard]] static const GameplayAssistPreferences *SelectAssistArgument(
+            lua_State *state, const std::optional<GameplayAssistPreferences> &assists) {
+            return assists.has_value() && RequestsPreferenceTable(state, "uses_assist_preferences") ? &*assists : nullptr;
+        }
+
+        [[nodiscard]] static const Accessibility::IColorAccessibilityQuery *SelectColorArgument(lua_State *state,
+                                                                                                const BehaviorContext &context) {
+            const auto *color = context.ColorAccessibility();
+            return color != nullptr && RequestsPreferenceTable(state, "uses_color_accessibility") ? color : nullptr;
+        }
+
+        /** @brief Creates a detached value table with no reference to the host or its authority. */
+        static void PushAssistPreferences(lua_State *state, const GameplayAssistPreferences &assists) {
+            lua_createtable(state, 0, 7);
+            lua_pushnumber(state, assists.aimAssist);
+            lua_setfield(state, -2, "aim_assist");
+            lua_pushboolean(state, assists.autoAimSnap);
+            lua_setfield(state, -2, "auto_aim_snap");
+            lua_pushnumber(state, assists.aggressionReduction);
+            lua_setfield(state, -2, "aggression_reduction");
+            lua_pushnumber(state, assists.reactionTimeMultiplier);
+            lua_setfield(state, -2, "reaction_time_multiplier");
+            lua_pushboolean(state, assists.skipQuickTimeEvents);
+            lua_setfield(state, -2, "skip_quick_time_events");
+            lua_pushnumber(state, assists.postHitInvulnerabilitySeconds);
+            lua_setfield(state, -2, "post_hit_invulnerability_seconds");
+            lua_pushnumber(state, assists.damageMultiplier);
+            lua_setfield(state, -2, "damage_multiplier");
+        }
+
         void Call(const char *name, BehaviorContext &context, const std::optional<double> delta = std::nullopt,
-                  const GameplayInputAction *action = nullptr, const GameplayEvent *event = nullptr) {
+                  const GameplayInputAction *action = nullptr, const GameplayEvent *event = nullptr,
+                  const std::optional<GameplayAssistPreferences> assists = std::nullopt) {
             if (!EnsureLoaded())
                 return;
             if (!vm_.uiBound) {
@@ -421,16 +485,21 @@ namespace Horo::Gameplay {
             const auto physics = context.PhysicsContext();
             const auto navigation = context.NavigationContext();
             const auto vfx = context.VfxContext();
+            const auto animation = context.AnimationContext();
+            const Detail::LuaAnimationCallback animationCallback(vm_.animationCallback);
             try {
                 BindCharacter(context);
-                Detail::UiScript::Protected(state,
-                                            [this, &context, &physics, &navigation, &vfx, name, delta, action, event](lua_State *inner) {
+                Detail::UiScript::Protected(state, [this, &context, &physics, &navigation, &vfx, &animation, name, delta, action, event,
+                                                    &assists](lua_State *inner) {
                     lua_rawgeti(inner, LUA_REGISTRYINDEX, vm_.behaviorRef);
                     lua_getfield(inner, -1, name);
                     if (lua_isnil(inner, -1))
                         return 0;
-                    PushContext(inner, context, physics, navigation, vfx);
-                    const int argumentCount = PushCallbackArguments(inner, delta, action, event);
+                    const auto *assistArgument = SelectAssistArgument(inner, assists);
+                    const auto *colorArgument = SelectColorArgument(inner, context);
+                    PushContext(inner, context, physics, navigation, vfx, animation);
+                    PushColorAccessibility(inner, colorArgument);
+                    const int argumentCount = PushCallbackArguments(inner, delta, action, event, assistArgument);
                     lua_call(inner, argumentCount, 0);
                     return 0;
                 });
@@ -567,6 +636,11 @@ namespace Horo::Gameplay {
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         return ReplaceCompatible(std::move(candidate).Value());
+    }
+
+    /** @copydoc LuaBehaviorProgram::SourceDigest */
+    Sha256Digest LuaBehaviorProgram::SourceDigest() const noexcept {
+        return ComputeSha256(std::as_bytes(std::span{impl_->source}));
     }
 
     /** @copydoc LuaBehaviorProgram::Revision */

@@ -8,12 +8,35 @@
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
+#include <array>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace Horo::Gameplay {
+    /** @brief One transform command accepted from an enabled Gameplay callback. */
+    struct BehaviorTransformSubmission final {
+        Runtime::EntityRef entity;
+        Math::Transform local;
+    };
+
+    /** @brief Bounded optional observation of one successful Gameplay phase. */
+    struct BehaviorFixedEvidence final {
+        static constexpr std::size_t MaximumTransforms = 64;
+        std::array<BehaviorTransformSubmission, MaximumTransforms> transforms{};
+        std::size_t transformCount{};
+        std::size_t callbacks{};
+        bool sceneCommandsQueued{};
+        bool truncated{};
+    };
     enum class BehaviorRestoreServices : std::uint32_t;
+
+    /** @brief Host-issued animation access for an exact frozen behavior type. */
+    struct BehaviorAnimationGrant final {
+        BehaviorTypeId type;
+        std::shared_ptr<const GameplayAnimationContext> context;
+    };
 
     /** @brief Runtime-only state captured for one stable behavior attachment. */
     struct BehaviorInstanceReloadState {
@@ -50,6 +73,9 @@ namespace Horo::Gameplay {
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact host UI grant, independently derived by the runner. */
         std::shared_ptr<const GameplayVfxContext> vfx;                 /**< Explicit module/Scene presentation grant. */
         std::string vfxModuleId; /**< Trusted composition principal; never inferred from an effect tag or behavior type. */
+        std::shared_ptr<const GameplayAnimationContext> animation; /**< Exact current module and Scene animation grant. */
+        std::vector<BehaviorAnimationGrant> animationBehaviors;    /**< Explicit exact-type Scene grants. */
+        std::optional<CancellationSource> animationLifetime;       /**< Runtime-owned retirement for exact-type grants. */
     };
 
     /** @brief Owns every behavior instance attached to one active runtime scene. */
@@ -101,11 +127,19 @@ namespace Horo::Gameplay {
         [[nodiscard]] std::shared_ptr<const Runtime::SceneStructuralReceipt> VfxStructuralReceipt() const noexcept;
 
         /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations.
-         * @param input Current tick input. @param delta Validated fixed step. @return Success or a lifecycle/callback error. */
-        [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta) const;
+         * @param input Current tick input. @param delta Validated fixed step.
+         * @param evidence Optional fresh diagnostic storage, valid only for this call. Ignore it on failure.
+         * @param assists Optional desired preferences from the host's authoritative snapshot for this dispatch.
+         * @param colorAccessibility Optional immutable color preferences borrowed for the complete dispatch.
+         * @return Success or a lifecycle/callback error. */
+        [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta,
+                                               BehaviorFixedEvidence *evidence = nullptr,
+                                               const GameplayAssistPreferences *assists = nullptr,
+                                               const Accessibility::IColorAccessibilityQuery *colorAccessibility = nullptr) const;
         /** @brief Runs presentation-only callbacks without committing simulation mutation.
-         * @param delta Current presentation frame delta. */
-        void PresentationUpdate(FrameDeltaTime delta) const;
+         * @param delta Current presentation frame delta.
+         * @param colorAccessibility Optional immutable color preferences borrowed for this presentation dispatch. */
+        void PresentationUpdate(FrameDeltaTime delta, const Accessibility::IColorAccessibilityQuery *colorAccessibility = nullptr) const;
         /** @brief Enables or disables one attachment with exact lifecycle transitions.
          * @param instance Exact attachment identity. @param enabled Desired enablement. @return Success or a typed failure. */
         [[nodiscard]] Result<void> SetEnabled(BehaviorInstanceId instance, bool enabled) const;
@@ -141,6 +175,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] static bool RestoreBindingAdmitted(const Impl &) noexcept;
         [[nodiscard]] static Result<std::shared_ptr<void>> AcquireRestoreGeneration(const BehaviorRegistry &);
         [[nodiscard]] static Result<void> BindRestoreVfx(Impl &, BehaviorRuntimeServiceBindings &);
+        /** @brief Validates and installs exact Scene animation grants at the activation boundary. */
+        [[nodiscard]] static Result<void> BindRestoreAnimation(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestorePhysics(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestoreNavigationUi(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestoreServices(Impl &, BehaviorRuntimeServiceBindings,
@@ -149,7 +185,9 @@ namespace Horo::Gameplay {
         [[nodiscard]] static Result<void> CheckRestoreServices(const Impl &, BehaviorRestoreServices);
         [[nodiscard]] Result<void> RestoreReloadInstance(std::size_t, const BehaviorInstanceReloadState &) const;
         [[nodiscard]] Result<void> RunFixedInstance(std::size_t, std::span<const GameplayInputAction>, FixedDeltaTime,
-                                                    Runtime::SceneCommandBuffer &) const;
+                                                    Runtime::SceneCommandBuffer &, BehaviorFixedEvidence *,
+                                                    const GameplayAssistPreferences *,
+                                                    const Accessibility::IColorAccessibilityQuery *) const;
         /** @brief Activates instances and rolls back failed factory/lifecycle construction.
          * @param impl Complete host-routed state with admitted scopes.
          * @return Active runner or original typed activation/rollback failure.

@@ -319,8 +319,8 @@ namespace Horo::Audio::Backend {
             REQUIRE(backend->InjectDeviceLoss(DeviceLossCause::Disconnected).HasError());
             std::array<Event, 64> events;
             REQUIRE(backend->DrainEvents(events) == 60);
-            REQUIRE(std::holds_alternative<DeviceLost>(events[0].fact));
-            REQUIRE(std::holds_alternative<DeviceInterruption>(events[1].fact));
+            REQUIRE(std::get<DeviceLost>(events[0].fact).epoch == Epoch());
+            REQUIRE(std::get<DeviceInterruption>(events[1].fact).epoch == Epoch());
         }
     }  // namespace
 }  // namespace Horo::Audio::Backend

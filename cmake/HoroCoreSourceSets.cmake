@@ -26,6 +26,7 @@ set(HORO_FOUNDATION_SOURCES
     foundation/text/String.cpp
     foundation/text/Utf8.cpp
     foundation/logging/Logger.cpp
+    foundation/logging/ProcessFaultMarker.cpp
     foundation/logging/LogContext.cpp
     foundation/logging/StructuredLogStore.cpp
     foundation/telemetry/Telemetry.cpp
@@ -56,6 +57,7 @@ set(HORO_RENDER_API_SOURCES
     runtime/renderer/api/VfxShaderParameters.cpp
     runtime/renderer/api/VfxFrameUpload.cpp
     runtime/renderer/api/VfxGraphValidation.cpp
+    runtime/renderer/api/MultiviewMotionHistory.cpp
     runtime/renderer/api/MultiviewSceneExtraction.cpp
     runtime/renderer/api/MultiviewGraphWorkload.cpp
     runtime/renderer/api/MultiviewShaderParameters.cpp
@@ -65,6 +67,9 @@ set(HORO_RENDER_API_SOURCES
     runtime/renderer/api/PostProcessVolumes.cpp
     runtime/renderer/api/PostProcessGraph.cpp
     runtime/renderer/api/PostProcessGraphAdmission.cpp
+    runtime/renderer/api/ReconstructionFrame.cpp
+    runtime/renderer/api/DynamicResolution.cpp
+    runtime/renderer/api/NativeReconstructionKernel.cpp
     runtime/renderer/api/MotionHistory.cpp
     runtime/renderer/api/MotionHistoryErrors.cpp
     runtime/renderer/api/MaterialBinding.cpp
@@ -98,6 +103,7 @@ set(HORO_RENDER_API_SOURCES
     runtime/renderer/api/RenderGraphLifetime.cpp
     runtime/renderer/api/RenderGraphWorkload.cpp
     runtime/renderer/api/RenderGraphTextureUpload.cpp
+    runtime/renderer/api/RenderGraphNativeReconstruction.cpp
     runtime/renderer/api/UiPaintWorkload.cpp
     runtime/renderer/api/UiPaintKernel.cpp
     runtime/renderer/api/UiPaintFrameUpload.cpp

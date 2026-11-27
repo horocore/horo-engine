@@ -17,6 +17,13 @@ namespace Horo::Navigation {
         float minimumProgressMeters{0.001F};
     };
 
+    /** @brief Owner-observed corridor progress, derived from exact Character feedback. */
+    enum class NavigationCrowdRecovery : std::uint8_t {
+        Clear,
+        Stalled,
+        RepathRequested,
+    };
+
     /** @brief One owner-issued solver request; the caller pins the same immutable snapshot for worker execution. */
     struct NavigationVelocityWork final {
         std::uint64_t sequence{};
@@ -25,6 +32,7 @@ namespace Horo::Navigation {
         NavigationAgentSceneBinding binding;
         NavigationDynamicRegistryRevision dynamicRevision;
         std::uint64_t characterRevision{};
+        NavigationCrowdRecovery recovery{NavigationCrowdRecovery::Clear};
     };
 
     /** @brief Exact authority evidence and safe desired motion; this value never commits Physics movement. */
@@ -35,6 +43,7 @@ namespace Horo::Navigation {
         NavigationAvoidanceDisposition disposition{NavigationAvoidanceDisposition::CollisionSafeStop};
         NavigationAvoidanceStopReason stopReason{NavigationAvoidanceStopReason::None};
         Math::Vec3 preferredVelocity{}; /**< Route intent before avoidance, for explicit blocked-progress diagnostics. */
+        NavigationCrowdRecovery recovery{NavigationCrowdRecovery::Clear};
     };
 
     /** @brief Character-owned result of one exact published intent, measured over its declared fixed step. */
@@ -91,6 +100,13 @@ namespace Horo::Navigation {
         NavigationVelocityPipeline(const NavigationVelocityPipeline &) = delete;
         NavigationVelocityPipeline &operator=(const NavigationVelocityPipeline &) = delete;
 
+        /** @brief Check whether this pipeline advances the supplied movement owner.
+         * @param movement Candidate owner. @return True only for the exact borrowed controller.
+         */
+        [[nodiscard]] bool UsesMovement(const NavigationMovementController &movement) const noexcept {
+            return movement_ == &movement;
+        }
+
         /** @brief Advance the real movement operation and prepare one bounded solver request.
          * @param current Committed owner observation; feedback is supplied exclusively through ObserveFeedback.
          * @param snapshot Complete exact-tick immutable avoidance capture.
@@ -125,6 +141,13 @@ namespace Horo::Navigation {
          * @return True only when that pending work was retired; late completion is subsequently stale.
          */
         [[nodiscard]] bool CancelPending(const NavigationVelocityWork &work) noexcept;
+
+        /** @brief Withdraws retained optional motion and route work at a suspension boundary.
+         * @param current Exact committed observation with no feedback.
+         * @return Success or a typed lifecycle validation error.
+         * @details The movement operation, Character incarnation, goal and budget remain owned by the same registration.
+         */
+        [[nodiscard]] Result<void> SuspendAtSafePoint(const NavigationMovementObservation &current);
 
         /** @brief Retain one exact Character result for the next strictly advancing owner tick.
          * @param feedback Sole movement authority's finite displacement and blockage evidence.

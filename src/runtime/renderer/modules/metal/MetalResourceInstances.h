@@ -22,6 +22,8 @@ namespace Horo::Render::Detail {
         RenderMemoryPoolId pool;
         RenderMemoryBlockId block;
         MetalResidentUse use;
+        __strong id<MTLCommandBuffer> pendingColorReadback{nil};
+        __strong id<MTLCommandBuffer> submittedColorReadback{nil};
         std::uint64_t lightTableRevision{};
         LightCullingDispatch lightTableDispatch;
         std::uint64_t uiPaintRevision{};

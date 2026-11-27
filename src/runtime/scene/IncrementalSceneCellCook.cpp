@@ -221,6 +221,12 @@ namespace Horo::Runtime {
             HashSorted(hash, source.behaviorSchemas, [](const auto &s) {
                 return std::pair{s.type, s.version};
             });
+            if (!source.worldAnchors.empty()) {
+                hash.Add(std::string_view{"Horo.SceneCellCook.WorldAnchors.v1"});
+                HashSorted(hash, source.worldAnchors, [](const auto &anchor) {
+                    return anchor.object;
+                });
+            }
             if (const auto dependencies = HashDependencies(hash, source, graph, cancellation); dependencies.HasError())
                 return Result<Sha256Digest>::Failure(dependencies.ErrorValue());
             return hash.Finish();
@@ -241,7 +247,8 @@ namespace Horo::Runtime {
             }))
                 return Failure<void>(SceneCellPayloadErrors::Invalid);
             if (source.entities.size() > limits.maximumEntities || source.dependencies.size() > limits.maximumDependencies ||
-                source.triggerVolumeEvidence.size() > source.entities.size() || source.componentSchemas.size() > maximumSchemas ||
+                source.triggerVolumeEvidence.size() > source.entities.size() || source.worldAnchors.size() > source.entities.size() ||
+                source.componentSchemas.size() > maximumSchemas ||
                 source.behaviorSchemas.size() > maximumSchemas - source.componentSchemas.size())
                 return Failure<void>(SceneCellPayloadErrors::CapacityExceeded);
             return Result<void>::Success();

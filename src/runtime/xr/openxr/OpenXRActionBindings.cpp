@@ -159,6 +159,14 @@ namespace Horo::XR::OpenXRInternal {
             return result;
         if (auto result = Load(request.getProc, instance, "xrGetActionStateVector2f", vectorState); result.HasError())
             return result;
+        if (!request.hapticPaths.empty()) {
+            if (auto result = Load(request.getProc, instance, "xrEnumerateBoundSourcesForAction", boundHaptics); result.HasError())
+                return result;
+            if (auto result = Load(request.getProc, instance, "xrApplyHapticFeedback", applyHaptic); result.HasError())
+                return result;
+            if (auto result = Load(request.getProc, instance, "xrStopHapticFeedback", stopHaptic); result.HasError())
+                return result;
+        }
         return request.tracking ? ResolveTracking(request, instance) : Result<void>::Success();
     }
 
@@ -168,6 +176,10 @@ namespace Horo::XR::OpenXRInternal {
             return result;
         if (auto result = Load(request.getProc, instance, "xrCreateReferenceSpace", createReference); result.HasError())
             return result;
+        if (request.tracking->base == XRSpaceKind::Stage || request.tracking->alternateReferenceAvailable) {
+            if (auto result = Load(request.getProc, instance, "xrGetReferenceSpaceBoundsRect", getBounds); result.HasError())
+                return result;
+        }
         if (auto result = Load(request.getProc, instance, "xrCreateActionSpace", createSpace); result.HasError())
             return result;
         if (auto result = Load(request.getProc, instance, "xrLocateSpace", locate); result.HasError())
@@ -313,6 +325,10 @@ namespace Horo::XR::OpenXRInternal {
             if (poseCount.HasError())
                 return Result<void>::Failure(poseCount.ErrorValue());
             count += poseCount.Value();
+            const auto hapticCount = SuggestHaptics(profile, std::span{suggestions}.subspan(count));
+            if (hapticCount.HasError())
+                return Result<void>::Failure(hapticCount.ErrorValue());
+            count += hapticCount.Value();
             if (count == 0)
                 continue;
             const XrInteractionProfileSuggestedBinding info{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, profile.native, count,
@@ -360,6 +376,10 @@ namespace Horo::XR::OpenXRInternal {
         if (auto result = CreateActions(schema, labels); result.HasError())
             return result;
         if (auto result = tracking_.CreatePoseActions(TrackingContext{*this}, poses); result.HasError())
+            return result;
+        if (auto result = CreateHapticActions(request.hapticPaths); result.HasError())
+            return result;
+        if (auto result = tracking_.PrepareGazeAction(TrackingContext{*this}); result.HasError())
             return result;
         if (auto result = Suggest(schema, catalog, overrides, profiles, controls, poses); result.HasError())
             return result;
@@ -450,7 +470,7 @@ namespace Horo::XR::OpenXRInternal {
         for (std::size_t index = 0; index < profiles.size(); ++index) {
             XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
             const auto result = profile(session, hands[index], &state);
-            if (XR_FAILED(result))
+            if (result != XR_SUCCESS)
                 return Result<Profiles>::Failure(NativeFailure("query interaction profile", result));
             if (state.type != XR_TYPE_INTERACTION_PROFILE_STATE || state.next != nullptr)
                 return Result<Profiles>::Failure(
@@ -471,6 +491,7 @@ namespace Horo::XR::OpenXRInternal {
         // A failed resynchronization must not leave the previous unsampled state eligible.
         sampledSequence_ = syncSequence_;
         tracking_.sampledSequence = syncSequence_;
+        tracking_.gazeSequence = syncSequence_;
         const Operation operation{sampling_};
         const auto native = Current(session);
         if (native.HasError())
@@ -501,6 +522,8 @@ namespace Horo::XR::OpenXRInternal {
         if (preparation_)
             preparation_->complete = false;
         if (auto retired = tracking_.CloseSpaces(TrackingContext{*this}); retired.HasError())
+            return retired;
+        if (auto retired = CloseHaptics(); retired.HasError())
             return retired;
         if (auto retired = tracking_.ClosePoseActions(TrackingContext{*this}); retired.HasError())
             return retired;
@@ -535,6 +558,7 @@ namespace Horo::XR::OpenXRInternal {
         tracking_.actions.clear();
         tracking_.request.reset();
         tracking_.sampledSequence = 0;
+        tracking_.gazeSequence = 0;
         return Result<void>::Success();
     }
 }  // namespace Horo::XR::OpenXRInternal

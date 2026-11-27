@@ -2,7 +2,9 @@
 
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Foundation/Utf8.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/docking/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 
@@ -137,10 +139,17 @@ namespace Horo::Editor {
             return std::format("{}:{}", record.source->line, record.source->column);
         }
 
+        /** @brief Decodes UTF-8 diagnostic paths while preserving legacy native narrow input. */
+        [[nodiscard]] std::filesystem::path DiagnosticNativePath(std::string_view path) {
+            if (IsValidUtf8ScalarSequence(path))
+                return WorkspaceNativePath(path);
+            return std::filesystem::path{path};
+        }
+
         [[nodiscard]] std::string FileLabel(const BuildOutputRecord &record) {
             if (!record.source.has_value() || record.source->absolutePath.empty())
                 return record.stage.empty() ? "Editor" : record.stage;
-            return std::filesystem::path{record.source->absolutePath}.filename().string();
+            return WorkspacePathText(DiagnosticNativePath(record.source->absolutePath).filename());
         }
 
         [[nodiscard]] std::string FormatTimeOfDay(const std::chrono::system_clock::time_point &timestampUtc) {
@@ -444,7 +453,8 @@ namespace Horo::Editor {
         const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
         const std::string level = context.localization.Get("editor", StatusLocalizationKey(record));
         const std::string line = LineLabel(record);
-        const std::string file = FileLabel(record);
+        const bool decision = record.stage == PlayDecisionDiagnosticStage;
+        const std::string file = decision ? kTextScope.Text(context.localization, "source.decision_graph") : FileLabel(record);
         DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {levelX, textY},
                                   {lineX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, StatusColor(record), level);
         DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {lineX, textY},
@@ -454,10 +464,13 @@ namespace Horo::Editor {
         DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {messageX, textY},
                                   {rowMin.x + regions.contentWidth - metrics.contentPadding, rowMin.y + metrics.tableRowHeight},
                                   Theme::Text(), record.message);
-        if (activated && record.source.has_value()) {
+        if (activated && decision) {
+            command.command = EditorWorkspaceViewCommand::NavigatePlayDecisionDiagnostic;
+            command.playDecisionDiagnosticSequence = record.sequence;
+        } else if (activated && record.source.has_value()) {
             command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
             command.diagnosticSource = DiagnosticSourceRequest{
-                .absolutePath = std::filesystem::path{record.source->absolutePath},
+                .absolutePath = DiagnosticNativePath(record.source->absolutePath),
                 .line = record.source->line,
                 .column = record.source->column,
             };

@@ -5,6 +5,7 @@
  * @brief Opaque credential references and fail-closed credential lifecycle contracts.
  */
 
+#include "Horo/Foundation/CredentialReference.h"
 #include "Horo/Security/SecureMemory.h"
 
 #include <cstdint>
@@ -13,22 +14,14 @@
 #include <string_view>
 #include <unordered_map>
 
+namespace Horo {
+    class ConfigurationSnapshot;
+    class SettingKey;
+}  // namespace Horo
+
 namespace Horo::Security {
     /** @brief Opaque, non-secret reference to provider-owned credential material. */
-    class CredentialReference final {
-    public:
-        CredentialReference() = default;
-
-        /** @brief Returns the opaque reference for equality and provider routing only. @return Borrowed non-secret reference text. */
-        [[nodiscard]] std::string_view Value() const noexcept;
-
-        auto operator<=>(const CredentialReference &) const = default;
-
-    private:
-        explicit CredentialReference(std::string value);
-        std::string value_;
-        friend class CredentialVault;
-    };
+    using CredentialReference = Horo::CredentialReference;
 
     /** @brief Provider boundary for secure credential persistence. */
     class CredentialBackend {
@@ -46,8 +39,21 @@ namespace Horo::Security {
         [[nodiscard]] virtual Result<void> Remove(const CredentialReference &reference) noexcept = 0;
     };
 
+    /** @brief Operation-local credential lookup authority, explicitly composed by the consuming host.
+     * @details Implementations enforce existence, expiry and revocation before exposing material. Provider ownership
+     * and thread rules belong to the host. The synchronous provider must outlive the consuming call.
+     */
+    class CredentialProvider {
+    public:
+        virtual ~CredentialProvider() = default;
+        /** @brief Resolves one live opaque identity for the consuming operation.
+         * @param reference Provider-owned identity. @param nowMillis Monotonic observation time.
+         * @return Move-only secret or a typed security failure. */
+        [[nodiscard]] virtual Result<SecureBytes> Resolve(const CredentialReference &reference, std::uint64_t nowMillis) = 0;
+    };
+
     /** @brief Coordinates opaque references, expiry, rotation, revocation, and provider recovery. */
-    class CredentialVault final {
+    class CredentialVault final : public CredentialProvider {
     public:
         /**
          * @brief Creates a fail-closed vault with explicit provider and entropy composition.
@@ -55,7 +61,7 @@ namespace Horo::Security {
          * @param random Entropy provider used to create unguessable references; null is treated as unavailable.
          */
         CredentialVault(std::shared_ptr<CredentialBackend> backend, std::shared_ptr<SecureRandomSource> random);
-        ~CredentialVault();
+        ~CredentialVault() override;
         CredentialVault(const CredentialVault &) = delete;
         CredentialVault &operator=(const CredentialVault &) = delete;
 
@@ -73,7 +79,7 @@ namespace Horo::Security {
 
         /** @brief Resolves a live reference into a short-lived move-only secret. @param reference Opaque reference to resolve. @param
          * nowMillis Monotonic observation time. @return Secret or typed failure. */
-        [[nodiscard]] Result<SecureBytes> Resolve(const CredentialReference &reference, std::uint64_t nowMillis = 0);
+        [[nodiscard]] Result<SecureBytes> Resolve(const CredentialReference &reference, std::uint64_t nowMillis = 0) override;
 
         /** @brief Permanently revokes a reference and erases provider material. @param reference Opaque reference to revoke. @return Typed
          * outcome. */
@@ -98,4 +104,58 @@ namespace Horo::Security {
         std::shared_ptr<SecureRandomSource> random_;
         std::unordered_map<std::string, Record> records_;
     };
+
+    /** @brief Host-owned enrollment and lookup for credentials that survive a process restart.
+     * @details The platform backend is the source of truth for retained values. The host persists
+     * only returned references and supplies platform backends known to persist locally. Hosts
+     * serialize access when their injected backend or entropy provider requires it.
+     */
+    class PersistentCredentialStore final : public CredentialProvider {
+    public:
+        /** @brief Compose a durable store without reading or changing existing credentials.
+         * @param backend Platform-secure persistent backend, or null if unavailable.
+         * @param random Secure operating-system entropy used for new references.
+         */
+        PersistentCredentialStore(std::shared_ptr<CredentialBackend> backend, std::shared_ptr<SecureRandomSource> random);
+
+        /** @brief Reports whether the host can currently access the durable backend. @return Backend availability. */
+        [[nodiscard]] bool Available() const noexcept;
+
+        /** @brief Enroll a new credential without overwriting an existing reference.
+         * @param secret Move-only credential material.
+         * @return Opaque reference to persist only after enrollment succeeds, or a sanitized failure.
+         */
+        [[nodiscard]] Result<CredentialReference> Enroll(SecureBytes secret);
+
+        /** @brief Resolve only the exact enrolled reference from the backend.
+         * @param reference Persisted identity selected by the host.
+         * @param nowMillis Monotonic observation time. Durable credentials do not use session expiry.
+         * @return Move-only credential material or a sanitized failure.
+         */
+        [[nodiscard]] Result<SecureBytes> Resolve(const CredentialReference &reference, std::uint64_t nowMillis) override;
+
+        /** @brief Remove exactly the enrolled identity. Already absent entries count as revoked.
+         * @param reference The identity to revoke.
+         * @return Success or a sanitized backend failure.
+         */
+        [[nodiscard]] Result<void> Revoke(const CredentialReference &reference);
+
+    private:
+        std::shared_ptr<CredentialBackend> backend_;
+        std::shared_ptr<SecureRandomSource> random_;
+    };
+
+    /**
+     * @brief Resolves a snapshot reference through an explicitly composed provider inside a consuming operation.
+     * @param snapshot Immutable configuration captured by the operation.
+     * @param key Secret-reference setting to resolve.
+     * @param provider Borrowed lifecycle authority that outlives this synchronous call, or null when unavailable.
+     * @param nowMillis Explicit host observation time in the same monotonic domain as provider expiry.
+     * @return Move-only secret, or a safe typed failure with provider diagnostic text removed.
+     * Provider exceptions are reported as credential backend unavailable without their text.
+     * @note The caller owns the returned secret only for the consuming operation and must not cache or publish it.
+     * Calls follow the provider's thread contract. The provider retains expiry and revocation authority.
+     */
+    [[nodiscard]] Result<SecureBytes> ResolveConfigurationCredential(const ConfigurationSnapshot &snapshot, const SettingKey &key,
+                                                                     CredentialProvider *provider, std::uint64_t nowMillis);
 }  // namespace Horo::Security

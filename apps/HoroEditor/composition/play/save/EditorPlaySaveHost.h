@@ -12,6 +12,24 @@
 #include <functional>
 
 namespace Horo::Application::Internal {
+    class PlaySaveAiServices;
+
+    struct EditorPlaySupplementRestore final {
+        std::unique_ptr<Runtime::IStagedRestoreParticipant> participant;
+        Runtime::IStagedRestoreFinalPublicationCheck *check{};
+    };
+
+    /** @brief Fixed descriptor and owner-only preparation for an optional subsystem record. */
+    struct EditorPlaySaveSupplement final {
+        Runtime::CanonicalStateParticipantDescriptor descriptor;
+        std::function<Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>>(Runtime::SaveWorldId, Security::SecureRandomSource &,
+                                                                                     const Runtime::SaveOperationHandle &)>
+            prepareCapture;
+        std::function<Result<EditorPlaySupplementRestore>(Runtime::SaveWorldId, std::span<const std::byte>)> stageRestore;
+        std::function<void()> restorePublished;
+        std::function<Result<void>(const Runtime::SaveOperationSnapshot &)> settleCapture;
+    };
+
     /** @brief Actual process services and immutable scope selected before activation; every service outlives settlement. */
     struct EditorPlaySaveEnvironment final {
         JobSystem &jobs;
@@ -19,17 +37,19 @@ namespace Horo::Application::Internal {
         Clock &clock;
         WallClock &wallClock;
         PlaySaveStorageConfig storage;
+        std::shared_ptr<PlaySaveAiServices> ai;
+        std::optional<EditorPlaySaveSupplement> supplement;
     };
 
     class PlaySavePrefabServices;
     class PlaySavePhysicsServices;
     class EditorPlaySaveHost;
     /** @brief Cold host factory; every invocation issues a new sandbox namespace and actual authored identity inventory. */
-    using EditorPlaySaveFactory = std::function<
-        Result<std::unique_ptr<EditorPlaySaveHost>>(Runtime::SaveProjectId, Runtime::RuntimeSceneService &,
-                                                    const Runtime::RuntimeSceneDefinition &, std::vector<Editor::PlaySaveGameplayBinding>,
-                                                    std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner>,
-                                                    std::shared_ptr<PlaySavePrefabServices>, std::shared_ptr<PlaySavePhysicsServices>)>;
+    using EditorPlaySaveFactory = std::function<Result<
+        std::unique_ptr<EditorPlaySaveHost>>(Runtime::SaveProjectId, Runtime::RuntimeSceneService &,
+                                             const Runtime::RuntimeSceneDefinition &, std::vector<Editor::PlaySaveGameplayBinding>,
+                                             std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner>, std::shared_ptr<PlaySavePrefabServices>,
+                                             std::shared_ptr<PlaySavePhysicsServices>, std::shared_ptr<PlaySaveAiServices>)>;
 
     /** @brief Single owner-lane runtime save composition. Workers never retain this object or a live Scene borrow. */
     class EditorPlaySaveHost final : public Editor::EditorPlaySaveSession {
@@ -80,12 +100,14 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<EditorPlaySaveFactory> MakeEditorPlaySaveFactory(JobSystem &jobs, OperationStore &operations, Clock &clock,
                                                                           WallClock &wallClock, const ProcessService &processes,
                                                                           Runtime::SaveRootPlatform platform,
-                                                                          std::shared_ptr<Security::SecureRandomSource> entropy);
+                                                                          std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                                          std::optional<EditorPlaySaveSupplement> supplement = {});
     /** @brief Selects real native entropy and the compiled OS convention at the explicit application composition boundary.
      * @param jobs Actual application scheduler. @param operations Actual process diagnostics authority.
      * @param clock Host monotonic clock. @param wallClock Host UTC clock.
      * @return Native sandbox factory or original typed root/configuration failure; no production namespace is selected.
      */
     [[nodiscard]] Result<EditorPlaySaveFactory> MakeNativeEditorPlaySaveFactory(JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                                                                WallClock &wallClock);
+                                                                                WallClock &wallClock,
+                                                                                std::optional<EditorPlaySaveSupplement> supplement = {});
 }  // namespace Horo::Application::Internal

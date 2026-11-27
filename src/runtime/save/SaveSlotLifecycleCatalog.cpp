@@ -1,4 +1,5 @@
 #include "SaveSlotLifecycleInternal.h"
+#include "SaveCloudRevisionMetadataInternal.h"
 #include "SaveSlotRetentionCloudCatalog.h"
 
 #include <algorithm>
@@ -77,7 +78,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
         }
 
         /** @brief Produces one canonical shallow catalog; order and duplicate rejection are checked on decode. */
-        [[nodiscard]] Json CatalogJson(const Catalog &catalog, const SaveSlotLifecyclePolicy &policy) {
+        [[nodiscard]] Json CatalogJson(const Catalog &catalog, const SaveSlotLifecyclePolicy &policy, Json cloud) {
             Json records = Json::array();
             Json retired = Json::array();
             for (const auto &record : catalog.records)
@@ -86,8 +87,11 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             for (const auto &record : catalog.retired)
                 retired.push_back(Json::array({EncodeEntry(record.entry), record.recycle, record.sequence, record.committedAt,
                                                record.backup, record.tombstone, EncodeRetentionCloud(record.cloud)}));
-            return Json::array(
-                {2U, ScopeKey(policy.destination.name), catalog.revision, std::move(records), std::move(retired), catalog.clock});
+            auto value = Json::array({cloud.is_null() ? 2U : 3U, ScopeKey(policy.destination.name), catalog.revision,
+                                      std::move(records), std::move(retired), catalog.clock});
+            if (!cloud.is_null())
+                value.push_back(std::move(cloud));
+            return value;
         }
 
         /** @brief Validates catalog entry fields without granting authority to advisory display. */
@@ -182,7 +186,9 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
                 return false;
             if (legacy)
                 return value.size() == 5;
-            return value.size() == 6 && value.at(0) == 2U && value.at(5).is_number_unsigned();
+            if ((value.size() == 6 && value.at(0) == 2U) || (value.size() == 7 && value.at(0) == 3U))
+                return value.at(5).is_number_unsigned();
+            return false;
         }
 
         /** @brief Applies exact scope, count and field-type checks before constructing records. */
@@ -214,13 +220,48 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
             }
             return true;
         }
+
+        /** @brief Carries exact cloud evidence across unrelated slot changes in the same publication. */
+        Result<Json> CloudForPublication(const Catalog &catalog, const SaveNamespaceId &name) {
+            if (!catalog.cloud)
+                return Result<Json>::Success(nullptr);
+            const auto &cloud = *catalog.cloud;
+            if (cloud.scope.localNamespace != name)
+                return Result<Json>::Failure(MakeError(SaveErrors::CloudMetadataInvalid));
+
+            const auto index = CatalogIndex(catalog);
+            if (cloud.indexRevision == index.revision) {
+                auto valid = ValidateSaveCloudRevisionMetadata(index, cloud.scope, cloud);
+                if (valid.HasError())
+                    return Result<Json>::Failure(valid.ErrorValue());
+                return Result<Json>::Success(EncodeCatalogCloud(cloud));
+            }
+            auto reconciled = SaveCloudRevisionMetadataDetail::RebindIndex(index, cloud);
+            if (reconciled.HasError())
+                return Result<Json>::Failure(reconciled.ErrorValue());
+            return Result<Json>::Success(EncodeCatalogCloud(reconciled.Value()));
+        }
     }  // namespace
+
+    /** @copydoc CatalogIndex */
+    SaveSlotIndex CatalogIndex(const Catalog &catalog, const bool deleted) {
+        SaveSlotIndex index{.revision = catalog.revision};
+        index.entries.reserve(catalog.records.size());
+        for (const auto &record : catalog.records) {
+            if (record.deleted == deleted)
+                index.entries.push_back(record.entry);
+        }
+        return index;
+    }
 
     /** @copydoc EncodeCatalog */
     Result<std::vector<std::byte>> EncodeCatalog(const Catalog &catalog, const SaveSlotLifecyclePolicy &policy) {
         if (!ValidCatalog(catalog, policy))
             return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
-        const auto text = CatalogJson(catalog, policy).dump();
+        auto cloud = CloudForPublication(catalog, policy.destination.name);
+        if (cloud.HasError())
+            return Result<std::vector<std::byte>>::Failure(cloud.ErrorValue());
+        const auto text = CatalogJson(catalog, policy, std::move(cloud).Value()).dump();
         if (text.size() > policy.maximumCatalogBytes - kDigestBytes)
             return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::StorageQuotaExceeded));
         return Result<std::vector<std::byte>>::Success(Seal(std::as_bytes(std::span{text.data(), text.size()})));
@@ -249,6 +290,11 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
                 catalog.records.push_back(DecodeRecord(item, legacy));
             for (const auto &item : value.at(4))
                 catalog.retired.push_back(DecodeRetired(item, legacy, policy.destination.name));
+            if (value.size() == 7) {
+                catalog.cloud = DecodeCatalogCloud(value.at(6), policy.destination.name, policy.maximumSlots);
+                if (ValidateSaveCloudRevisionMetadata(CatalogIndex(catalog), catalog.cloud->scope, *catalog.cloud).HasError())
+                    return Result<Catalog>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
+            }
             if (!ValidCatalog(catalog, policy))
                 return Result<Catalog>::Failure(MakeError(SaveErrors::SlotCommitInvalid));
             return Result<Catalog>::Success(std::move(catalog));

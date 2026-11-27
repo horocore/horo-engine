@@ -4,7 +4,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
 #include "editor/screens/workspace/panels/hierarchy/HierarchyRowLayout.h"
 
 #include <algorithm>
@@ -463,9 +463,22 @@ namespace Horo::Editor {
 
     void HierarchyPanel::OnDetach() {
         editSession_.Close();
-        focusedWidgetContext_.Reset();
+        ResetTransientInput();
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
+    }
+
+    /** @copydoc HierarchyPanel::OnPresentationHidden */
+    void HierarchyPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &) {
+        ResetTransientInput();
+    }
+
+    /** @copydoc HierarchyPanel::ResetTransientInput */
+    void HierarchyPanel::ResetTransientInput() noexcept {
+        focusedWidgetContext_.Reset();
+        renamingId_.reset();
+        requestRenameFocus_ = false;
+        requestSearchFocus_ = false;
     }
 
     void HierarchyPanel::BeginRename(const HierarchyNodeId id) {

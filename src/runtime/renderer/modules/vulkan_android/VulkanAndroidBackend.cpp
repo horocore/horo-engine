@@ -159,8 +159,7 @@ namespace Horo::Render {
 
     /** @copydoc IsVulkanAndroidBackpressure */
     bool IsVulkanAndroidBackpressure(const Error &error) noexcept {
-        return error.domain.Value() == AndroidVulkan::Errors::Pending.domain.Value() &&
-               error.code.Value() == AndroidVulkan::Errors::Pending.code.Value();
+        return AndroidVulkan::IsPending(error);
     }
 
     /** @copydoc RegisterVulkanAndroidRenderBackend */

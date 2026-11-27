@@ -1,14 +1,16 @@
 #pragma once
 
-#include "ExtensionActivityView.h"
-#include "ExtensionRecoveryView.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
-#include "UiCanvasDocumentView.h"
-#include "WorkspaceSplitterInteraction.h"
+#include "ai/decisions/panels/DecisionTaskPalette.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvas.h"
 #include "editor/source_editor/SourceEditorSession.h"
 #include "editor/source_editor/SourceEditorWidget.h"
+#include "extensions/ExtensionRecoveryView.h"
+#include "extensions/activity/ExtensionActivityView.h"
+#include "layout/WorkspaceSplitterInteraction.h"
+#include "ui_canvas/UiCanvasDocumentView.h"
 
 #include <array>
 #include <cstdint>
@@ -85,6 +87,16 @@ namespace Horo::Editor {
         /** @brief Tears down source presentations when their project document owner leaves or is replaced. */
         void ResetSourceSession() noexcept;
 
+        /** @brief Queues a review for its exact source tab on the next draw. */
+        [[nodiscard]] bool StageSourceReview(std::shared_ptr<const SourceReviewOverlay> overlay) {
+            return m_sourceSession.StageReview(std::move(overlay));
+        }
+
+        /** @brief Reads the exact selected range from the active source's existing presentation. */
+        [[nodiscard]] std::optional<SourceContextRange> ReadSourceSelection(const SourceDocumentSnapshot &snapshot) const {
+            return m_sourceSession.ReadSelection(snapshot);
+        }
+
     private:
         ExtensionActivityView m_extensions;
         ExtensionRecoveryView m_extensionRecovery;
@@ -112,7 +124,9 @@ namespace Horo::Editor {
         void DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
                          EditorWorkspaceViewCommandData &outCommand) const;
 
-        void DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws one startup recovery indication and emits its read-only review or authoring action. */
+        void DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel, bool paired,
+                             EditorWorkspaceViewCommandData &outCommand) const;
 
         void DrawExternalConflictBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const;
 
@@ -137,9 +151,231 @@ namespace Horo::Editor {
         /** @brief Draws either the active document or its explicitly focused native panel. */
         void DrawDockContent(WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
-        /** @brief Projects the active immutable sequence through the shared timeline control. */
         /** @brief Draws the active registered PCG document using immutable source and workspace-only state. */
         bool DrawPCGDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Projects the active Blackboard schema and emits revision-fenced source commands. */
+        bool DrawBlackboardDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+
+        /** @brief Renders an already admitted immutable Environment Query source. */
+        bool DrawEnvironmentQueryDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+
+        /** @brief Transient wide-value controls preserve invalid or as-yet-unapplied input. */
+        struct EnvironmentQueryFields final {
+            struct Distance final {
+                AI::QueryStageId stage;
+                std::uint64_t radius{};
+                bool preferNearer{};
+                std::uint64_t weight{};
+                AI::QueryContextId center;
+                std::vector<AI::QueryPointContextOption> centers;
+                AI::QueryDistanceScoreResponse response;
+            };
+
+            struct GameplayProperty final {
+                AI::QueryPropertyDescriptor descriptor;
+                AI::QueryPropertyData value;
+                bool included{};
+                bool validHex{true};
+                std::array<char, AI::EnvironmentQuerySchemaLimits::CanonicalBytes * 2 + 1> hex{};
+            };
+
+            EnvironmentQueryDocumentFence fence;
+            AI::QueryTestId gameplayTest;
+            AI::QueryStageId gameplayStage;
+            std::vector<GameplayProperty> gameplayProperties;
+            std::uint64_t step{};
+            std::uint64_t outer{};
+            std::uint64_t inner{};
+            std::uint64_t maximum{};
+            bool annulus{};
+            bool currentlySensed{};
+            AI::QueryContextId center;
+            std::vector<Distance> distances;
+            std::uint64_t newDistanceRadius{};
+            std::optional<AI::QueryPointVisibilityStageSettings> visibility;
+            std::optional<AI::QueryPointNavigationStageSettings> navigation;
+            Physics::PhysicsQueryChannelId queryChannel;
+            bool preferPathCost{};
+            double pathCostCeiling{100};
+            std::uint64_t pathCostWeight{1};
+            bool providerRoom{};
+            std::string widgetId;
+            std::vector<Math::WorldCoordinate64> authoredPoints;
+            bool navigationSurface{};
+            std::uint64_t surfaceRadius{};
+            std::uint64_t surfaceMaximum{};
+
+            /** @brief Checks all editable fields before narrowing user input. */
+            [[nodiscard]] bool IsValid() const;
+            /** @brief Checks the draft path cost scoring settings. */
+            [[nodiscard]] bool IsPathScoringValid() const noexcept;
+            /** @brief Converts the validated controls to an owning authoring request. */
+            [[nodiscard]] AI::BuiltinPointQuerySettings Capture() const;
+        };
+
+        mutable EnvironmentQueryFields m_environmentQueryFields;
+        /** @brief Edits the ordered point inventory within the native schema's bounds. */
+        void DrawAuthoredPointFields(EnvironmentQueryFields &fields) const;
+        /** @brief Draws the controls for the document's current generator. */
+        void DrawPointGeneratorFields(EnvironmentQueryFields &fields, const AI::BuiltinPointQuerySettings &current) const;
+        /** @brief Draws the score direction and curve of one enabled distance stage. */
+        void DrawEnvironmentQueryDistanceResponse(AI::QueryDistanceScoreResponse &response) const;
+        /** @brief Draws the existing distance stages and returns the identity selected for removal. */
+        [[nodiscard]] std::optional<AI::QueryStageId> DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const;
+        /** @brief Draws external provider choices and emits at most one structural edit. */
+        [[nodiscard]] EnvironmentQueryStageChange DrawEnvironmentQueryProviderStages(
+            EnvironmentQueryFields &fields, std::span<const PhysicsQueryChannelChoice> channels) const;
+        /** @brief Draws native point-test editing using only inert descriptors and authored properties. */
+        [[nodiscard]] EnvironmentQueryStageChange DrawGameplayQueryTests(const EnvironmentQueryWorkspaceDocument &document,
+                                                                         EnvironmentQueryFields &fields, bool editable) const;
+        void DrawGameplayQuerySelection(const EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryFields &fields) const;
+        /** @brief Edits one typed gameplay property and reports whether its current input can be applied. */
+        [[nodiscard]] bool DrawGameplayQueryProperty(EnvironmentQueryFields::GameplayProperty &field) const;
+        static void SelectGameplayQueryTest(EnvironmentQueryFields &fields, const AI::QueryTestDescriptor &descriptor,
+                                            const AI::QueryAssetStage *stage);
+        /** @brief Draws typed Perception controls against the current document revision. */
+        void DrawPerceptionQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                         EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws revision-fenced save and history commands shared by editable query kinds. */
+        void DrawEnvironmentQueryHistory(const EnvironmentQueryWorkspaceDocument &document,
+                                         EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws typed settings and emits a single revision-fenced edit/history action. */
+        void DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                          std::span<const PhysicsQueryChannelChoice> channels,
+                                          EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Presents the admitted semantic source without retaining a runtime plan. */
+        bool DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+
+        struct BlackboardViewDraft final {
+            BlackboardDocumentFence fence;
+            std::uint64_t diagnosticKeyRequest{};
+            AI::BlackboardKeyId selected;
+            std::string name;
+            std::string numericDefault;
+            AI::BlackboardKeyDescriptor proposed;
+            std::optional<AI::BlackboardKeyId> replacement;
+            std::size_t usagePage{};
+            std::vector<std::string> rowIds;
+        };
+
+        mutable BlackboardViewDraft m_blackboardDraft;
+
+        /** @brief Uncommitted signed priority tied to one transition and document revision. */
+        struct StateMachinePriorityDraft final {
+            AI::DecisionNodeId transition;
+            std::uint64_t revision{};
+            std::int32_t value{};
+            std::string widgetId;
+        };
+
+        /** @brief Transient selection by semantic identity, scoped to one open graph instance. */
+        struct StateMachineSelection final {
+            DocumentInstanceId instance;
+            AI::DecisionNodeId state;
+            AI::DecisionNodeId target;
+            AI::DecisionNodeId transition;
+            std::optional<StateMachinePriorityDraft> priority{};
+        };
+
+        mutable StateMachineSelection m_stateMachineSelection;
+        mutable DecisionGraphCanvas m_decisionGraphCanvas;
+        mutable std::uint64_t m_playDecisionGraphFocusSeen{};
+        /** @brief Routes neutral canvas selection and link gestures to the ordinary document owner and controls. */
+        void ApplyDecisionCanvasInteraction(const DecisionGraphWorkspaceDocument &document, const DecisionCanvasInteraction &interaction,
+                                            EditorWorkspaceViewCommandData &outCommand) const;
+
+        /** @brief Remembers the selected authored node and exact installed Task in one open tree. */
+        struct BehaviorTreeSelection final {
+            DocumentInstanceId instance;
+            Assets::AssetId subtree;
+            AI::DecisionNodeId node;
+            DecisionTaskPaletteDraft palette;
+        };
+
+        mutable BehaviorTreeSelection m_behaviorTreeSelection;
+
+        /** @brief Typed property drafts stay scoped to one exact document and catalog revision. */
+        struct DecisionTaskPropertyDraft final {
+            DocumentInstanceId instance;
+            AI::DecisionNodeId node;
+            std::uint64_t revision{};
+            std::uint64_t catalogRevision{};
+            AI::BehaviorTreePropertyId property;
+            AI::BehaviorTreeNodeId reference;
+            bool checked{};
+            std::array<char, AI::BehaviorTreeAssetHardLimits::PropertyBytes + 1> text{};
+            std::string fieldScope;
+
+            /** @brief Initializes widget state from the effective value of a newly selected property. */
+            void Select(const AI::BehaviorTreeProperty &effective);
+        };
+
+        struct DecisionTaskPropertyBinding final {
+            AI::DecisionNodeId node;
+            AI::DecisionNodeTypeId type;
+            AI::DecisionVersionRange versions;
+            std::span<const AI::BehaviorTreeProperty> properties;
+        };
+
+        struct DecisionTaskPropertyIntent final {
+            DecisionTaskSelection task;
+            DecisionTaskPropertyEdit property;
+        };
+
+        mutable DecisionTaskPropertyDraft m_behaviorTreeTaskPropertyDraft;
+        mutable DecisionTaskPropertyDraft m_utilityTaskPropertyDraft;
+        mutable std::array<DecisionTaskPropertyDraft, static_cast<std::size_t>(StateMachineTaskPhase::Count)> m_stateTaskPropertyDrafts;
+        /** @brief Offers the installed Task's supported overrides through shared typed controls. */
+        [[nodiscard]] std::optional<DecisionTaskPropertyIntent> DrawDecisionTaskPropertyEditor(
+            const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+            const DecisionTaskPropertyBinding &binding, DecisionTaskPropertyDraft &draft, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws the selected typed field and returns only an explicitly applied value. */
+        [[nodiscard]] std::optional<AI::BehaviorTreePropertyValue> DrawDecisionTaskPropertyValue(
+            const AI::BehaviorTreeProperty &effective, std::string_view label, std::size_t textLimit,
+            std::span<const AI::BehaviorTreeNode> referenceNodes, DecisionTaskPropertyDraft &draft,
+            EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws the current state's precise typed action phases in the property-only document route. */
+        void DrawStateMachineTaskPropertyEditors(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                                                 const AI::StateMachineState &state, EditorWorkspaceViewCommandData &outCommand) const;
+
+        /** @brief Widget selections for one exact task and graph revision. */
+        struct BehaviorTreeQuerySelection final {
+            DocumentInstanceId instance;
+            AI::DecisionNodeId node;
+            std::uint64_t revision{};
+            std::optional<DecisionTaskSelection> task;
+            Assets::AssetId source;
+            AI::BlackboardKeyId key;
+            std::string timeout;
+        };
+
+        mutable BehaviorTreeQuerySelection m_behaviorTreeQuerySelection;
+        /** @brief Draws the saved query review and typed output controls for one Task. */
+        void DrawBehaviorTreeQueryOutput(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                                         const AI::BehaviorTreeNode &node, EditorWorkspaceViewCommandData &outCommand,
+                                         std::optional<DecisionTaskSelection> task = {}) const;
+        /** @brief Draws the reviewed key and tick fields and returns a valid submitted timeout. */
+        std::optional<std::uint32_t> DrawBehaviorTreeQueryFields(const BehaviorTreeQueryReview &review) const;
+
+        /** @brief Bounded numeric text drafts and stable selection for a Utility document. */
+        struct UtilityGraphSelection final {
+            DocumentInstanceId instance;
+            std::uint64_t revision{};
+            AI::DecisionNodeId option;
+            DecisionTaskPaletteDraft palette;
+            std::optional<std::size_t> row;
+            AI::UtilityConsideration score;
+            std::array<std::string, 6> fields;
+        };
+
+        mutable UtilityGraphSelection m_utilityGraphSelection;
+        /** @brief Projects saved Blackboard score inputs and emits typed Utility authoring commands. */
+        void DrawUtilityGraph(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                              EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Projects supported tree topology and emits stable revision-fenced edits. */
+        void DrawBehaviorTreeTopology(const EditorWorkspaceViewModel &viewModel, const DecisionGraphWorkspaceDocument &document,
+                                      EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Projects the active immutable sequence through the shared timeline control. */
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws source-only controls and the isolated stage using shared themed components. */
         bool DrawPrefabDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;

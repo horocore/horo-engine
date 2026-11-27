@@ -2,12 +2,14 @@
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ViewportOverlay.h"
+#include "ViewportPlayCaptions.h"
 #include "ViewportStreamingPreview.h"
-#include "editor/screens/workspace/AssetSceneDrop.h"
-#include "editor/screens/workspace/terrain/TerrainViewportTool.h"
+#include "editor/screens/workspace/assets/AssetSceneDrop.h"
+#include "editor/screens/workspace/terrain/viewport/TerrainViewportTool.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
 #include <algorithm>
@@ -17,6 +19,98 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Presents captions only over the active desktop Play camera. */
+        void DrawDesktopPlayCaptions(ImDrawList &draw, ImVec2 origin, ImVec2 extent, const EditorWorkspaceViewModel &view,
+                                     const EditorGuiContext &context) {
+            if (context.playCaptions && view.playViewSource == EditorPlayViewSource::AuthoredCamera &&
+                (view.playState == EditorPlayState::Playing || view.playState == EditorPlayState::Paused))
+                DrawViewportPlayCaptions(draw, origin, extent, context.theme.fonts, *context.playCaptions);
+        }
+
+        /** @brief Formats an authored vector for the text alternative to a spatial preview. */
+        std::string ReviewValue(const Math::Vec3 &value) {
+            return std::format("({}, {}, {})", value.x, value.y, value.z);
+        }
+
+        /** @brief Keeps rotations in the same XYZW representation as the proposed operation. */
+        std::string ReviewValue(const Math::Quaternion &value) {
+            return std::format("({}, {}, {}, {})", value.x, value.y, value.z, value.w);
+        }
+
+        /** @brief Writes one changed property without asking the user to infer it from the rendered pose. */
+        template <class Value>
+        void DrawReviewTransformChange(const EditorWorkspaceViewModel::AgentSceneReviewView::Transform &target, std::string_view key,
+                                       const Value &before, const Value &after, const EditorGuiContext &context) {
+            if (before == after)
+                return;
+            const auto oldValue = ReviewValue(before);
+            const auto newValue = ReviewValue(after);
+            const auto row = std::vformat(context.localization.Get("editor", key),
+                                          std::make_format_args(target.name, target.object, oldValue, newValue));
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, row, Theme::Text(), context.theme.fonts);
+        }
+
+        /** @brief Keeps review details scrollable so a full review leaves room for the live viewport. */
+        void DrawSceneReviewDetails(const EditorWorkspaceViewModel::AgentSceneReviewView &review, const EditorGuiContext &context) {
+            const auto &localization = context.localization;
+            const auto detailCount = review.renames.size() + review.lights.size() + review.transforms.size();
+            const float lines = static_cast<float>(std::min<std::size_t>(detailCount, 3));
+            const float height = std::min(lines * ImGui::GetTextLineHeightWithSpacing(), ImGui::GetContentRegionAvail().y * 0.25F);
+            if (height <= 0.0F)
+                return;
+            if (ImGui::BeginChild("##SceneReviewDetails", {0, height})) {
+                const auto pattern = localization.Get("editor", "workspace.viewport.agent_review.rename");
+                for (const auto &transform : review.transforms) {
+                    DrawReviewTransformChange(transform, "workspace.viewport.agent_review.position", transform.before.translation,
+                                              transform.after.translation, context);
+                    DrawReviewTransformChange(transform, "workspace.viewport.agent_review.rotation", transform.before.rotation,
+                                              transform.after.rotation, context);
+                    DrawReviewTransformChange(transform, "workspace.viewport.agent_review.scale", transform.before.scale,
+                                              transform.after.scale, context);
+                }
+                for (const auto &rename : review.renames) {
+                    const auto row = std::vformat(pattern, std::make_format_args(rename.before, rename.after, rename.object));
+                    ImGui::TextWrapped("%s", row.c_str());
+                }
+                for (const auto &light : review.lights) {
+                    const auto lightPattern = localization.Get("editor", light.enabled ? "workspace.viewport.agent_review.enable_light"
+                                                                                       : "workspace.viewport.agent_review.disable_light");
+                    const auto row = std::vformat(lightPattern, std::make_format_args(light.name, light.object));
+                    ImGui::TextWrapped("%s", row.c_str());
+                }
+            }
+            ImGui::EndChild();
+        }
+
+        /** @brief Offers an exact local decision next to the preview without exposing the operation to MCP. */
+        void DrawAgentSceneReview(const EditorWorkspaceViewModel::AgentSceneReviewView &review, EditorWorkspaceViewCommandData &command,
+                                  const EditorGuiContext &context) {
+            const auto &localization = context.localization;
+            const auto summary = std::vformat(localization.Get("editor", "workspace.viewport.agent_review.summary"),
+                                              std::make_format_args(review.objectCount));
+            ImGui::TextWrapped("%s", summary.c_str());
+            if (review.requiresSpatialWarning)
+                ImGui::TextWrapped("%s", localization.Get("editor", "workspace.viewport.agent_review.spatial_warning").c_str());
+            if (!review.transforms.empty()) {
+                const auto key = review.hasSpatialPreview ? "workspace.viewport.agent_review.preview_legend"
+                                                          : "workspace.viewport.agent_review.preview_unavailable";
+                ImGui::TextWrapped("%s", localization.Get("editor", key).c_str());
+            }
+            DrawSceneReviewDetails(review, context);
+            const bool confirmImpact = review.requiresSpatialWarning && !review.spatialImpactConfirmed;
+            const auto apply = localization.Get("editor", confirmImpact ? "workspace.viewport.agent_review.confirm_spatial_impact"
+                                                                         : "workspace.viewport.agent_review.apply");
+            const auto discard = localization.Get("editor", "workspace.viewport.agent_review.discard");
+            const bool approved = Ui::Button({.label = apply.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
+            const bool rejected = Ui::Button({.label = discard.c_str(), .style = {.width = Ui::StyleWidth::FillAvailable}});
+            if (approved || rejected) {
+                using enum EditorWorkspaceViewCommandData::AgentSceneReviewDecision::Action;
+                command.command = EditorWorkspaceViewCommand::ResolveAgentSceneReview;
+                const auto action = confirmImpact ? ConfirmSpatialImpact : Apply;
+                command.agentSceneReviewDecision = {review.id, rejected ? Discard : action};
+            }
+        }
+
         [[nodiscard]] std::optional<AssetSceneDragPayload> ReadAssetPayload(const ImGuiPayload *payload) {
             if (payload == nullptr || !payload->IsDataType(AssetSceneDragPayloadType) || payload->Data == nullptr ||
                 payload->DataSize != sizeof(AssetSceneDragPayload))
@@ -94,6 +188,7 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
         contributions_ = context.extensionViewport;
+        offerAgentViewportReview_ = context.offerAgentViewportReview;
         viewportRenderer_ = context.viewportRenderer;
         navigationOverlays_ = context.navigationOverlays;
         navigationProjectRoot_ = context.projectRoot;
@@ -109,6 +204,7 @@ namespace Horo::Editor {
         terrainTool_->Cancel();
         interaction_.Detach();
         contributions_ = nullptr;
+        offerAgentViewportReview_ = {};
         activeContribution_ = {};
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
@@ -147,10 +243,12 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         ImGui::BeginChild("##Content", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
+        if (viewModel.agentSceneReview)
+            DrawAgentSceneReview(*viewModel.agentSceneReview, command, context);
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
-        const float height = size.y;
+        const float height = viewModel.agentSceneReview ? std::max(0.0F, ImGui::GetContentRegionAvail().y) : size.y;
         const float centerX = origin.x + width * 0.5F;
         const float horizon = origin.y + height * 0.38F;
         const float ground = origin.y + height;
@@ -205,6 +303,7 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F) {
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
             DrawViewportStreamingPreview(drawList, origin, {width, height}, viewModel, context, viewportRenderer_->ClipDepthRange());
+            DrawDesktopPlayCaptions(drawList, origin, {width, height}, viewModel, context);
         } else
             interaction_.CancelForUnavailableSurface(command);
 
@@ -214,7 +313,9 @@ namespace Horo::Editor {
                                                      .tool = viewModel.activeTransformTool,
                                                      .gridVisible = gridOverride_.value_or(context.settings.settings.gridOverlay),
                                                      .canFocusSelection = viewModel.primarySelectionWorldBounds.has_value(),
-                                                     .objectCount = viewModel.objects.size()},
+                                                     .objectCount = viewModel.objects.size(),
+                                                     .canReviewWithAgent =
+                                                         offerAgentViewportReview_ && viewModel.playState == EditorPlayState::Idle},
                                 context.theme.fonts, context.localization);
         if (overlay.projection) {
             command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
@@ -231,6 +332,8 @@ namespace Horo::Editor {
         }
         if (overlay.toggleGrid)
             gridOverride_ = !gridOverride_.value_or(context.settings.settings.gridOverlay);
+        if (overlay.reviewWithAgent)
+            offerAgentViewportReview_(command);
         if (!hasRenderedViewport)
             DrawMissingRendererMessage(centerX, origin.y, height, context);
 

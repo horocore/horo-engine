@@ -5,11 +5,14 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
+#include "Horo/Packages/PackageRequest.h"
 #include "editor/modals/packages/PackageModal.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <imgui_internal.h>
 #include <imgui_test_engine/imgui_te_context.h>
+#include <imgui_test_engine/imgui_te_engine.h>
 #include <thread>
 
 namespace {
@@ -31,18 +34,71 @@ namespace {
         EditorModalHost modals{events, input};
         bool unavailable{};
         bool missingFactory{};
+        bool removalReview{};
         unsigned acquisitions{};
         std::optional<PackageOperationSnapshot> operation;
 
-        explicit PackageUi(const bool unavailableInitially = false, const char *locale = "en-US", const bool noFactory = false)
-            : unavailable(unavailableInitially), missingFactory(noFactory) {
+        explicit PackageUi(const bool unavailableInitially = false, const char *locale = "en-US", const bool noFactory = false,
+                           const bool reviewRemoval = false)
+            : unavailable(unavailableInitially), missingFactory(noFactory), removalReview(reviewRemoval) {
             LocalizationError error;
             REQUIRE(localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
                                                      (std::string{locale} + ".json"),
                                                  &error));
             REQUIRE(localization.Prepare(LocaleTag{locale}, &error));
             REQUIRE(localization.ActivatePrepared(&error));
+            if (removalReview)
+                PrepareRemoval();
             Open();
+        }
+
+        /** @brief Supplies a locked asset package and a bounded worker reporting authored removal blockers. */
+        void PrepareRemoval() {
+            using namespace Packages;
+            const auto &graph = application.graph;
+            auto request = ValidatedPackageRequest::Parse(R"({
+                "sources":{"fixture.source":{"kind":"public-registry","registry":"official"}},
+                "dependencies":{"com.horo.application-fixture":{"source":"fixture.source","version":"1.0.0"}}
+            })");
+            REQUIRE(request.HasValue());
+            const PackageResolutionPlan plan{.packages = {{graph.package, graph.version, graph.source, graph.archive.Digest(), {}}}};
+            const PackageLockArtifact artifact{.package = graph.package,
+                                               .version = graph.version,
+                                               .source = graph.source,
+                                               .artifactDigest = graph.archive.Digest(),
+                                               .manifestDigest = graph.archive.PackageManifestDigest(),
+                                               .fileManifestDigest = graph.archive.Manifest().Digest(),
+                                               .contributions = {"assets"}};
+            auto lock = ValidatedPackageLockfileV1::Generate(plan, std::span{&graph.package, 1}, request.Value().Digest(),
+                                                             std::span{&artifact, 1});
+            REQUIRE(lock.HasValue());
+            auto config = application.Configuration();
+            config.restore.expectedRequestHash = request.Value().Digest();
+            config.restore.lockfileJson = lock.Value().SerializeCanonical();
+            config.lockedPlan = std::move(lock).Value();
+            config.portableRequest = std::move(request).Value();
+            config.prepareRemoval = [](const HoroPackageId &, std::shared_ptr<const PackageRemovalLease> reservation) {
+                return Result<PackageRemovalWork>::Success([held = std::move(reservation)](const CancellationToken &) {
+                    if (!held)
+                        return Result<void>::Failure(Error{ErrorCode{"fixture.package.no_reservation"}, ErrorDomainId{"fixture.package"}});
+                    std::vector<Diagnostic> references;
+                    for (unsigned attachment = 1; attachment <= 32; ++attachment)
+                        references.emplace_back(DiagnosticCode{"packages.host.behavior_in_use"}, DiagnosticSeverity::Error,
+                                                 "com.horo.application-fixture", SourceLocation{"Assets/Scene.horoasset"},
+                                                 "7/" + std::to_string(attachment));
+                    references.emplace_back(DiagnosticCode{"packages.host.decision_subplan_missing"}, DiagnosticSeverity::Error,
+                                             "770001", SourceLocation{"Assets/Guard.decision.json"}, "920003");
+                    references.emplace_back(DiagnosticCode{"packages.host.runtime_registration_unavailable"}, DiagnosticSeverity::Error,
+                                             "com.horo.provider", SourceLocation{"extensions/ai/extension.json"}, "gameplay.ai");
+                    return Result<void>::Failure(Error{ErrorCode{"packages.host.behavior_in_use"}, ErrorDomainId{"packages.host"},
+                                                       ErrorSeverity::Error, "", std::move(references)});
+                });
+            };
+            REQUIRE(application.application->Close().HasValue());
+            auto created = PackageApplication::Create(application.jobs, *application.restore, application.install,
+                                                       *application.lifecycle, std::move(config));
+            REQUIRE(created.HasValue());
+            application.application = std::move(created).Value();
         }
 
         void Open() {
@@ -57,7 +113,7 @@ namespace {
                         // The enclosing fixture retains ownership until the modal and its callbacks have retired.
                     }});
                 };
-            auto modal = std::make_unique<PackageModal>(context, std::move(acquire));
+            auto modal = std::make_unique<PackageModal>(context, std::move(acquire), false, [this] { return removalReview; });
             REQUIRE(modals.OpenRoot(std::move(modal)).HasValue());
         }
 
@@ -316,6 +372,47 @@ namespace {
         REQUIRE(fixture.application.application->Plan().Value());
         CHECK(fixture.application.application->Plan().Value()->packages.front().verification == PackagePlanVerification::ArchiveVerified);
         CHECK_FALSE(fixture.application.lifecycle->Active());
+    }
+
+    TEST_CASE("Package removal can navigate every page of saved references", "[ui][imgui][editor][packages]") {
+        PackageUi fixture{false, "en-US", false, true};
+        std::string visibleText;
+        const auto result = fixture.harness.Run("horo_packages", "removal_reference_pages", [&](ImGuiTestContext *) {
+            ImGui::LogToBuffer();
+            fixture.Frame();
+            visibleText = ImGui::GetCurrentContext()->LogBuffer.c_str();
+            ImGui::LogFinish();
+        }, [&](ImGuiTestContext *ctx) {
+            ctx->Yield(2);
+            Click(*ctx, "Install verified packages");
+            IM_CHECK(AwaitTerminal(*ctx, fixture, PackageOperationKind::Install));
+            IM_CHECK(fixture.operation->outcome == PackageOperationOutcome::Succeeded);
+            ctx->ItemInputValue("//**/##PackageIdentity", "com.horo.application-fixture");
+            Click(*ctx, "Preview removal from the locked graph");
+            Click(*ctx, "Remove reviewed package");
+            IM_CHECK(AwaitTerminal(*ctx, fixture, PackageOperationKind::Remove));
+            IM_CHECK(fixture.operation->outcome == PackageOperationOutcome::Failed);
+            IM_CHECK(fixture.operation->diagnostic.has_value());
+            IM_CHECK_EQ(fixture.operation->diagnostic->diagnostics.size(), 34U);
+            ctx->Yield();
+            IM_CHECK((ctx->ItemInfo("//**/Previous references").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+            IM_CHECK(visibleText.find("Assets/Guard.decision.json") == std::string::npos);
+            Click(*ctx, "Next references");
+            ctx->Yield();
+            IM_CHECK((ctx->ItemInfo("//**/Next references").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+            IM_CHECK(visibleText.find("Decision subplan could not be found") != std::string::npos);
+            IM_CHECK(visibleText.find("Assets/Guard.decision.json") != std::string::npos);
+            IM_CHECK(visibleText.find("920003") != std::string::npos);
+            IM_CHECK(visibleText.find("770001") != std::string::npos);
+            IM_CHECK(visibleText.find("Runtime module ownership needs verification") != std::string::npos);
+            IM_CHECK(visibleText.find("extensions/ai/extension.json") != std::string::npos);
+            IM_CHECK(visibleText.find("gameplay.ai") != std::string::npos);
+            IM_CHECK(visibleText.find("com.horo.provider") != std::string::npos);
+            Click(*ctx, "Previous references");
+            ctx->Yield();
+            IM_CHECK((ctx->ItemInfo("//**/Previous references").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        }, Horo::Tests::EditorUiScenarioBudget::Extended(kPackageAsyncFrameBudget));
+        CheckRun(result);
     }
 
     TEST_CASE("Closing and reopening package modal retains running work until its real cancellation acknowledgment",

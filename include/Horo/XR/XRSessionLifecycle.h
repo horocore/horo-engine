@@ -5,16 +5,19 @@
  * @brief Backend-neutral XR session activation, runtime-event state, and generation fencing.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/XR/XRFeatureNegotiation.h"
 
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <thread>
 
 namespace Horo::XR {
     namespace RuntimeInternal {
         class XRSessionHostControl;
-    }
+        class XRTrackingPublication;
+    }  // namespace RuntimeInternal
     /** @brief Ordered host-composition resource boundaries; native values remain in the selected adapter. */
     enum class XRSessionPreparation : std::uint8_t {
         PlatformLoader,
@@ -52,6 +55,9 @@ namespace Horo::XR {
         InstanceLost,
         Ready /**< Native Ready for the same retained owner after Idle; never creates or rediscovers a session. */
     };
+
+    /** @brief Resolves a canonical event without issuing identity or mutating a session. */
+    [[nodiscard]] std::optional<XRSessionState> NextXRSessionState(XRSessionState current, XRSessionEvent event) noexcept;
 
     /** @brief Fixed-size state publication; consumers must revalidate its exact session before use. */
     struct XRSessionSnapshot final {
@@ -96,8 +102,10 @@ namespace Horo::XR {
     /**
      * @brief Single-thread-affine session coordinator; host stops producers before destruction.
      *
-     * No method may race another method. Normal event/admission success is fixed work with no allocation, blocking I/O,
-     * native call or CPU-GPU synchronization. Activation, replacement and shutdown are host lifecycle operations.
+     * Construct, activate, apply selected-runtime events, admit work and destroy on the same control thread.
+     * Other threads can request cancellation through the caller-owned token. They cannot read or mutate the live
+     * coordinator. Normal event/admission success is fixed work with no allocation, blocking I/O, native call or
+     * CPU-GPU synchronization. Activation, replacement and shutdown are host lifecycle operations.
      */
     class XRSessionLifecycle final {
     public:
@@ -115,17 +123,19 @@ namespace Horo::XR {
          * @param activeSystem System currently selected by host preflight, including its runtime generation.
          * @param expectedRevision Capability revision retained by the host's accepted plan.
          * @param plan Complete immutable profile and optional-feature decision accepted before resource preparation.
-         * @return New session ID, or typed admission/activation failure with the adapter cause preserved.
+         * @param cancellation Cooperative cancellation sampled before preparation, between stages and before commit.
+         * @return New session ID, or typed wrong-thread, cancellation or activation failure with the adapter cause preserved.
          * @post Failure leaves the prior publication unchanged and retires only the candidate's completed stages.
          */
         [[nodiscard]] Result<XRSessionId> Activate(const XRCapabilitySnapshot &capabilities, const XRSystemId &activeSystem,
-                                                   XRCapabilityRevision expectedRevision, const XRFeaturePlan &plan);
+                                                   XRCapabilityRevision expectedRevision, const XRFeaturePlan &plan,
+                                                   const CancellationToken &cancellation = {});
 
         /**
          * @brief Applies a selected-runtime event to its exact published generation.
          * @param source Session generation carried by the normalized backend event.
          * @param event Closed event vocabulary; delayed foreign generations fail stale without state mutation.
-         * @return Success for legal or duplicate events, otherwise a typed stale/invalid-transition failure.
+         * @return Success for legal or duplicate events, otherwise a typed wrong-thread, stale or invalid-transition failure.
          * @pre The selected backend validates its native incarnation before normalizing an event.
          * @post Idle closes publication while retaining the exact accepted plan and resources. Ready may republish only
          * that same inactive owner, without preparation or a new generation. Loss, replacement and shutdown revoke this
@@ -137,30 +147,36 @@ namespace Horo::XR {
          * @brief Checks frame/action admission and exact current generation before downstream work.
          * @param session Candidate owner retained by a consumer.
          * @param needsFocus Whether the operation requires focused action admission.
-         * @return Success or typed invalid, stale, or unavailable failure without native access.
+         * @return Success or typed wrong-thread, invalid, stale or unavailable failure without native access.
          */
         [[nodiscard]] Result<void> Admit(const XRSessionId &session, bool needsFocus) const;
 
-        /** @brief Returns a fixed-size copy of the current state. @return Generation-fenced state publication. */
+        /** @brief Returns a fixed-size copy of the current state. @return Generation-fenced publication or empty off owner. */
         [[nodiscard]] XRSessionSnapshot Snapshot() const noexcept;
 
-        /** @brief Copy the active immutable decision plan, if a session remains published. @return Fixed-size plan or no value. */
+        /** @brief Copy the active immutable decision plan on its control thread. @return Fixed-size plan or no value. */
         [[nodiscard]] std::optional<XRFeaturePlan> AcceptedPlan() const noexcept;
 
-        /** @brief Closes admission and retires resources in reverse order; idempotent. */
+        /** @brief Closes admission and retires resources in reverse order; idempotent and ignored off owner. */
         void Shutdown() noexcept;
 
     private:
+        friend class XRFrameLifecycle;
+        friend class XRSpatialAnchors;
         friend class RuntimeInternal::XRSessionHostControl;
-        static constexpr std::size_t PreparationCount = static_cast<std::size_t>(XRSessionPreparation::Count);
+        friend class RuntimeInternal::XRTrackingPublication;
+        /** @brief Tests immutable control-thread identity before accessing owner state. */
+        [[nodiscard]] bool IsOwnerThread() const noexcept;
 
         void Retire(const XRSessionId &session) noexcept;
         void PublishState(XRSessionState state) noexcept;
 
         IXRSessionResources *resources_;
+        const std::thread::id owner_{std::this_thread::get_id()};
         XRSessionId ownedSession_{};
         XRSessionSnapshot snapshot_{};
         std::optional<XRFeaturePlan> acceptedPlan_;
+        std::uint64_t trackingContinuity_{};  // Owner lane; zero means no further cutoffs for this session.
         std::uint32_t lastSessionGeneration_{};
         bool destroyed_{};
     };

@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "McpAuditTelemetry.h"
 
 #include <algorithm>
 #include <array>
@@ -67,10 +68,24 @@ namespace Horo::Mcp {
             std::shared_ptr<const McpToolSnapshot> snapshot;
             OperationState state{OperationState::Queued};
             std::optional<nlohmann::json> result;
+            std::optional<McpResultLease> resultLease;
             std::optional<Error> error;
             std::optional<double> progress;
             std::string phase;
+            std::chrono::steady_clock::time_point auditStarted;
         };
+
+        /** @brief Reports a registered operation without serializing any wire or application payload. */
+        void AuditOperation(const std::string_view event, const Operation &operation) noexcept {
+            EmitMcpAudit({.event = event,
+                          .principal = operation.context.authority->AuditIdentity(),
+                          .session = operation.session,
+                          .operation = operation.id,
+                          .tool = operation.tool.value,
+                          .status = Name(operation.state),
+                          .elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                                           operation.auditStarted)});
+        }
 
         [[nodiscard]] nlohmann::json View(const Operation &operation) {
             nlohmann::json value = {{"schemaVersion", 1},
@@ -116,6 +131,7 @@ namespace Horo::Mcp {
         std::unordered_map<std::uint64_t, std::shared_ptr<Operation>> operations;
         std::deque<std::uint64_t> recent;
         std::uint64_t nextId{1};
+        std::uint64_t activeRevision{1};
         std::size_t pending{};
         std::size_t active{};
         std::size_t callbacks{};
@@ -142,6 +158,7 @@ namespace Horo::Mcp {
             }
             --active;
             operation->state = terminal;
+            ++activeRevision;
             operation->error = std::move(error);
             operation->result = std::move(result);
             operation->phase.clear();
@@ -149,6 +166,7 @@ namespace Horo::Mcp {
             if (prune)
                 PruneRecent();
             drained.notify_all();
+            AuditOperation("operation.finished", *operation);
         }
 
         /** @brief Makes deadline and cancellation priority explicit at every state boundary. */
@@ -187,6 +205,46 @@ namespace Horo::Mcp {
             }
         }
 
+        /** @brief Binds one live source lease before an adapter completes its sensitive response. */
+        bool BindResultLease(std::uint64_t id, McpResultLease lease) {
+            std::lock_guard lock{mutex};
+            const auto found = operations.find(id);
+            if (found == operations.end() || found->second->state != OperationState::Running || found->second->resultLease ||
+                !lease.IsLive())
+                return false;
+            found->second->resultLease = std::move(lease);
+            return true;
+        }
+
+        /** @brief Emits a leased payload only once, exclusively through operations/get. Requires mutex. */
+        Result<nlohmann::json> ReadOperation(Operation &operation, bool consumeResult) {
+            using Output = Result<nlohmann::json>;
+            if (!operation.resultLease || operation.state != OperationState::Succeeded)
+                return Output::Success(View(operation));
+            if (!operation.result || !operation.resultLease->IsLive() || operation.context.authority->IsStopRequested()) {
+                operation.result.reset();
+                return Output::Failure(MakeError(McpErrors::OperationUnavailable));
+            }
+            if (!consumeResult)
+                return Output::Failure(MakeError(McpErrors::OperationUnavailable));
+            auto view = View(operation);
+            operation.result.reset();
+            return Output::Success(std::move(view));
+        }
+
+        /** @brief Routes adapter callbacks to the exact operation without retaining the controller. */
+        void BindAdapterCallbacks(Operation &operation) {
+            const auto controller = weak_from_this();
+            operation.context.reportProgress = [controller, id = operation.id](const double fraction, std::string phase) {
+                if (const auto state = controller.lock())
+                    state->ReportProgress(id, fraction, std::move(phase));
+            };
+            operation.context.bindResultLease = [controller, id = operation.id](McpResultLease lease) {
+                const auto state = controller.lock();
+                return state && state->BindResultLease(id, std::move(lease));
+            };
+        }
+
         /** @brief Admits one request and retains its snapshot under the bounded queue lock. */
         [[nodiscard]] Result<nlohmann::json> QueueCall(const McpRequest &request, const McpRequestContext &context, McpToolId tool,
                                                        const McpOwnerContext owner, std::shared_ptr<const McpToolSnapshot> snapshot) {
@@ -202,6 +260,7 @@ namespace Horo::Mcp {
             }
             auto operation = std::make_shared<Operation>();
             operation->id = nextId++;
+            operation->auditStarted = std::chrono::steady_clock::now();
             operation->requestId = request.id;
             operation->session = context.session;
             operation->tool = std::move(tool);
@@ -210,16 +269,15 @@ namespace Horo::Mcp {
             operation->context.requestIdentity = request.id;
             operation->cancellation = CancellationSource{context.cancellation};
             operation->context.cancellation = operation->cancellation.Token();
-            operation->context.reportProgress = [weak = weak_from_this(), id = operation->id](const double fraction, std::string phase) {
-                if (const auto state = weak.lock())
-                    state->ReportProgress(id, fraction, std::move(phase));
-            };
+            BindAdapterCallbacks(*operation);
             operation->owner = owner;
             operation->snapshot = std::move(snapshot);
             operations.try_emplace(operation->id, operation);
             queues[Index(owner)].push_back(operation);
             ++pending;
             ++active;
+            ++activeRevision;
+            AuditOperation("operation.queued", *operation);
             StopIfRequested(operation);
             return Result<nlohmann::json>::Success(View(*operation));
         }
@@ -229,7 +287,9 @@ namespace Horo::Mcp {
             std::lock_guard lock{mutex};
             try {
                 if (operation && !StopIfRequested(operation)) {
-                    if (outcome.HasValue())
+                    if (operation->resultLease && !operation->resultLease->IsLive())
+                        Finish(operation, OperationState::Failed, MakeError(McpErrors::OperationUnavailable));
+                    else if (outcome.HasValue())
                         Finish(operation, OperationState::Succeeded, {}, std::move(outcome).Value());
                     else
                         Finish(operation, OperationState::Failed, outcome.ErrorValue());
@@ -254,6 +314,28 @@ namespace Horo::Mcp {
     }
 
     McpController::McpController(ConstructionKey, std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    /** @copydoc McpController::ReadActiveRequests */
+    Result<std::optional<McpActiveRequestSnapshot>> McpController::ReadActiveRequests(const McpRequestContext &context,
+                                                                                      const std::uint64_t knownRevision) const {
+        using Outcome = Result<std::optional<McpActiveRequestSnapshot>>;
+        if (!context.session.IsValid() || context.authorization != state_->authorization)
+            return Outcome::Failure(MakeError(McpErrors::AuthorizationDenied));
+        std::lock_guard lock{state_->mutex};
+        if (const auto authorized = state_->authorization->Validate(context); authorized.HasError())
+            return Outcome::Failure(authorized.ErrorValue());
+        if (state_->stopping)
+            return Outcome::Failure(MakeError(McpErrors::ShuttingDown));
+        if (knownRevision == state_->activeRevision)
+            return Outcome::Success(std::nullopt);
+        McpActiveRequestSnapshot snapshot{.revision = state_->activeRevision};
+        for (const auto &[id, operation] : state_->operations) {
+            if (operation->session == context.session && operation->context.authority == context.authority && !Terminal(operation->state))
+                snapshot.requests.push_back({id, operation->tool.value, operation->state == OperationState::Running});
+        }
+        std::ranges::sort(snapshot.requests, {}, &McpActiveRequest::id);
+        return Outcome::Success(std::move(snapshot));
+    }
 
     McpController::~McpController() noexcept {
         try {
@@ -312,7 +394,7 @@ namespace Horo::Mcp {
         } else {
             state_->StopIfRequested(operation);
         }
-        return Result<nlohmann::json>::Success(View(*operation));
+        return state_->ReadOperation(*operation, request.method == "operations/get");
     }
 
     /** @copydoc McpController::DispatchCall */
@@ -340,8 +422,14 @@ namespace Horo::Mcp {
         if (effect.HasError())
             return Result<nlohmann::json>::Failure(effect.ErrorValue());
         if (const auto approval = state_->authorization->Authorize(context, request, effect.Value() != McpToolEffect::Query, false);
-            approval.HasError())
+            approval.HasError()) {
+            EmitMcpAudit({.event = "operation.rejected",
+                          .principal = context.authority->AuditIdentity(),
+                          .session = context.session,
+                          .tool = tool.value,
+                          .status = "authorization_denied"});
             return Result<nlohmann::json>::Failure(approval.ErrorValue());
+        }
         return state_->QueueCall(request, context, tool, owner.Value(), snapshot);
     }
 
@@ -432,6 +520,8 @@ namespace Horo::Mcp {
             queue.pop_front();
             --state->pending;
             operation->state = OperationState::Running;
+            ++state->activeRevision;
+            AuditOperation("operation.started", *operation);
             ++state->callbacks;
         }
         auto complete = [state, weakOperation = std::weak_ptr<Operation>{operation}, completed](Result<nlohmann::json> outcome) {

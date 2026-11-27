@@ -3,7 +3,10 @@
 /** @file NetworkProductLaunchOptions.h
  * @brief Sole typed parser boundary for network mode, endpoints, gameplay selection and optional real Scene input.
  */
+#include "HeadlessCookedDecisionAdmission.h"
+#include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
+#include "HeadlessReplayArtifact.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkModeComposition.h"
 
@@ -20,6 +23,14 @@ namespace Horo::Application::Internal {
         Network::NetworkAddress connect;
         std::optional<GameplayWorldSelection> gameplay;
         HeadlessProjectSceneOptions sceneInput;
+        std::vector<HeadlessCookedDecisionBinding> cookedDecisionBindings;
+        Runtime::SceneObjectId aiSimulationAnchor; /**< Optional stable object in the selected authoritative Scene. */
+        Assets::AssetId reducedPopulation;
+        std::size_t maximumReducedPromotions{};
+        std::optional<AI::AiMissingControllerPolicy> aiMissingController;
+        std::optional<HeadlessNavigationPathPolicy> navigationPath;
+        std::shared_ptr<HeadlessDecisionReplay> decisionReplay;
+        std::optional<HeadlessReplayOutput> decisionReplayOutput;
     };
 
     /** @brief Parses existing positional network modes plus explicit optional Scene input without native activation.

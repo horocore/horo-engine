@@ -9,25 +9,26 @@
 namespace Horo::Platform::Android {
     /** @brief Compose native sensor discovery and private Java permission callbacks on the application owner. */
     GameActivityInput::GameActivityInput(android_app &app, Input::RawInputCollector &collector, const std::array<bool, 3> admittedSensors)
-        : app_(app), session_(collector) {
+        : app_(app), session_(collector), jni_(app.activity ? app.activity->vm : nullptr) {
         if (!BindJava())
             return;
-        const auto type = env_->GetObjectClass(app_.activity->javaGameActivity);
-        const auto nameMethod = env_->GetMethodID(type, "getPackageName", "()Ljava/lang/String;");
-        const auto package = nameMethod && !env_->ExceptionCheck()
-                                 ? static_cast<jstring>(env_->CallObjectMethod(app_.activity->javaGameActivity, nameMethod))
+        auto *env = jni_.Environment();
+        const auto type = env->GetObjectClass(app_.activity->javaGameActivity);
+        const auto nameMethod = type ? env->GetMethodID(type, "getPackageName", "()Ljava/lang/String;") : nullptr;
+        const auto package = nameMethod && !env->ExceptionCheck()
+                                 ? static_cast<jstring>(env->CallObjectMethod(app_.activity->javaGameActivity, nameMethod))
                                  : nullptr;
-        if (package && !env_->ExceptionCheck()) {
-            const char *name = env_->GetStringUTFChars(package, nullptr);
+        if (package && !env->ExceptionCheck()) {
+            const char *name = env->GetStringUTFChars(package, nullptr);
             if (name) {
                 manager_ = ASensorManager_getInstanceForPackage(name);
-                env_->ReleaseStringUTFChars(package, name);
+                env->ReleaseStringUTFChars(package, name);
             }
         }
-        env_->DeleteLocalRef(package);
-        env_->DeleteLocalRef(type);
-        if (env_->ExceptionCheck())
-            env_->ExceptionClear();
+        env->DeleteLocalRef(package);
+        env->DeleteLocalRef(type);
+        if (env->ExceptionCheck())
+            env->ExceptionClear();
         if (manager_)
             queue_ = ASensorManager_createEventQueue(manager_, app_.looper, LOOPER_ID_USER + 1, nullptr, nullptr);
         constexpr std::array types{ASENSOR_TYPE_ACCELEROMETER, ASENSOR_TYPE_GYROSCOPE, ASENSOR_TYPE_STEP_COUNTER};
@@ -49,10 +50,10 @@ namespace Horo::Platform::Android {
 
     /** @brief Stop and detach Java producers before releasing native callback storage or sensors. */
     GameActivityInput::~GameActivityInput() {
-        if (env_ && detach_) {
-            env_->CallVoidMethod(app_.activity->javaGameActivity, detach_, reinterpret_cast<jlong>(this));
-            if (env_->ExceptionCheck())
-                env_->ExceptionClear();
+        if (auto *env = jni_.Environment(); env && detach_) {
+            env->CallVoidMethod(app_.activity->javaGameActivity, detach_, reinterpret_cast<jlong>(this));
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
         }
         session_.Shutdown();
         if (queue_) {
@@ -61,39 +62,31 @@ namespace Horo::Platform::Android {
                     ASensorEventQueue_disableSensor(queue_, sensor);
             ASensorManager_destroyEventQueue(manager_, queue_);
         }
-        if (attached_)
-            app_.activity->vm->DetachCurrentThread();
     }
 
     /** @brief Register a per-Activity callback without a process-global native pointer. */
     bool GameActivityInput::BindJava() noexcept {
-        auto *vm = app_.activity->vm;
-        void *environment{};
-        const auto state = vm->GetEnv(&environment, JNI_VERSION_1_6);
-        if (state == JNI_EDETACHED) {
-            if (vm->AttachCurrentThread(&env_, nullptr) != JNI_OK)
-                return false;
-            attached_ = true;
-        } else if (state == JNI_OK)
-            env_ = static_cast<JNIEnv *>(environment);
-        if (!env_)
+        auto *env = jni_.Environment();
+        if (!env || !app_.activity->javaGameActivity)
             return false;
-        jclass type = env_->GetObjectClass(app_.activity->javaGameActivity);
-        if (!type)
+        jclass type = env->GetObjectClass(app_.activity->javaGameActivity);
+        if (!type) {
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
             return false;
+        }
         const JNINativeMethod callback{const_cast<char *>("horoInputEvent"), const_cast<char *>("(JII)V"),
                                        reinterpret_cast<void *>(&Callback)};
-        const auto bind = env_->GetMethodID(type, "horoBindInput", "(J)V");
-        detach_ = env_->GetMethodID(type, "horoDetachInput", "(J)V");
-        request_ = env_->GetMethodID(type, "horoRequestActivityRecognition", "()V");
-        const bool registered =
-            !env_->ExceptionCheck() && bind && detach_ && request_ && env_->RegisterNatives(type, &callback, 1) == JNI_OK;
-        env_->DeleteLocalRef(type);
+        const auto bind = env->GetMethodID(type, "horoBindInput", "(J)V");
+        detach_ = bind ? env->GetMethodID(type, "horoDetachInput", "(J)V") : nullptr;
+        request_ = detach_ ? env->GetMethodID(type, "horoRequestActivityRecognition", "()V") : nullptr;
+        const bool registered = !env->ExceptionCheck() && request_ && env->RegisterNatives(type, &callback, 1) == JNI_OK;
+        env->DeleteLocalRef(type);
         if (registered)
-            env_->CallVoidMethod(app_.activity->javaGameActivity, bind, reinterpret_cast<jlong>(this));
-        const bool failed = env_->ExceptionCheck();
+            env->CallVoidMethod(app_.activity->javaGameActivity, bind, reinterpret_cast<jlong>(this));
+        const bool failed = env->ExceptionCheck();
         if (failed)
-            env_->ExceptionClear();
+            env->ExceptionClear();
         return registered && !failed;
     }
 
@@ -156,10 +149,11 @@ namespace Horo::Platform::Android {
         if (status_ != InputAdmission::Accepted || !request_)
             return false;
         static_cast<void>(session_.ConfigureSensor(SensorKind::StepCounter, sensors_[2] != nullptr, true));
-        env_->CallVoidMethod(app_.activity->javaGameActivity, request_);
-        if (!env_->ExceptionCheck())
+        auto *env = jni_.Environment();
+        env->CallVoidMethod(app_.activity->javaGameActivity, request_);
+        if (!env->ExceptionCheck())
             return true;
-        env_->ExceptionClear();
+        env->ExceptionClear();
         static_cast<void>(session_.SetPermission(PermissionState::Denied));
         return false;
     }

@@ -18,6 +18,12 @@ verifiable source in `packages.json` or `packages.lock`.
 Bootstrap, CI, CLI, MCP, and editor project-open flows use the same
 `PackageRestore` operation.
 
+Update staging uses the same restore verification with an explicit lock and
+project root. The completed operation yields an immutable record of the verified
+graph, the admitted root, and the digest of the exact candidate lock bytes.
+Staging leaves the active graph alone. The update transaction consumes the
+record after rechecking current project authority and approval.
+
 ## Restore Use Case
 
 `project restore` is separate from package install. Restore reconstructs the
@@ -260,6 +266,13 @@ package://com.vendor.humanoid-animation-pack/animations/walk.anim
 On a new machine, restore fetches the package and the reference resolves again.
 Imported project assets use project GUIDs and keep source-package provenance as
 metadata only.
+
+An installed-record mount read resolves the package and optional explicit
+version against the exact verified graph. It accepts canonical,
+non-executable inventory members under the currently supported `assets/` root
+and requires the lock to declare the asset contribution. The caller supplies a
+byte limit and receives owned bytes from the verified archive. File reads do
+not change enablement or choose another installed version.
 
 ## Bootstrap Integration
 

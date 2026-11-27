@@ -3,9 +3,35 @@
 
 #include <algorithm>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Checks the scalar stereo attachment shape supported by the Vulkan copy command. */
+        bool IsStereoCoverageAttachment(const RenderTextureDescriptor &texture, const std::size_t eyeCount) {
+            return texture.format == RenderTextureFormat::R32Float && texture.layerCount == eyeCount && texture.sampleCount == 1 &&
+                   texture.mipCount == 1 &&
+                   HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource);
+        }
+
+        /** @brief Checks an exact tightly packed host staging allocation. */
+        bool IsReadbackStaging(const RenderBufferDescriptor &buffer, const std::size_t bytes) {
+            return buffer.access == RenderBufferAccess::HostVisible && buffer.usage == RenderBufferUsage::CopyDestination &&
+                   buffer.byteSize == bytes;
+        }
+
+        /** @brief Requires a resolved two-dimensional RGBA8 color attachment before native readback. */
+        bool IsColorReadbackTexture(const RenderTextureDescriptor &texture) {
+            return texture.dimension == RenderTextureDimension::TwoD && texture.format == RenderTextureFormat::Rgba8Unorm &&
+                   texture.mipCount == 1 && texture.layerCount == 1 && texture.sampleCount == 1 &&
+                   HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource);
+        }
+
+        /** @brief Verifies both image bounds and Vulkan's signed native image offset range. */
+        bool FitsCoverageCopy(const MultiviewRenderRectangle &tile, const FramebufferExtent extent) {
+            return tile.Fits(extent) && std::in_range<std::int32_t>(tile.x) && std::in_range<std::int32_t>(tile.y);
+        }
+
         /** @brief Updates only admitted multiview attachment contents in the existing transactional scratch journal. */
         void PrepareMultiviewContents(const RenderGraphMultiview &workload, const std::span<const VulkanGraphResource> bindings,
                                       const std::span<VulkanGraphResourceState> states) {
@@ -67,6 +93,49 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateStereoCoverageCopy */
+    Result<void> VulkanGraphRuntime::Impl::ValidateStereoCoverageCopy(const RenderGraphStereoCoverageCopy &copy) {
+        if (!native.copyImageToBuffer)
+            return Result<void>::Failure(Unsupported("Coverage readback requires Vulkan image-to-buffer copy support."));
+        const auto &source = bindings[copy.source.value - 1];
+        const auto &destination = bindings[copy.destination.value - 1];
+        const auto &texture = source.textureDescriptor;
+        const auto bytes = copy.PackedBytes();
+        if (!source.image || !destination.buffer || !IsStereoCoverageAttachment(texture, copy.tiles.size()) ||
+            !IsReadbackStaging(destination.bufferDescriptor, bytes))
+            return Result<void>::Failure(Invalid("Coverage readback resident formats, usage or coherent staging extent differ."));
+        if (!std::ranges::all_of(copy.tiles, [&](const auto &tile) {
+            return FitsCoverageCopy(tile, texture.extent);
+        }))
+            return Result<void>::Failure(Invalid("Coverage readback rectangle exceeds its exact eye attachment."));
+        auto &state = states[copy.destination.value - 1];
+        state.contentsDefined = true;
+        state.readbackBytes = bytes;
+        state.readbackKind = VulkanReadbackKind::StereoCoverage;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::ValidateColorReadback */
+    Result<void> VulkanGraphRuntime::Impl::ValidateColorReadback(const RenderGraphColorReadback &readback) {
+        if (!native.copyImageToBuffer)
+            return Result<void>::Failure(Unsupported("Color readback requires Vulkan image-to-buffer copy support."));
+        const auto sourceIndex = readback.source.value - 1;
+        const auto destinationIndex = readback.destination.value - 1;
+        const auto &source = bindings[sourceIndex];
+        const auto &destination = bindings[destinationIndex];
+        if (!source.image || !destination.buffer || !IsColorReadbackTexture(source.textureDescriptor) ||
+            !IsReadbackStaging(destination.bufferDescriptor, readback.PackedBytes()))
+            return Result<void>::Failure(Invalid("Color readback requires resolved RGBA8 and exact coherent staging."));
+        if (!states[sourceIndex].contentsDefined || !readback.Fits(source.textureDescriptor.extent) ||
+            !std::in_range<std::int32_t>(readback.x) || !std::in_range<std::int32_t>(readback.y))
+            return Result<void>::Failure(Invalid("Color readback requires defined pixels within the exact source extent."));
+        auto &state = states[destinationIndex];
+        state.contentsDefined = true;
+        state.readbackBytes = readback.PackedBytes();
+        state.readbackKind = VulkanReadbackKind::Color;
+        return Result<void>::Success();
+    }
+
     Result<void> VulkanGraphRuntime::Impl::ValidateColor(const RenderGraphColorAttachment &operation, RenderQueueId queue) {
         const auto *color = &operation;
 
@@ -108,6 +177,10 @@ namespace Horo::Render::Detail {
             return ValidateBufferCopy(*copy);
         if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
             return ValidateTextureUpload(*upload);
+        if (const auto *copy = std::get_if<RenderGraphStereoCoverageCopy>(&workload))
+            return ValidateStereoCoverageCopy(*copy);
+        if (const auto *readback = std::get_if<RenderGraphColorReadback>(&workload))
+            return ValidateColorReadback(*readback);
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload))
             return ValidateColor(*color, queue);
         if (std::holds_alternative<PrimaryOutputAttachment>(workload))
@@ -159,6 +232,61 @@ namespace Horo::Render::Detail {
         copyImage(command, &copy);
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeStereoCoverageCopy */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeStereoCoverageCopy(const VkCommandBuffer command,
+                                                                      const RenderGraphStereoCoverageCopy &copy,
+                                                                      const std::span<const VulkanGraphResource> resident) const noexcept {
+        std::array<VkBufferImageCopy2, 2> regions{};
+        VkDeviceSize offset{};
+        for (std::uint32_t eye = 0; eye < regions.size(); ++eye) {
+            const auto &tile = copy.tiles[eye];
+            regions[eye] = {.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                            .bufferOffset = offset,
+                            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, eye, 1},
+                            .imageOffset = {static_cast<std::int32_t>(tile.x), static_cast<std::int32_t>(tile.y), 0},
+                            .imageExtent = {tile.width, tile.height, 1}};
+            offset += static_cast<VkDeviceSize>(tile.width) * tile.height * sizeof(float);
+        }
+        EncodeImageReadback(command, resident[copy.source.value - 1].image, resident[copy.destination.value - 1].buffer, regions, offset);
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeColorReadback */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeColorReadback(VkCommandBuffer command, const RenderGraphColorReadback &readback,
+                                                                 std::span<const VulkanGraphResource> resident) const noexcept {
+        const VkBufferImageCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                        .imageOffset = {static_cast<std::int32_t>(readback.x), static_cast<std::int32_t>(readback.y), 0},
+                                        .imageExtent = {readback.extent.width, readback.extent.height, 1}};
+        EncodeImageReadback(command, resident[readback.source.value - 1].image, resident[readback.destination.value - 1].buffer,
+                            std::span{&region, 1}, readback.PackedBytes());
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeImageReadback */
+    void VulkanGraphRuntime::Impl::Dispatch::EncodeImageReadback(VkCommandBuffer command, VkImage image, VkBuffer buffer,
+                                                                 std::span<const VkBufferImageCopy2> regions,
+                                                                 VkDeviceSize bytes) const noexcept {
+        const VkCopyImageToBufferInfo2 transfer{.sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+                                                .srcImage = image,
+                                                .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                .dstBuffer = buffer,
+                                                .regionCount = static_cast<std::uint32_t>(regions.size()),
+                                                .pRegions = regions.data()};
+        copyImageToBuffer(command, &transfer);
+        const VkBufferMemoryBarrier2 hostVisibility{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                                    .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                                    .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                                                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                    .buffer = buffer,
+                                                    .size = bytes};
+        const VkDependencyInfo dependency{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                          .bufferMemoryBarrierCount = 1,
+                                          .pBufferMemoryBarriers = &hostVisibility};
+        barrier(command, &dependency);
+    }
+
     /** @copydoc VulkanGraphRuntime::Impl::Dispatch::EncodeColor */
     void VulkanGraphRuntime::Impl::Dispatch::EncodeColor(const VkCommandBuffer command, const RenderGraphColorAttachment &operation,
                                                          const std::span<const VulkanGraphResource> resident) const noexcept {
@@ -187,13 +315,17 @@ namespace Horo::Render::Detail {
     void VulkanGraphRuntime::Impl::Encode(const VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept {
         std::visit([this, command]<typename Operation>(const Operation &operation) noexcept {
             if constexpr (std::is_same_v<Operation, RenderGraphMultiview>) {
-                multiview.Encode(command);
+                multiview[static_cast<std::size_t>(operation.output)].Encode(command);
             } else if constexpr (std::is_same_v<Operation, RenderGraphDepthAttachment>) {
                 native.EncodeDepthAttachment(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphBufferCopy>) {
                 native.EncodeCopy(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphTextureUpload>) {
                 native.EncodeTextureUpload(command, operation, bindings);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphStereoCoverageCopy>) {
+                native.EncodeStereoCoverageCopy(command, operation, bindings);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphColorReadback>) {
+                native.EncodeColorReadback(command, operation, bindings);
             } else if constexpr (std::is_same_v<Operation, RenderGraphColorAttachment>) {
                 native.EncodeColor(command, operation, bindings);
             } else if constexpr (!std::is_same_v<Operation, std::monostate>) {
@@ -211,16 +343,26 @@ namespace Horo::Render::Detail {
         else if (std::holds_alternative<RenderGraphVfxGpuCompute>(workload) || std::holds_alternative<RenderGraphVfxGpuDraw>(workload)) {
             if (const auto encoded = vfxGpu.Encode(command, ticket, submission, request, pass, bindings); encoded.HasError())
                 return encoded;
-        } else
+        } else if (const auto *work = std::get_if<RenderGraphNativeReconstruction>(&workload)) {
+            reconstruction.Encode(command, work->dispatch.constants, passes[pass].reconstruction);
+        } else if (std::holds_alternative<RenderGraphStereoCoverageReduction>(workload)) {
+            coverageReduction.Encode(command, passes[pass].coverageReduction);
+        } else if (const auto *paint = std::get_if<RenderGraphUiPaint>(&workload)) {
+            static_cast<const VulkanUiPaintCommands &>(*paint->kernel).Encode(command, *paint, passes[pass].uiPaint);
+        } else if (const auto material = passes[pass].materialRaster) {
+            EncodeMaterialPass(command, materialPasses[*material]);
+        } else {
             Encode(command, workload);
+        }
         Barriers(command, passes[pass].after);
         return Result<void>::Success();
     }
 
     /** @brief Copies submission ownership into preallocated tickets; no graph/request views survive admission. */
-    Result<void> VulkanGraphRuntime::Impl::Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins) {
+    Result<void> VulkanGraphRuntime::Impl::Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins,
+                                                  const RenderTimelinePoint timedSignal) {
         for (auto &submission : submissions) {
-            auto reserved = commands.Begin(submission.value.queue);
+            auto reserved = commands.Begin(submission.value.queue, timedSignal == submission.value.signal);
             if (reserved.HasError())
                 return Result<void>::Failure(std::move(reserved).ErrorValue());
             submission.ticket = reserved.Value();

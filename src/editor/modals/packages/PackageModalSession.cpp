@@ -64,6 +64,7 @@ namespace Horo::Editor {
             case Application::PackageOperationKind::Disable:
                 return application_->Disable();
             case Application::PackageOperationKind::Activate:
+            case Application::PackageOperationKind::Remove:
                 return Result<Application::PackageOperationId>::Failure(ViewError("editor.packages.selection_required"));
         }
         return Result<Application::PackageOperationId>::Failure(ViewError("editor.packages.action_invalid"));
@@ -75,6 +76,14 @@ namespace Horo::Editor {
         if (const auto valid = Validate(generation); valid.HasError())
             return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());
         return application_->Activate(enabled);
+    }
+
+    /** @copydoc PackageModalSession::ActivateModules */
+    Result<Application::PackageOperationId> PackageModalSession::ActivateModules(PackageModalGeneration generation,
+                                                                                 std::span<const Packages::EnabledPackageModule> enabled) {
+        if (const auto valid = Validate(generation); valid.HasError())
+            return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());
+        return application_->ActivateModules(enabled);
     }
 
     /** @copydoc PackageModalSession::Cancel */
@@ -104,5 +113,30 @@ namespace Horo::Editor {
     /** @copydoc PackageModalSession::Plan */
     std::shared_ptr<const Application::PackagePlanSnapshot> PackageModalSession::Plan() const noexcept {
         return plan_;
+    }
+
+    /** @copydoc PackageModalSession::PreviewRemoval */
+    Result<Packages::PackageRemovalGraphPreview> PackageModalSession::PreviewRemoval(const PackageModalGeneration generation,
+                                                                                     const Packages::HoroPackageId &package) const {
+        if (const auto valid = Validate(generation); valid.HasError())
+            return Result<Packages::PackageRemovalGraphPreview>::Failure(valid.ErrorValue());
+        return application_->PreviewRemoval(package);
+    }
+
+    /** @copydoc PackageModalSession::InspectRemoval */
+    Result<Application::PackageRemovalPreview> PackageModalSession::InspectRemoval(const PackageModalGeneration generation,
+                                                                                   const Packages::HoroPackageId &package) const {
+        if (auto valid = Validate(generation); valid.HasError())
+            return Result<Application::PackageRemovalPreview>::Failure(valid.ErrorValue());
+        return application_->InspectRemoval(package);
+    }
+
+    /** @copydoc PackageModalSession::Remove */
+    Result<Application::PackageOperationId> PackageModalSession::Remove(
+        const PackageModalGeneration generation, const Packages::HoroPackageId &package,
+        const std::shared_ptr<const Application::PackagePlanSnapshot> &reviewed) {
+        if (auto valid = Validate(generation); valid.HasError())
+            return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());
+        return application_->Remove(package, reviewed);
     }
 }  // namespace Horo::Editor

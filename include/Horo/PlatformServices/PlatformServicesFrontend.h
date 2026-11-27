@@ -8,8 +8,11 @@
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <type_traits>
+#include <utility>
 
 namespace Horo::PlatformServices {
     /** @brief Frozen product policy that may deny otherwise available service operations. */
@@ -37,7 +40,9 @@ namespace Horo::PlatformServices {
      * @brief Sole backend-neutral request surface for one active provider and session generation.
      * @details The frontend owns a strong backend lease and copied immutable capability/session snapshots. Rejected requests never
      *          invoke the backend. Close stops admission before invoking backend shutdown and is idempotent. Routing and Close are
-     *          serialized by the composition owner's lane; concurrent entry is not supported by this slice.
+     *          serialized by the composition owner's lane; concurrent entry is not supported by this slice. One small issuance
+     *          authority is allocated per frontend; weak capabilities on returned handles prevent cross-frontend cancellation
+     *          when backend numeric IDs/generations coincide, without retaining request or provider resources.
      */
     class PlatformServicesFrontend final {
     public:
@@ -111,18 +116,35 @@ namespace Horo::PlatformServices {
          * pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() const;
 
+        /** @brief Checks that a terminal observation came from the current frontend's exact admitted request.
+         * @param request Handle captured at admission. @param observation Terminal snapshot received from the store.
+         * @return True only while the issuing frontend and store are live and all identity evidence matches.
+         */
+        template <typename T> [[nodiscard]] bool OwnsObservation(const PlatformRequestHandle<T> &request,
+                                                                 const PlatformRequestSnapshot<T> &observation) const noexcept {
+            if (!open_ || !request.IsValid() || !observation.terminal || !OwnsRequest(request.frontendAuthority_) || request.store_.expired())
+                return false;
+            const auto &store = observation.terminal->store_;
+            return !request.store_.owner_before(store) && !store.owner_before(request.store_) && observation.id == request.Id() &&
+                   observation.generation == request.Generation();
+        }
+
         /**
          * @brief Requests best-effort cancellation of one admitted typed request.
          * @tparam T Request result type.
          * @param request Frontend-issued request handle.
          * @return Cancellation acknowledgement or a typed lifecycle/stale failure.
-         * @details Cancellation is intent only; the request retains its ADR-130 terminal semantics.
+         * @details Cancellation is intent only; the request retains its ADR-130 terminal semantics. Handles issued by another
+         * frontend or obtained directly from a backend/store fail stale before the backend is called. Moving this frontend
+         * transfers its issuance authority and preserves its admitted handles.
          */
         template <typename T> [[nodiscard]] Result<void> RequestCancel(const PlatformRequestHandle<T> &request) const {
             if (!open_)
                 return Result<void>::Failure(MakeError(FrontendErrors::Unavailable));
             if (!request.IsValid())
                 return Result<void>::Failure(MakeError(FrontendErrors::InvalidRequest));
+            if (!OwnsRequest(request.frontendAuthority_))
+                return Result<void>::Failure(MakeError(RequestErrors::Stale));
             try {
                 return backend_->RequestCancel(request.Id(), request.Generation());
             } catch (...) {  // NOSONAR: backend adapters are an extension boundary and may throw non-standard exceptions.
@@ -131,11 +153,46 @@ namespace Horo::PlatformServices {
         }
 
         /**
+         * @brief Registers one deferred observer for an admitted opaque cloud request.
+         * @tparam T Cloud list, complete read, or mutation result.
+         * @param request Handle issued by this frontend.
+         * @param observer Callback for the terminal result on the request store's owner lane.
+         * @return A suppression token or typed admission failure.
+         * @details Retain the token for delivery. Closing the frontend revokes observation before backend shutdown begins.
+         */
+        template <typename T>
+            requires (std::is_same_v<T, CloudObjectPage> || std::is_same_v<T, CloudBlobReadResult> ||
+                      std::is_same_v<T, CloudMutationResult>)
+        [[nodiscard]] Result<PlatformRequestSubscription> OnCloudComplete(
+            const PlatformRequestHandle<T> &request,
+            std::type_identity_t<std::function<void(const PlatformRequestSnapshot<T> &)>> observer) const {
+            using Response = Result<PlatformRequestSubscription>;
+            if (!open_)
+                return Response::Failure(MakeError(FrontendErrors::Unavailable));
+            if (!request.IsValid() || !observer)
+                return Response::Failure(MakeError(FrontendErrors::InvalidRequest));
+            if (!OwnsRequest(request.frontendAuthority_))
+                return Response::Failure(MakeError(RequestErrors::Stale));
+            return PlatformRequestStore::ObserveAdmitted<T>(
+                request, [authority = request.frontendAuthority_, observer = std::move(observer)](const auto &snapshot) {
+                    if (!authority.expired())
+                        observer(snapshot);
+                });
+        }
+
+        /**
          * @brief Returns public finite limits for one available policy-admitted service without exposing its private binding.
          * @param service Known Horo service kind.
          * @return Copied limits or a typed lifecycle, policy, or availability failure.
          */
         [[nodiscard]] Result<PlatformServiceLimits> ServiceLimits(PlatformServiceKind service) const;
+
+        /** @brief Returns the byte ceiling for an authorized conditional cloud write.
+         * @param subject Exact authenticated account binding.
+         * @return Finite write bound or a typed stale, unavailable, or unsupported capability failure.
+         * @details Reads cached capability evidence. The result reserves no quota and contacts no provider.
+         */
+        [[nodiscard]] Result<std::uint64_t> CloudWriteByteLimit(const PlatformSubjectHandle &subject) const;
 
         /**
          * @brief Idempotently closes admission before invoking backend shutdown exactly once.
@@ -146,8 +203,26 @@ namespace Horo::PlatformServices {
         [[nodiscard]] bool IsOpen() const noexcept;
 
     private:
+        struct RequestAuthority final {};
+
+        /** @brief Checks cancellation provenance without retaining the request or provider.
+         * @param authority Weak issuance capability captured by a returned handle. @return True for this exact frontend lifetime. */
+        [[nodiscard]] bool OwnsRequest(const std::weak_ptr<const void> &authority) const noexcept;
+        /** @brief Validates the session and the provider guarantees required for an automatic mutation. */
+        [[nodiscard]] Result<const PlatformServiceCapability *> ValidateCloudMutationService(const PlatformSubjectHandle &subject) const;
+
+        /** @brief Binds a successful backend handle to this frontend's cancellation lifetime without duplicating request state. */
+        template <typename T> [[nodiscard]] Result<PlatformRequestHandle<T>> BindDispatch(Result<PlatformRequestHandle<T>> result) const {
+            if (result.HasError() || !result.Value().IsValid())
+                return result;
+            auto handle = std::move(result).Value();
+            handle.frontendAuthority_ = requestAuthority_;
+            return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
+        }
+
         PlatformServicesFrontend(std::shared_ptr<IPlatformServicesBackend> backend, PlatformServiceCapabilitySnapshot capabilities,
-                                 PlatformSessionSnapshot session, PlatformServicesOperationPolicy policy) noexcept;
+                                 PlatformSessionSnapshot session, PlatformServicesOperationPolicy policy,
+                                 std::shared_ptr<const RequestAuthority> requestAuthority) noexcept;
 
         [[nodiscard]] Result<const PlatformServiceCapability *> ValidateService(PlatformServiceKind service) const;
         [[nodiscard]] Result<const PlatformServiceCapability *> ValidateSubjectService(PlatformServiceKind service,
@@ -158,6 +233,7 @@ namespace Horo::PlatformServices {
         std::shared_ptr<IPlatformServicesBackend> backend_;
         PlatformServiceCapabilitySnapshot capabilities_;
         PlatformSessionSnapshot session_;
+        std::shared_ptr<const RequestAuthority> requestAuthority_;
         PlatformServicesOperationPolicy policy_;
         bool open_{true};
         bool shutdownInvoked_{};

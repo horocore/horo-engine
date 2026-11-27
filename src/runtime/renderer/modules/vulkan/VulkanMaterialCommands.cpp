@@ -157,10 +157,10 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    /** @brief Checks pipeline/target compatibility and captures the exact indexed mesh backing. */
-    Result<void> VulkanGraphRuntime::Impl::PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
-                                                               const RenderQueueSubmission &submission, VulkanCommandRetention &pins) {
-        const auto input = MaterialInputState(submission.queue);
+    /** @copydoc VulkanGraphRuntime::Impl::CaptureMaterialDraw */
+    Result<void> VulkanGraphRuntime::Impl::CaptureMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
+                                                               const VulkanMaterialTarget &target, bool depthOnly,
+                                                               VulkanCommandRetention &pins) {
         draw.material = dynamic_cast<const VulkanPreparedMaterialBinding *>(source.material);
         if (!draw.material)
             return Result<void>::Failure(Invalid("Material has no Vulkan native binding."));
@@ -172,9 +172,8 @@ namespace Horo::Render::Detail {
         }))
             return Result<void>::Failure(Invalid("Material belongs to a different or retired selected-device incarnation."));
         const auto &state = draw.material->state;
-        const auto depthFormat = materialTarget.depthView ? std::optional{materialTarget.depth.textureDescriptor.format} : std::nullopt;
-        if (const std::array formats{state.depthOnly == materialDepthOnly,
-                                     materialDepthOnly || state.colorFormat == materialTarget.color.textureDescriptor.format,
+        const auto depthFormat = target.depthView ? std::optional{target.depth.textureDescriptor.format} : std::nullopt;
+        if (const std::array formats{state.depthOnly == depthOnly, depthOnly || state.colorFormat == target.color.textureDescriptor.format,
                                      state.depthFormat == depthFormat, state.sampleCount == 1};
             !std::ranges::all_of(formats, [](bool valid) {
             return valid;
@@ -186,6 +185,16 @@ namespace Horo::Render::Detail {
         draw.mesh = mesh.Value();
         if (draw.mesh.descriptor.vertexStride != sizeof(MeshVertex))
             return Result<void>::Failure(Invalid("Material mesh does not use the canonical MeshVertex layout."));
+        return Result<void>::Success();
+    }
+
+    /** @brief Captures the draw before the standalone material pass establishes its resource states. */
+    Result<void> VulkanGraphRuntime::Impl::PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
+                                                               const RenderQueueSubmission &submission, bool depthOnly,
+                                                               VulkanCommandRetention &pins) {
+        if (const auto captured = CaptureMaterialDraw(source, draw, materialTarget, depthOnly, pins); captured.HasError())
+            return captured;
+        const auto input = MaterialInputState(submission.queue);
         if (auto prepared = MaterialState(draw.mesh.vertex, input, submission, true); prepared.HasError())
             return prepared;
         if (auto prepared = MaterialState(draw.mesh.index, input, submission, true); prepared.HasError())
@@ -201,14 +210,14 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(Invalid("Material batch draw capacity is invalid."));
         const auto barrierStart = barriers.size();
         materialPassStateCount = 0;
-        materialDepthOnly = request.depthOnly;
         if (auto target = PrepareMaterialTarget(request, pins); target.HasError())
             return target;
         if (!ValidMaterialRegion(request))
             return Result<void>::Failure(Invalid("Material raster region is outside its retained attachment."));
         const auto firstDraw = materialDrawCount;
         for (const auto &source : request.draws) {
-            if (auto draw = PrepareMaterialDraw(source, materialDraws[materialDrawCount], *request.submission, pins); draw.HasError())
+            if (auto draw = PrepareMaterialDraw(source, materialDraws[materialDrawCount], *request.submission, request.depthOnly, pins);
+                draw.HasError())
                 return draw;
             ++materialDrawCount;
         }

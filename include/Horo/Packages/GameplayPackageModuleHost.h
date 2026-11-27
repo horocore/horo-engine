@@ -4,10 +4,12 @@
  */
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/LuaDecisionNode.h"
+#include "Horo/Gameplay/LuaPerceptionSense.h"
 #include "Horo/Packages/PackageModuleHost.h"
 #include "Horo/Security/ArtifactSignature.h"
 
 #include <functional>
+#include <variant>
 
 namespace Horo::Packages {
     /** @brief Exact locked package attribution accompanying its real acquired node generation. */
@@ -17,6 +19,15 @@ namespace Horo::Packages {
         Sha256Digest artifact;
         std::uint64_t activationGeneration{};
         std::shared_ptr<const AI::DecisionNodeGeneration> nodes;
+    };
+
+    /** @brief Exact verified package attribution paired with its actual native custom-sense generation. */
+    struct PackagePerceptionSenseGeneration final {
+        HoroPackageId package;
+        PackageVersion version;
+        Sha256Digest artifact;
+        std::uint64_t activationGeneration{};
+        std::shared_ptr<const AI::PerceptionSenseGeneration> senses;
     };
 
     /** @brief Exact application-selected gameplay SDK identity and per-generation world authority. */
@@ -67,6 +78,57 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<PackageDecisionNodeGeneration> AcquireDecisionNodes(const HoroPackageId &package, std::string_view moduleId,
                                                                                  std::uint64_t generation) const;
+        /** @brief Acquires the Decision contributions of exact current roles published by the supplied lifecycle.
+         * @param lifecycle Same owner-lane lifecycle that published the selected runtime module activations.
+         * @return Bounded contributions with real revocable generation leases, or the original typed read failure.
+         * @details Installs, rejected candidates, unrelated roles and withdrawn activations contribute nothing.
+         * Release returned leases before asking the package lifecycle to finalize retirement.
+         */
+        [[nodiscard]] Result<std::vector<PackageDecisionNodeGeneration>> AcquireActiveDecisionNodes(
+            const PackageLifecycleService &lifecycle) const;
+
+        /** @brief Owned, non-executable inventory copied from one published package module.
+         * @details Artifact and generation attribute registrations to the exact admitted native image. */
+        struct RegistrationInventory final {
+            /** @brief A behavior or system with declared access to a persistent component identity. */
+            struct ComponentUse final {
+                Gameplay::ComponentTypeId component;
+                std::variant<Gameplay::BehaviorTypeId, Gameplay::GameplaySystemId> consumer;
+
+                [[nodiscard]] auto operator<=>(const ComponentUse &) const noexcept = default;
+            };
+
+            static constexpr std::size_t MaximumComponentIds = 4096;
+            static constexpr std::size_t MaximumComponentUses = 16'384;
+            HoroPackageId package;
+            PackageVersion version;
+            Sha256Digest artifact;
+            std::uint64_t activationGeneration;
+            std::string moduleId;
+            std::vector<Gameplay::BehaviorTypeId> behaviors;
+            std::vector<Gameplay::GameplayServiceDescriptor> services;
+            std::string descriptorPath; /**< Canonical path of the declaring descriptor inside the verified archive. */
+            std::vector<Gameplay::GameplaySystemDescriptor> systems; /**< Inert schedule metadata, including required service IDs. */
+            std::vector<AI::DecisionNodeTypeId> decisionNodes; /**< Inert IDs from the exact native decision registry. */
+            bool hasCustomSenses{}; /**< The role has a native Perception surface requiring saved-source review. */
+            bool hasAdditionalReferenceClasses{}; /**< The role contributes assets, components, native queries, or persistent adapters. */
+            std::vector<Gameplay::ComponentTypeId> components; /**< Stable IDs from the exact native component registry. */
+            std::vector<ComponentUse> componentUses; /**< Declared behavior and system reads or writes, in canonical order. */
+        };
+
+        /** @brief Copies behavior, component and decision IDs and service and system descriptors from exact published runtime roles.
+         * @param lifecycle The package lifecycle which published those roles.
+         * @return Owned metadata or typed owner/generation failure. An empty result means no active SDK roles.
+         * @details Must run on the owner lane. No factories are called or retained. The result describes active roles only
+         * and grants no proof of registration completeness for disabled packages. */
+        [[nodiscard]] Result<std::vector<RegistrationInventory>> CaptureActiveRegistrations(const PackageLifecycleService &lifecycle) const;
+        /** @brief Acquires custom senses from the selected verified native role, retaining actual owner revocation.
+         * @param package Exact installed package. @param module Selected gameplay module. @param generation Current role generation.
+         * @return Locked package attribution and native sense lease, or typed stale/unavailable failure.
+         */
+        [[nodiscard]] Result<PackagePerceptionSenseGeneration> AcquirePerceptionSenses(const HoroPackageId &package,
+                                                                                       std::string_view module,
+                                                                                       std::uint64_t generation) const;
         /** @brief Compiles actual declared package script bytes under that same native activation's revocation/lifetime.
          * @param source Exact declared .horo_script inventory identity, never an arbitrary physical file.
          * @param type Canonical sidecar/selection identity. @param provider Stable provider identity.
@@ -77,6 +139,16 @@ namespace Horo::Packages {
             const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation, const PackagePath &source,
             AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
             Gameplay::LuaBehaviorLimits limits = {}) const;
+
+        /** @brief Compiles a declared package spatial predicate under the actual native perception parent's lifetime.
+         * @param package Exact installed package. @param module Selected verified role. @param generation Current activation.
+         * @param source Declared .horo_script inventory path. @param contract Host-selected Script identities and bounds.
+         * @param limits Enforced VM memory and whole-evaluation instruction ceilings.
+         * @return Owned program or typed source, admission or VM failure; no arbitrary filesystem source is read.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Gameplay::LuaPerceptionSenseProgram>> CompilePerceptionSense(
+            const HoroPackageId &package, std::string_view module, std::uint64_t generation, const PackagePath &source,
+            AI::PerceptionSenseContract contract, Gameplay::LuaBehaviorLimits limits = {256U * 1024U, 4096}) const;
 
     private:
         struct Impl;

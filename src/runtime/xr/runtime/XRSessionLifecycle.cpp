@@ -1,5 +1,6 @@
 #include "Horo/XR/XRSessionLifecycle.h"
 
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/XR/XRErrors.h"
 #include "Horo/XR/XRSessionErrors.h"
 
@@ -10,25 +11,21 @@
 
 namespace Horo::XR {
     namespace {
-        constexpr std::array<XRSessionPreparation, 7> PreparationOrder{XRSessionPreparation::PlatformLoader,
-                                                                       XRSessionPreparation::InstanceSystem,
-                                                                       XRSessionPreparation::RendererCompatibility,
-                                                                       XRSessionPreparation::CapabilitiesAndSpaces,
-                                                                       XRSessionPreparation::NativeSessionAndSwapchains,
-                                                                       XRSessionPreparation::RendererTargets,
-                                                                       XRSessionPreparation::InputAndUi};
-        static_assert(PreparationOrder.size() == static_cast<std::size_t>(XRSessionPreparation::Count));
+        struct PreparationStep final {
+            XRSessionPreparation stage;
+            std::string_view name;
+        };
 
-        [[nodiscard]] constexpr std::string_view PreparationName(const XRSessionPreparation stage) noexcept {
-            constexpr std::array<std::string_view, PreparationOrder.size()> names{"PlatformLoader",
-                                                                                  "InstanceSystem",
-                                                                                  "RendererCompatibility",
-                                                                                  "CapabilitiesAndSpaces",
-                                                                                  "NativeSessionAndSwapchains",
-                                                                                  "RendererTargets",
-                                                                                  "InputAndUi"};
-            return names[static_cast<std::size_t>(stage)];
-        }
+        constexpr std::array PreparationOrder{
+            PreparationStep{XRSessionPreparation::PlatformLoader, "PlatformLoader"},
+            PreparationStep{XRSessionPreparation::InstanceSystem, "InstanceSystem"},
+            PreparationStep{XRSessionPreparation::RendererCompatibility, "RendererCompatibility"},
+            PreparationStep{XRSessionPreparation::CapabilitiesAndSpaces, "CapabilitiesAndSpaces"},
+            PreparationStep{XRSessionPreparation::NativeSessionAndSwapchains, "NativeSessionAndSwapchains"},
+            PreparationStep{XRSessionPreparation::RendererTargets, "RendererTargets"},
+            PreparationStep{XRSessionPreparation::InputAndUi, "InputAndUi"},
+        };
+        static_assert(PreparationOrder.size() == static_cast<std::size_t>(XRSessionPreparation::Count));
 
         [[nodiscard]] XRSessionId CandidateSession(const XRSystemId &system, const std::uint32_t generation) noexcept {
             return {.system = system, .slot = {.index = 0, .generation = generation}};
@@ -36,8 +33,35 @@ namespace Horo::XR {
 
         void ReleasePrepared(IXRSessionResources &resources, const XRSessionId &candidate, const std::size_t completed) noexcept {
             for (std::size_t remaining = completed; remaining > 0; --remaining)
-                resources.Release(PreparationOrder[remaining - 1], candidate);
+                resources.Release(PreparationOrder[remaining - 1].stage, candidate);
         }
+
+        /** @brief Holds the exact completed prefix until the candidate publishes or unwinds. */
+        class PreparedSession final {
+        public:
+            PreparedSession(IXRSessionResources &resources, const XRSessionId &session) noexcept
+                : resources_(resources), session_(session) {}
+
+            PreparedSession(const PreparedSession &) = delete;
+            PreparedSession &operator=(const PreparedSession &) = delete;
+
+            ~PreparedSession() {
+                ReleasePrepared(resources_, session_, completed_);
+            }
+
+            void CompleteStage() noexcept {
+                ++completed_;
+            }
+
+            void Commit() noexcept {
+                completed_ = 0;
+            }
+
+        private:
+            IXRSessionResources &resources_;
+            XRSessionId session_;
+            std::size_t completed_{};
+        };
 
         [[nodiscard]] bool IsLegalEvent(const XRSessionState current, const XRSessionEvent event) noexcept {
             switch (event) {
@@ -89,19 +113,34 @@ namespace Horo::XR {
         }
     }  // namespace
 
+    std::optional<XRSessionState> NextXRSessionState(const XRSessionState current, const XRSessionEvent event) noexcept {
+        return IsLegalEvent(current, event) ? std::optional{StateForEvent(event)} : std::nullopt;
+    }
+
     /** @copydoc XRSessionLifecycle::XRSessionLifecycle */
     XRSessionLifecycle::XRSessionLifecycle(IXRSessionResources &resources) noexcept : resources_(&resources) {}
 
     /** @copydoc XRSessionLifecycle::~XRSessionLifecycle */
     XRSessionLifecycle::~XRSessionLifecycle() {
+        HORO_INVARIANT_MSG(IsOwnerThread(), "XR session lifecycle destruction requires its control thread");
         Shutdown();
+    }
+
+    /** @copydoc XRSessionLifecycle::IsOwnerThread */
+    bool XRSessionLifecycle::IsOwnerThread() const noexcept {
+        return owner_ == std::this_thread::get_id();
     }
 
     /** @copydoc XRSessionLifecycle::Activate */
     Result<XRSessionId> XRSessionLifecycle::Activate(const XRCapabilitySnapshot &capabilities, const XRSystemId &activeSystem,
-                                                     const XRCapabilityRevision expectedRevision, const XRFeaturePlan &plan) {
+                                                     const XRCapabilityRevision expectedRevision, const XRFeaturePlan &plan,
+                                                     const CancellationToken &cancellation) {
+        if (!IsOwnerThread())
+            return Result<XRSessionId>::Failure(MakeError(XRSessionErrors::WrongThread));
         if (destroyed_)
             return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (cancellation.IsCancellationRequested())
+            return Result<XRSessionId>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         switch (ValidateXRFeaturePlan(plan, capabilities, activeSystem, expectedRevision)) {
             case XRFeatureNegotiationStatus::Ok:
                 break;
@@ -121,14 +160,14 @@ namespace Horo::XR {
 
         // A failed private candidate is never reissued, even if its adapter leaked an observation.
         const XRSessionId candidate = CandidateSession(capabilities.System(), ++lastSessionGeneration_);
-        for (std::size_t completed = 0; completed < PreparationOrder.size(); ++completed) {
-            auto prepared = resources_->Prepare(PreparationOrder[completed], candidate, plan);
-            if (prepared.HasError()) {
-                ReleasePrepared(*resources_, candidate, completed);
-                return Result<XRSessionId>::Failure(
-                    WrapError(XRSessionErrors::ActivationFailed, std::move(prepared).ErrorValue(),
-                              std::string{"XR session activation failed at "} + std::string{PreparationName(PreparationOrder[completed])}));
-            }
+        PreparedSession rollback{*resources_, candidate};
+        for (const auto &step : PreparationOrder) {
+            if (auto prepared = resources_->Prepare(step.stage, candidate, plan); prepared.HasError())
+                return Result<XRSessionId>::Failure(WrapError(XRSessionErrors::ActivationFailed, std::move(prepared).ErrorValue(),
+                                                              std::string{"XR session activation failed at "} + std::string{step.name}));
+            rollback.CompleteStage();
+            if (cancellation.IsCancellationRequested())
+                return Result<XRSessionId>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         }
 
         // Preparation is complete; old-generation retirement and publication cannot fail.
@@ -138,17 +177,21 @@ namespace Horo::XR {
         snapshot_.capabilityRevision = capabilities.Revision();
         acceptedPlan_ = plan;
         PublishState(XRSessionState::Ready);
+        trackingContinuity_ = 1;
+        rollback.Commit();
         return Result<XRSessionId>::Success(candidate);
     }
 
     /** @copydoc XRSessionLifecycle::ApplyEvent */
     Result<void> XRSessionLifecycle::ApplyEvent(const XRSessionId &source, const XRSessionEvent event) {
+        if (!IsOwnerThread())
+            return Result<void>::Failure(MakeError(XRSessionErrors::WrongThread));
         if (!source.IsValid() || event > XRSessionEvent::Ready)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (source != ownedSession_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        const XRSessionState next = StateForEvent(event);
-        if (!IsLegalEvent(snapshot_.state, event))
+        const auto next = NextXRSessionState(snapshot_.state, event);
+        if (!next)
             return Result<void>::Failure(MakeError(XRSessionErrors::TransitionInvalid));
         if (event == XRSessionEvent::Ready) {
             if (!acceptedPlan_ || acceptedPlan_->System() != ownedSession_.system)
@@ -156,7 +199,7 @@ namespace Horo::XR {
             snapshot_.session = ownedSession_;
             snapshot_.capabilityRevision = acceptedPlan_->Revision();
         }
-        PublishState(next);
+        PublishState(*next);
         if (next == XRSessionState::Inactive || next == XRSessionState::Lost) {
             snapshot_.session = {};
             snapshot_.capabilityRevision = {};
@@ -168,6 +211,8 @@ namespace Horo::XR {
 
     /** @copydoc XRSessionLifecycle::Admit */
     Result<void> XRSessionLifecycle::Admit(const XRSessionId &session, const bool needsFocus) const {
+        if (!IsOwnerThread())
+            return Result<void>::Failure(MakeError(XRSessionErrors::WrongThread));
         if (!session.IsValid())
             return Result<void>::Failure(MakeError(XRErrors::IdentityInvalid));
         if (session != snapshot_.session)
@@ -179,12 +224,12 @@ namespace Horo::XR {
 
     /** @copydoc XRSessionLifecycle::Snapshot */
     XRSessionSnapshot XRSessionLifecycle::Snapshot() const noexcept {
-        return snapshot_;
+        return IsOwnerThread() ? snapshot_ : XRSessionSnapshot{};
     }
 
     /** @copydoc XRSessionLifecycle::AcceptedPlan */
     std::optional<XRFeaturePlan> XRSessionLifecycle::AcceptedPlan() const noexcept {
-        return snapshot_.session.IsValid() ? acceptedPlan_ : std::nullopt;
+        return IsOwnerThread() && snapshot_.session.IsValid() ? acceptedPlan_ : std::nullopt;
     }
 
     void XRSessionLifecycle::Retire(const XRSessionId &session) noexcept {
@@ -194,6 +239,10 @@ namespace Horo::XR {
 
     void XRSessionLifecycle::PublishState(const XRSessionState state) noexcept {
         using enum XRSessionState;
+        if (state != snapshot_.state && trackingContinuity_ != 0) {
+            // Unsigned exhaustion leaves zero, which rejects new cutoffs until a new session is issued.
+            ++trackingContinuity_;
+        }
         snapshot_.state = state;
         snapshot_.admitsFrames = state == Running || state == Visible || state == Focused;
         snapshot_.admitsActions = state == Focused;
@@ -201,7 +250,7 @@ namespace Horo::XR {
 
     /** @copydoc XRSessionLifecycle::Shutdown */
     void XRSessionLifecycle::Shutdown() noexcept {
-        if (destroyed_)
+        if (!IsOwnerThread() || destroyed_)
             return;
         destroyed_ = true;
         PublishState(XRSessionState::Destroyed);

@@ -3,10 +3,10 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/ui/EditorNumberParsing.h"
 
 #include <algorithm>
 #include <charconv>
-#include <cmath>
 #include <format>
 #include <limits>
 #include <type_traits>
@@ -46,11 +46,7 @@ namespace Horo::Editor {
                 static_cast<void>(Ui::InputTextControl("##value", entry->second, 128, fonts, {.error = state.invalid.contains(key)}));
                 T candidate{};
                 const auto &text = entry->second;
-                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), candidate);
-                bool valid = parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
-                if constexpr (std::is_floating_point_v<T>)
-                    valid = valid && std::isfinite(candidate);
-                if (valid) {
+                if (ParseEditorNumber(text, candidate)) {
                     value = candidate;
                     state.invalid.erase(key);
                 } else

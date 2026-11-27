@@ -112,10 +112,6 @@ namespace Horo::Extensions::LuaModuleDetail {
         lua_setfield(lua, -2, "__metatable");
         state.values.metatable = luaL_ref(lua, LUA_REGISTRYINDEX);
         lua_newtable(lua);
-        lua_pushcfunction(lua, Import);
-        lua_setfield(lua, -2, "import");
-        lua_pushcfunction(lua, Unsigned);
-        lua_setfield(lua, -2, "u64");
         state.horoRef = luaL_ref(lua, LUA_REGISTRYINDEX);
         state.thread = lua_newthread(lua);
         state.threadRef = luaL_ref(lua, LUA_REGISTRYINDEX);

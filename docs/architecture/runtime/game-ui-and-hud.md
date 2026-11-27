@@ -294,6 +294,13 @@ A `UiCanvas` declares:
 The canvas does not choose semantic owner lifetime. Its containing runtime
 instance already names one ADR-073 owner scope, while each viewport attachment
 supplies logical extent, DPI, safe area, view identity and presented revision.
+Paint extraction uses the layout and clipping from the exact view in the held
+animation frame. A detached view remains readable from an earlier frame lease
+until its readers release it. Current extraction rejects that retired identity.
+The application paint owner can reserve an independent extractor for a preview,
+thumbnail, or offscreen view. These snapshot views share authored data without
+sharing snapshot slots. Extracting a snapshot issues no presentation receipt and
+does not admit input. A successful source reload revokes previous attachments.
 
 ```cpp
 struct UiCanvasDescriptor {
@@ -335,7 +342,21 @@ by screen hit testing. UI scale is folded into the resolved physical-pixels-per-
 DIP ratio; font scale is carried into intrinsic text measurement and shaping but
 does not change non-text layout geometry. Resize, monitor/DPI, safe-area, or
 viewport changes produce a new immutable resolution input; consumers replace
-layout and render generations at their normal safe point.
+layout and render generations at their normal safe point. The application
+projects the exact user scale ratio into the same viewport evidence. It
+multiplies the authored and user geometry scales once, preserving the
+independent text-only factor. Reduced logical viewport width feeds the existing
+responsive selection and intrinsic text reflow. Input remains fenced until
+that layout has a matching presentation receipt.
+
+The view policy can reserve a minimum control target before layout measures
+text and places elements. The product uses a 24-DIP logical floor in the
+runtime UI view. Fixed/clipped lanes can still restrict the visible and
+interactive part of a target, which layout reports without enlarging hit
+boxes outside their paint and clip. A live focus graph binds its own scroll
+policy to the candidate layout. Reveal uses that view's scroll limits before
+paint and hit testing, and leaves non-scroll clipping and explicit no-reveal
+policies in force.
 
 Physical pixel snapping is downstream derived render data. `Edges` snapping uses
 the resolved safe content rectangle and ties-to-even conversion, and may only
@@ -348,6 +369,77 @@ remain Renderer-owned.
 Screen-space UI is resolved after world rendering unless a render graph pass
 explicitly composes it earlier. World-space UI produces normal render instances
 and participates in visibility and depth policy declared by the canvas.
+
+The prepared UI paint program can rasterize the complete canvas into its own
+sampleable color surface. It reserves one transparent linear premultiplied
+target per slot and exports the root write through the render graph. The
+borrowed surface identity is valid for an exact accepted preparation. Sampling
+requires a renderer graph that orders the read after the paint write and
+retains the texture through completion. Placement in a camera or scene and
+interaction mapping both depend on the consuming presentation pass.
+
+The Vulkan qualification bundle cooks the paint producer and the sampled
+canvas consumer as distinct artifacts. The paint package is admitted with a
+linear color target and its stencil format. The consumer validates its
+position, UV, uniform, sampler and color interfaces against the reflected
+native stages before the viewport can construct the sampling pass.
+The base Vulkan viewport renders a prepared Camera or World canvas in the same
+graph as the opaque scene. Camera placement covers the selected viewport.
+World placement uses the scene camera and tests against opaque depth without
+writing depth. Native qualification reads the viewport pixels before and after
+moving a World canvas behind opaque geometry. The editor's base Vulkan game
+viewport selects a Camera or World canvas from the same published Scene as the
+opaque pass. A Camera canvas uses the game viewport's committed extent and
+display scale. A World canvas uses its authored raster size and the current
+entity hierarchy to derive one plane for the draw and its receipt. The
+application accepts one viewport canvas per Scene. A skipped or failed frame
+revokes interaction with the previous presentation. This authored route
+requires the ordinary desktop viewport, without a mounted origin or XR eye
+routing.
+Native coverage loads the actual authored asset through the Scene participant,
+reads Camera and World output pixels, and verifies that input is admitted only
+after the matching native presentation. Scene replacement retires the old
+interaction view and applies opaque depth to the new World placement.
+
+The presentation receipt carries the exact World canvas plane when a consuming
+pass places the canvas in the scene. Runtime UI adopts that plane with the
+receipt's view, canvas and revisions. A later receipt can move the plane
+without changing layout. Unpresented output revokes the retained placement.
+World ray callers now pass only a view, canvas and ray in `UiWorldRayQuery`.
+Hosts must supply the actual rendered plane in `UiPresentationReceipt`.
+The input debugger follows the same targeting path.
+The scene UI host retains the hit geometry alongside the extracted World
+snapshot. Native presentation admits that exact pair. A headset submission
+retains both until its own completion, including when the mirror presents first.
+The shared pointer recognizer accepts bounded world rays for capture and
+gestures. A ray that crosses the plane outside the canvas can still move a
+captured contact. A tracking-loss cancellation can release it without geometry.
+World samples use the presented plane and share the same gesture dispatch and
+control defaults as viewport pointers.
+The application World pointer port routes an admitted context through the
+canvas's focus graph and capture store. Losing its presented geometry
+neutralizes the active capture. The input adapter owns focus and session loss
+notifications and cancels through the same port.
+
+A Scene entity can reference one canvas through its `uiCanvas` component. The
+reference names the registry asset, document, canvas and minimum document
+revision. Scene source schema 5 preserves it. The cooker emits
+`horo.scene.runtime.v5` for Scenes with canvas references and records each
+Runtime UI document as a required asset. Older Scenes without this component
+retain their previous encoding. Runtime UI still owns all instance, layout and
+presentation state. The entity's authored transform remains Scene-owned.
+Prefab creation and expansion preserve the same reference and require its
+registry asset as part of the portable dependency closure.
+
+The project cook resolves registered `runtime.ui.document` sources in its pinned
+inventory and uses the same bounded versioned UI Canvas codec as authoring.
+A standalone `.uicanvas` remains an Editor document until an identity sidecar
+registers it as a cook input. The project cook
+emits source-free UI document bytes through the standard asset cache and
+publication pipeline. Required dependencies must exist, and any present
+dependency must match its declared type. An unavailable optional dependency
+remains optional in the cooked document. Present dependencies participate in
+the transitive cook key for the document and its consuming Scenes.
 
 ## Responsive Presentation Profiles
 
@@ -402,6 +494,17 @@ auto uses intrinsic size, and definite size is aligned within the anchor segment
 Absolute/anchored elements do not contribute to flex/grid flow but do contribute
 to post-arrange overflow.
 
+Each presentation view supplies its horizontal reading direction. Direction changes
+invalidate retained layout and publish new hit-test geometry with a new interaction
+revision. Right-to-left arrangement reflects eligible child placements and logical
+box edges inside each parent. An element with physical horizontal placement keeps
+its authored physical alignment. The source and cooked layouts store that opt-out
+as an optional `horizontalPlacement` field. Older layouts default to following the
+view's direction. Published record order remains authored order. The focus graph
+reads the same published direction and placement policy. It mirrors authored
+horizontal links for eligible nodes and uses the resulting physical boxes for
+spatial fallback. Tab order and physical links retain authored behavior.
+
 Layout has two logical phases:
 
 ```text
@@ -423,6 +526,14 @@ hit testing. Required failure publishes nothing and retains the prior last-good
 generation according to ADR-073. Gameplay code does not mutate boxes or render
 quads directly. Physical pixel snapping is downstream derived render data and
 cannot feed back into logical layout, scroll extent or serialized state.
+
+Layout qualification runs the Layout, LayoutClipping, CanvasSpace, Document,
+AnimationIntegration and TextLayout CTest suites together. These cover nested
+constraints, failed updates, overflow, invalidation, DPI, safe area, RTL geometry and
+text, and responsive profile publication. The 2,081-element nested layout case
+requires zero measured allocations after setup, three measures after a single-leaf
+invalidation, and preparation under 250 ms initially and 100 ms after invalidation.
+The elapsed-time ceilings guard against stalls on shared Debug runners.
 
 ### Clipping, Scroll Content And Bring-Into-View
 
@@ -713,6 +824,22 @@ context. It hit-tests the last successfully presented interaction snapshot. Swit
 ray/direct modes, tracking or session loss, assignment change, modal/route exclusion,
 presentation-revision loss and source destruction release capture and neutralize the
 source. A Physics/Renderer hit is evidence only; it cannot set focus or invoke a widget.
+The OpenXR Play host can provide a controller ray and the down state of a
+consumer-selected, registered digital action from one committed tracking cutoff.
+The action must come from the exact controller that supplied the ray. An
+inactive action or lost tracking invalidates the source rather than supplying
+a normal release. The UI composition still owns routing, edges and cancellation.
+The signed OpenXR binding document may opt in with
+`worldUiPointer` containing `action` and `maximumDistanceMeters`. The signed
+document must declare the digital action and an aim pose for the same controller
+role. With an assigned local Play player, the editor routes that controller's
+aimed ray through the presented World UI only while its Input context is
+eligible. Loss or replacement of the controller, player assignment, scene,
+binding, origin, or eligible presentation cancels capture and requires a neutral
+button sample before another press.
+The adapter retains the outgoing pointer owner while cancellation is pending
+and retries cleanup before routing another sample. The World canvas
+reserves dispatch storage during scene preparation, including for a replacement.
 
 ### Semantic audio and haptic feedback
 
@@ -733,6 +860,12 @@ explicit malformed, stale, capacity, or lifecycle failures; it never performs
 audio/haptic work, allocation, or I/O. On reload the old queue retires and
 discards its stale cues; the new presented owner gets a new queue. Shutdown
 likewise discards undelivered optional cues.
+
+World pointer dispatch records focus changes, applied control defaults, and
+genuine routed control cancellations in the canvas's reserved feedback queue.
+The application reads those intents through the current World presentation.
+Changing the presented interaction revision or withdrawing pointer admission
+discards undelivered cues. A full queue leaves the UI action in effect.
 
 At a non-frame-hot host safe point, a borrowed `UiFeedbackRealizer` may map an
 intent to optional audio and/or haptic effects. Its per-modality result explicitly
@@ -808,6 +941,11 @@ glyph-run generation; Renderer owns only glyph atlas/raster resource realization
 Font/locale/style/content changes prepare a complete new font/layout generation.
 Old face bytes, metrics, shaped runs, layout and atlas resources remain leased by
 old interaction/render snapshots until retirement.
+
+When only text scale changes, layout passes the new scale to text measurement
+providers and invalidates the measured text nodes and their ancestors. Images
+receive the neutral text scale. A new logical extent may still reassign downstream
+geometry. Required measurement failure preserves the prior published layout.
 
 Missing required family/artifact fails candidate activation and retains last-good
 state. Unsupported later content follows the declared replacement,
@@ -945,6 +1083,10 @@ presentation child clock gated by one exact route/screen generation. Preview is
 isolated editor session state; deterministic test and manual time advance only from
 explicit ordered commands.
 
+A source bound after the host has run starts at the scheduler's last committed
+fixed step and cumulative admitted presentation duration. Those values establish
+its history cutoff. Only subsequent admitted time advances the new source.
+
 Clock/cursor/rate accumulation uses checked integer/rational arithmetic with carried
 remainders. Host suspension holds presentation/transition/preview live playback and
 resume starts with zero delta. Multiple viewports, extraction retries or repeated
@@ -953,12 +1095,43 @@ rendering cannot advance an animation.
 Enter/exit transitions may block screen activation/retirement only when declared
 required and within finite deadlines. Element/screen/scope removal, replacement,
 dependency failure, reload policy or shutdown completes/cancels one generation
-exactly once. Reduced-motion policy resolves before publication and can make motion
-zero-duration while still completing the lifecycle in the same VariableUpdate.
+exactly once. The application captures high contrast and reduced motion from the
+same committed configuration. The UI publishes the preference at its ordinary
+derived-frame cutoff and keeps the exact policy through structural replacement.
+The style registry selects high-contrast states, including combined focused states,
+through the same rules for core and contributed elements. Matching high-contrast
+rules form an accessibility layer after animated values so motion cannot overwrite
+the selected contrast or focus treatment. Themes supply the colors and focus
+treatments through their registered assets or classes.
+
+The paint projection consumes the same immutable control and focus states used by
+the style cascade. Focus adds a dual-tone outline. Checked, selected, pressed,
+disabled, invalid, and busy states have distinct geometric marks that can appear
+together. The marks carry the exact element's transform, clip, mask, and opacity
+group. Visible controls keep the marks when a project customizes the theme; a
+hidden control emits none. Known focus and control owners determine the cold
+paint budget. A retained paint program reserves one stable indicator slot per
+eligible element. Changes in state emit or remove geometry within that slot
+and keep the program's bound roles and resources.
+
+An explicitly decorative timeline completes at its resolved endpoint on the first
+update with reduced motion, including required route transitions. This publishes
+one normal completion and respects the existing presentation gate. Decorative
+definitions omit semantic markers. Essential definitions retain their authored
+timing and markers. Pending/failed derived updates and retained frames keep their
+existing publication and lifecycle guarantees.
 
 VariableUpdate freezes one clock snapshot, evaluates timelines once in stable order,
 then resolves style/layout/focus and publishes immutable values. Render phases only
 consume those values; they never sample time or fire completion markers.
+
+Style, theme and motion qualification runs the Runtime UI Style, Theme, Document,
+Animation, AnimationIntegration and PaintHost CTest suites together. Registry and
+theme cases cover token cycles, missing-token diagnostics and retention of the
+last accepted generation. Clock and host cases cover paused time, deterministic
+publication, authored contrast and focus variants, and essential versus decorative
+motion. The live policy cases verify allocation-free publication and a stable
+terminal value across preference changes.
 
 ## Rendering Contract
 
@@ -1041,6 +1214,38 @@ These contracts describe the integrated implementation boundary. DTO validation,
 retained geometry, Null execution and editor outline preview alone do not establish
 native paint capability. Each interactive backend needs actual pixel/readback and
 lifecycle evidence before that capability is qualified.
+
+Runtime UI owners can opt into lifetime CPU samples at construction. Layout
+samples the candidate preparation used by publication, text samples shaping,
+and render owners sample extraction and geometry construction. A sample records
+monotonic duration and whether the operation produced its result. Disabled
+owners do not read the clock. Successful work uses the same storage and
+publication paths as unprofiled work.
+
+At a diagnostics safe point an immutable geometry plan can report its exact view
+and snapshot revision, draw batches, vertices, indices, clips and used geometry
+bytes. Its caller-bounded scan reports the sum of canvas-space triangle areas as a
+workload proxy. Projection, mask, clip, blending and native pass execution can
+change actual pixel coverage. Atlas inspection reports occupied and reserved
+tiles, including pending uploads, and capacity pressure. These APIs do not
+sample native GPU timing or claim allocator-level totals.
+
+Runtime UI malformed-input qualification uses fixed seeds and bounded cases for
+source and cooked documents, migration graphs, template graphs, layout
+constraints, UTF-8, and binding provider contributions. The corresponding
+Catch2 suites run through the Windows CI test group and the full native test
+configuration. Run the individual executables with `[fuzz]` to select just
+the generated cases. Each case limits its inputs without relying on a
+wall-clock assertion, and validates accepted evidence or transactional refusal.
+
+The `[accessibility][reference]` case in `HoroRuntimeUiAccessibilityTests`
+checks detached layout and semantic snapshots for desktop and portrait
+viewport evidence with different DPI, safe-area insets and supplied localized
+labels. Its expected geometry and semantic fields are independent of native
+renderers. The separate Metal UI paint smoke suite measures native pixels of
+rounded masks, opacity and nested groups when its cooked shader fixture and a
+Metal device are available. Cross-backend reference images require the same
+paint features to be available in each participating native renderer.
 
 ### Render-graph composition admission
 
@@ -1252,6 +1457,23 @@ publisher, then invokes that reserved commit. Capacity, malformed values, provid
 rejection/error/cancellation and stale revisions leave committed state unchanged.
 The provider cannot reenter UI or publish state during preparation; asynchronous
 work returns private evidence for later owner-thread preparation, never UI callbacks.
+
+At an explicit diagnostic safe point, `UiHotReload::Inspect` copies binding,
+provider and action records from one current canvas generation. A route selection
+must name the exact attached route incarnation. The capture owns its records and
+retains no runtime owner, provider callback, capability token or action
+payload. Public committed values are copied, while UserSensitive, Restricted
+and Secret values are always redacted, including fallbacks. The capture reports
+the store's recorded write admission without calling its provider. Capture
+exceeding a row budget fails before exposing a result. Replaced leases and
+stopped publishers reject new captures, and records already captured remain
+readable. Regular frame work never captures these diagnostics.
+
+Application tools call `RuntimeUiService::Inspect` with the exact game instance
+and a generation obtained through `Acquire`. The service checks its owner lane
+and current publication before forwarding to the same diagnostic projection.
+Reloaded and revoked services reject earlier selections. The host receives
+copied records and retains no access to the mutable canvas publisher.
 
 The new provider capability's `Prepare` boundary is exception-free (`noexcept`),
 matching the Foundation public engine module policy. The owned adapter converts
@@ -1469,6 +1691,10 @@ reuse Runtime UI identities; player, viewport and Foundation operation values ar
 dependency-neutral scalar projections used only as evidence and never establish
 new identity authority. The operation `Error` remains control-flow authority. A
 diagnostic record is inert and owns no log sink, store, renderer or runtime state.
+Layout preparation can optionally identify the exact evaluated element or invalid
+child output. The synchronous call resets that output and never retains it.
+Owner, revision and whole-layout failures carry no element. The Canvas resolves
+a reported handle in its current preview tree before offering navigation.
 
 ### Optional input debugger
 
@@ -1507,6 +1733,9 @@ owners during synchronous callbacks is forbidden; shutdown occurs outside calls.
 See [input debugger integration](../../guides/runtime-ui-input-debugger.md).
 
 ## Testing
+
+The [input, focus and event routing qualification matrix](../../guides/runtime-ui-input-qualification.md)
+records the deterministic and native-adapter coverage required for interaction changes.
 
 Required tests cover:
 
@@ -1554,6 +1783,15 @@ swaps complete publishers at an ADR-073 structural safe point. Frame polling
 reads stage/deadline facts without pumping assets; composition and deferred
 reclamation are explicit load-time operations. Old whole-generation leases remain
 pinned, while fresh presentation evidence gates the replacement screen's input.
+
+The first screen can be composed and presented before any gameplay Scene is
+activated. When that startup request declares a visible minimum, it must prepare
+an admitted layout and presentation view. The first successful receipt starts
+the minimum. The next screen may load in parallel, but its commit is refused
+until the minimum elapses. Cancellation, timeout and failure retain the current
+startup screen and its display evidence. The host uses the typed transition
+progress and failure to present status without polling the gameplay Scene.
+
 See [the asynchronous screen transition contract](../../guides/runtime-ui-screen-transition-migration.md).
 
 `UiHotReload` is owned by `HoroEngine::RuntimeUi`. It prepares complete real

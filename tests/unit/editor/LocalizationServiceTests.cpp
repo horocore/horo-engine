@@ -1,5 +1,6 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 
 #include <array>
 #include <catch2/catch_message.hpp>
@@ -15,9 +16,64 @@ namespace {
     }
 
     constexpr std::array globalDockKeys{
+        "workspace.global_dock.platform.profile",
+        "workspace.global_dock.platform.selection",
+        "workspace.global_dock.platform.profile.editor",
+        "workspace.global_dock.platform.profile.development",
+        "workspace.global_dock.platform.profile.shipping",
+        "workspace.global_dock.platform.profile.headless",
+        "workspace.global_dock.platform.profile.server",
+        "workspace.global_dock.platform.profile.test",
+        "workspace.global_dock.platform.profile.unsupported",
+        "workspace.global_dock.platform.mode.null",
+        "workspace.global_dock.platform.mode.test",
+        "workspace.global_dock.platform.mode.exact",
+        "workspace.global_dock.platform.mode.absent",
+        "workspace.global_dock.platform.service.achievements",
+        "workspace.global_dock.platform.service.stats",
+        "workspace.global_dock.platform.service.cloud",
+        "workspace.global_dock.platform.service.presence",
+        "workspace.global_dock.platform.service.friends",
+        "workspace.global_dock.platform.service.session",
+        "workspace.global_dock.platform.service.available",
+        "workspace.global_dock.platform.service.unavailable",
+        "workspace.global_dock.tab.platform",
+        "workspace.global_dock.platform.title",
+        "workspace.global_dock.platform.unavailable",
+        "workspace.global_dock.platform.privacy",
+        "workspace.global_dock.platform.active",
+        "workspace.global_dock.platform.retained",
+        "workspace.global_dock.platform.pending",
+        "workspace.global_dock.platform.dispatching",
+        "workspace.global_dock.platform.reconciling",
+        "workspace.global_dock.platform.suspended",
+        "workspace.global_dock.platform.succeeded",
+        "workspace.global_dock.platform.failed",
+        "workspace.global_dock.platform.expired",
+        "workspace.global_dock.platform.superseded",
+        "workspace.global_dock.platform.abandoned",
+        "workspace.global_dock.platform.queued_notice",
+        "workspace.global_dock.platform.suspend",
+        "workspace.global_dock.platform.command_failed",
         "workspace.global_dock.tab.assets",
         "workspace.global_dock.tab.console",
         "workspace.global_dock.tab.mcp",
+        "workspace.mcp_commands.open_debug_capture",
+        "workspace.mcp_commands.open_scene_proposals",
+        "workspace.viewport.agent_review.summary",
+        "workspace.viewport.agent_review.position",
+        "workspace.viewport.agent_review.rotation",
+        "workspace.viewport.agent_review.scale",
+        "workspace.viewport.agent_review.spatial_warning",
+        "workspace.viewport.agent_review.confirm_spatial_impact",
+        "workspace.viewport.agent_review.preview_legend",
+        "workspace.viewport.agent_review.preview_unavailable",
+        "workspace.viewport.agent_review.rename",
+        "workspace.viewport.agent_review.enable_light",
+        "workspace.viewport.agent_review.disable_light",
+        "workspace.viewport.agent_review.apply",
+        "workspace.viewport.agent_review.discard",
+        "workspace.viewport.agent_review.invalid",
         "workspace.global_dock.tab.performance",
         "workspace.global_dock.tab.physics",
         "workspace.global_dock.tab.audio",
@@ -54,9 +110,9 @@ namespace {
         "workspace.global_dock.console.row.warning",
         "workspace.global_dock.console.row.error",
         "workspace.global_dock.console.empty",
-        "workspace.global_dock.mcp.bridge",
-        "workspace.global_dock.mcp.tools",
-        "workspace.global_dock.mcp.awaiting",
+        "workspace.global_dock.mcp.empty",
+        "workspace.global_dock.mcp.copy",
+        "workspace.global_dock.mcp.operation.finished",
         "workspace.global_dock.performance.gpu",
         "workspace.global_dock.performance.cpu",
         "workspace.global_dock.performance.memory",
@@ -88,13 +144,31 @@ namespace {
         "workspace.content_browser.prefab.migration_required",
     };
     constexpr std::array recoveryKeys{
+        "workspace.paired_recovery.keep_description",
+        "workspace.paired_recovery.keep",
+        "workspace.paired_recovery.available",
+        "workspace.paired_recovery.reopen",
+        "workspace.paired_recovery.invalid",
+        "workspace.paired_recovery.review",
+        "workspace.paired_recovery.title",
+        "workspace.paired_recovery.description",
+        "workspace.paired_recovery.restore",
+        "workspace.paired_recovery.cancel",
+        "workspace.paired_recovery.blocked",
+        "workspace.paired_recovery.failed",
         "workspace.recovery.available",
         "workspace.recovery.restore",
         "workspace.recovery.discard",
     };
+    constexpr std::array prefabOverrideKeys{
+        "workspace.prefab.diff.revert_value",    "workspace.prefab.diff.revert_component", "workspace.prefab.diff.revert_object",
+        "workspace.prefab.diff.revert_instance", "workspace.prefab.diff.apply_value",      "workspace.prefab.diff.apply_component",
+        "workspace.prefab.diff.apply_object",    "workspace.prefab.diff.apply_instance",
+    };
     constexpr std::array projectLoadingKeys{
-        "project_loading.status.loading_scene",
-        "project_loading.error.scene",
+        "project_loading.status.loading_scene",      "project_loading.error.scene",
+        "project_loading.error.platform_identity",   "project_loading.error.creation_durability",
+        "project_loading.error.creation_unexpected", "project_loading.error.creation_publication",
     };
     constexpr std::array sceneConflictKeys{
         "workspace.scene_conflict.available",      "workspace.scene_conflict.compare",
@@ -122,6 +196,72 @@ namespace {
         REQUIRE((service.ActivatePrepared()));
     }
 
+    /** @brief Covers the optional local XR listening controls in both shipped languages. */
+    void RequireXrListeningCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array keys{
+            "workspace.local_agent.xr_listening_idle",
+            "workspace.local_agent.xr_listening_limit",
+            "workspace.local_agent.xr_listening_provider_timeout",
+            "workspace.local_agent.xr_listening_update_limit",
+            "workspace.local_agent.xr_listening_resources_unavailable",
+            "workspace.local_agent.xr_listening_provider_unavailable",
+            "workspace.local_agent.xr_listening_invalid_transcript",
+            "workspace.local_agent.xr_listening_low_confidence",
+            "workspace.local_agent.xr_listening_privacy",
+            "workspace.local_agent.xr_listening_max_audio_seconds",
+            "workspace.local_agent.xr_listening_admitted_audio_ms",
+            "workspace.local_agent.xr_listening_after_capture_ms",
+            "workspace.local_agent.xr_listening_active",
+            "workspace.local_agent.xr_listening_finishing",
+            "workspace.local_agent.xr_listening_draft",
+            "workspace.local_agent.xr_listening_speech_only",
+            "workspace.local_agent.xr_listening_spatial_rejected",
+            "workspace.local_agent.xr_listening_spatial",
+            "workspace.local_agent.xr_listening_interrupted",
+            "workspace.local_agent.xr_listening_microphone_permission",
+            "workspace.local_agent.xr_listening_speech_permission",
+            "workspace.local_agent.xr_listening_permission_pending",
+            "workspace.local_agent.xr_listening_permission_denied",
+            "workspace.local_agent.xr_listening_permission_unavailable",
+            "workspace.local_agent.xr_listening_input_busy",
+            "workspace.local_agent.xr_listening_play_unavailable",
+            "workspace.local_agent.xr_listening_select_input",
+            "workspace.local_agent.xr_listening_refresh",
+            "workspace.local_agent.xr_listening_input",
+            "workspace.local_agent.xr_listening_start",
+            "workspace.local_agent.xr_listening_finish",
+            "workspace.local_agent.xr_listening_cancel",
+            "workspace.local_agent.xr_listening_discard",
+        };
+        RequireCatalogKeys(service, keys);
+    }
+
+    /** @brief Covers the localized read-only XR evidence reviews. */
+    void RequireXrEvidenceCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array keys{
+            "workspace.local_agent.xr_reference_review",     "workspace.local_agent.xr_pointing_review",
+            "workspace.local_agent.xr_location_review",      "workspace.local_agent.xr_location_coordinates",
+            "workspace.local_agent.xr_surface_review",       "workspace.local_agent.xr_surface_empty",
+            "workspace.local_agent.xr_surface_unavailable",  "workspace.local_agent.xr_surface_floor",
+            "workspace.local_agent.xr_surface_ceiling",      "workspace.local_agent.xr_surface_wall",
+            "workspace.local_agent.xr_surface_platform",     "workspace.local_agent.xr_surface_unknown",
+            "workspace.local_agent.xr_contacts_review",      "workspace.local_agent.xr_contacts_unavailable",
+            "workspace.local_agent.xr_contacts_tick",        "workspace.local_agent.xr_contacts_empty",
+            "workspace.local_agent.xr_contacts_trigger",     "workspace.local_agent.xr_contacts_contact",
+            "workspace.local_agent.xr_contacts_contact_end", "workspace.local_agent.xr_contacts_trigger_exit",
+            "workspace.local_agent.xr_pointing_unavailable", "workspace.local_agent.xr_pointing_empty",
+            "workspace.local_agent.xr_reference_stale",      "workspace.local_agent.xr_reference_revision",
+            "workspace.local_agent.xr_reference_mounted",    "workspace.local_agent.xr_reference_empty",
+            "workspace.local_agent.xr_reference_ambiguous",  "workspace.local_agent.xr_reference_available",
+            "workspace.local_agent.xr_reference_mixed_miss",
+            "workspace.local_agent.xr_reference_hidden",     "workspace.local_agent.xr_reference_locked",
+            "workspace.local_agent.xr_reference_deleted",    "workspace.local_agent.xr_reference_out_of_scope",
+            "workspace.local_agent.xr_play_selection_review",
+            "workspace.local_agent.xr_play_selection_empty",
+        };
+        RequireCatalogKeys(service, keys);
+    }
+
     /** @brief Requires the localized controls and close decisions belonging to persistent document tabs. */
     void RequireDocumentCatalogKeys(const Horo::Editor::LocalizationService &service) {
         constexpr std::array sourceEditingKeys{
@@ -141,6 +281,141 @@ namespace {
             "workspace.source_edit.history_evicted",
             "workspace.source_edit.history_oversized",
             "workspace.source_edit.close_search",
+            "workspace.source_review.previous",
+            "workspace.source_review.next",
+            "workspace.source_review.conflict",
+            "workspace.source_review.dismiss",
+            "workspace.source_review.source_diagnostics",
+            "workspace.source_review.applied_diagnostics",
+            "workspace.source_review.errors",
+            "workspace.source_review.warnings",
+            "workspace.source_review.diagnostics_unavailable",
+            "workspace.local_agent.source_patch_review",
+            "workspace.local_agent.cloud_use",
+            "workspace.local_agent.cloud_profile_working",
+            "workspace.local_agent.cloud_profile_failed",
+            "workspace.local_agent.cloud_model_save",
+            "workspace.local_agent.cloud_model_saved",
+            "workspace.local_agent.cloud_use_local",
+            "workspace.local_agent.cloud_endpoint",
+            "workspace.local_agent.cloud_key_enroll",
+            "workspace.local_agent.cloud_key_revoke",
+            "workspace.local_agent.cloud_key_saved",
+            "workspace.local_agent.cloud_key_removed",
+            "workspace.local_agent.cloud_key_failed",
+            "workspace.local_agent.cloud_review",
+            "workspace.local_agent.cloud_review_prompt",
+            "workspace.local_agent.cloud_review_discovery",
+            "workspace.local_agent.cloud_approve",
+            "workspace.local_agent.cloud_discard",
+            "workspace.local_agent.cloud_unavailable",
+            "workspace.local_agent.cloud_auth_failed",
+            "workspace.local_agent.cloud_rate_limited",
+            "workspace.local_agent.message_utf8_bytes",
+            "workspace.local_agent.model_output_cap",
+            "workspace.local_agent.model_input_tokens_reported",
+            "workspace.local_agent.model_output_tokens_reported",
+            "workspace.local_agent.local_only",
+            "workspace.local_agent.rate_limited",
+            "workspace.local_agent.request_budget_exceeded",
+            "workspace.local_agent.session_model_budget_exceeded",
+            "workspace.local_agent.project_model_budget_exceeded",
+            "workspace.local_agent.session_model_budget_usage",
+            "workspace.local_agent.project_model_budget_usage",
+            "workspace.local_agent.cloud_timeout",
+            "workspace.local_agent.cloud_working",
+            "workspace.local_agent.source_patch_stale",
+            "workspace.local_agent.source_patch_invalid",
+            "workspace.local_agent.source_patch_unavailable",
+            "workspace.local_agent.patch_file_create",
+            "workspace.local_agent.patch_file_edit",
+            "workspace.local_agent.patch_file_delete",
+            "workspace.local_agent.patch_file_rename",
+            "workspace.local_agent.patch_file_bytes",
+            "workspace.local_agent.patch_file_ranges",
+            "workspace.local_agent.patch_file_pending",
+            "workspace.local_agent.patch_file_source_unavailable",
+            "workspace.local_agent.patch_file_disk_changed",
+            "workspace.local_agent.patch_file_dirty_delete",
+            "workspace.local_agent.patch_file_case_only_rename",
+            "workspace.local_agent.source_patch_destination",
+            "workspace.local_agent.source_patch_destination_review",
+            "workspace.local_agent.source_patch_create_preview",
+            "workspace.local_agent.source_patch_check_syntax",
+            "workspace.local_agent.source_patch_syntax_clean",
+            "workspace.local_agent.source_patch_syntax_invalid",
+            "workspace.local_agent.source_patch_syntax_unavailable",
+            "workspace.local_agent.source_patch_check_cpp",
+            "workspace.local_agent.source_patch_cpp_clean",
+            "workspace.local_agent.source_patch_cpp_findings",
+            "workspace.local_agent.source_patch_cpp_unavailable",
+            "workspace.local_agent.source_patch_diagnostics_truncated",
+            "workspace.local_agent.source_patch_create_excerpt",
+            "workspace.local_agent.source_patch_structural_preview",
+            "workspace.local_agent.source_patch_confirm_delete",
+            "workspace.local_agent.source_patch_confirm_moves",
+            "workspace.local_agent.source_patch_group_recovery",
+            "workspace.local_agent.source_patch_cross_volume",
+            "workspace.local_agent.source_patch_move_unsupported",
+            "workspace.local_agent.source_patch_confirm_rename",
+            "workspace.local_agent.source_patch_rename_complete",
+            "workspace.local_agent.source_patch_rename_recovery",
+            "workspace.local_agent.source_patch_delete_complete",
+            "workspace.local_agent.source_patch_delete_recovery",
+            "workspace.local_agent.patch_file_parent_missing",
+            "workspace.local_agent.patch_file_redirect",
+            "workspace.local_agent.patch_file_destination_alias",
+            "workspace.local_agent.patch_file_destination_unavailable",
+            "workspace.local_agent.patch_file_destination_occupied",
+            "workspace.local_agent.patch_file_overlap",
+            "workspace.local_agent.patch_file_rejected",
+            "workspace.local_agent.patch_file_accepted",
+            "workspace.local_agent.patch_file_mixed",
+            "workspace.local_agent.source_patch_accept_file",
+            "workspace.local_agent.source_patch_reject_file",
+            "workspace.local_agent.source_patch_accept_all",
+            "workspace.local_agent.source_patch_undo",
+            "workspace.local_agent.source_patch_apply",
+            "workspace.local_agent.source_patch_applied",
+            "workspace.local_agent.source_patch_apply_failed",
+            "workspace.local_agent.source_patch_revert",
+            "workspace.local_agent.source_patch_reverted",
+            "workspace.local_agent.source_patch_revert_failed",
+            "workspace.local_agent.source_patch_transaction_conflict",
+            "workspace.local_agent.source_patch_transaction_cancelled",
+            "workspace.local_agent.source_patch_transaction_preparing",
+            "workspace.local_agent.source_patch_audit_proposal",
+            "workspace.local_agent.source_patch_audit_historical",
+            "workspace.local_agent.source_patch_audit_applied",
+            "workspace.local_agent.source_patch_audit_saved",
+            "workspace.local_agent.source_patch_audit_reverted",
+            "workspace.local_agent.source_patch_audit_stale",
+            "workspace.local_agent.source_validation_save",
+            "workspace.local_agent.source_validation_building",
+            "workspace.local_agent.source_validation_build_passed",
+            "workspace.local_agent.source_validation_build_failed",
+            "workspace.local_agent.source_validation_testing",
+            "workspace.local_agent.source_validation_tests_passed",
+            "workspace.local_agent.source_validation_tests_failed",
+            "workspace.local_agent.source_validation_stale",
+            "workspace.local_agent.source_validation_approve_build",
+            "workspace.local_agent.source_validation_approve_test",
+            "workspace.local_agent.source_patch_audit_history_error",
+            "workspace.local_agent.source_patch_hunks",
+            "workspace.local_agent.source_patch_checkpoint_save",
+            "workspace.local_agent.source_patch_checkpoint_load",
+            "workspace.local_agent.source_patch_checkpoint_saved",
+            "workspace.local_agent.source_patch_checkpoint_loaded",
+            "workspace.local_agent.source_patch_checkpoint_missing",
+            "workspace.local_agent.source_patch_checkpoint_stale",
+            "workspace.local_agent.source_patch_checkpoint_error",
+            "workspace.local_agent.source_patch_range",
+            "workspace.local_agent.source_patch_offset",
+            "workspace.local_agent.source_patch_previous_hunk",
+            "workspace.local_agent.source_patch_next_hunk",
+            "workspace.local_agent.source_patch_accept_hunk",
+            "workspace.local_agent.source_patch_reject_hunk",
+            "workspace.local_agent.source_patch_reject",
         };
         RequireCatalogKeys(service, sourceEditingKeys);
         constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",
@@ -152,7 +427,40 @@ namespace {
         RequireCatalogKeys(service, documentKeys);
     }
 
+    /** @brief Verifies the package removal review controls and reference labels in each loaded catalog. */
+    void RequireRemovalReviewKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array keys{"workspace.packages.previous_references",
+                                  "workspace.packages.next_references",
+                                  "workspace.packages.reference_importer",
+                                  "workspace.packages.reference_behavior",
+                                  "workspace.packages.reference_component",
+                                  "workspace.packages.reference_component_access",
+                                  "workspace.packages.reference_service",
+                                  "workspace.packages.reference_decision",
+                                  "workspace.packages.reference_perception",
+                                  "workspace.packages.reference_unreadable",
+                                  "workspace.packages.reference_saved_source_unreadable",
+                                  "workspace.packages.reference_registration",
+                                  "workspace.packages.declared_module",
+                                  "workspace.packages.activate_importer_module",
+                                  "workspace.packages.reference_composition_missing",
+                                  "workspace.packages.reference_composition_type",
+                                  "workspace.packages.reference_subplan_missing",
+                                  "workspace.packages.reference_subplan_ambiguous",
+                                  "workspace.packages.reference_subplan_incompatible",
+                                  "workspace.packages.reference_coverage",
+                                  "workspace.packages.reference_descriptor_unverified",
+                                  "workspace.packages.reference_module_owner",
+                                  "workspace.packages.reference_contribution_owner",
+                                  "workspace.packages.reference_file_owner"};
+        RequireCatalogKeys(service, keys);
+    }
+
     void RequireSettingsCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array focusHistoryKeys{"workspace.accessibility_contrast.controls_focus_history",
+                                               "workspace.accessibility_contrast.controls_history_no_focus",
+                                               "workspace.accessibility_contrast.controls_history_named"};
+        RequireCatalogKeys(service, focusHistoryKeys);
         REQUIRE_FALSE(service.Get("editor", "settings.nav.packages").starts_with("[missing:"));
         REQUIRE_FALSE(service.Get("editor", "settings.nav.updates").starts_with("[missing:"));
         constexpr std::array updateKeys{"settings.updates.check",
@@ -180,23 +488,201 @@ namespace {
                                          "workspace.packages.restore",
                                          "workspace.packages.install",
                                          "workspace.packages.package",
+                                         "workspace.packages.required_by",
+                                         "workspace.packages.preview_removal",
+                                         "workspace.packages.removal_kept",
+                                         "workspace.packages.removal_candidates",
+                                         "workspace.packages.removal_native_in_use",
+                                         "workspace.packages.removal_reference_check",
+                                         "workspace.packages.removal_save_and_stop",
+                                         "workspace.packages.confirm_removal",
+                                         "workspace.packages.removal_committed",
                                          "workspace.packages.descriptor",
                                          "workspace.packages.activate",
+                                         "workspace.packages.gameplay_module",
+                                         "workspace.packages.activate_gameplay_module",
                                          "workspace.packages.disable",
                                          "workspace.packages.cancel",
                                          "workspace.packages.running",
                                          "workspace.packages.terminal",
                                          "workspace.packages.operation_failed",
+                                         "workspace.packages.execution_trust_required",
                                          "workspace.packages.close",
                                          "workspace.packages.retry",
                                          "workspace.packages.recovery_hint"};
         RequireCatalogKeys(service, packageKeys);
         RequireCatalogKeys(service, globalDockKeys);
+        RequireXrListeningCatalogKeys(service);
+        RequireXrEvidenceCatalogKeys(service);
         RequireDocumentCatalogKeys(service);
         RequireCatalogKeys(service, contentBrowserKeys);
+        RequireCatalogKeys(service, std::array{"workspace.source_language.unavailable",
+                                               "workspace.source_language.definition",
+                                               "workspace.source_language.waiting",
+                                               "workspace.source_language.retry",
+                                               "workspace.source_language.no_definition",
+                                               "workspace.source_language.actions",
+                                               "workspace.source_language.references",
+                                               "workspace.source_language.choose_reference",
+                                               "workspace.source_language.no_references",
+                                               "workspace.source_language.document_symbols",
+                                               "workspace.source_language.choose_document_symbol",
+                                               "workspace.source_language.no_document_symbols",
+                                               "workspace.source_language.code_actions",
+                                               "workspace.source_language.choose_code_action",
+                                               "workspace.source_language.no_code_actions",
+                                               "workspace.source_language.code_action_before",
+                                               "workspace.source_language.code_action_after",
+                                               "workspace.source_language.apply_code_action",
+                                               "workspace.source_language.dismiss_code_action",
+                                               "workspace.source_language.complete",
+                                               "workspace.source_language.choose_completion",
+                                               "workspace.source_language.no_completion",
+                                               "workspace.source_language.script_diagnostics",
+                                               "workspace.source_language.unknown_script_member",
+                                               "workspace.source_language.script_actions",
+                                               "workspace.source_language.describe_symbol",
+                                               "workspace.source_language.no_symbol",
+                                               "workspace.source_language.script_module_unavailable"});
         RequireCatalogKeys(service, recoveryKeys);
+        RequireCatalogKeys(service, prefabOverrideKeys);
         RequireCatalogKeys(service, projectLoadingKeys);
         RequireCatalogKeys(service, sceneConflictKeys);
+        constexpr std::array xrSetupKeys{
+            "workspace.xr_setup.title",
+            "workspace.xr_setup.runtime_discovered",
+            "workspace.xr_setup.runtime_missing",
+            "workspace.xr_setup.renderer_ready",
+            "workspace.xr_setup.renderer_missing",
+            "workspace.xr_setup.display_refresh_rates",
+            "workspace.xr_setup.display_refresh_unavailable",
+            "workspace.xr_setup.display_view_extents",
+            "workspace.xr_setup.profile_projection",
+            "workspace.xr_setup.profile_tracked",
+            "workspace.xr_setup.profile_unavailable",
+            "workspace.xr_setup.test_not_run",
+            "workspace.xr_setup.test_queued",
+            "workspace.xr_setup.test_passed",
+            "workspace.xr_setup.test_failed",
+            "workspace.xr_setup.test_cancelled",
+            "workspace.xr_setup.permissions",
+            "workspace.xr_setup.busy",
+            "workspace.xr_setup.unavailable",
+            "workspace.xr_setup.renderer_incompatible",
+            "workspace.xr_setup.unsupported",
+            "workspace.xr_setup.permission_denied",
+            "workspace.xr_setup.stale",
+            "workspace.xr_setup.capacity",
+            "workspace.xr_setup.invalid",
+            "workspace.xr_setup.cleanup",
+            "workspace.xr_setup.run_test",
+            "workspace.xr_setup.haptic_left",
+            "workspace.xr_setup.haptic_right",
+            "workspace.xr_setup.haptic_queued",
+            "workspace.xr_setup.haptic_submitted",
+            "workspace.xr_setup.haptic_unsupported",
+            "workspace.xr_setup.haptic_rejected",
+            "workspace.xr_setup.haptic_cancelled",
+            "workspace.xr_setup.planes_scope",
+            "workspace.xr_setup.planes_allow",
+            "workspace.xr_setup.planes_revoke",
+            "workspace.xr_setup.planes_armed",
+            "workspace.xr_setup.planes_waiting",
+            "workspace.xr_setup.planes_tracking",
+            "workspace.xr_setup.planes_rejected",
+            "workspace.xr_setup.gaze_scope",
+            "workspace.xr_setup.gaze_allow",
+            "workspace.xr_setup.gaze_armed",
+            "workspace.xr_setup.gaze_waiting",
+            "workspace.xr_setup.gaze_tracking",
+            "workspace.xr_setup.gaze_revoke",
+            "workspace.xr_setup.gaze_rejected",
+            "workspace.xr_setup.passthrough_scope",
+            "workspace.xr_setup.passthrough_allow",
+            "workspace.xr_setup.passthrough_revoke",
+            "workspace.xr_setup.passthrough_armed",
+            "workspace.xr_setup.passthrough_pending",
+            "workspace.xr_setup.passthrough_active",
+            "workspace.xr_setup.passthrough_denied",
+            "workspace.xr_setup.passthrough_rejected",
+            "workspace.xr_setup.inspect_title",
+            "workspace.xr_setup.inspect_unavailable",
+            "workspace.xr_setup.inspect_idle",
+            "workspace.xr_setup.inspect_waiting",
+            "workspace.xr_setup.inspect_unfocused",
+            "workspace.xr_setup.inspect_events",
+            "workspace.xr_setup.inspect_current",
+            "workspace.xr_setup.inspect_stale",
+            "workspace.xr_setup.inspect_redacted",
+            "workspace.xr_setup.inspect_session",
+            "workspace.xr_setup.inspect_session_inactive",
+            "workspace.xr_setup.inspect_session_ready",
+            "workspace.xr_setup.inspect_session_running",
+            "workspace.xr_setup.inspect_session_visible",
+            "workspace.xr_setup.inspect_session_focused",
+            "workspace.xr_setup.inspect_session_stopping",
+            "workspace.xr_setup.inspect_session_lost",
+            "workspace.xr_setup.inspect_session_destroyed",
+            "workspace.xr_setup.inspect_generations",
+            "workspace.xr_setup.inspect_focus",
+            "workspace.xr_setup.inspect_yes",
+            "workspace.xr_setup.inspect_no",
+            "workspace.xr_setup.inspect_capability_revision",
+            "workspace.xr_setup.inspect_projection",
+            "workspace.xr_setup.inspect_view",
+            "workspace.xr_setup.inspect_local",
+            "workspace.xr_setup.inspect_stage",
+            "workspace.xr_setup.inspect_world",
+            "workspace.xr_setup.inspect_action_space",
+            "workspace.xr_setup.inspect_action_projection",
+            "workspace.xr_setup.inspect_hands",
+            "workspace.xr_setup.inspect_eye_gaze",
+            "workspace.xr_setup.inspect_unsupported",
+            "workspace.xr_setup.inspect_not_available",
+            "workspace.xr_setup.inspect_available",
+            "workspace.xr_setup.inspect_permission_required",
+            "workspace.xr_setup.inspect_denied",
+            "workspace.xr_setup.inspect_dependency_missing",
+            "workspace.xr_setup.inspect_incompatible",
+            "workspace.xr_setup.inspect_temporary",
+            "workspace.xr_setup.inspect_policy_disabled",
+            "workspace.xr_setup.inspect_not_requested",
+            "workspace.xr_setup.inspect_required",
+            "workspace.xr_setup.inspect_optional_enabled",
+            "workspace.xr_setup.inspect_optional_disabled",
+            "workspace.xr_setup.inspect_projection_fallback",
+            "workspace.xr_setup.inspect_tracking",
+            "workspace.xr_setup.inspect_active",
+            "workspace.xr_setup.inspect_tracking_lost",
+            "workspace.xr_setup.inspect_tracking_permission",
+            "workspace.xr_setup.inspect_tracking_revisions",
+            "workspace.xr_setup.inspect_capture_ms",
+            "workspace.xr_setup.inspect_devices",
+            "workspace.xr_setup.inspect_poses",
+            "workspace.xr_setup.inspect_left_hand",
+            "workspace.xr_setup.inspect_right_hand",
+            "workspace.xr_setup.inspect_position_validity",
+            "workspace.xr_setup.inspect_orientation_validity",
+            "workspace.xr_setup.inspect_confidence",
+            "workspace.xr_setup.inspect_space_references",
+            "workspace.xr_setup.inspect_action_count",
+            "workspace.xr_setup.inspect_source_head",
+            "workspace.xr_setup.inspect_source_left_controller",
+            "workspace.xr_setup.inspect_source_right_controller",
+            "workspace.xr_setup.inspect_source_tracker",
+            "workspace.xr_setup.inspect_source_left_hand",
+            "workspace.xr_setup.inspect_source_right_hand",
+            "workspace.xr_setup.inspect_binding_source",
+            "workspace.xr_setup.inspect_boolean",
+            "workspace.xr_setup.inspect_scalar",
+            "workspace.xr_setup.inspect_vector",
+            "workspace.xr_setup.inspect_omitted_actions",
+            "workspace.xr_setup.inspect_tracked",
+            "workspace.xr_setup.inspect_disconnected",
+            "workspace.xr_setup.inspect_hand_generation",
+            "workspace.xr_setup.close",
+        };
+        RequireCatalogKeys(service, xrSetupKeys);
     }
 
     TEST_CASE("Locale Tags Normalize And Reject Invalid Input", "[unit][editor]") {
@@ -280,6 +766,8 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.compare") == "Compare with disk");
+        CHECK(service.Get("editor", "workspace.prefab_document.keep") == "Keep local draft");
         CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
         CHECK(service.Get("editor", "workspace.prefab_document.discard_recovery").find("keep source edits") != std::string::npos);
         CHECK(service.Get("editor", "workspace.prefab_document.source_controls").find("Scene viewport") != std::string::npos);
@@ -290,6 +778,7 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Missing Gameplay Asset Type"));
         RequireSettingsCatalogKeys(service);
+        RequireRemovalReviewKeys(service);
         for (const auto key : {"workspace.activity.move_left", "workspace.activity.move_right", "workspace.activity.move_bottom",
                                "workspace.activity.move_earlier", "workspace.activity.move_later"})
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
@@ -297,6 +786,8 @@ namespace {
         REQUIRE((service.Prepare(Horo::Editor::LocaleTag{"tr-TR"}, &error)));
         REQUIRE((service.ActivatePrepared(&error)));
         REQUIRE((service.Get("editor", "settings.input.shortcut.click_to_record") == "Kaydetmek için tıkla"));
+        CHECK(service.Get("editor", "workspace.prefab_document.compare") == "Diskteki sürümle karşılaştır");
+        CHECK(service.Get("editor", "workspace.prefab_document.keep") == "Yerel taslağı koru");
         REQUIRE((service.Get("editor", "settings.input.shortcut.press_keys") == "Tuşlara basın..."));
         REQUIRE((service.Get("editor", "workspace.content_browser.embedded") == "YERLEŞİK"));
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Proje varlık paneli"));
@@ -308,9 +799,24 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Eksik Oynanış Asset Türü"));
         RequireSettingsCatalogKeys(service);
+        RequireRemovalReviewKeys(service);
         for (const auto key : {"workspace.activity.move_left", "workspace.activity.move_right", "workspace.activity.move_bottom",
                                "workspace.activity.move_earlier", "workspace.activity.move_later"})
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
+    }
+
+    TEST_CASE("Recording failure reasons resolve in both editor locales", "[unit][editor][audio][localization]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        constexpr std::array keys{"settings.audio.microphone.recording.permission_denied", "settings.audio.microphone.recording.device_lost",
+                                  "settings.audio.microphone.recording.insufficient_space"};
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{locale}};
+            Horo::Editor::LocalizationError error;
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            RequireCatalogKeys(service, keys);
+        }
     }
 
     TEST_CASE("Selected XR mirror meaning is explicit in both supported locales", "[unit][editor][xr][localization]") {
@@ -323,6 +829,48 @@ namespace {
             REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
             REQUIRE(service.ActivatePrepared(&error));
             CHECK(service.Get("editor", "workspace.game.xr_mirror") == label);
+        }
+    }
+
+    TEST_CASE("Play Decision provider context is translated in both supported locales", "[unit][editor][ai][localization]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        constexpr std::array providerKeys{"workspace.game.ai_problem_provider",
+                                          "workspace.game.ai_problem_graph",
+                                          "workspace.game.ai_problem_node",
+                                          "workspace.game.ai_inspection_title",
+                                          "workspace.game.ai_inspection_compare",
+                                          "workspace.game.ai_inspection_filter",
+                                          "workspace.game.ai_inspection_redacted",
+                                          "workspace.game.ai_inspection_age",
+                                          "workspace.game.ai_inspection_provider",
+                                          "workspace.game.ai_inspection_provider_available",
+                                          "workspace.game.ai_inspection_provider_unavailable",
+                                          "workspace.game.ai_inspection_capability_spatial",
+                                          "workspace.game.ai_inspection_capability_sight",
+                                          "workspace.game.ai_inspection_capability_acoustic",
+                                          "workspace.game.ai_inspection_capability_contact",
+                                          "workspace.game.ai_inspection_capability_relay",
+                                          "workspace.game.ai_inspection_capability_script",
+                                          "workspace.game.ai_inspection_navigation",
+                                          "workspace.game.ai_inspection_navigation_disabled",
+                                          "workspace.game.ai_inspection_omitted_tasks",
+                                          "workspace.game.ai_inspection_trace",
+                                          "workspace.game.ai_inspection_transition",
+                                          "workspace.game.ai_inspection_utility_consideration",
+                                          "workspace.game.ai_inspection_utility_total",
+                                          "workspace.game.ai_inspection_trace_overflow",
+                                          "workspace.game.ai_debug_pause",
+                                          "workspace.game.ai_debug_step",
+                                          "workspace.game.ai_debug_resume",
+                                          "workspace.game.ai_debug_set_breakpoint",
+                                          "workspace.game.ai_debug_clear_breakpoint"};
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{locale}};
+            Horo::Editor::LocalizationError error;
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            RequireCatalogKeys(service, providerKeys);
         }
     }
 
@@ -578,6 +1126,184 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Microphone permission settings resolve in each shipped editor locale", "[unit][editor][localization]") {
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        const Horo::Editor::LocaleTag tag{locale};
+        Horo::Editor::LocalizationService service{tag};
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
+        REQUIRE(service.Prepare(tag));
+        REQUIRE(service.ActivatePrepared());
+        for (const auto suffix : {"title", "required", "pending", "granted", "denied", "unavailable", "request", "input", "scan", "test",
+                                  "test_description", "start", "stop", "starting", "capturing", "test_failed"}) {
+            const auto key = std::string{"settings.audio.microphone."} + suffix;
+            INFO(locale);
+            CHECK_FALSE(service.Get("editor", key).empty());
+            CHECK(service.Get("editor", key) != key);
+        }
+    }
+}
+
+TEST_CASE("Decision query authoring and preview copy resolve in both shipped locales", "[unit][editor][decision][localization]") {
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+    Horo::Editor::LocalizationError error;
+    for (const auto locale : {"en-US", "tr-TR"})
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+        REQUIRE(service.ActivatePrepared(&error));
+        for (const auto key : {"bound_query", "select_query", "review_query", "no_query_keys", "query_output_key", "select_query_key",
+                               "query_timeout", "apply_query_output"}) {
+            const auto full = std::string{"workspace.decision_graph."} + key;
+            INFO(locale);
+            INFO(full);
+            CHECK_FALSE(service.Get("editor", full).empty());
+            CHECK(service.Get("editor", full) != full);
+        }
+        constexpr auto framePoint = "workspace.environment_query.preview_frame_candidate";
+        CHECK_FALSE(service.Get("editor", framePoint).empty());
+        CHECK(service.Get("editor", framePoint) != framePoint);
+    }
+}
+
+TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][editor][agent][localization]") {
+    using namespace Horo::Editor;
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    constexpr GuiLocalizationScope panel{"workspace.local_agent"};
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService service{LocaleTag{locale}};
+        LocalizationError error;
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        REQUIRE(service.Prepare(LocaleTag{locale}, &error));
+        REQUIRE(service.ActivatePrepared(&error));
+        for (const auto key : {"title",
+                               "endpoint",
+                               "discover",
+                               "model",
+                               "prompt",
+                               "ask",
+                               "regenerate",
+                               "stop",
+                               "working",
+                               "invalid",
+                               "unavailable",
+                               "timeout",
+                               "cancelled",
+                               "failed",
+                               "no_models",
+                               "empty_response",
+                               "scene_count",
+                               "scene_query_review",
+                               "scene_query_arguments",
+                               "scene_query_scope",
+                               "scene_query_impact",
+                               "scene_query_deny",
+                               "scene_query_running",
+                               "scene_query_succeeded",
+                               "scene_query_denied",
+                               "scene_query_cancelled",
+                               "scene_query_timeout",
+                               "scene_query_failed",
+                               "scene_query_audit",
+                               "scene_query_revoke",
+                               "ask_with_scene_count",
+                               "tools_unsupported",
+                               "history_review",
+                               "history_save",
+                               "history_saving",
+                               "history_saved",
+                               "history_write_error",
+                               "history_manage",
+                               "history_changed",
+                               "history_working",
+                               "history_name",
+                               "history_rename",
+                               "history_archive",
+                               "history_restore",
+                               "history_export",
+                               "history_copy_export",
+                               "history_delete",
+                               "history_delete_confirm",
+                               "history_cancel",
+                               "history_recovery_offer",
+                               "history_recovery_prompt",
+                               "history_recovery_start",
+                               "history_recovery_answer",
+                               "history_draft_offer",
+                               "history_draft_preview",
+                               "history_draft_save",
+                               "history_draft_cancel",
+                               "history_draft_saved",
+                               "history_draft_unavailable",
+                               "history_input_tokens",
+                               "history_output_tokens",
+                               "history_reference_review",
+                               "history_reference_save",
+                               "history_reference_record",
+                               "history_reference_answer",
+                               "history_reference_asset",
+                               "history_reference_document",
+                               "history_reference_tool",
+                               "history_reference_build",
+                               "history_reference_revision",
+                               "history_recovery_keep_incomplete",
+                               "history_incomplete",
+                               "history_streaming",
+                               "context_offer",
+                               "context_file_offer",
+                               "context_scene_selection_offer",
+                               "context_scene_selection_unavailable",
+                               "context_viewport_offer",
+                               "context_viewport_unavailable",
+                               "context_viewport_add_transforms",
+                               "context_viewport_remove_transforms",
+                               "context_file_empty",
+                               "context_saved_file_offer",
+                               "context_saved_file_path",
+                               "context_saved_file_reading",
+                               "context_saved_file_unavailable",
+                               "context_file_unavailable",
+                               "context_file_select",
+                               "context_file_add",
+                               "context_file_remove",
+                               "context_files_preview",
+                               "context_file_previous",
+                               "context_file_next",
+                               "context_range_offer",
+                               "context_range_unavailable",
+                               "context_build_offer",
+                               "context_completed_build_offer",
+                               "context_build_diagnostics_offer",
+                               "context_build_diagnostics_unavailable",
+                               "context_active_build_diagnostics_offer",
+                               "context_active_build_diagnostics_unavailable",
+                               "context_build_diagnostics_reading",
+                               "context_editor_diagnostics_offer",
+                               "context_editor_diagnostics_unavailable",
+                               "context_editor_diagnostics_reading",
+                               "context_completed_build_unavailable",
+                               "context_build_unavailable",
+                               "context_review",
+                               "context_clipboard_note",
+                               "context_clipboard_report",
+                               "context_clipboard_unavailable",
+                               "context_approve",
+                               "context_cancel",
+                               "context_unavailable",
+                               "context_stale",
+                               "history_recent_messages",
+                               "history_title",
+                               "history_unavailable"}) {
+            INFO(locale);
+            INFO(key);
+            const auto &value = panel.Text(service, key);
+            CHECK_FALSE(value.empty());
+            CHECK(value != std::string{"workspace.local_agent."} + key);
+        }
+    }
+}
+
 TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales", "[unit][editor][ui_canvas][localization]") {
     const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
@@ -591,6 +1317,8 @@ TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales"
                                "redo",
                                "reload",
                                "command_failed",
+                               "preview.inspect_problem_element",
+                               "preview.inspect_problem_property",
                                "search",
                                "create",
                                "move_up",
@@ -616,6 +1344,12 @@ TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales"
             INFO(full);
             CHECK_FALSE(service.Get("editor", full).empty());
             CHECK(service.Get("editor", full) != full);
+        }
+        for (const auto key : {"workspace.ui_inspector.layout_measured_dip", "workspace.ui_inspector.layout_content_dip"}) {
+            INFO(locale);
+            INFO(key);
+            CHECK_FALSE(service.Get("editor", key).empty());
+            CHECK(service.Get("editor", key) != key);
         }
     }
 }

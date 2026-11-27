@@ -1,0 +1,506 @@
+#include "Horo/Application/Internal/AudioRecording.h"
+#include "Horo/Audio/Internal/Sdl3AudioBackend.h"
+#include "Horo/Foundation/Platform.h"
+#include "OwnedTestDirectory.h"
+
+#include <algorithm>
+#include <array>
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <thread>
+#include <vector>
+
+namespace Horo::Audio::Backend {
+    namespace {
+        /** @brief Creates an independent capture backend for the SDL dummy driver selected by CTest. */
+        std::unique_ptr<Sdl3AudioBackend> MakeBackend() {
+            const Sdl3AudioBackendConfig config{.owner = AudioRuntimeId::Create(731).Value(), .clockDomain = 4};
+            auto backend = CreateSdl3AudioBackend(config);
+            REQUIRE(backend.HasValue());
+            return std::move(backend).Value();
+        }
+
+        /** @brief Pins an enumerated endpoint and its advertised PCM layout without the default route alias. */
+        AudioCaptureBufferDescriptor SelectEndpoint(const AudioCaptureDeviceSnapshot &catalog) {
+            const auto device = std::ranges::find_if(catalog.devices, [](const auto &entry) {
+                return entry.deviceClass != AudioDeviceClass::Virtual && entry.preferredFormat.has_value();
+            });
+            REQUIRE(device != catalog.devices.end());
+            return {.device = device->id,
+                    .generation = 1,
+                    .clockDomain = 4,
+                    .format = *device->preferredFormat,
+                    .slots = 2,
+                    .maximumFrames = 4096,
+                    .budgetBytes = 256 * 1024};
+        }
+
+        /** @brief Polls within a fixed test deadline while the actual SDL recording thread supplies PCM. */
+        Sdl3CaptureReadout WaitForOverflow(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant,
+                                           const std::uint64_t afterSequence = 0) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            AudioCapturedBlock ignored;
+            while (std::chrono::steady_clock::now() < deadline) {
+                const auto read = backend.ReadCapture(grant.generation, grant, ignored, {});
+                REQUIRE(read.HasValue());
+                if (const auto &drop = read.Value().latestDrop; drop && drop->sequence > afterSequence)
+                    return read.Value();
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            FAIL("The SDL recording callback did not fill and overflow the bounded ring.");
+            return {};
+        }
+
+        /** @brief Reads the next complete live block, including a following generation or gap. */
+        AudioCapturedBlock WaitForBlock(Sdl3AudioBackend &backend, const Sdl3CaptureGrant &grant, std::span<AudioSample> pcm) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            AudioCapturedBlock block;
+            while (std::chrono::steady_clock::now() < deadline) {
+                const auto read = backend.ReadCapture(grant.generation, grant, block, pcm);
+                REQUIRE(read.HasValue());
+                if (read.Value().status == AudioCaptureRead::Copied)
+                    return block;
+                REQUIRE(read.Value().status == AudioCaptureRead::Empty);
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            FAIL("The SDL recording callback did not publish another complete block.");
+            return {};
+        }
+
+        /** @brief Waits for the dummy callback without opening any physical device or reading PCM. */
+        void WaitForActivity(const Sdl3AudioBackend &backend) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            while (backend.CaptureActivity().state == Sdl3CaptureActivityState::AwaitingFrames &&
+                   std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            REQUIRE(backend.CaptureActivity().state == Sdl3CaptureActivityState::Capturing);
+        }
+
+        /** @brief Checks that live PCM and the source timeline survive a stalled reader. */
+        void VerifyOverflow(Sdl3AudioBackend &backend, const AudioCaptureBufferDescriptor &descriptor, const Sdl3CaptureGrant &grant,
+                            std::span<AudioSample> pcm) {
+            const auto full = WaitForOverflow(backend, grant);
+            CHECK(full.status == AudioCaptureRead::InsufficientSpace);
+            CHECK(full.droppedFrames > 0);
+            REQUIRE(full.latestDrop);
+            CHECK(full.latestDrop->start.clockDomain == descriptor.clockDomain);
+            CHECK(full.latestDrop->droppedFramesBefore + full.latestDrop->frames <= full.droppedFrames);
+            const auto stalled = WaitForOverflow(backend, grant, full.latestDrop->sequence);
+            REQUIRE(stalled.latestDrop);
+            CHECK(stalled.status == AudioCaptureRead::InsufficientSpace);
+            CHECK(stalled.latestDrop->droppedFramesBefore > full.latestDrop->droppedFramesBefore);
+            CHECK(stalled.latestDrop->firstFrame > full.latestDrop->firstFrame);
+            CHECK(stalled.latestDrop->start.nanoseconds > full.latestDrop->start.nanoseconds);
+            const auto activity = backend.CaptureActivity();
+            CHECK(activity.state == Sdl3CaptureActivityState::Capturing);
+            CHECK(activity.generation == descriptor.generation);
+            CHECK(activity.purpose == Sdl3CapturePurpose::Speech);
+            const auto channels = descriptor.format.layout.orderedChannels.size();
+            AudioCapturedBlock first;
+            const auto readFirst = backend.ReadCapture(grant.generation, grant, first, pcm);
+            REQUIRE(readFirst.HasValue());
+            REQUIRE(readFirst.Value().status == AudioCaptureRead::Copied);
+            REQUIRE(first.frames > 0);
+            CHECK(first.start.clockDomain == descriptor.clockDomain);
+            CHECK(first.firstFrame == 0);
+            CHECK(first.sequence == 1);
+            CHECK(std::ranges::all_of(std::span{pcm}.first(first.frames * channels), [](const AudioSample sample) {
+                return sample == 0.0F;
+            }));
+
+            AudioCapturedBlock second;
+            const auto readSecond = backend.ReadCapture(grant.generation, grant, second, pcm);
+            REQUIRE(readSecond.HasValue());
+            REQUIRE(readSecond.Value().status == AudioCaptureRead::Copied);
+            CHECK(second.firstFrame == first.frames);
+            CHECK(second.sequence == 2);
+            CHECK(second.start.nanoseconds - first.start.nanoseconds ==
+                  std::uint64_t{first.frames} * 1'000'000'000 / descriptor.format.sampleRate);
+            CHECK(full.latestDrop->sequence > second.sequence);
+            CHECK(full.latestDrop->start.nanoseconds - first.start.nanoseconds ==
+                  full.latestDrop->firstFrame * 1'000'000'000 / descriptor.format.sampleRate);
+            const auto afterGap = WaitForBlock(backend, grant, pcm);
+            CHECK(afterGap.sequence > second.sequence + 1);
+            CHECK(afterGap.firstFrame == second.firstFrame + second.frames + afterGap.droppedFramesBefore);
+            CHECK(afterGap.start.nanoseconds - first.start.nanoseconds ==
+                  afterGap.firstFrame * 1'000'000'000 / descriptor.format.sampleRate);
+        }
+
+        TEST_CASE("SDL recording callbacks feed bounded PCM only under an exact grant", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            REQUIRE(catalog.permission == AudioCapturePermission::NotRequired);
+            const auto descriptor = SelectEndpoint(catalog);
+            const auto defaultInput = ResolveAudioCaptureDevice(catalog, AudioDefaultDeviceRole::Multimedia);
+            REQUIRE(defaultInput.status == AudioDeviceResolutionStatus::Resolved);
+            CHECK(defaultInput.device == descriptor.device);
+            const Sdl3CaptureIntent intent{.purpose = Sdl3CapturePurpose::Speech};
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .intent = intent,
+                                   .foreground = true};
+            const auto denied = backend->StartCapture(descriptor, intent, grant);
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            grant.authorityRevision = 1;
+            --grant.discoveryRevision;
+            CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+            grant.discoveryRevision = catalog.revision;
+            REQUIRE(backend->StartCapture(descriptor, intent, grant).HasValue());
+            CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+
+            std::vector pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 1.0F);
+            VerifyOverflow(*backend, descriptor, grant, pcm);
+            REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->CaptureActivity().generation == 0);
+            AudioCapturedBlock stopped;
+            CHECK(backend->ReadCapture(descriptor.generation, grant, stopped, pcm).HasError());
+            CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+            auto replacement = descriptor;
+            ++replacement.generation;
+            grant.generation = replacement.generation;
+            ++grant.authorityRevision;
+            REQUIRE(backend->StartCapture(replacement, intent, grant).HasValue());
+            CHECK(backend->StopCapture(descriptor.generation).HasError());
+            CHECK(backend->ReadCapture(descriptor.generation, std::nullopt, stopped, pcm).HasError());
+            const auto restarted = WaitForBlock(*backend, grant, pcm);
+            CHECK(restarted.firstFrame == 0);
+            CHECK(restarted.sequence == 1);
+            CHECK(restarted.droppedFramesBefore == 0);
+            CHECK(backend->CaptureActivity().generation == replacement.generation);
+            REQUIRE(backend->StopCapture(replacement.generation).HasValue());
+        }
+
+        TEST_CASE("SDL capture rejects cross-purpose grants and retires withdrawn permission without a PCM read",
+                  "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            Sdl3CaptureIntent intent{.purpose = Sdl3CapturePurpose::Speech};
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 4,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Recording},
+                                   .foreground = true};
+            const auto mismatch = backend->StartCapture(descriptor, intent, grant);
+            REQUIRE(mismatch.HasError());
+            CHECK(mismatch.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            grant.intent = intent;
+            SECTION("foreground-only consent expires on focus loss") {
+                grant.foreground = false;
+                CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+                grant.foreground = true;
+                REQUIRE(backend->StartCapture(descriptor, intent, grant).HasValue());
+                grant.foreground = false;
+                const auto revoked = backend->ReconcileCapture(descriptor.generation, grant);
+                REQUIRE(revoked.HasError());
+                CHECK(revoked.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            }
+            SECTION("background capture needs an explicit grant and still ends on withdrawal") {
+                intent.allowBackground = true;
+                CHECK(backend->StartCapture(descriptor, intent, grant).HasError());
+                grant.intent = intent;
+                REQUIRE(backend->StartCapture(descriptor, intent, grant).HasValue());
+                grant.foreground = false;
+                REQUIRE(backend->ReconcileCapture(descriptor.generation, grant).HasValue());
+                const auto revoked = backend->ReconcileCapture(descriptor.generation, std::nullopt);
+                REQUIRE(revoked.HasError());
+                CHECK(revoked.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            }
+            AudioCapturedBlock block{};
+            CHECK(backend->ReadCapture(descriptor.generation, grant, block, {}).HasError());
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->CaptureActivity().purpose == Sdl3CapturePurpose::Unspecified);
+            REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+        }
+
+        TEST_CASE("SDL checks current speech consent before copying already queued PCM", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            const Sdl3CaptureGrant admitted{.device = descriptor.device,
+                                            .discoveryRevision = catalog.revision,
+                                            .generation = descriptor.generation,
+                                            .authorityRevision = 1,
+                                            .intent = {.purpose = Sdl3CapturePurpose::Speech},
+                                            .foreground = true};
+            REQUIRE(backend->StartCapture(descriptor, admitted.intent, admitted).HasValue());
+            WaitForActivity(*backend);
+            std::optional consent{admitted};
+            SECTION("withdrawal") {
+                consent.reset();
+            }
+            SECTION("authority replacement") {
+                ++consent->authorityRevision;
+            }
+            SECTION("foreground loss") {
+                consent->foreground = false;
+            }
+            SECTION("recording permission presented to speech") {
+                consent->intent.purpose = Sdl3CapturePurpose::Recording;
+            }
+
+            AudioCapturedBlock block{.sequence = 8};
+            const std::vector original(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 0.25F);
+            auto pcm = original;
+            const auto denied = backend->ReadCapture(descriptor.generation, consent, block, pcm);
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            CHECK(block.sequence == 8);
+            CHECK(pcm == original);
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->ReadCapture(descriptor.generation, admitted, block, pcm).HasError());
+        }
+
+        TEST_CASE("SDL normal recording stop transfers unread PCM only under the current recording grant", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Recording},
+                                   .foreground = true};
+            SECTION("revoked consent discards the unread tail") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                grant.foreground = false;
+                const auto stopped = backend->FinishRecording(descriptor.generation, grant);
+                REQUIRE(stopped.HasError());
+                CHECK(stopped.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            }
+            SECTION("speech admission cannot authorize recording") {
+                grant.intent.purpose = Sdl3CapturePurpose::Speech;
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                CHECK(backend->FinishRecording(descriptor.generation, grant).HasError());
+                REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            }
+            SECTION("normal stop detaches the producer and transfers queued data") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                WaitForActivity(*backend);
+                auto stopped = backend->FinishRecording(descriptor.generation, grant);
+                REQUIRE(stopped.HasValue());
+                auto tail = std::move(stopped).Value();
+                CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+                CHECK(backend->FinishRecording(descriptor.generation, grant).HasError());
+                AudioCapturedBlock block;
+                std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size());
+                REQUIRE(tail.TryRead(block, pcm) == AudioCaptureRead::Copied);
+                CHECK(block.sequence == 1);
+                CHECK(block.firstFrame == 0);
+            }
+        }
+
+        TEST_CASE("SDL recording publishes a project audio asset only for an uninterrupted capture", "[audio][sdl3][capture][recording]") {
+            using namespace Application::Internal;
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            auto descriptor = SelectEndpoint(catalog);
+            const Sdl3CaptureGrant grant{.device = descriptor.device,
+                                         .discoveryRevision = catalog.revision,
+                                         .generation = descriptor.generation,
+                                         .authorityRevision = 1,
+                                         .intent = {.purpose = Sdl3CapturePurpose::Recording},
+                                         .foreground = true};
+            bool overflow = false;
+            SECTION("the application receives a continuous take") {
+                descriptor.slots = 64;
+                descriptor.budgetBytes = 4 * 1024 * 1024;
+            }
+            SECTION("a stalled recorder loses a complete callback block") {
+                overflow = true;
+            }
+            auto prepared = AudioRecording::Prepare(descriptor, 2U * descriptor.format.sampleRate);
+            REQUIRE(prepared.HasValue());
+            auto recording = std::move(prepared).Value();
+            REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+            if (overflow)
+                REQUIRE(WaitForOverflow(*backend, grant).droppedFrames > 0);
+            else
+                WaitForActivity(*backend);
+            auto stopped = backend->FinishRecording(descriptor.generation, grant);
+            REQUIRE(stopped.HasValue());
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+
+            Tests::OwnedTestDirectory project{"sdl-recording"};
+            const auto root = std::filesystem::canonical(project.Path());
+            NativeDurableFileSystem files;
+            Editor::ProjectMutationCoordinator mutations{files};
+            Assets::AssetRegistry registry;
+            Application::ProjectAssetImportCommitter publisher{mutations, files, &registry};
+            const AudioRecordingDestination destination{"record", root, ProjectPath::Parse("assets/take.wav").Value(),
+                                                        Assets::AssetId::FromBytes({1})};
+            const auto published = recording.Publish(std::move(stopped).Value(), destination, publisher, files, {});
+            const auto snapshot = registry.Snapshot();
+            const auto *record = snapshot.Find(destination.id);
+            if (overflow) {
+                REQUIRE(published.HasError());
+                CHECK(published.ErrorValue().code.Value() == AudioErrors::SourceInvalid.code.Value());
+                CHECK_FALSE(record);
+                CHECK_FALSE(std::filesystem::exists(root / "assets/take.wav"));
+                CHECK_FALSE(std::filesystem::exists(root / "assets/take.wav.horo"));
+                return;
+            }
+            REQUIRE(published.HasValue());
+            CHECK(published.Value().frames > 0);
+            CHECK(published.Value().sampleRate == descriptor.format.sampleRate);
+            REQUIRE(record);
+            CHECK(record->type.Value() == "core.audio");
+            CHECK(std::filesystem::is_regular_file(root / record->sourcePath.String()));
+            CHECK(std::filesystem::is_regular_file(root / record->metadataPath.String()));
+        }
+
+        TEST_CASE("SDL speech sealing transfers only an uninterrupted authorized generation", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            auto descriptor = SelectEndpoint(catalog);
+            descriptor.slots = 8;
+            descriptor.budgetBytes = 512U << 10U;
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::Speech},
+                                   .foreground = true};
+            SECTION("consent withdrawn before seal") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                grant.foreground = false;
+                const auto denied = backend->FinishSpeech(grant.generation, grant);
+                REQUIRE(denied.HasError());
+                CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            }
+            SECTION("recording grant cannot seal speech") {
+                grant.intent.purpose = Sdl3CapturePurpose::Recording;
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                CHECK(backend->FinishSpeech(grant.generation, grant).HasError());
+                REQUIRE(backend->StopCapture(grant.generation).HasValue());
+            }
+            SECTION("overflow invalidates the unread queue") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                CHECK(WaitForOverflow(*backend, grant).droppedFrames > 0);
+                const auto interrupted = backend->FinishSpeech(grant.generation, grant);
+                REQUIRE(interrupted.HasError());
+                CHECK(interrupted.ErrorValue().code.Value() == AudioErrors::SourceInvalid.code.Value());
+            }
+            SECTION("control health observation leaves the exact generation and its PCM for sealing") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                WaitForActivity(*backend);
+                REQUIRE(backend->ReconcileCapture(grant.generation, grant).HasValue());
+                CHECK(backend->CaptureActivity().generation == grant.generation);
+                auto sealed = backend->FinishSpeech(grant.generation, grant);
+                REQUIRE(sealed.HasValue());
+                auto tail = std::move(sealed).Value();
+                REQUIRE(tail.Descriptor());
+                CHECK(tail.Descriptor()->generation == grant.generation);
+                AudioCapturedBlock block;
+                std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size());
+                REQUIRE(tail.TryRead(block, pcm) == AudioCaptureRead::Copied);
+                CHECK(block.sequence == 1);
+                CHECK(block.firstFrame == 0);
+                CHECK(backend->ReconcileCapture(grant.generation, grant).HasError());
+            }
+            CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            CHECK(backend->FinishSpeech(grant.generation, grant).HasError());
+        }
+
+        TEST_CASE("SDL network voice copies timestamped PCM only for its current capture grant", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            Sdl3CaptureGrant grant{.device = descriptor.device,
+                                   .discoveryRevision = catalog.revision,
+                                   .generation = descriptor.generation,
+                                   .authorityRevision = 1,
+                                   .intent = {.purpose = Sdl3CapturePurpose::NetworkVoice},
+                                   .foreground = true};
+            SECTION("a speech generation is inaccessible on the network endpoint") {
+                grant.intent.purpose = Sdl3CapturePurpose::Speech;
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                AudioCapturedBlock block;
+                const auto rejected = backend->ReadNetworkVoiceCapture(grant.generation, grant, block, {});
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                CHECK(backend->CaptureActivity().purpose == Sdl3CapturePurpose::Speech);
+            }
+            SECTION("only the voice consumer receives PCM until its grant is withdrawn") {
+                REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+                WaitForActivity(*backend);
+                AudioCapturedBlock block;
+                std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size(), 1.0F);
+                const auto local = backend->ReadCapture(grant.generation, grant, block, pcm);
+                REQUIRE(local.HasError());
+                CHECK(local.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                const auto admitted = backend->ReadNetworkVoiceCapture(grant.generation, grant, block, pcm);
+                REQUIRE(admitted.HasValue());
+                CHECK(admitted.Value().status == AudioCaptureRead::Copied);
+                CHECK(block.sequence == 1);
+                CHECK(block.start.clockDomain == descriptor.clockDomain);
+                std::ranges::fill(pcm, 1.0F);
+                const auto withdrawn = backend->ReadNetworkVoiceCapture(grant.generation, std::nullopt, block, pcm);
+                REQUIRE(withdrawn.HasError());
+                CHECK(withdrawn.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+                CHECK(block.sequence == 1);
+                CHECK(std::ranges::all_of(pcm, [](AudioSample sample) { return sample == 1.0F; }));
+                CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
+            }
+        }
+
+        TEST_CASE("SDL connection tests expose a level without granting access to PCM", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            const auto &catalog = discovery.Value().snapshot;
+            const auto descriptor = SelectEndpoint(catalog);
+            const Sdl3CaptureGrant grant{.device = descriptor.device,
+                                         .discoveryRevision = catalog.revision,
+                                         .generation = descriptor.generation,
+                                         .authorityRevision = 1,
+                                         .intent = {.purpose = Sdl3CapturePurpose::ConnectionTest},
+                                         .foreground = true};
+            REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
+            WaitForActivity(*backend);
+            CHECK(backend->CaptureActivity().peakLevel == 0.0F);  // Dummy recorder emits silence.
+            AudioCapturedBlock block{.sequence = 8};
+            std::array<AudioSample, 2> pcm{0.25F, -0.5F};
+            const auto denied = backend->ReadCapture(descriptor.generation, grant, block, pcm);
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == AudioErrors::CapturePermissionDenied.code.Value());
+            CHECK(block.sequence == 8);
+            CHECK(pcm.front() == 0.25F);
+            REQUIRE(backend->StopCapture(descriptor.generation).HasValue());
+            CHECK(backend->CaptureActivity().peakLevel == 0.0F);
+        }
+
+        TEST_CASE("SDL dummy permission request returns a decision without opening capture", "[audio][sdl3][capture]") {
+            auto backend = MakeBackend();
+            const auto decision = backend->RequestCapturePermission();
+            REQUIRE(decision.HasValue());
+            CHECK(decision.Value() == Sdl3CapturePermissionRequest::DecisionAvailable);
+            const auto discovery = backend->DiscoverCapture();
+            REQUIRE(discovery.HasValue());
+            CHECK(discovery.Value().snapshot.permission == AudioCapturePermission::NotRequired);
+            AudioCapturedBlock block{};
+            CHECK(backend->ReadCapture(1, std::nullopt, block, {}).HasError());
+        }
+    }  // namespace
+}  // namespace Horo::Audio::Backend

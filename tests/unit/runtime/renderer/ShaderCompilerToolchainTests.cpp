@@ -1,6 +1,11 @@
+#include "EditorNativeReconstructionReleaseLayout.h"
+#include "EditorVulkanViewportShader.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/VfxShaderParameters.h"
+#include "VulkanReconstructionReleaseCook.h"
 #include "support/ShaderCompilerToolchainFixture.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -316,4 +321,183 @@ TEST_CASE("Locked Linux shader tools produce repeatable validated native artifac
            {Identity(ShaderCompilerTool::Dxc), Identity(ShaderCompilerTool::SpirvTools), Identity(ShaderCompilerTool::SpirvCross)});
     verify(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60,
            {Identity(ShaderCompilerTool::Dxc), Identity(ShaderCompilerTool::DxilValidator)});
+}
+
+TEST_CASE("Locked Vulkan shader tools cook and admit the native reconstruction entries",
+          "[runtime][renderer][shader-compiler][toolchain][reconstruction][integration]") {
+    auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    if (!dxc || !spirvTools || !spirvCross)
+        SKIP("Set the DXC, SPIRV_VAL and SPIRV_CROSS HORO_TEST_SHADER_* paths to the reviewed Linux tool artifacts.");
+
+    TemporaryDirectory temporary;
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = temporary.Path() / "scratch";
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+
+    using enum NativeReconstructionEntry;
+    const auto entry = GENERATE(Spatial, TemporalSeed, TemporalHistory);
+    const auto other = (entry == Spatial) ? TemporalHistory : Spatial;
+    auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
+    auto &target = request.targets.front().requirement;
+    target.maximumInlineConstantBytes = 128;
+    target.supportsCompute = true;
+    target.supportsStorageResources = true;
+    auto contract = DescribeNativeReconstructionShader(entry, target);
+    REQUIRE(contract.HasValue());
+    request.manifest = std::move(contract.Value().manifest);
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/runtime/native_reconstruction.hlsl");
+    request.dependencies.clear();
+    request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, std::move(contract.Value().reflectionNames)};
+    const auto cooked = CompileShaderTargets(request, adapter.Value(), {});
+    REQUIRE(cooked.HasValue());
+    REQUIRE(cooked.Value().artifacts.size() == 1);
+    const auto &artifact = cooked.Value().artifacts.front();
+    REQUIRE(artifact.reflection);
+    const auto bytes = AdmitNativeReconstructionShader(entry, target, artifact);
+    REQUIRE(bytes.HasValue());
+    CHECK_FALSE(bytes.Value().empty());
+    CHECK(AdmitNativeReconstructionShader(other, target, artifact).HasError());
+    RequireRepeatable(request, adapter.Value());
+}
+
+TEST_CASE("The Vulkan reconstruction release cook publishes its complete canonical pre-sign inventory",
+          "[runtime][renderer][shader-compiler][toolchain][reconstruction][release][integration]") {
+    using namespace Horo::Release;
+    namespace Layout = Horo::Editor::NativeReconstructionRelease;
+    using Horo::Editor::Offline::CookVulkanReconstructionRelease;
+    using Horo::Editor::Offline::CookVulkanSpatialReconstructionRelease;
+    using Horo::Editor::Offline::MakeVulkanSceneLinearCookRequest;
+
+    const auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    const auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    const auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    if (!dxc || !spirvTools || !spirvCross)
+        SKIP("Set the DXC, SPIRV_VAL and SPIRV_CROSS HORO_TEST_SHADER_* paths to the reviewed Linux tool artifacts.");
+
+    TemporaryDirectory temporary;
+    const auto scratch = temporary.Path() / "scratch";
+    REQUIRE(std::filesystem::create_directory(scratch));
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = scratch;
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+    const std::array tools{dxc->identity, spirvTools->identity, spirvCross->identity};
+    const auto source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/runtime/native_reconstruction.hlsl");
+    const auto destination = temporary.Path() / "release stage";
+    const auto repeat = temporary.Path() / "repeat stage";
+    const ReleaseCandidateId candidate{24};
+
+    const auto packageFiles = GENERATE(6U, 8U, 12U);
+    const bool withScene = packageFiles >= 8U;
+    const auto scene = withScene ? Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl")
+                                 : std::vector<std::uint8_t>{};
+    const auto temporal = packageFiles == 12U
+                              ? Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport_temporal_inputs.hlsl")
+                              : std::vector<std::uint8_t>{};
+    const auto cook = [&](const std::filesystem::path &stage, const CancellationToken &cancel = {}) {
+        if (!temporal.empty())
+            return Horo::Editor::Offline::CookVulkanTemporalReconstructionRelease(stage, scratch, candidate, source, scene, temporal, tools,
+                                                                                  adapter.Value(), cancel);
+        if (withScene)
+            return CookVulkanSpatialReconstructionRelease(stage, scratch, candidate, source, scene, tools, adapter.Value(), cancel);
+        return CookVulkanReconstructionRelease(stage, scratch, candidate, source, tools, adapter.Value(), cancel);
+    };
+
+    const auto cooked = cook(destination);
+    INFO((cooked.HasError() ? cooked.ErrorValue().message : "cooked"));
+    REQUIRE(cooked.HasValue());
+    const auto &inventory = cooked.Value();
+    CHECK(inventory.Candidate() == candidate);
+    REQUIRE(inventory.Artifacts().size() == packageFiles);
+    CHECK(VerifyReleaseStagedTree(destination, inventory).HasValue());
+    const auto parsed = ReleasePreSignInventory::ParseCanonical(inventory.CanonicalJson());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Digest() == inventory.Digest());
+
+    for (const auto entry : Layout::Entries) {
+        const auto prefix = Layout::Prefix(entry);
+        const auto payload = Read(destination / (prefix + ".horoshdr"));
+        const auto metadata = Read(destination / (prefix + ".reflection.json"));
+        const auto contract = DescribeNativeReconstructionShader(entry, Layout::Target);
+        REQUIRE(contract.HasValue());
+        const auto decoded = DecodeReflectedShaderArtifact(contract.Value().manifest, Layout::Target, payload, metadata);
+        REQUIRE(decoded.HasValue());
+        const CompiledShaderArtifact artifact{.backend = Layout::Target.backend,
+                                              .payloadFormat = Layout::Target.payloadFormat,
+                                              .artifactKey = decoded.Value().compiledArtifactKey,
+                                              .payload = payload,
+                                              .reflection = std::make_shared<const ReflectedShaderArtifact>(decoded.Value())};
+        CHECK(AdmitNativeReconstructionShader(entry, Layout::Target, artifact).HasValue());
+    }
+    for (const auto &record : inventory.Artifacts())
+        CHECK(record.role == ReleaseArtifactRole::AssetArchive);
+    if (!temporal.empty()) {
+        using Horo::Editor::EditorVulkanTemporalInput;
+        const std::array guides{std::pair{EditorVulkanTemporalInput::LinearDepth, Layout::TemporalDepthPrefix},
+                                std::pair{EditorVulkanTemporalInput::Motion, Layout::TemporalMotionPrefix}};
+        for (const auto &[guide, prefix] : guides) {
+            const auto payload = Read(destination / (std::string{prefix} + ".horoshdr"));
+            const auto reflection = Read(destination / (std::string{prefix} + ".reflection.json"));
+            CHECK(Horo::Editor::ValidateEditorVulkanTemporalInputCook(guide, payload, reflection).HasValue());
+        }
+    }
+
+    const auto duplicate = cook(repeat);
+    REQUIRE(duplicate.HasValue());
+    CHECK(duplicate.Value().CanonicalJson() == inventory.CanonicalJson());
+    CHECK(VerifyReleaseStagedTree(repeat, inventory).HasValue());
+
+    const auto invalid = temporary.Path() / "failed stage";
+    CHECK(CookVulkanReconstructionRelease(invalid, scratch, candidate, {0x3f}, tools, adapter.Value()).HasError());
+    CHECK_FALSE(std::filesystem::exists(invalid));
+    if (!temporal.empty()) {
+        const auto failedGuide = Horo::Editor::Offline::CookVulkanTemporalReconstructionRelease(invalid, scratch, candidate, source, scene,
+                                                                                                {0x3f}, tools, adapter.Value());
+        CHECK(failedGuide.HasError());
+        CHECK_FALSE(std::filesystem::exists(invalid));
+    }
+    CancellationSource stopped;
+    stopped.RequestCancellation();
+    const auto cancelled = cook(invalid, stopped.Token());
+    RequireError(cancelled, ShaderCompilerPipelineErrors::CancellationRequested);
+    CHECK_FALSE(std::filesystem::exists(invalid));
+    CHECK(cook(destination).HasError());
+    CHECK(VerifyReleaseStagedTree(destination, inventory).HasValue());
+    if (withScene) {
+        const auto path = destination / Layout::SceneLinearPayloadPath;
+        const auto payload = Read(path);
+        const auto metadata = Read(destination / Layout::SceneLinearReflectionPath);
+        CHECK(Horo::Editor::LoadEditorVulkanSceneLinearCook(payload, metadata).HasValue());
+        CHECK(Horo::Editor::LoadEditorVulkanViewportCook(payload, metadata).HasError());
+        const auto record = std::ranges::find(inventory.Artifacts(), Layout::SceneLinearPayloadPath, &ReleaseArtifactRecord::path);
+        REQUIRE(record != inventory.Artifacts().end());
+        CHECK(record->size == payload.size());
+        CHECK(record->digest == ComputeSha256(std::as_bytes(std::span{payload})));
+
+        const auto standalone = CompileShaderTargets(MakeVulkanSceneLinearCookRequest(scene, tools), adapter.Value(), {});
+        REQUIRE(standalone.HasValue());
+        REQUIRE(standalone.Value().artifacts.size() == 1);
+        REQUIRE(standalone.Value().artifacts.front().reflection);
+        CHECK(standalone.Value().artifacts.front().payload == payload);
+        const auto standaloneMetadata = EncodeReflectedShaderArtifact(*standalone.Value().artifacts.front().reflection);
+        REQUIRE(standaloneMetadata.HasValue());
+        CHECK(standaloneMetadata.Value() == metadata);
+
+        const auto failedScene =
+            CookVulkanSpatialReconstructionRelease(invalid, scratch, candidate, source, {0x3f}, tools, adapter.Value());
+        CHECK(failedScene.HasError());
+        CHECK_FALSE(std::filesystem::exists(invalid));
+        REQUIRE(std::filesystem::remove(repeat / Layout::SceneLinearReflectionPath));
+        CHECK(VerifyReleaseStagedTree(repeat, inventory).HasError());
+    } else {
+        CHECK_FALSE(std::filesystem::exists(destination / Layout::SceneLinearPayloadPath));
+        CHECK_FALSE(std::filesystem::exists(destination / Layout::SceneLinearReflectionPath));
+    }
 }

@@ -9,6 +9,7 @@ namespace Horo::AI {
     namespace {
         using BehaviorTreeTestSupport::Fixture;
         using BehaviorTreeTestSupport::Node;
+        using TestSupport::ExpectError;
         using TestSupport::MakeIdentity;
 
         DecisionNodeRegistration Registration(std::shared_ptr<BehaviorTreeTestSupport::Probe> &probe) {
@@ -84,6 +85,37 @@ namespace Horo::AI {
             CHECK(fixture.probe->destroyed == 1);
         }
 
+        TEST_CASE("Decision binding stops invoking factories after admission is withdrawn", "[ai][decision-node]") {
+            using enum BehaviorTreeOperation;
+            Fixture fixture({Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)});
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            struct RevokingFactory final {
+                std::shared_ptr<BehaviorTreeTestSupport::Probe> probe;
+                std::atomic_bool &admission;
+                std::size_t calls{};
+            } factory{fixture.probe, *admission};
+            auto registration = Registration(fixture.probe);
+            registration.factory.userData = &factory;
+            registration.factory.create = [](void *value, std::span<const BehaviorTreeProperty>) -> IBehaviorTreeExecutor * {
+                auto &owner = *static_cast<RevokingFactory *>(value);
+                ++owner.calls;
+                owner.admission.store(false);
+                return new BehaviorTreeTestSupport::Executor(owner.probe);
+            };
+            const auto captured = DecisionNodeGeneration::Capture({&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            const auto &generation = captured.Value();
+            SECTION("asset bindings") {
+                ExpectError(generation->CreateExecutor(generation, *fixture.Bindings(), {}), AIErrors::RuntimeUnavailable);
+            }
+            SECTION("executable plan bindings") {
+                ExpectError(generation->CreateExecutor(generation, *fixture.Plan(), {}), AIErrors::RuntimeUnavailable);
+            }
+            CHECK_FALSE(generation->CanAdmit());
+            CHECK(factory.calls == 1);
+            CHECK(fixture.probe->destroyed == 1);
+        }
+
         TEST_CASE("Decision node executor retirement aborts and cleans running work once while retaining its generation",
                   "[ai][decision-node]") {
             Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
@@ -116,6 +148,115 @@ namespace Horo::AI {
             CHECK(fixture.probe->destroyed == 1);
             generation.reset();
             CHECK(weak.expired());
+        }
+
+        TEST_CASE("Decision task results cannot complete a tree after callback admission is withdrawn", "[ai][decision-node]") {
+            Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            const auto registration = Registration(fixture.probe);
+            auto captured = DecisionNodeGeneration::Capture({&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            const auto &generation = captured.Value();
+            auto plan = fixture.Plan();
+            auto executor = generation->CreateExecutor(generation, *plan, {});
+            REQUIRE(executor.HasValue());
+            const BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            auto created = BehaviorTreeInstance::Create(plan, binding, std::move(executor).Value());
+            REQUIRE(created.HasValue());
+            auto tree = std::move(created).Value();
+            std::uint64_t tick = 1;
+            SECTION("revocation inside start") {
+                fixture.probe->withdrawOnStart = admission.get();
+            }
+            SECTION("revocation inside resume") {
+                fixture.probe->outcome[1] = AiTaskState::Running;
+                REQUIRE(fixture.Evaluate(*tree, tick++) == AiTaskState::Running);
+                fixture.probe->outcome[1] = AiTaskState::Succeeded;
+                fixture.probe->withdrawOnResume = admission.get();
+            }
+            CHECK(fixture.Evaluate(*tree, tick) == AiTaskState::Cancelled);
+            CHECK_FALSE(generation->CanAdmit());
+            CHECK(fixture.probe->aborts[1] == 1);
+            CHECK(fixture.probe->cleanups[1] == 1);
+            tree->Shutdown();
+            CHECK(fixture.probe->cleanups[1] == 1);
+        }
+
+        TEST_CASE("A queued decision completion rechecks the provider that admitted the task", "[ai][decision-node]") {
+            using enum AiTaskState;
+            AiTaskContinuation continuation;
+            Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
+            fixture.probe->captureContinuation = &continuation;
+            fixture.probe->outcome[1] = Running;
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            const auto registration = Registration(fixture.probe);
+            const auto captured = DecisionNodeGeneration::Capture({&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            const auto &generation = captured.Value();
+            const auto plan = fixture.Plan();
+            auto executor = generation->CreateExecutor(generation, *plan, {});
+            REQUIRE(executor.HasValue());
+            const BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            auto created = BehaviorTreeInstance::Create(plan, binding, std::move(executor).Value());
+            REQUIRE(created.HasValue());
+            auto tree = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*tree, 1) == Running);
+            AiTaskTerminalResult success{.state = Succeeded};
+            const auto published = continuation.PublishTerminal(success);
+            REQUIRE(published.HasValue());
+            REQUIRE(published.Value() == AiTaskPublicationDisposition::Accepted);
+
+            auto expected = Succeeded;
+            SECTION("the provider remains admitted") {}
+            SECTION("revocation wins over the previously queued success") {
+                admission->store(false);
+                expected = Cancelled;
+            }
+            CHECK(fixture.Evaluate(*tree, 2) == expected);
+            REQUIRE(fixture.probe->terminals[1]);
+            CHECK(fixture.probe->terminals[1]->state == expected);
+            CHECK(fixture.probe->resumes[1] == 0);
+            CHECK(fixture.probe->aborts[1] == (expected == Cancelled ? 1U : 0U));
+            tree->Shutdown();
+            CHECK(fixture.probe->cleanups[1] == 1);
+            CHECK_FALSE(continuation.IsCurrent());
+        }
+
+        TEST_CASE("Bound decision executor replacement prepares new node callbacks before cancelling the old tree", "[ai][decision-node]") {
+            using enum BehaviorTreeOperation;
+            using enum AiTaskState;
+            Fixture fixture({Node(1, Task)});
+            fixture.probe->outcome[1] = Running;
+            const auto registration = Registration(fixture.probe);
+            auto admission = std::make_shared<std::atomic_bool>(true);
+            auto captured = DecisionNodeGeneration::Capture(std::span{&registration, 1}, admission);
+            REQUIRE(captured.HasValue());
+            auto generation = captured.Value();
+            auto original = fixture.Plan();
+            auto callbacks = generation->CreateExecutor(generation, *original, {});
+            REQUIRE(callbacks.HasValue());
+            BehaviorTreeInstanceBinding binding{fixture.agent, {}, 100, 1, fixture.blackboard->Binding()};
+            binding.availableTaskSlots = 8;
+            auto created = BehaviorTreeInstance::Create(original, binding, std::move(callbacks).Value());
+            REQUIRE(created.HasValue());
+            auto instance = std::move(created).Value();
+            REQUIRE(fixture.Evaluate(*instance, 1) == Running);
+            fixture.nodes = {Node(1, Sequence, {2, 3}), Node(2, Task), Node(3, Task)};
+            fixture.probe->outcome[3] = Running;
+            auto candidate = fixture.Plan();
+            ExpectError(instance->Replace(candidate), AIErrors::DecisionAssetDescriptorIncompatible);
+            CHECK(fixture.probe->aborts[1] == 0);
+            auto replacement = generation->CreateExecutor(generation, *candidate, {});
+            REQUIRE(replacement.HasValue());
+            auto replaced = instance->Replace(candidate, std::move(replacement).Value());
+            REQUIRE(replaced.HasValue());
+            CHECK_FALSE(replaced.Value());
+            CHECK(fixture.probe->aborts[1] == 1);
+            CHECK(fixture.probe->cleanups[1] == 1);
+            CHECK(fixture.probe->starts[2] == 0);
+            REQUIRE(fixture.Evaluate(*instance, 2) == Running);
+            CHECK(fixture.probe->starts[2] == 1);
+            CHECK(fixture.probe->starts[3] == 1);
         }
 
         TEST_CASE("Decision node generation rejects off-owner creation without touching factories", "[ai][decision-node]") {

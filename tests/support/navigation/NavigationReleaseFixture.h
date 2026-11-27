@@ -110,11 +110,13 @@ namespace Horo::Application::ContentTestSupport {
         return std::move(selection).Value();
     }
 
-    /** @brief Read actual ZIP content through miniz, not through a memory-provider substitute. */
+    /** @brief Read the produced ZIP through the native filesystem before decoding it with miniz. */
     [[nodiscard]] inline std::vector<std::uint8_t> ExtractArchive(const std::filesystem::path &zip) {
+        constexpr std::size_t MaximumFixtureZipBytes = 16U * 1024U * 1024U;
+        const auto archive = NativeDurableFileSystem{}.ReadFileBounded(zip, MaximumFixtureZipBytes);
+        REQUIRE(archive.HasValue());
         mz_zip_archive reader{};
-        const auto path = zip.string();
-        REQUIRE(mz_zip_reader_init_file(&reader, path.c_str(), 0));
+        REQUIRE(mz_zip_reader_init_mem(&reader, archive.Value().data(), archive.Value().size(), 0));
 
         struct Close final {
             mz_zip_archive &reader;

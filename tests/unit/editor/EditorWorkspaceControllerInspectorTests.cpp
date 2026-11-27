@@ -3,7 +3,7 @@
 #include "Horo/Assets/MeshEditorPayload.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
 #include <algorithm>
 #include <atomic>

@@ -50,6 +50,8 @@ namespace Horo::Gameplay {
     /** @copydoc BehaviorRuntime::ActivateImpl */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::ActivateImpl(std::shared_ptr<Impl> impl) {
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
+            if (impl->animationLifetime)
+                impl->animationLifetime->RequestCancellation();
             if (impl->character)
                 impl->character->Revoke();
             if (impl->navigation)
@@ -79,7 +81,9 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
-    Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) const {
+    Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta,
+                                              BehaviorFixedEvidence *evidence, const GameplayAssistPreferences *assists,
+                                              const Accessibility::IColorAccessibilityQuery *colorAccessibility) const {
         impl_->vfxStructuralReceipt.reset();
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
@@ -93,14 +97,9 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         Runtime::SceneCommandBuffer commands;
         for (std::size_t index = 0; index < impl_->instances.size(); ++index)
-            if (auto updated = RunFixedInstance(index, input, delta, commands); updated.HasError())
+            if (auto updated = RunFixedInstance(index, input, delta, commands, evidence, assists, colorAccessibility); updated.HasError())
                 return updated;
-        if (!commands.Empty()) {
-            Result<void> committed = impl_->CommitCommands(std::move(commands));
-            if (committed.HasError())
-                return Result<void>::Failure(committed.ErrorValue());
-        }
-        return Result<void>::Success();
+        return impl_->CommitFixedCommands(std::move(commands), evidence);
     }
 
     /** @copydoc BehaviorRuntime::VfxStructuralReceipt */
@@ -109,12 +108,16 @@ namespace Horo::Gameplay {
     }
 
     Result<void> BehaviorRuntime::RunFixedInstance(std::size_t index, std::span<const GameplayInputAction> input, FixedDeltaTime delta,
-                                                   Runtime::SceneCommandBuffer &commands) const {
+                                                   Runtime::SceneCommandBuffer &commands, BehaviorFixedEvidence *evidence,
+                                                   const GameplayAssistPreferences *assists,
+                                                   const Accessibility::IColorAccessibilityQuery *colorAccessibility) const {
         auto &instance = impl_->instances[index];
         if (!instance.component.enabled)
             return Result<void>::Success();
         Impl::ContextBackend backend{*impl_, instance, input, commands};
-        BehaviorContext context{backend};
+        backend.fixedEvidence = evidence;
+        backend.colorAccessibility = colorAccessibility;
+        BehaviorContext context{backend, assists};
         if (!instance.started) {
             instance.implementation->OnStart(context);
             instance.started = true;
@@ -128,11 +131,14 @@ namespace Horo::Gameplay {
                 instance.implementation->OnInputAction(context, action);
         }
         instance.implementation->OnFixedUpdate(context, delta);
+        if (evidence)
+            ++evidence->callbacks;
         return Result<void>::Success();
     }
 
     /** @copydoc BehaviorRuntime::PresentationUpdate */
-    void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta) const {
+    void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta,
+                                             const Accessibility::IColorAccessibilityQuery *colorAccessibility) const {
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
             return;
@@ -144,6 +150,7 @@ namespace Horo::Gameplay {
             if (!instance.component.enabled)
                 continue;
             Impl::ContextBackend backend{*impl_, instance, {}, rejectedCommands, false};
+            backend.colorAccessibility = colorAccessibility;
             BehaviorContext context{backend};
             instance.implementation->OnPresentationUpdate(context, delta);
         }

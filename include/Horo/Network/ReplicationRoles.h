@@ -25,6 +25,15 @@ namespace Horo::Network {
     /** @brief Monotonic publication revision of one object role binding. */
     using ReplicationRoleRevision = ReplicationIdentity<ReplicationRoleRevisionTag, std::uint64_t>;
 
+    /** @brief Authority-issued ownership fact for the exact initial object occurrence. */
+    struct ReplicationInitialOwnership final {
+        NetworkObjectId object;
+        ReplicationRoleRevision revision;
+        std::optional<NetworkPeerId> autonomousOwner;
+
+        auto operator<=>(const ReplicationInitialOwnership &) const noexcept = default;
+    };
+
     /** @brief Explicit world role; process locality and presentation ownership never imply authority. */
     enum class ReplicationExecutionRole : std::uint8_t {
         Standalone,

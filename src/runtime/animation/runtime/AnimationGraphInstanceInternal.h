@@ -10,6 +10,8 @@
 #include <vector>
 
 namespace Horo::Animation::Detail {
+    struct PoseCompositionInput;
+
     /** @brief Exact player candidate state; integer residual is signed millionths
      * of one time tick. */
     struct GraphPlayerState final {
@@ -85,6 +87,20 @@ namespace Horo::Animation::Detail {
         std::vector<std::uint8_t> coverage;
     };
 
+    /** @brief Travel composed across the actual attempt's action sections before pose layering. */
+    struct GraphActionRootMotion final {
+        AnimationRootMotionDelta delta{};
+        float lastWeight{};
+    };
+
+    /** @brief Opt-in bounded root travel stored with its actual pose writer and action slot. */
+    struct GraphRootMotionWorkspace final {
+        std::vector<AnimationRootMotionDelta> poses;
+        std::vector<GraphActionRootMotion> actions;
+        std::vector<AnimationClipTraversalSegment> trace;
+        std::size_t joint{};
+    };
+
     /** @brief Complete double-buffered owner publication, with its resident handles
      * and nonwrapping generation fence. */
     struct GraphPublicationStorage final {
@@ -92,6 +108,7 @@ namespace Horo::Animation::Detail {
         std::array<std::vector<GraphStateEvent>, 2> events;
         std::array<std::uint32_t, 2> eventCounts{};
         std::array<std::vector<Math::Transform>, 2> poses;
+        std::array<AnimationRootMotionDelta, 2> rootMotion{};
         std::array<PoseHandle, 2> handles{};
         GraphInstancePublication publication{};
         std::uint64_t nextGeneration{1};
@@ -107,6 +124,7 @@ namespace Horo::Animation::Detail {
         AnimationClipTraversal traversal{};
         AnimationTimeDelta delta{};
         AnimationClipCursor before{};
+        AnimationRootMotionDelta rootMotion{};
     };
 
     /** @brief One occurrence membership and branch-local input; no independent
@@ -151,9 +169,10 @@ namespace Horo::Animation::Detail {
         NotifyWorkspace notifies;
         AnimationClipLimits clipLimits{};
         GraphPoseWorkspace poses;
+        GraphRootMotionWorkspace rootMotion;
         GraphScalarWorkspace scalars;
         std::vector<GraphParameterValue> parameters;
-        std::vector<std::uint8_t> queuedTriggers;
+        std::vector<std::optional<GraphParameterValue>> queuedParameters;
         std::vector<GraphPlayerState> players;
         std::vector<GraphPreparedMachine> preparedMachines;
         std::vector<std::uint8_t> latchScratch;
@@ -176,6 +195,38 @@ namespace Horo::Animation::Detail {
             return std::span{poses.coverage}.subspan(static_cast<std::size_t>(slot.index) * joints, joints);
         }
     };
+
+    /** @brief Validates one input against its declared variant and finite value contract. */
+    [[nodiscard]] GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration,
+                                                              const GraphParameterInput &parameter) noexcept;
+
+    /** @brief Checks opt-in authority and actual bound root tracks after clip binding validation. */
+    [[nodiscard]] GraphInstanceFailure AdmitRootMotion(const GraphInstanceAssets &assets,
+                                                       const GraphInstanceCreateContext &context) noexcept;
+    /** @brief Accounts for the motion workspace before graph allocation. */
+    [[nodiscard]] std::uint64_t RootMotionStorageBytes(const AnimationGraphProgram &program,
+                                                       const GraphInstanceCreateContext &context) noexcept;
+    /** @brief Accounts for bounded travel, key lookup and composition in one opted-in attempt. */
+    [[nodiscard]] std::uint64_t RootMotionOperations(const AnimationGraphProgram &program,
+                                                     const GraphInstanceCreateContext &context) noexcept;
+    /** @brief Resolves the admitted root joint and allocates all motion buffers. */
+    void PrepareRootMotion(GraphInstanceState &state, const GraphInstanceCreateContext &context);
+    /** @brief Reuses canonical clip travel with optional root extraction before advancing the actual player. */
+    [[nodiscard]] AnimationClipOutcome<AnimationClipRootMotion> TraverseRootMotion(GraphInstanceState &state,
+                                                                                   const AnimationClipAsset &clip,
+                                                                                   AnimationClipCursor cursor, AnimationTimeDelta delta,
+                                                                                   AnimationClipRegion region);
+    /** @brief Interpolates two normalized rigid displacements with the pose's admitted weight. */
+    [[nodiscard]] AnimationRootMotionDelta BlendRootMotion(AnimationRootMotionDelta base, AnimationRootMotionDelta overlay,
+                                                           float weight) noexcept;
+    /** @brief Appends a directed rigid displacement, rejecting non-finite accumulated position. */
+    [[nodiscard]] bool AppendRootMotionDelta(AnimationRootMotionDelta &base, AnimationRootMotionDelta delta) noexcept;
+    /** @brief Resolves the effective pose layer weight for the exact root joint. */
+    [[nodiscard]] float RootLayerWeight(std::size_t joint, const PoseCompositionInput &composition) noexcept;
+    /** @brief Applies the pose layer's exact root mask, coverage and mode to its motion writers. */
+    [[nodiscard]] GraphInstanceFailure LayerRootMotion(GraphInstanceState &state, GraphWorkingSlot output, GraphWorkingSlot base,
+                                                       GraphWorkingSlot overlay, GraphWorkingSlot reference,
+                                                       const PoseCompositionInput &composition) noexcept;
 
     /** @brief Cold membership preparation and exact group work/storage admission.
      */

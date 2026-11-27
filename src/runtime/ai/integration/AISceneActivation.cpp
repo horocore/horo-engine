@@ -3,6 +3,7 @@
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIRuntimeCapability.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
 #include <functional>
@@ -62,6 +63,21 @@ namespace Horo::AI {
             return Result<AiSceneActivationBinding>::Success(
                 AiSceneActivationBinding{.incarnation = incarnation.Value(), .scene = scene.RuntimeId()});
         }
+
+        /** @brief Binds cooked plans for the restored active population, including agents authored to start manually. */
+        Result<void> BindRestoredCookedPlans(std::span<AgentRuntimeState> agents, std::span<const AiControllerDescriptor> descriptors) {
+            for (auto &agent : agents) {
+                if (agent.record.state != AiAgentActivationState::Active) {
+                    agent.cookedPlan.reset();
+                    continue;
+                }
+                const auto *descriptor = FindDescriptor(descriptors, agent.record.controller->controller);
+                if (!descriptor)
+                    return Result<void>::Failure(MakeError(AIErrors::ControllerDescriptorMissing));
+                agent.cookedPlan = descriptor->cookedPlan;
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     namespace Detail {
@@ -81,6 +97,7 @@ namespace Horo::AI {
         /** @copydoc CancelOwnedWork */
         void CancelOwnedWork(AgentRuntimeState &agent) noexcept {
             agent.cancellation.RequestCancellation();
+            agent.sensing.reset();
             if (agent.task) {
                 (void)agent.task->RequestCancellation(AiTaskCancellationReason::OwnerShutdown);
                 (void)agent.task->RetireAgentGeneration();
@@ -107,6 +124,16 @@ namespace Horo::AI {
             return &candidate;
         }
 
+        /** @copydoc ValidateCurrentCookedDecisions */
+        Result<void> ValidateCurrentCookedDecisions(const std::span<const AgentRuntimeState> agents) {
+            if (std::ranges::any_of(agents, [](const auto &agent) {
+                return agent.cookedPlan && !agent.cookedPlan->IsCurrent();
+            }))
+                return Result<void>::Failure(
+                    MakeError(AIErrors::ControllerDescriptorIncompatible, "AI cooked decision provider retired before Scene publication."));
+            return Result<void>::Success();
+        }
+
         /** @copydoc ShutdownStateContents */
         void ShutdownStateContents(AiSceneRuntimeState &state) noexcept {
             state.closed = true;
@@ -116,6 +143,8 @@ namespace Horo::AI {
                 CancelOwnedWork(agent);
             state.agents.clear();
             state.agentsByOwner.clear();
+            state.perceptionExecution.reset();
+            state.perceptionSpatial = nullptr;
         }
     }  // namespace Detail
 
@@ -176,7 +205,7 @@ namespace Horo::AI {
 
         [[nodiscard]] Result<void> PrepareAgentRuntimeState(const AiSceneActivationBinding binding, const AiSceneAgentDescriptor &input,
                                                             const std::span<const AiControllerDescriptor> descriptors,
-                                                            const AiCapabilitySet availableCapabilities, const std::uint32_t slotIndex,
+                                                            const AiSceneRuntimeSettings &settings, const std::uint32_t slotIndex,
                                                             std::optional<AgentRuntimeState> &prepared,
                                                             const std::uint32_t generation = 1) {
             prepared.reset();
@@ -186,24 +215,36 @@ namespace Horo::AI {
             const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, generation}};
             const AiControllerDescriptor *descriptor =
                 input.controller ? FindDescriptor(descriptors, input.controller->controller) : nullptr;
+            const bool shouldStart = sceneStartup && controllerStartup;
+            const bool needsPerception = input.controller && input.controller->requiredCapabilities.Contains(AiCapability::Perception);
+            const auto authoredEndpoints = needsPerception && descriptor ? descriptor->perceptionEndpoints : nullptr;
+            if (shouldStart && descriptor) {
+                if (const auto valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError())
+                    return valid;
+            }
+            const ErrorCodeDescriptor *missing = descriptor ? nullptr : &AIErrors::ControllerDescriptorMissing;
+            if (descriptor && needsPerception && settings.requirePerceptionEndpoints && !authoredEndpoints)
+                missing = &AIErrors::PerceptionDependencyMissing;
+            if (shouldStart && missing && settings.missingController == AiMissingControllerPolicy::Reject)
+                return Result<void>::Failure(MakeError(*missing));
             const auto schemaPublication = ResolveAgentSchema(descriptor, input.controller, handle);
-            if (!sceneStartup || !controllerStartup) {
-                prepared.emplace(AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
-                                                                                  .owner = input.owner,
-                                                                                  .agent = input.agent,
-                                                                                  .controller = input.controller,
-                                                                                  .state = AiAgentActivationState::Disabled},
-                                                   .schema = schemaPublication.schema,
-                                                   .blackboardBinding = schemaPublication.binding});
+            const auto endpoints =
+                authoredEndpoints ? std::make_shared<const AiControllerPerceptionEndpoints>(*authoredEndpoints) : nullptr;
+            if (!shouldStart || missing) {
+                prepared.emplace(
+                    AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
+                                                                     .owner = input.owner,
+                                                                     .agent = input.agent,
+                                                                     .controller = input.controller,
+                                                                     .state = shouldStart && missing ? AiAgentActivationState::Degraded
+                                                                                                     : AiAgentActivationState::Disabled},
+                                      .schema = schemaPublication.schema,
+                                      .perceptionEndpoints = endpoints,
+                                      .blackboardBinding = schemaPublication.binding});
                 return Result<void>::Success();
             }
 
-            if (descriptor == nullptr)
-                return Failure(AIErrors::ControllerDescriptorMissing,
-                               "An enabled AI controller has no matching immutable activation descriptor.");
-            if (const Result<void> valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError())
-                return Result<void>::Failure(valid.ErrorValue());
-            if (!HasCapabilities(availableCapabilities, input.controller->requiredCapabilities))
+            if (!HasCapabilities(settings.availableCapabilities, input.controller->requiredCapabilities))
                 return Failure(AIErrors::CapabilityUnavailable, "An enabled AI controller requires an unavailable host capability.");
 
             auto blackboard = BlackboardInstance::Create(schemaPublication.binding, schemaPublication.schema);
@@ -220,6 +261,8 @@ namespace Horo::AI {
                                                .hasBlackboard = true,
                                                .hasRunningTask = false},
                 .schema = schemaPublication.schema,
+                .perceptionEndpoints = endpoints,
+                .cookedPlan = descriptor->cookedPlan,
                 .blackboardBinding = schemaPublication.binding,
                 .blackboard = std::move(blackboard).Value(),
             });
@@ -228,7 +271,7 @@ namespace Horo::AI {
 
         [[nodiscard]] Result<std::unique_ptr<Detail::AiSceneRuntimeState>> BuildSceneState(
             const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
-            const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet availableCapabilities) {
+            const std::span<const AiControllerDescriptor> descriptors, const AiSceneRuntimeSettings &settings) {
             std::unique_ptr<Detail::AiSceneRuntimeState> state;
             try {
                 state = std::make_unique<Detail::AiSceneRuntimeState>();
@@ -239,7 +282,7 @@ namespace Horo::AI {
                     state->lastAgentIdentity = std::max(state->lastAgentIdentity, input.agent.agent.Value());
                     std::optional<AgentRuntimeState> prepared;
                     const std::size_t slotIndex = state->agents.size();
-                    if (const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, availableCapabilities,
+                    if (const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, settings,
                                                                             static_cast<std::uint32_t>(slotIndex), prepared);
                         ready.HasError()) {
                         ShutdownStateContents(*state);
@@ -250,6 +293,8 @@ namespace Horo::AI {
                         state->agentsByOwner.emplace(input.owner, slotIndex);
                     }
                 }
+                if (auto capacity = Detail::ValidatePerceptionCapacity(state->agents); capacity.HasError())
+                    return Result<std::unique_ptr<Detail::AiSceneRuntimeState>>::Failure(capacity.ErrorValue());
             } catch (const std::bad_alloc &) {
                 if (state != nullptr)
                     ShutdownStateContents(*state);
@@ -264,7 +309,7 @@ namespace Horo::AI {
     /** @copydoc Detail::PrepareStructuralAgents */
     Result<std::vector<Detail::AgentRuntimeState>> Detail::PrepareStructuralAgents(
         const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
-        const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet capabilities,
+        const std::span<const AiControllerDescriptor> descriptors, const AiSceneRuntimeSettings &settings,
         const std::span<const Horo::Handle<AgentHandleTag>> slots) {
         if (const auto valid = ValidateSceneInputs(agents, descriptors, binding); valid.HasError())
             return Result<std::vector<AgentRuntimeState>>::Failure(valid.ErrorValue());
@@ -272,7 +317,7 @@ namespace Horo::AI {
         result.reserve(agents.size());
         for (std::size_t index = 0; index < agents.size(); ++index) {
             std::optional<AgentRuntimeState> prepared;
-            if (const auto ready = PrepareAgentRuntimeState(binding, agents[index], descriptors, capabilities, slots[index].index, prepared,
+            if (const auto ready = PrepareAgentRuntimeState(binding, agents[index], descriptors, settings, slots[index].index, prepared,
                                                             slots[index].generation);
                 ready.HasError())
                 return Result<std::vector<AgentRuntimeState>>::Failure(ready.ErrorValue());
@@ -283,8 +328,8 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneRuntime::MakeStructuralParticipant */
     std::unique_ptr<Runtime::SceneStructuralParticipant> AiSceneRuntime::MakeStructuralParticipant(
-        const std::span<const AiControllerDescriptor> descriptors) {
-        return Detail::MakeStructuralParticipant(*this, descriptors);
+        const std::span<const AiControllerDescriptor> descriptors, std::optional<AiScenePerceptionGroupInput> perception) {
+        return Detail::MakeStructuralParticipant(*this, descriptors, std::move(perception));
     }
 
     /** @copydoc AiSceneSnapshot::Find */
@@ -308,13 +353,50 @@ namespace Horo::AI {
         Shutdown();
     }
 
+    /** @copydoc AiSceneActivationCandidate::PreparePerception */
+    Result<void> AiSceneActivationCandidate::PreparePerception(const Runtime::RuntimeSceneView &scene,
+                                                               const AiScenePerceptionActivationInput &input) {
+        if (!input.positions)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+        try {
+            const auto positions = input.positions(scene);
+            if (positions.HasError())
+                return Result<void>::Failure(positions.ErrorValue());
+            auto prepared = Detail::PerceptionGroupPublication::PrepareScene(input.spatial, scene, 1, positions.Value(), input.filtering,
+                                                                             state_->agents);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            if (input.execution) {
+                auto admitted = Detail::PreparePerceptionSenses(*input.execution, {}, state_->agents);
+                if (admitted.HasError())
+                    return admitted;
+                state_->perceptionExecution = input.execution;
+            }
+            state_->perceptionSpatial = &input.spatial;
+            perception_ = std::make_unique<Detail::PerceptionGroupPublication>(std::move(prepared).Value());
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        }
+    }
+
     /** @copydoc AiSceneActivationCandidate::ValidatePublication */
     Result<void> AiSceneActivationCandidate::ValidatePublication() const {
         if (published_)
             return Result<void>::Success();
         if (runtime_ == nullptr || state_ == nullptr)
             return Failure(AIErrors::SceneActivationInvalid, "The AI scene activation candidate has no owned staged state.");
-        return runtime_->ValidateCandidate(binding_);
+        if (auto valid = runtime_->ValidateCandidate(binding_); valid.HasError())
+            return valid;
+        if (restoreCancellation_.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreCancelled));
+        if (restoredScene_ && !restoredScene_->IsCurrent())
+            return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        if (perception_ && !perception_->IsCurrent())
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (state_->perceptionExecution && !state_->perceptionExecution->generation->CanAdmit())
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        return Detail::ValidateCurrentCookedDecisions(state_->agents);
     }
 
     /** @copydoc AiSceneActivationCandidate::Publish */
@@ -322,6 +404,8 @@ namespace Horo::AI {
         if (published_ || runtime_ == nullptr || state_ == nullptr)
             return;
         published_ = runtime_->PublishCandidate(state_, binding_, publicationToken_);
+        if (published_ && perception_)
+            perception_->Publish();
     }
 
     /** @copydoc AiSceneActivationCandidate::Shutdown */
@@ -333,23 +417,37 @@ namespace Horo::AI {
             state_.reset();
         }
         if (published_) {
+            if (perception_)
+                perception_->RetireScene(binding_.scene);
             runtime_->RetirePublication(publicationToken_);
             published_ = false;
         }
+        perception_.reset();
     }
 
     /** @copydoc AiSceneRuntime::Create */
     Result<AiSceneRuntime> AiSceneRuntime::Create(const AiSceneRuntimeSettings settings) {
         if (!settings.IsValid())
             return Failure<AiSceneRuntime>(AIErrors::AgentCapacityExceeded, "AI scene runtime settings exceed a bounded product limit.");
-        return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings});
+        return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings, std::nullopt});
     }
 
-    AiSceneRuntime::AiSceneRuntime(const AiSceneRuntimeSettings settings) noexcept : settings_(settings) {}
+    Result<AiSceneRuntime> AiSceneRuntime::Create(const AiSceneRuntimeSettings settings, AiSceneCookedDecisionExecution execution) {
+        if (!settings.IsValid())
+            return Failure<AiSceneRuntime>(AIErrors::AgentCapacityExceeded, "AI scene runtime settings exceed a bounded product limit.");
+        if (!execution.HasMatchingTiming())
+            return Failure<AiSceneRuntime>(AIErrors::SchedulerPolicyInvalid,
+                                           "Cooked decisions require an explicit matching timing policy.");
+        return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings, std::move(execution)});
+    }
+
+    AiSceneRuntime::AiSceneRuntime(const AiSceneRuntimeSettings settings, std::optional<AiSceneCookedDecisionExecution> execution) noexcept
+        : settings_(settings), decisionExecution_(std::move(execution)) {}
 
     AiSceneRuntime::AiSceneRuntime(AiSceneRuntime &&other) noexcept
-        : settings_(other.settings_), active_(std::move(other.active_)), nextPublicationToken_(other.nextPublicationToken_),
-          activePublicationToken_(other.activePublicationToken_), shutdown_(other.shutdown_) {
+        : settings_(other.settings_), decisionExecution_(std::move(other.decisionExecution_)), active_(std::move(other.active_)),
+          nextPublicationToken_(other.nextPublicationToken_), activePublicationToken_(other.activePublicationToken_),
+          shutdown_(other.shutdown_) {
         other.activePublicationToken_ = 0;
         other.shutdown_ = true;
     }
@@ -362,6 +460,46 @@ namespace Horo::AI {
     Result<std::unique_ptr<AiSceneActivationCandidate>> AiSceneRuntime::PrepareScene(
         const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
         const std::span<const AiControllerDescriptor> descriptors) {
+        return PrepareSceneInternal(binding, agents, descriptors, nullptr);
+    }
+
+    /** @copydoc AiSceneRuntime::PrepareRestoredScene */
+    Result<std::unique_ptr<AiSceneActivationCandidate>> AiSceneRuntime::PrepareRestoredScene(
+        const Runtime::RuntimeSceneView &scene, std::span<const AiControllerDescriptor> descriptors, const AiCanonicalState &state,
+        std::span<const BlackboardSchemaMigration> migrations, CancellationToken cancellation) {
+        using Candidate = Result<std::unique_ptr<AiSceneActivationCandidate>>;
+        const auto binding = MakeBinding(scene);
+        if (binding.HasError())
+            return Candidate::Failure(binding.ErrorValue());
+        if (active_ && active_->binding.scene == binding.Value().scene)
+            return Candidate::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        if (state.agents.size() > settings_.maximumAgents || migrations.size() > MaximumAiSchemaMigrations)
+            return Candidate::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+        try {
+            std::vector<AiSceneAgentDescriptor> agents;
+            agents.reserve(state.agents.size());
+            for (std::size_t index = 0; index < scene.SlotCount(); ++index) {
+                if (cancellation.IsCancellationRequested())
+                    return Candidate::Failure(MakeError(AIErrors::CanonicalRestoreCancelled));
+                const auto entity = scene.EntityAt(index);
+                if (!entity || (!entity->components->aiAgent && !entity->components->aiController))
+                    continue;
+                if (agents.size() == state.agents.size())
+                    return Candidate::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+                agents.push_back(
+                    {entity->entity, entity->components->aiAgent.value_or(AiAgentComponent{}), entity->components->aiController});
+            }
+            const Detail::SceneRestoreInput restore{scene, state, migrations, cancellation};
+            return PrepareSceneInternal(binding.Value(), agents, descriptors, &restore);
+        } catch (const std::bad_alloc &) {
+            return Candidate::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));
+        }
+    }
+
+    /** @copydoc AiSceneRuntime::PrepareSceneInternal */
+    Result<std::unique_ptr<AiSceneActivationCandidate>> AiSceneRuntime::PrepareSceneInternal(
+        const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
+        const std::span<const AiControllerDescriptor> descriptors, const Detail::SceneRestoreInput *restore) {
         if (shutdown_)
             return Failure<std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::RuntimeUnavailable, "The AI scene runtime is shut down.");
         if (!binding.IsValid())
@@ -374,10 +512,16 @@ namespace Horo::AI {
         if (const Result<void> valid = ValidateSceneInputs(agents, descriptors, binding); valid.HasError())
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(valid.ErrorValue());
 
-        auto state = BuildSceneState(binding, agents, descriptors, settings_.availableCapabilities);
+        auto state = BuildSceneState(binding, agents, descriptors, settings_);
         if (state.HasError())
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(state.ErrorValue());
         std::unique_ptr<Detail::AiSceneRuntimeState> ownedState = std::move(state).Value();
+        if (restore) {
+            if (const auto restored = Detail::RestoreDetachedScene(*ownedState, *restore, settings_); restored.HasError())
+                return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(restored.ErrorValue());
+            if (const auto plans = BindRestoredCookedPlans(ownedState->agents, descriptors); plans.HasError())
+                return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(plans.ErrorValue());
+        }
 
         if (nextPublicationToken_ == std::numeric_limits<std::uint64_t>::max()) {
             ShutdownStateContents(*ownedState);
@@ -387,7 +531,13 @@ namespace Horo::AI {
         const std::uint64_t publicationToken = nextPublicationToken_++;
         try {
             std::shared_ptr<Detail::AiSceneRuntimeState> retainedState = std::move(ownedState);
+            if (auto scheduled = PrepareCookedDecisionScheduler(retainedState); scheduled.HasError())
+                return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(scheduled.ErrorValue());
             auto candidate = std::make_unique<AiSceneActivationCandidate>(*this, binding, std::move(retainedState), publicationToken);
+            if (restore) {
+                candidate->restoredScene_ = restore->scene;
+                candidate->restoreCancellation_ = restore->cancellation;
+            }
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
             if (ownedState != nullptr)
@@ -579,15 +729,13 @@ namespace Horo::AI {
             ShutdownStateContents(*previous);
     }
 
-    /** @copydoc AiSceneActivationParticipant::Prepare */
-    Result<std::unique_ptr<Runtime::SceneActivationCandidate>> AiSceneActivationParticipant::Prepare(
+    /** @copydoc AiSceneActivationParticipant::PrepareAuthoredScene */
+    Result<std::unique_ptr<AiSceneActivationCandidate>> AiSceneActivationParticipant::PrepareAuthoredScene(
         const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
-        if (runtime_ == nullptr)
-            return Failure<std::unique_ptr<Runtime::SceneActivationCandidate>>(AIErrors::SceneActivationInvalid,
-                                                                               "The AI scene participant has no runtime owner.");
+        using Candidate = Result<std::unique_ptr<AiSceneActivationCandidate>>;
         const auto binding = MakeBinding(scene);
         if (binding.HasError())
-            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(binding.ErrorValue());
+            return Candidate::Failure(binding.ErrorValue());
 
         std::vector<AiSceneAgentDescriptor> agents;
         try {
@@ -597,22 +745,35 @@ namespace Horo::AI {
                     continue;
                 const std::optional<Runtime::EntityRef> owner = scene.Find(entity.object);
                 if (!owner)
-                    return Failure<std::unique_ptr<
-                        Runtime::SceneActivationCandidate>>(AIErrors::SceneActivationInvalid,
-                                                            "An AI component references an entity absent from the runtime scene.");
+                    return Candidate::Failure(
+                        MakeError(AIErrors::SceneActivationInvalid, "An AI component references an entity absent from the runtime scene."));
                 agents.push_back(AiSceneAgentDescriptor{.owner = *owner,
                                                         .agent = entity.components.aiAgent.value_or(AiAgentComponent{}),
                                                         .controller = entity.components.aiController});
             }
         } catch (const std::bad_alloc &) {
-            return Failure<
-                std::unique_ptr<Runtime::SceneActivationCandidate>>(AIErrors::AgentCapacityExceeded,
-                                                                    "AI scene component projection exceeded its bounded storage.");
+            return Candidate::Failure(
+                MakeError(AIErrors::AgentCapacityExceeded, "AI scene component projection exceeded its bounded storage."));
         }
+        return runtime_->PrepareScene(binding.Value(), agents, descriptors_);
+    }
 
-        auto candidate = runtime_->PrepareScene(binding.Value(), agents, descriptors_);
+    /** @copydoc AiSceneActivationParticipant::Prepare */
+    Result<std::unique_ptr<Runtime::SceneActivationCandidate>> AiSceneActivationParticipant::Prepare(
+        const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView &scene) {
+        using Candidate = Result<std::unique_ptr<Runtime::SceneActivationCandidate>>;
+        const auto restored = restore_ ? restore_(scene) : Result<AiSceneRestoredPopulation>::Success({});
+        if (restored.HasError())
+            return Candidate::Failure(restored.ErrorValue());
+        const auto &selection = restored.Value();
+        auto candidate = selection.state ? runtime_->PrepareRestoredScene(scene, descriptors_, *selection.state, {}, selection.cancellation)
+                                         : PrepareAuthoredScene(definition, scene);
         if (candidate.HasError())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(candidate.ErrorValue());
+        if (perception_) {
+            if (auto staged = candidate.Value()->PreparePerception(scene, *perception_); staged.HasError())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(staged.ErrorValue());
+        }
         return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::move(candidate).Value());
     }
 }  // namespace Horo::AI

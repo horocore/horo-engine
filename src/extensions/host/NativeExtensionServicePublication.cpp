@@ -139,6 +139,8 @@ namespace Horo::Extensions {
                 client->provider = provider.Value();
             }
             nativeModule->committed.store(true, std::memory_order_release);
+            if (const auto state = nativeModule->host.lock())
+                state->authoringApiRevision.fetch_add(1, std::memory_order_release);
         }
         return Result<void>::Success();
     }

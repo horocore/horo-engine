@@ -30,6 +30,12 @@ namespace Horo::Release {
         ReleaseCandidateId candidate_;
     };
 
+    /** @brief Borrowed production envelope and independent publisher verifier supplied by the release host. */
+    struct ReleaseManifestSigningInput final {
+        std::span<const std::byte> envelope;
+        const IReleaseManifestSignatureVerifier &verifier;
+    };
+
     /** @brief Native filesystem adapter for explicit candidate staging and collision-safe promotion. */
     class NativeReleaseCandidatePublisher final {
     public:
@@ -49,11 +55,13 @@ namespace Horo::Release {
          * @param plan The same frozen plan that created @p stage.
          * @param stage Private stage returned by Begin, after all byte-changing workers have stopped.
          * @param manifest Final post-sign manifest for the exact candidate and plan identities.
+         * @param signing Optional host-supplied detached manifest envelope and publisher trust. When supplied, both
+         * metadata files must verify and retries must match the exact supplied envelope bytes.
          * @return Success after promotion or an idempotent retry that verifies the same final candidate;
          *         a conflicting or changed final candidate is never replaced.
          */
         [[nodiscard]] Result<void> Promote(const ReleaseExecutionPlan &plan, const ReleaseStagingArea &stage,
-                                           const ReleaseArtifactManifest &manifest);
+                                           const ReleaseArtifactManifest &manifest, const ReleaseManifestSigningInput *signing = nullptr);
 
     private:
         DurableFileSystem &files_;

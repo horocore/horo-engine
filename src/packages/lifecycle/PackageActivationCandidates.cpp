@@ -1,10 +1,13 @@
 #include "Horo/Extensions/ExtensionAbi.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
+#include "Horo/Packages/PackageMigration.h"
 #include "PackageActivationComposition.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <map>
+#include <ranges>
 #include <set>
 
 namespace Horo::Packages::Detail {
@@ -22,8 +25,10 @@ namespace Horo::Packages::Detail {
             const auto &root = declared.root;
             auto &manifest = declared.manifest;
             const auto entries = package.archive->Manifest().Entries();
-            // This composition exposes only the registered importer catalog. Other extension points need their own explicit host owners.
-            if (!std::ranges::all_of(manifest.contributions, [](const auto &contribution) {
+            // The provider-only profile has one RAII publication owner. Independent catalogs cannot commit a mixed batch atomically.
+            const bool providerOnly =
+                manifest.contributions.size() == 1 && manifest.contributions.front().type == "platform.services.provider";
+            if (!providerOnly && !std::ranges::all_of(manifest.contributions, [](const auto &contribution) {
                 return contribution.type == "asset.importer";
             }))
                 return Result<PackageActivationCandidate>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
@@ -225,4 +230,205 @@ namespace Horo::Packages::Detail {
             return Result<std::vector<PackageActivationCandidate>>::Failure(pending.ErrorValue());
         return OrderCandidates(std::move(pending).Value(), install->Graph()->packages);
     }
+    namespace {
+        /** @brief Tests a single native role with no intermodule service contract. */
+        bool IsStandaloneNativeRole(const Extensions::ExtensionModuleManifest &module, const Extensions::ExtensionModuleRole role) {
+            return module.kind == "native" && module.imports.empty() && module.exports.empty() &&
+                   std::ranges::equal(module.roles, std::array{role});
+        }
+    }  // namespace
+
+    /** @copydoc IsImporterOnlyModule */
+    bool IsImporterOnlyModule(const Extensions::ExtensionModuleManifest &module, const Extensions::ExtensionManifest &manifest) {
+        if (!IsStandaloneNativeRole(module, Extensions::ExtensionModuleRole::BackendCapability) || !module.dependencies.empty() ||
+            !module.requiredCapabilities.empty())
+            return false;
+        bool hasImporter = false;
+        for (const auto &contribution : manifest.contributions) {
+            if (contribution.owningModule != module.id)
+                continue;
+            if (contribution.type != "asset.importer")
+                return false;
+            hasImporter = true;
+        }
+        return hasImporter;
+    }
 }  // namespace Horo::Packages::Detail
+
+namespace Horo::Packages {
+    namespace {
+        constexpr std::string_view ExtensionPrefix = "extensions/";
+        constexpr std::string_view DescriptorSuffix = "/extension.json";
+        using RemovalArtifacts = std::map<std::string, std::set<std::string, std::less<>>, std::less<>>;
+
+        /** @brief Borrows the exact archive and reservation during inert importer reference review. */
+        struct ImporterRemovalReview final {
+            const PackageRestorePackage &package;
+            const PackageRemovalLease *reservation;
+        };
+
+        /** @brief Identifies descriptor candidates in the sealed inventory before validating their ownership. */
+        bool IsExtensionDescriptor(const PackageFileEntry &file) {
+            const std::string_view path = file.id.path.Value();
+            return path.starts_with(ExtensionPrefix) && path.ends_with(DescriptorSuffix);
+        }
+
+        /** @brief Identifies resources controlled by the exact native gameplay declaration. */
+        bool IsGameplayRemovalFile(const PackageFileEntry &file, const RemovalArtifacts &byRoot) {
+            const auto &path = file.id.path.Value();
+            if (path == "horo-package.toml" || path == PackageAssetRenameDeclarationPath || path.starts_with("assets/"))
+                return !file.executable;
+            if (!file.contributionRoot)
+                return false;
+            const auto owner = byRoot.find(file.contributionRoot->Value());
+            if (owner == byRoot.end())
+                return false;
+            const auto &[root, artifacts] = *owner;
+            if (artifacts.contains(path))
+                return true;
+            if (file.executable)
+                return false;
+            constexpr std::string_view SignatureSuffix = ".signature.json";
+            const std::string_view name{path};
+            if (name.ends_with(SignatureSuffix))
+                return artifacts.contains(name.substr(0, name.size() - SignatureSuffix.size()));
+            return (name.starts_with(root) && name.substr(root.size()) == DescriptorSuffix) || name.ends_with(".horo_script");
+        }
+
+        /** @brief Accounts for executable entries and names owners outside the admitted withdrawal routes. */
+        void CollectRemovalArtifacts(
+            const Detail::DeclaredPackageDescriptor &declared, const PackagePath &descriptorPath, const ImporterRemovalReview &importers,
+            std::set<std::string, std::less<>> &artifacts, std::vector<PackageRuntimeRoleDeclaration> &roles, std::vector<Diagnostic> &blockers) {
+            const SourceLocation descriptor{descriptorPath.Value()};
+            const auto &manifest = declared.manifest;
+            std::set<std::string_view, std::less<>> importerModules;
+            for (const auto &module : manifest.modules) {
+                if (Detail::IsStandaloneNativeRole(module, Extensions::ExtensionModuleRole::RuntimeParticipant)) {
+                    roles.emplace_back(descriptorPath, module.id);
+                } else if (importers.reservation && Detail::IsImporterOnlyModule(module, manifest) &&
+                           importers.reservation->AllowsNativeImporterReview(importers.package, module.id)) {
+                    importerModules.insert(module.id);
+                } else {
+                    blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_module_owner_required"}, DiagnosticSeverity::Error,
+                                          "Module requires its registered lifecycle owner.", descriptor, module.id);
+                    continue;
+                }
+                if (!module.entry.empty())
+                    artifacts.emplace(declared.root + '/' + Detail::SelectedPackageNativeEntry(module.entry));
+                for (const auto &variant : module.entries)
+                    artifacts.emplace(declared.root + '/' + variant.entry);
+            }
+            for (const auto &contribution : manifest.contributions)
+                if (!importerModules.contains(contribution.owningModule))
+                    blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_contribution_owner_required"},
+                                          DiagnosticSeverity::Error, contribution.type + " / " + contribution.owningModule,
+                                          descriptor, contribution.id);
+        }
+
+        /** @brief Identifies each archive member outside the gameplay owner's file authority. */
+        void CollectUnownedFiles(const ValidatedPackageArchive &archive, const RemovalArtifacts &artifacts,
+                                 std::vector<Diagnostic> &blockers) {
+            for (const auto &file : archive.Manifest().Entries()) {
+                if (IsGameplayRemovalFile(file, artifacts))
+                    continue;
+                const auto &path = file.id.path.Value();
+                blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_file_owner_required"}, DiagnosticSeverity::Error,
+                                      "Archive member requires a separate lifecycle owner.", SourceLocation{path},
+                                      file.contributionRoot ? file.contributionRoot->Value() : path);
+            }
+        }
+
+        /** @brief Reports locked contributions that no validated extension descriptor accounts for. */
+        void CollectUnownedContributions(const LockedPackage &lock, const RemovalArtifacts &artifacts, std::vector<Diagnostic> &blockers) {
+            for (const auto &type : lock.contributions)
+                if (type != "assets" && !artifacts.contains(std::string{ExtensionPrefix} + type))
+                    blockers.emplace_back(DiagnosticCode{"packages.lifecycle.removal_contribution_owner_required"}, DiagnosticSeverity::Error,
+                                          type, SourceLocation{"packages.lock"}, lock.package.Value());
+        }
+    }  // namespace
+
+    /** @brief Verifies every archived executable member before allowing its role-specific reference review. */
+    static Result<std::vector<PackageRuntimeRoleDeclaration>> InspectRemovalRoles(const PackageRestorePackage &package,
+                                                                                  const PackageRemovalLease *reservation,
+                                                                                  std::vector<PackageRuntimeRoleDeclaration> *verifiedOnFailure) {
+        using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
+        auto outsideOwner = MakeError(PackageLifecycleErrors::InvalidCandidate);
+        if (!package.archive)
+            return Roles::Failure(std::move(outsideOwner));
+        // The importer sidecar scan identifies importer use, not references to mounted assets contributed by this archive.
+        const bool hasMountedAssets = reservation && std::ranges::any_of(package.archive->Manifest().Entries(), [](const auto &file) {
+            return file.id.path.Value().starts_with("assets/");
+        });
+        RemovalArtifacts artifacts;
+        std::vector<PackageRuntimeRoleDeclaration> roles;
+        std::optional<Error> firstDescriptorFailure;
+        for (const auto &file : package.archive->Manifest().Entries() | std::views::filter(IsExtensionDescriptor)) {
+            const auto &descriptor = file.id.path;
+            auto declared = Detail::ReadDeclaredPackageDescriptor(package, descriptor);
+            if (declared.HasError()) {
+                auto failure = std::move(declared).ErrorValue();
+                outsideOwner.diagnostics.emplace_back(DiagnosticCode{"packages.lifecycle.removal_descriptor_unverified"},
+                                                      DiagnosticSeverity::Error, failure.code.Value(),
+                                                      SourceLocation{descriptor.Value()}, package.lock.package.Value());
+                if (!firstDescriptorFailure)
+                    firstDescriptorFailure.emplace(std::move(failure));
+                continue;
+            }
+            CollectRemovalArtifacts(declared.Value(), descriptor, {package, hasMountedAssets ? nullptr : reservation},
+                                    artifacts[declared.Value().root], roles, outsideOwner.diagnostics);
+        }
+        CollectUnownedContributions(package.lock, artifacts, outsideOwner.diagnostics);
+        CollectUnownedFiles(*package.archive, artifacts, outsideOwner.diagnostics);
+        const bool hasOwnedFiles = std::ranges::any_of(artifacts, [](const auto &owner) { return !owner.second.empty(); });
+        if (hasOwnedFiles && outsideOwner.diagnostics.empty())
+            return Roles::Success(std::move(roles));
+        if (verifiedOnFailure)
+            *verifiedOnFailure = std::move(roles);
+        return Roles::Failure(firstDescriptorFailure ? WithCause(std::move(outsideOwner), std::move(*firstDescriptorFailure))
+                                                     : std::move(outsideOwner));
+    }
+
+    /** @copydoc InspectGameplayRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectGameplayRemovalRoles(const PackageRestorePackage &package) {
+        return InspectRemovalRoles(package, nullptr, nullptr);
+    }
+
+    /** @copydoc InspectLivePackageRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(const PackageRestorePackage &package,
+                                                                                      const PackageRemovalLease &reservation) {
+        return InspectRemovalRoles(package, &reservation, nullptr);
+    }
+
+    /** @copydoc InspectLivePackageRemovalRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectLivePackageRemovalRoles(
+        const PackageRestorePackage &package, const PackageRemovalLease &reservation,
+        std::vector<PackageRuntimeRoleDeclaration> &verifiedOnFailure) {
+        verifiedOnFailure.clear();
+        return InspectRemovalRoles(package, &reservation, &verifiedOnFailure);
+    }
+
+    /** @copydoc InspectPackageRuntimeRoles */
+    Result<std::vector<PackageRuntimeRoleDeclaration>> InspectPackageRuntimeRoles(const VerifiedPackageInstallRecord &install,
+                                                                                  const HoroPackageId &package) {
+        using Roles = Result<std::vector<PackageRuntimeRoleDeclaration>>;
+        const auto graph = install.Graph();
+        const auto installed = std::ranges::find_if(graph->packages, [&package](const auto &entry) {
+            return entry.lock.package == package;
+        });
+        if (installed == graph->packages.end())
+            return Roles::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        std::vector<PackageRuntimeRoleDeclaration> roles;
+        for (const auto &file : installed->archive->Manifest().Entries()) {
+            if (!IsExtensionDescriptor(file))
+                continue;
+            const auto declared = Detail::ReadDeclaredPackageDescriptor(*installed, file.id.path);
+            if (declared.HasError())
+                return Roles::Failure(declared.ErrorValue());
+            for (const auto &entry : declared.Value().manifest.modules) {
+                if (std::ranges::find(entry.roles, Extensions::ExtensionModuleRole::RuntimeParticipant) != entry.roles.end())
+                    roles.emplace_back(file.id.path, entry.id);
+            }
+        }
+        return Roles::Success(std::move(roles));
+    }
+}  // namespace Horo::Packages

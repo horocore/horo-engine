@@ -10,8 +10,9 @@
 #include <thread>
 
 namespace Horo::Gameplay {
+    class LoadedGameModule;
     class LuaDecisionNodeProgram;
-}
+}  // namespace Horo::Gameplay
 
 namespace Horo::AI {
     enum class DecisionNodeRole : std::uint8_t {
@@ -65,6 +66,20 @@ namespace Horo::AI {
         std::vector<BehaviorTreeProperty> properties;
     };
 
+    /** @brief Explicit owner-side factory for authored query tasks in an executable Behavior Tree. */
+    class IDecisionQueryTaskBinder {
+    public:
+        virtual ~IDecisionQueryTaskBinder() = default;
+
+        /** @brief Constructs an occurrence-local task once the registered node contract is validated.
+         * @param tree Exact compiled tree authorizing output bindings.
+         * @param configuration Exact authored node properties, including its query output.
+         * @return Owned executor or a typed host admission failure. A null result is invalid.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<IBehaviorTreeExecutor>> BindQueryTask(
+            const BehaviorTreeExecutionPlan &tree, const DecisionNodeConfiguration &configuration) = 0;
+    };
+
     /** @brief Validates one bounded declaration without invoking provider code. */
     [[nodiscard]] Result<void> ValidateDecisionNodeRegistration(const DecisionNodeRegistration &registration);
 
@@ -107,20 +122,47 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
             std::shared_ptr<const DecisionNodeGeneration> self, const DecisionAssetPlan &plan, AiCapabilitySet capabilities,
             std::span<const DecisionNodeConfiguration> configuration = {}) const;
-        /** @brief Binds only provider callbacks selected by actual executable topology; core control nodes remain flat runtime data. */
+        /** @brief Binds provider callbacks selected by actual executable topology. */
         [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
             std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
             std::span<const DecisionNodeConfiguration> configuration = {}) const;
+        /** @brief Binds provider callbacks with explicit owner admission for typed query tasks.
+         * @param self Exact retained provider generation. @param plan Compiled executable topology.
+         * @param capabilities Allowed provider capabilities. @param configuration Authored node properties.
+         * @param queryTasks Optional owner binder used for every authored query task; borrowed during construction.
+         * @return Owned callback set or typed failure before any task starts.
+         */
+        [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
+            std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
+            std::span<const DecisionNodeConfiguration> configuration, IDecisionQueryTaskBinder *queryTasks) const;
 
     private:
         friend class RegisteredDecisionNodeExecutor;
+        friend class DecisionGraphInstance;
+        friend class ::Horo::Gameplay::LoadedGameModule;
         friend class ::Horo::Gameplay::LuaDecisionNodeProgram;
+        /** @brief Binds callbacks for a graph whose operation can be cancelled during construction. */
+        [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
+            std::shared_ptr<const DecisionNodeGeneration> self, const DecisionAssetPlan &plan, AiCapabilitySet capabilities,
+            std::span<const DecisionNodeConfiguration> configuration, const AiTaskOperationContext *operation) const;
+        /** @brief Binds executable callbacks while the graph and optional query route are admitted. */
+        [[nodiscard]] Result<std::unique_ptr<IBehaviorTreeExecutor>> CreateExecutor(
+            std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
+            std::span<const DecisionNodeConfiguration> configuration, IDecisionQueryTaskBinder *queryTasks,
+            const AiTaskOperationContext *operation) const;
+        /** @brief Retains one exact native owner while deferring callable admission until module activation succeeds. */
+        [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureNative(
+            std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
+            std::shared_ptr<const std::atomic_bool> factoryAdmission);
         [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureVm(
             std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
             std::shared_ptr<const DecisionNodeGeneration> provider);
         [[nodiscard]] static Result<std::shared_ptr<const DecisionNodeGeneration>> CaptureAdmitted(
             std::span<const DecisionNodeRegistration> registrations, std::shared_ptr<const std::atomic_bool> admission,
-            std::shared_ptr<const DecisionNodeGeneration> provider, bool vmAuthority);
+            std::shared_ptr<const DecisionNodeGeneration> provider, bool vmAuthority,
+            std::shared_ptr<const std::atomic_bool> factoryAdmission = {});
+        /** @brief Checks factory activation for each retained provider without invoking user code. */
+        [[nodiscard]] bool FactoriesActive() const noexcept;
         [[nodiscard]] static bool ValidProvider(const std::shared_ptr<const DecisionNodeGeneration> &provider) noexcept;
         [[nodiscard]] Result<void> StoreDeclarations(std::vector<DecisionNodeRegistration> declarations);
         [[nodiscard]] Result<void> AppendGeneration(const std::shared_ptr<const DecisionNodeGeneration> &generation,
@@ -128,6 +170,7 @@ namespace Horo::AI {
         std::vector<DecisionNodeContract> contracts_;
         std::vector<DecisionNodeFactoryBinding> factories_;
         std::shared_ptr<const std::atomic_bool> admission_;
+        std::shared_ptr<const std::atomic_bool> factoryAdmission_;
         std::shared_ptr<const DecisionNodeGeneration> provider_;
         std::vector<std::shared_ptr<const DecisionNodeGeneration>> parents_;
         std::thread::id owner_;

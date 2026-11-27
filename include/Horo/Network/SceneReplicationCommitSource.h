@@ -1,11 +1,13 @@
 #pragma once
 
 /** @file SceneReplicationCommitSource.h
- * @brief Explicit Scene-owner commit and NetworkFlush composition for declared transform replication.
+ * @brief Explicit Scene-owner commit and NetworkFlush composition for declared Scene and presentation replication.
  */
 
 #include "Horo/Network/ReplicationStateCapture.h"
+#include "Horo/Runtime/RuntimeDispatchEvidence.h"
 
+#include <functional>
 #include <thread>
 
 namespace Horo::Network {
@@ -13,13 +15,43 @@ namespace Horo::Network {
     enum class SceneReplicationProperty : std::uint8_t {
         TranslationX,
         TranslationY,
-        TranslationZ
+        TranslationZ,
+        RotationX,
+        RotationY,
+        RotationZ,
+        RotationW,
+        LinearVelocityX,
+        LinearVelocityY,
+        LinearVelocityZ,
+        AnimationActionTag
     };
 
-    /** @brief Declared FieldId binding to one Scene-owned canonical transform scalar. */
+    /** @brief Declared FieldId binding to a transform, velocity or action scalar. Rotation requires all four components. */
     struct SceneReplicationFieldBinding final {
         FieldId field;
         SceneReplicationProperty property;
+    };
+
+    /** @brief Owner-lane reader of completed world-space velocity in metres per second for an exact authored Scene occurrence.
+     * @details Called synchronously during NetworkFlush only for an admitted velocity schema. Returns an error if the
+     * adjacent owner has no current sample. The reader never grants mutation authority or retains the Scene view.
+     */
+    using SceneReplicationVelocitySource = std::function<Result<Math::Vec3>(const Runtime::RuntimeEntityView &)>;
+    /** @brief Projects a declared public tag from committed animation. Zero denotes an idle or unlisted action. */
+    using SceneReplicationActionSource = std::function<Result<std::int32_t>(const Runtime::RuntimeEntityView &)>;
+    /** @brief Reads a committed adjacent owner's Scene-local transform for an exact entity.
+     * @details Empty leaves the authored Scene projection in use. An error rejects the complete read.
+     * Invoked synchronously on the owner lane with the admitted Scene view and committed scheduler tick.
+     */
+    using SceneReplicationTransformSource =
+        std::function<Result<std::optional<Math::Transform>>(const Runtime::RuntimeSceneView &, const Runtime::RuntimeEntityView &,
+                                                             std::uint64_t)>;
+
+    /** @brief Adjacent owners consulted by the observed Scene capture. */
+    struct SceneReplicationObservationSources final {
+        SceneReplicationVelocitySource velocity;
+        SceneReplicationActionSource action;
+        SceneReplicationTransformSource transform;
     };
 
     /** @brief Real RuntimeScene owner adapter and explicit post-commit NetworkFlush composition.
@@ -27,7 +59,8 @@ namespace Horo::Network {
      * the scene owner thread. A read barrier rejects reentrant wrapper commits. Even a direct
      * RuntimeScene::Commit bypass invalidates the actual RuntimeSceneView and rejects the whole
      * capture candidate before publication. The source pins the scene; copied snapshots do not.
-     * Replace this source/coordinator together on scene/schema/module generation replacement.
+     * Application-owned Scenes can bind the read-only observed mode to their committed scheduler dispatch instead.
+     * Replace either source/coordinator together on scene/schema/module generation replacement.
      */
     class SceneReplicationCommitSource final : public ICommittedReplicationSource {
         struct ConstructionKey final {
@@ -44,6 +77,11 @@ namespace Horo::Network {
          */
         SceneReplicationCommitSource(ConstructionKey key, std::shared_ptr<Runtime::RuntimeScene> scene,
                                      std::vector<SceneReplicationFieldBinding> fields);
+        /** @internal Factory-only construction for the application's unmodified Scene owner. */
+        SceneReplicationCommitSource(ConstructionKey key, Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch,
+                                     ReplicationSchemaId schema, ReplicationSchemaVersion version,
+                                     std::vector<SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+                                     SceneReplicationObservationSources sources);
         /** @brief Composes declared typed Scene bindings outside simulation.
          * @param scene Canonical scene owner pinned for this adapter lifetime.
          * @param fields Exact unique schema FieldIds to publish as floating-point transform scalars.
@@ -51,6 +89,35 @@ namespace Horo::Network {
          */
         [[nodiscard]] static Result<std::shared_ptr<SceneReplicationCommitSource>> Create(
             std::shared_ptr<Runtime::RuntimeScene> scene, std::span<const SceneReplicationFieldBinding> fields);
+        /** @brief Binds an application-owned Scene and its actual fixed commit issuer without inheriting mutation authority.
+         * @param scene Expected unique runtime Scene identity.
+         * @param dispatch Exact scheduler issuer retained by the owning application participant.
+         * @param schema Exact allowed schema. @param version Its exact installed version.
+         * @param fields Complete declared transform and optional presentation fields.
+         * @param sceneOwner Exact owner lifetime. A successful read pins this scope only until EndRead.
+         * @param velocity Exact adjacent owner reader, required when the schema declares any velocity axis.
+         * @param action Exact public action reader, required when the schema declares an action tag.
+         * @return Owner-lane observation adapter or typed invalid/capacity error. */
+        [[nodiscard]] static Result<std::shared_ptr<SceneReplicationCommitSource>> CreateObserved(
+            Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
+            ReplicationSchemaVersion version, std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+            SceneReplicationVelocitySource velocity = {}, SceneReplicationActionSource action = {});
+        /** @brief Binds the observed Scene with explicitly selected adjacent-owner projections.
+         * @param scene Expected unique runtime Scene identity. @param dispatch Exact scheduler issuer.
+         * @param schema Selected schema. @param version Its installed version. @param fields Declared public fields.
+         * @param sceneOwner Exact owner lifetime. @param sources Velocity, action and optional transform projections.
+         * @return Owner-lane observation adapter or a typed invalid/capacity error.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<SceneReplicationCommitSource>> CreateObservedWithSources(
+            Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
+            ReplicationSchemaVersion version, std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+            SceneReplicationObservationSources sources);
+        /** @brief Observes the exact current Scene in the canonical post-commit fixed callback.
+         * @param view Current immutable view supplied by the already owning Scene service.
+         * @param evidence Live callback evidence from the bound scheduler.
+         * @return True on observation; wrong worlds, expired/foreign attempts and repeated ticks preserve prior state.
+         * @details The source holds only a read-only Scene view. Neither this call nor subsequent capture commits a Scene transaction. */
+        [[nodiscard]] bool ObserveCommittedTick(Runtime::RuntimeSceneView view, const Runtime::RuntimeDispatchEvidence &evidence) noexcept;
         /** @brief Atomically commits Scene commands before opening the replication read safe point.
          * @param commands Complete owner transaction.
          * @param simulationTick Strictly increasing positive host simulation tick.
@@ -58,6 +125,16 @@ namespace Horo::Network {
          */
         [[nodiscard]] Result<Runtime::StructuralCommitResult> CommitSimulationTick(const Runtime::SceneCommandBuffer &commands,
                                                                                    std::uint64_t simulationTick);
+        /** @brief Acquires read-only capture evidence for the actual committed Scene and current world mapping.
+         * @param world Matching active replication lifecycle.
+         * @param phase Actual host phase; only NetworkFlush is accepted.
+         * @param cancellation Caller cancellation.
+         * @return Exact world read and committed tick or a typed phase, commitment, or lifecycle error.
+         * @details Intended for preparing a bounded capture or admitting an explicitly empty initial inventory.
+         * Callers still need to read each nonempty target through this source. */
+        [[nodiscard]] Result<ReplicationWorldCaptureRead> AcquireCaptureReadAfterCommit(const ReplicationWorldLifecycle &world,
+                                                                                        Runtime::RuntimePhase phase,
+                                                                                        const CancellationToken &cancellation = {}) const;
         /** @brief Captures declared source targets at the actual completed Scene tick in NetworkFlush.
          * @param world Matching active replication lifecycle.
          * @param capture Prepared coordinator bound to this source generation.
@@ -79,12 +156,32 @@ namespace Horo::Network {
         void EndRead(const ReplicationCommittedRead &read) const noexcept override;
 
     private:
+        struct PresentationValues final {
+            Math::Vec3 velocity{};
+            std::int64_t actionTag{};
+        };
+
+        /** @brief Samples only selected adjacent owners and verifies the current read after each callback. */
+        [[nodiscard]] Result<PresentationValues> SamplePresentation(const ReplicationCommittedRead &read,
+                                                                    const Runtime::RuntimeEntityView &entity) const;
+        /** @brief Copies the selected transform and revalidates the exact read after the adjacent-owner callback. */
+        [[nodiscard]] Result<Math::Transform> SampleTransform(const ReplicationCommittedRead &read,
+                                                              const Runtime::RuntimeEntityView &entity) const;
+        /** @brief Keeps the exact canonical Scene owner live before entering a view read. */
+        [[nodiscard]] std::shared_ptr<const void> PinSceneOwner() const noexcept;
         std::shared_ptr<Runtime::RuntimeScene> scene_;
+        Runtime::SceneRuntimeId expectedScene_;
+        Runtime::RuntimeDispatchSource dispatch_;
+        ReplicationSchemaId schema_;
+        ReplicationSchemaVersion version_;
         std::vector<SceneReplicationFieldBinding> fields_;
+        std::weak_ptr<const void> sceneOwner_;
+        SceneReplicationObservationSources sources_;
         Runtime::RuntimeSceneView committed_;
         std::uint64_t tick_{};
         std::uint64_t revision_{};
         std::thread::id owner_{std::this_thread::get_id()};
         mutable std::optional<Runtime::EntityRef> reading_;
+        mutable std::shared_ptr<const void> readOwner_;
     };
 }  // namespace Horo::Network

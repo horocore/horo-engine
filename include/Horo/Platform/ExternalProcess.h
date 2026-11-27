@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,25 @@ namespace Horo {
         ProcessStopCause stopCause{ProcessStopCause::None};
     };
 
+    /** @brief Optional full-duplex byte exchange, called only on the process runner's worker.
+     * @details Callbacks must be nonblocking. The owner supplies bounded queues and keeps the
+     * capability alive until Run returns. Standard error retains the normal bounded line capture.
+     */
+    class IProcessByteChannel {
+    public:
+        virtual ~IProcessByteChannel() = default;
+
+        /** @brief Copies available input into the runner's fixed buffer and retires those bytes.
+         * @param destination Bounded writable span. @return Byte count, with zero meaning temporarily empty.
+         */
+        virtual std::size_t TakeInput(std::span<char> destination) noexcept = 0;
+
+        /** @brief Accepts exact stdout bytes, including nulls and line terminators.
+         * @param bytes Borrowed only until return. @return False to terminate when the receiver cannot accept them.
+         */
+        virtual bool AcceptOutput(std::span<const char> bytes) noexcept = 0;
+    };
+
     /** @brief Complete shell-free request for one child process. */
     struct ExternalProcessRequest {
         std::string executable;
@@ -88,6 +108,7 @@ namespace Horo {
         std::chrono::milliseconds maximumDrainDuration{std::chrono::seconds{1}}; /**< Final drain bound after forced termination. */
         CancellationToken forceCancellation;          /**< Repeated-interrupt policy; bypasses the graceful period. */
         const ProductLaunchLease *maintenanceLease{}; /**< Borrowed exclusive lease transferred only for this bounded child. */
+        IProcessByteChannel *byteChannel{};           /**< Optional raw stdin/stdout transport, borrowed for the duration of Run. */
     };
 
     /** @brief Blocking portable execution capability intended to run on an owned worker. */
@@ -105,7 +126,10 @@ namespace Horo {
                                                                 const CancellationToken &cancellation) = 0;
     };
 
-    /** @brief Native POSIX/Windows implementation with process-tree cancellation. */
+    /** @brief Native POSIX/Windows implementation with process-tree cancellation.
+     * @details POSIX children start in their own process group with an unblocked signal mask and default
+     * SIGINT, SIGTERM and SIGPIPE dispositions. Host presentation/cancellation signal suppression stays in the host.
+     */
     class NativeExternalProcessRunner final : public IExternalProcessRunner {
     public:
         /** @copydoc IExternalProcessRunner::Run */

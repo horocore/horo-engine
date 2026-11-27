@@ -43,6 +43,11 @@ namespace Horo::PlatformServices {
             bool shutdownThrows{};
             bool shutdownThrowsNonStandard{};
             bool malformedHandle{};
+            std::optional<Error> cloudWriteFailure;
+            std::optional<CloudListRequest> lastCloudList;
+            std::optional<CloudBlobReadRequest> lastCloudRead;
+            std::optional<CloudBlobWriteRequest> lastCloudWrite;
+            std::optional<CloudBlobDeleteRequest> lastCloudDelete;
             std::optional<LeaderboardRankedQuery> lastRankedQuery;
             std::optional<LeaderboardAroundSubjectQuery> lastAroundSubjectQuery;
             std::optional<LeaderboardFriendsQuery> lastFriendsLeaderboardQuery;
@@ -106,19 +111,25 @@ namespace Horo::PlatformServices {
                 return Admit<CloudReadResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest) override {
+            Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest request) override {
+                lastCloudList = std::move(request);
                 return Admit<CloudObjectPage>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest) override {
+            Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest request) override {
+                lastCloudRead = std::move(request);
                 return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&) override {
+            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&request) override {
+                if (cloudWriteFailure)
+                    return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(*cloudWriteFailure);
+                lastCloudWrite = std::move(request);
                 return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest &&) override {
+            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest &&request) override {
+                lastCloudDelete = std::move(request);
                 return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
             }
 
@@ -160,6 +171,17 @@ namespace Horo::PlatformServices {
 
         PlatformServiceCapabilitySnapshot Capabilities(const PlatformProviderGeneration generation = {7}) {
             return AvailableCapabilities(generation, {.maxConcurrentRequests = 16, .maxPageEntries = 4, .maxPayloadBytes = 4});
+        }
+
+        CloudMutationCapability MutationFacts() {
+            return {.atomicity = CloudMutationAtomicity::ConditionalAtomicObject,
+                    .createIfAbsent = true,
+                    .replaceIfRevision = true,
+                    .deleteIfRevision = true,
+                    .durableMutationDedupe = true,
+                    .maxNamespaceBytes = 32,
+                    .maxObjectCount = 4,
+                    .maxConcurrentMutations = 2};
         }
 
         PlatformSessionSnapshot Session(const PlatformProviderGeneration provider = {7}, const PlatformSessionGeneration generation = {5},

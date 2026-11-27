@@ -4,13 +4,15 @@
 #include <thread>
 
 namespace Horo::Gameplay {
+    class GameplayAnimationContext;
     class GameplayPhysicsContext;
-}
+}  // namespace Horo::Gameplay
 
 namespace Horo::Tests {
     /** @brief Explicit native fixture control, borrowed only while its owning test retains all module generations. */
     struct GameplayRetirementFixture final {
         std::shared_ptr<const Gameplay::GameplayPhysicsContext> physics;
+        std::shared_ptr<const Gameplay::GameplayAnimationContext> animation;
         unsigned failPhase{};
         unsigned restoreFailure{};
         unsigned restoreRequiredServices{};

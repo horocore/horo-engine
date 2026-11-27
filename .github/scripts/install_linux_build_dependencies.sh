@@ -76,11 +76,15 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   printf '\n### Linux dependency setup\n\n| Phase | Exit status | Duration |\n| --- | --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
 fi
 
-# Both mirrors serve Ubuntu-signed indexes and packages. APT retains its normal
+# Mirrors serve Ubuntu-signed indexes and packages. APT retains its normal
 # signature/hash checks, including when completed archives survive a retry.
 # Inherit APT's runner architecture/variant selection: forcing baseline amd64
 # indexes would replace installed amd64v3 packages even at equal versions.
-mirrors=(https://archive.ubuntu.com/ubuntu http://azure.archive.ubuntu.com/ubuntu)
+mirrors=(
+  https://archive.ubuntu.com/ubuntu
+  https://mirrors.edge.kernel.org/ubuntu
+  https://mirrors.mit.edu/ubuntu
+)
 downloaded=false
 for mirror in "${mirrors[@]}"; do
   cat > "$apt_root/ubuntu.sources" <<EOF
@@ -100,7 +104,7 @@ EOF
 done
 
 if [[ "$downloaded" != true ]]; then
-  echo '::error::Neither Ubuntu mirror supplied all required dependencies within the acquisition policy and budget.'
+  echo '::error::No configured Ubuntu mirror supplied all required dependencies within the acquisition policy and budget.'
   diagnose_packages
   exit 1
 fi

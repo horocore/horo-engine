@@ -1,4 +1,5 @@
 #include "AiSceneTestSupport.h"
+#include "Horo/AI/AiReducedPopulation.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Prefab/CookedPrefab.h"
 
@@ -51,6 +52,18 @@ namespace Horo::AI {
                 REQUIRE(candidate.HasValue());
                 return std::move(candidate).Value();
             }
+
+            void TrackReducedAgents(std::span<const AiReducedAgent> rows) {
+                auto population = AiReducedPopulation::Create({rows.size(), 1, 10}, rows);
+                REQUIRE(population.HasValue());
+                auto reduced = resident.runtime.MakeReducedPopulationStructuralParticipant(
+                    std::array{resident.fixtures.front().descriptor}, std::make_shared<AiReducedPopulation>(std::move(population).Value()),
+                    [](const Runtime::RuntimeSceneView &, Runtime::EntityRef) {
+                        return Result<Math::WorldCoordinate64>::Success(Math::WorldCoordinate64{});
+                    });
+                REQUIRE(reduced.HasValue());
+                participant = std::move(reduced).Value();
+            }
         };
 
         TEST_CASE("AI prefab reservations roll back without consuming identities or resident tasks", "[ai][prefab][identity]") {
@@ -98,6 +111,36 @@ namespace Horo::AI {
             REQUIRE(ordinary.aiAgent->agent.Value() == std::numeric_limits<std::uint64_t>::max());
             auto retry = fixture.Prepare();
             REQUIRE(retry->AgentIdentities().front().resolved.Value() == 3);
+        }
+
+        TEST_CASE("AI prefab reservations pass reduced identities without consuming the next free slot", "[ai][prefab][identity]") {
+            IdentityFixture fixture;
+            const std::array rows{AiReducedAgent{MakeIdentity<AgentId>(3), {}}, AiReducedAgent{MakeIdentity<AgentId>(4), {}},
+                                  AiReducedAgent{MakeIdentity<AgentId>(6), {}}};
+            fixture.TrackReducedAgents(rows);
+            {
+                const auto candidate = fixture.Prepare();
+                REQUIRE(candidate->AgentIdentities().front().resolved.Value() == 5);
+            }
+            const auto retry = fixture.Prepare();
+            REQUIRE(retry->AgentIdentities().front().resolved.Value() == 5);
+            REQUIRE(retry->ValidatePublication().HasValue());
+            retry->Publish();
+            REQUIRE(retry->AfterPublication().HasValue());
+            REQUIRE(fixture.Prepare(3)->AgentIdentities().front().resolved.Value() == 7);
+        }
+
+        TEST_CASE("AI prefab reservations cannot wrap past the last reduced identity", "[ai][prefab][identity]") {
+            IdentityFixture fixture;
+            constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+            const std::array rows{AiReducedAgent{MakeIdentity<AgentId>(maximum), {}}};
+            fixture.TrackReducedAgents(rows);
+            auto ordinary = fixture.components;
+            ordinary.aiAgent->agent = MakeIdentity<AgentId>(maximum - 1);
+            const Runtime::RuntimeEntityView authored{.entity = {fixture.added.binding.scene, {3, 1}}, .components = &ordinary};
+            const auto rejected = fixture.participant->Prepare(fixture.resident.scene->View(), std::array{fixture.View(), authored}, {});
+            REQUIRE(rejected.HasError());
+            REQUIRE(fixture.Prepare()->AgentIdentities().front().resolved.Value() == 3);
         }
     }  // namespace
 }  // namespace Horo::AI

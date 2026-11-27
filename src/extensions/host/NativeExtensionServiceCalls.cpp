@@ -108,7 +108,10 @@ namespace Horo::Extensions {
 
     void NativeServiceModule::Revoke() noexcept {
         revoked = true;
-        committed = false;
+        if (committed.exchange(false, std::memory_order_acq_rel)) {
+            if (const auto state = host.lock())
+                state->authoringApiRevision.fetch_add(1, std::memory_order_release);
+        }
         if (admission)
             admission->Revoke();
         if (owner != std::this_thread::get_id()) {

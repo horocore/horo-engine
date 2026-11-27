@@ -12,7 +12,6 @@
 
 namespace Horo::Runtime {
     namespace {
-        constexpr std::string_view SaveErrorDomain = "horo.save";
 
         struct DiagnosticPolicy final {
             const ErrorCodeDescriptor *descriptor;
@@ -65,6 +64,7 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::CaptureAlreadySealed, Lifecycle},
             DiagnosticPolicy{&SaveErrors::CaptureAllocationFailed, Quota},
             DiagnosticPolicy{&SaveErrors::CaptureAdapterContractInvalid, Participant},
+            DiagnosticPolicy{&SaveErrors::RestoreParticipantInvalid, Participant},
             DiagnosticPolicy{&SaveErrors::ArchiveHeaderInvalid, Corruption},
             DiagnosticPolicy{&SaveErrors::ArchiveManifestInvalid, Corruption},
             DiagnosticPolicy{&SaveErrors::ArchiveEnvelopeInvalid, Corruption},
@@ -89,6 +89,11 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::ArchiveIntegrityCoverageInvalid, Corruption},
             DiagnosticPolicy{&SaveErrors::ArchiveContentHashMismatch, Corruption},
             DiagnosticPolicy{&SaveErrors::CanonicalStateHashMismatch, Corruption},
+            DiagnosticPolicy{&SaveErrors::ProtectionUnsupported, Compatibility},
+            DiagnosticPolicy{&SaveErrors::ProtectionUnavailable, Storage},
+            DiagnosticPolicy{&SaveErrors::ProtectionKeyRotated, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::ProtectionKeyRevoked, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::ProtectionAuthenticationFailed, Corruption},
             DiagnosticPolicy{&SaveErrors::CanonicalCodecInvalid, Validation},
             DiagnosticPolicy{&SaveErrors::CanonicalCodecCorrupt, Corruption},
             DiagnosticPolicy{&SaveErrors::CanonicalCodecLimitExceeded, Quota},
@@ -154,6 +159,10 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::CommandTargetUnavailable, Validation},
             DiagnosticPolicy{&SaveErrors::CommandIncompatible, Validation},
             DiagnosticPolicy{&SaveErrors::CommandCooldown, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::LifecycleUnavailable, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::LifecycleSuspended, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::LifecycleCallbackFailed, Lifecycle},
+            DiagnosticPolicy{&SaveErrors::GenerationStale, Lifecycle},
             DiagnosticPolicy{&SaveErrors::DiagnosticInvalid, Validation},
             DiagnosticPolicy{&SaveErrors::DiagnosticUnsupported, Validation},
             DiagnosticPolicy{&SaveErrors::DiagnosticCorrelationStale, Lifecycle},
@@ -164,7 +173,7 @@ namespace Horo::Runtime {
         }
 
         std::optional<DiagnosticPolicy> PolicyFor(const Error &error) noexcept {
-            if (error.domain.Value() != SaveErrorDomain)
+            if (error.domain.Value() != SaveDiagnosticErrorDomain)
                 return std::nullopt;
             for (const auto &policy : Policies()) {
                 if (error.code.Value() == policy.descriptor->code.Value())
@@ -431,6 +440,33 @@ namespace Horo::Runtime {
         return {causes_.data(), causeCount_};
     }
 
+    /** @copydoc RedactSaveDiagnosticError */
+    Error RedactSaveDiagnosticError(const Error &error) {
+        std::array<const ErrorCodeDescriptor *, MaximumSaveDiagnosticCauseDepth + 1> descriptors;
+        descriptors.fill(&SaveErrors::DiagnosticUnsupported);
+        std::size_t count{};
+        for (const Error *node = &error; node && count < descriptors.size(); node = node->cause.Get()) {
+            const auto policy = PolicyFor(*node);
+            descriptors[count++] = policy ? policy->descriptor : &SaveErrors::DiagnosticUnsupported;
+        }
+        // Checked MSVC string default construction can terminate if its iterator proxy cannot allocate.
+        auto projected = MakeError(*descriptors[--count], std::string(std::size_t{0}, '\0'));
+        while (count != 0) {
+            auto outer = MakeError(*descriptors[--count], std::string(std::size_t{0}, '\0'));
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+            projected = WithCause(outer, projected);
+#else
+            projected = WithCause(std::move(outer), std::move(projected));
+#endif
+        }
+#if defined(_MSVC_STL_VERSION) && _ITERATOR_DEBUG_LEVEL != 0
+        return static_cast<const Error &>(projected);
+#else
+        return projected;
+#endif
+    }
+
+    /** @copydoc SaveDiagnosticErrorDescriptors */
     std::span<const ErrorCodeDescriptor *const> SaveDiagnosticErrorDescriptors() noexcept {
         static const auto descriptors = [] {
             std::array<const ErrorCodeDescriptor *, std::tuple_size_v<std::remove_reference_t<decltype(Policies())>>> values{};

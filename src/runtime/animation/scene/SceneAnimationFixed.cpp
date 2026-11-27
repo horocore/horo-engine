@@ -1,6 +1,8 @@
 #include "AnimationGraphSceneCommitAccess.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "SceneAnimationState.h"
 
+#include <algorithm>
 #include <exception>
 
 namespace Horo::Runtime {
@@ -31,17 +33,79 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    Result<void> SceneAnimationRuntime::State::EvaluateActor(Actor &actor, const FixedStepContext &context) const {
-        if (!actor.playing)
+    /** @copydoc SceneAnimationRuntime::State::CaptureInputs */
+    Result<void> SceneAnimationRuntime::State::CaptureInputs(const FixedStepContext &context) const {
+        if (!config.inputs)
             return Result<void>::Success();
-        const auto snapshot = config.inputs ? config.inputs->Read(actor.entity, context) : SceneAnimationInputSnapshot{};
-        const A::GraphEvaluationInput input{attemptTick,           {context.fixedDelta.ToNanoseconds()},
-                                            snapshot.playbackRate, snapshot.parameters,
-                                            context.cancellation,  snapshot.curveTime};
-        if (const auto outcome = actor.graph.Evaluate(input); outcome.HasError())
-            return Result<void>::Failure(A::DescribeGraphInstanceFailure(outcome));
-        actor.staged = true;
+        for (const auto &actor : active->current->actors) {
+            if (!actor || !actor->playing)
+                continue;
+            auto snapshot = config.inputs->Read(actor->entity, context);
+            if (snapshot.parameters.size() > actor->inputStorage.size())
+                return Result<void>::Failure(A::DescribeGraphInstanceFailure({A::GraphInstanceFailure::LimitExceeded}));
+            std::ranges::copy(snapshot.parameters, actor->inputStorage.begin());
+            snapshot.parameters = std::span{actor->inputStorage}.first(snapshot.parameters.size());
+            actor->capturedInput = snapshot;
+        }
         return Result<void>::Success();
+    }
+
+    /** @copydoc SceneAnimationRuntime::State::EvaluateRange */
+    Result<void> SceneAnimationRuntime::State::EvaluateRange(std::span<const std::shared_ptr<Actor>> actors,
+                                                             const A::GraphEvaluationInput &batch, const CancellationToken &work) {
+        for (const auto &actor : actors) {
+            if (!actor || !actor->playing)
+                continue;
+            const auto &snapshot = actor->capturedInput;
+            auto input = batch;
+            input.rate = snapshot.playbackRate;
+            input.parameters = snapshot.parameters;
+            input.curveTime = snapshot.curveTime;
+            input.cancellation = work;
+            if (const auto outcome = A::Detail::GraphSceneCommitAccess::EvaluateIsolated(actor->graph, input, batch.cancellation);
+                outcome.HasError())
+                return Result<void>::Failure(A::DescribeGraphInstanceFailure(outcome));
+            actor->staged = true;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneAnimationRuntime::State::EvaluateActors */
+    Result<void> SceneAnimationRuntime::State::EvaluateActors(const FixedStepContext &context) const {
+        const auto &slots = active->current->actors;
+        const A::GraphEvaluationInput batch{.tick = attemptTick,
+                                            .delta = {context.fixedDelta.ToNanoseconds()},
+                                            .cancellation = context.cancellation};
+        if (!config.parallelEvaluation)
+            return EvaluateRange(slots, batch, batch.cancellation);
+
+        const auto playing = [](const auto &actor) {
+            return actor && actor->playing;
+        };
+        const auto count = static_cast<std::size_t>(std::ranges::count_if(slots, playing));
+        const auto &policy = *config.parallelEvaluation;
+        auto &jobs = policy.jobs.get();
+        const auto partitions = std::min(count, jobs.WorkerCount());
+        if (partitions < 2)
+            return EvaluateRange(slots, batch, batch.cancellation);
+
+        const auto last = std::find_if(slots.rbegin(), slots.rend(), playing).base();
+        const auto actors = std::span{slots}.first(static_cast<std::size_t>(last - slots.begin()));
+        const auto width = (actors.size() + partitions - 1) / partitions;
+        try {
+            TaskGroup group(jobs, TaskGroupFailurePolicy::CollectAll, context.cancellation);
+            for (std::size_t first = 0; first < actors.size(); first += width) {
+                const auto slice = actors.subspan(first, std::min(width, actors.size() - first));
+                auto submitted = group.Spawn({}, [slice, batch](const CancellationToken &cancellation) {
+                    return EvaluateRange(slice, batch, cancellation);
+                });
+                if (submitted.HasError())
+                    return Result<void>::Failure(std::move(submitted).ErrorValue());
+            }
+            return group.Join({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = policy.deadline});
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(A::AnimationAssetErrors::Capacity));
+        }
     }
 
     Result<void> SceneAnimationRuntime::State::PrepareAttempt(const FixedStepContext &context) {
@@ -65,6 +129,10 @@ namespace Horo::Runtime {
         for (const auto &actor : active->current->actors) {
             if (!actor || !actor->staged)
                 continue;
+            if (actor->pendingMotion && actor->pendingMotion->claimed &&
+                actor->pendingMotion->result.disposition == SceneRootMotionDisposition::Unavailable)
+                return Result<void>::Failure(
+                    MakeError(A::AnimationErrors::GraphAdmissionRejected, "A claimed root motion request has no response."));
             const auto outcome = A::Detail::GraphSceneCommitAccess::Prepare(actor->graph, attemptTick);
             if (outcome.HasError())
                 return Result<void>::Failure(A::DescribeGraphInstanceFailure(outcome));
@@ -79,6 +147,10 @@ namespace Horo::Runtime {
             if (!actor || !actor->staged)
                 continue;
             (void)A::Detail::GraphSceneCommitAccess::Publish(actor->graph);
+            if (actor->pendingMotion) {
+                actor->publishedMotion = actor->pendingMotion->result;
+                actor->pendingMotion.reset();
+            }
             actor->staged = false;
         }
     }
@@ -91,6 +163,7 @@ namespace Horo::Runtime {
                 continue;
             if (actor->graph.Abort().HasError())
                 std::terminate();
+            actor->pendingMotion.reset();
             actor->staged = false;
         }
     }
@@ -136,14 +209,11 @@ namespace Horo::Runtime {
             return admitted;
         if (!state_->active || state_->active->closed)
             return Result<void>::Success();
-        for (const auto &actor : state_->active->current->actors) {
-            if (!actor)
-                continue;
-            const auto evaluated = state_->EvaluateActor(*actor, context);
-            if (evaluated.HasError())
-                return evaluated;
-        }
-        return Result<void>::Success();
+        if (const auto captured = state_->CaptureInputs(context); captured.HasError())
+            return captured;
+        if (const auto evaluated = state_->EvaluateActors(context); evaluated.HasError())
+            return evaluated;
+        return state_->StageRootMotion(context);
     }
 
     Result<void> SceneAnimationRuntime::PrepareFixedCommit(const FixedStepContext &context) {

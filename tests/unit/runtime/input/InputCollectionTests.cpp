@@ -45,6 +45,56 @@ namespace Horo::Input {
         constexpr std::array pressed{CollectedActionValue{0, 1.0F, 0.0F, true}};
     }  // namespace
 
+    TEST_CASE("Input collected axis observes only committed values for the exact player without consuming edges",
+              "[unit][input][collection]") {
+        Fixture fixture;
+        fixture.action.id = ActionId{"play.xr.move"};
+        fixture.action.valueType = ActionValueType::Axis2D;
+        fixture.action.defaultBindings.clear();
+        REQUIRE(fixture.router.SetActionMap({fixture.action}).HasValue());
+        const auto player = fixture.router.ActionCollectionForPlayer(fixture.context, 2).Value();
+        const auto other = fixture.router.ActionCollectionForPlayer(fixture.context, 3).Value();
+        auto source = fixture.Source(player);
+        auto frame = fixture.Frame(player, 1);
+        const std::array movement{CollectedActionValue{0, 0.25F, -0.5F, true}};
+        REQUIRE(frame.Append(source, movement).HasValue());
+        CHECK_FALSE(player.ReadCollectedAxis(fixture.action.id));
+        REQUIRE(frame.Commit().HasValue());
+
+        const auto axis = player.ReadCollectedAxis(fixture.action.id);
+        REQUIRE(axis);
+        CHECK(axis->x == 0.25F);
+        CHECK(axis->y == -0.5F);
+        CHECK_FALSE(axis->pressed);
+        const auto otherAxis = other.ReadCollectedAxis(fixture.action.id);
+        REQUIRE(otherAxis);
+        CHECK(otherAxis->x == 0.0F);
+        CHECK(otherAxis->y == 0.0F);
+        CHECK_FALSE(fixture.Port().ReadCollectedAxis(fixture.action.id));
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, 2).pressed);
+        CHECK(player.ReadCollectedAxis(fixture.action.id)->x == axis->x);
+
+        REQUIRE(source.Reset().HasValue());
+        CHECK(player.ReadCollectedAxis(fixture.action.id)->x == 0.0F);
+    }
+
+    TEST_CASE("Input collected digital state is player-scoped and does not drain its press", "[unit][input][collection]") {
+        Fixture fixture;
+        const auto player = fixture.router.ActionCollectionForPlayer(fixture.context, 2).Value();
+        const auto other = fixture.router.ActionCollectionForPlayer(fixture.context, 3).Value();
+        auto source = fixture.Source(player);
+        auto frame = fixture.Frame(player, 1);
+        REQUIRE(frame.Append(source, pressed).HasValue());
+        CHECK_FALSE(player.ReadCollectedButton(fixture.action.id));
+        REQUIRE(frame.Commit().HasValue());
+        CHECK(player.ReadCollectedButton(fixture.action.id) == true);
+        CHECK(other.ReadCollectedButton(fixture.action.id) == false);
+        CHECK_FALSE(player.ReadCollectedAxis(fixture.action.id));
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, 2).pressed);
+        REQUIRE(source.Reset().HasValue());
+        CHECK(player.ReadCollectedButton(fixture.action.id) == false);
+    }
+
     TEST_CASE("Input reserved source validation retains exact lifetime thread and configuration fences", "[unit][input][collection]") {
         Fixture fixture;
         auto source = fixture.Source(fixture.Port());
@@ -103,6 +153,46 @@ namespace Horo::Input {
             REQUIRE(retained.Validate().HasValue());
         }
         CHECK(retained.Validate().HasError());
+    }
+
+    TEST_CASE("Collected axes join cancelling physical scales before saturation without allocations", "[unit][input][collection]") {
+        const float scale = std::numeric_limits<float>::max();
+        const std::array keys{Key::A, Key::B, Key::C, Key::D, Key::F, Key::G, Key::H, Key::I};
+        std::vector<InputBinding> bindings;
+        for (std::size_t index = 0; index < keys.size(); ++index)
+            bindings.push_back({.kind = BindingControlKind::Key,
+                                .key = keys[index],
+                                .scale = index % 4 < 2 ? scale : -scale,
+                                .component = static_cast<std::uint8_t>(index / 4),
+                                .deadzoneKind = DeadzoneKind::Radial,
+                                .deadzone = 0.0F});
+        const ActionDescriptor action{ActionId{"play.look"}, ActionValueType::Axis2D, InputContextId{"play"}, false, std::move(bindings)};
+        InputRouter router;
+        REQUIRE(router.SetActionMap({action}).HasValue());
+        auto context = router.PushContext(action.context, InputContextKind::Gameplay);
+        auto port = router.ActionCollection(context);
+        REQUIRE(port.HasValue());
+        auto source = port.Value().RegisterSource(std::span{&action, 1});
+        REQUIRE(source.HasValue());
+        RawInputCollector collector;
+        collector.BeginFrame(1);
+        for (const auto key : keys)
+            collector.SetKey(key, true);
+        auto begun = port.Value().Begin(collector.Commit());
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        const std::array collected{CollectedActionValue{0, 0.25F, -0.5F, true}};
+        REQUIRE(frame.Append(source.Value(), collected).HasValue());
+        REQUIRE(frame.Commit().HasValue());
+        const auto before = Tests::AllocationProbe::Count();
+        const auto evidence = router.ReadActionEvidence(context, action.id);
+        const auto after = Tests::AllocationProbe::Count();
+        CHECK(before == after);
+        CHECK(evidence.status == ActionReadStatus::Resolved);
+        CHECK(evidence.value.x == 0.25F);
+        CHECK(evidence.value.y == -0.5F);
+        CHECK(evidence.value.pressed);
+        CHECK(evidence.value.down);
     }
 
     TEST_CASE("Input collection publishes only at commit and consumes an admitted edge once", "[unit][input][collection]") {
@@ -206,6 +296,73 @@ namespace Horo::Input {
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
     }
 
+    TEST_CASE("Retired collected input cannot supply a pending fixed-tick command", "[unit][input][collection]") {
+        Fixture fixture;
+        auto port = fixture.router.ActionCollectionForPlayer(fixture.context, 2).Value();
+        auto source = fixture.Source(port);
+        GameplayInputFrameBuilder builder{{}, {}, fixture.action.id, {}};
+
+        auto first = fixture.Frame(port, 1);
+        REQUIRE(first.Append(source, pressed).HasValue());
+        REQUIRE(first.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context, 2);
+
+        REQUIRE(source.Reset().HasValue());
+        auto neutral = fixture.Frame(port, 2);
+        REQUIRE(neutral.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context, 2);
+        CHECK(builder.Consume(41) == GameplayInputFrame{.tick = 41});
+
+        auto replacement = fixture.Source(port);
+        auto fresh = fixture.Frame(port, 3);
+        REQUIRE(fresh.Append(replacement, pressed).HasValue());
+        REQUIRE(fresh.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context, 2);
+        CHECK(builder.Consume(42).jumpPressed);
+        CHECK(builder.Consume(43) == GameplayInputFrame{.tick = 43});
+    }
+
+    TEST_CASE("A canceled candidate cannot preserve pre-suspension gameplay commands", "[unit][input][collection]") {
+        Fixture fixture;
+        const auto port = fixture.Port();
+        const auto source = fixture.Source(port);
+        GameplayInputFrameBuilder builder{{}, {}, fixture.action.id, {}};
+        auto initial = fixture.Frame(port, 1);
+        REQUIRE(initial.Append(source, pressed).HasValue());
+        REQUIRE(initial.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context);
+
+        fixture.collector.BeginFrame(2);
+        const auto &raw = fixture.collector.Commit();
+        auto opened = port.Begin(raw);
+        REQUIRE(opened.HasValue());
+        auto canceled = std::move(opened).Value();
+        REQUIRE(canceled.Append(source, pressed).HasValue());
+        REQUIRE(canceled.Cancel().HasValue());
+        fixture.router.BeginFrame(raw);
+        builder.Capture(fixture.router, fixture.context);
+        CHECK(builder.Consume(41) == GameplayInputFrame{.tick = 41});
+    }
+
+    TEST_CASE("An explicit release still preserves a tap across zero-tick collected frames", "[unit][input][collection]") {
+        Fixture fixture;
+        const auto port = fixture.Port();
+        const auto source = fixture.Source(port);
+        GameplayInputFrameBuilder builder{{}, {}, fixture.action.id, {}};
+        auto initial = fixture.Frame(port, 1);
+        REQUIRE(initial.Append(source, pressed).HasValue());
+        REQUIRE(initial.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context);
+
+        auto release = fixture.Frame(port, 2);
+        constexpr std::array neutral{CollectedActionValue{0, 0.0F, 0.0F, true}};
+        REQUIRE(release.Append(source, neutral).HasValue());
+        REQUIRE(release.Commit().HasValue());
+        builder.Capture(fixture.router, fixture.context);
+        CHECK(builder.Consume(41).jumpPressed);
+        CHECK(builder.Consume(42) == GameplayInputFrame{.tick = 42});
+    }
+
     TEST_CASE("Input collection map replacement invalidates borrows and cannot publish an old action index", "[unit][input][collection]") {
         Fixture fixture;
         auto port = fixture.Port();
@@ -299,6 +456,7 @@ namespace Horo::Input {
         auto frame = std::move(opened).Value();
         REQUIRE(frame.Append(source, pressed).HasValue());
         REQUIRE(frame.Commit().HasValue());
+        CHECK_FALSE(port.RoutingEligible());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
         fixture.collector.BeginFrame(2);
         fixture.collector.SetWindowState({.focused = true});
@@ -307,8 +465,16 @@ namespace Horo::Input {
         auto focused = std::move(next).Value();
         REQUIRE(focused.Append(source, pressed).HasValue());
         REQUIRE(focused.Commit().HasValue());
-        auto modal = fixture.router.PushContext(InputContextId{"modal"}, InputContextKind::ModalRoot);
-        CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
+        CHECK(port.RoutingEligible());
+        {
+            const auto modal = fixture.router.PushContext(InputContextId{"modal"}, InputContextKind::ModalRoot);
+            CHECK_FALSE(port.RoutingEligible());
+            CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
+        }
+        CHECK_FALSE(port.RoutingEligible());
+        auto resumed = fixture.Frame(port, 3);
+        REQUIRE(resumed.Commit().HasValue());
+        CHECK(port.RoutingEligible());
     }
 
     TEST_CASE("Input collection total action storage rejects overflow without consuming a source slot", "[unit][input][collection]") {
@@ -341,6 +507,9 @@ namespace Horo::Input {
         auto borrowed = query.ActionCollection(fixture.context, device);
         REQUIRE(borrowed.HasValue());
         auto port = std::move(borrowed).Value();
+        const auto firstAssignment = port.ReadPlayerAssignmentRevision();
+        REQUIRE(firstAssignment);
+        CHECK(*firstAssignment != 0);
         auto source = fixture.Source(port);
         auto frame = fixture.Frame(port, 2);
         REQUIRE(frame.Append(source, pressed).HasValue());
@@ -355,10 +524,24 @@ namespace Horo::Input {
         fixture.router.UnassignGamepad(device);
         CHECK(port.Begin(fixture.collector.Commit()).HasError());
         auto current = fixture.Port();
+        CHECK_FALSE(current.ReadPlayerAssignmentRevision());
+        CHECK_FALSE(port.ReadPlayerAssignmentRevision());
+        const auto playerPort = query.ActionCollectionForPlayer(fixture.context, 2);
+        REQUIRE(playerPort.HasValue());
+        const auto liveRevision = playerPort.Value().ReadPlayerAssignmentRevision();
+        REQUIRE(liveRevision);
+        CHECK(liveRevision != firstAssignment);
         auto neutral = fixture.Frame(current, 3);
         CHECK(neutral.Append(source, pressed).HasError());
         REQUIRE(neutral.Commit().HasValue());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, 2).down);
+        REQUIRE(fixture.router.AssignGamepad(2, device));
+        const auto reassigned = query.ActionCollection(fixture.context, device);
+        REQUIRE(reassigned.HasValue());
+        const auto revision = reassigned.Value().ReadPlayerAssignmentRevision();
+        REQUIRE(revision);
+        CHECK(revision != liveRevision);
+        CHECK(playerPort.Value().ReadPlayerAssignmentRevision() == revision);
     }
 
     TEST_CASE("Input collection destructor cleanup does not allocate under failure injection", "[unit][input][collection]") {

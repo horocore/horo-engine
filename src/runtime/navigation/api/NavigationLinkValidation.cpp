@@ -151,17 +151,18 @@ namespace Horo::Navigation {
                 NavigationBakeLinkEndpoint end;
             };
 
-            /** @brief Requires exact collision-owner evidence for each admitted traversal direction. */
-            [[nodiscard]] bool HasClearance(const OrderedEndpoints &traversal) {
+            /** @brief Returns the proven radius for one exact direction with sufficient measured height. */
+            [[nodiscard]] std::optional<float> ProvenRadius(const OrderedEndpoints &traversal) {
                 if (!work.Charge(1 + std::bit_width(clearance.size())))
-                    return false;
+                    return std::nullopt;
                 const auto key = std::tuple{context.profile, EndpointKey(traversal.start), EndpointKey(traversal.end)};
                 const auto found = std::ranges::lower_bound(clearance, key, {}, [](const auto *evidence) {
                     return ClearanceKey(*evidence);
                 });
-                return found != clearance.end() && ClearanceKey(**found) == key &&
-                       (*found)->radiusMeters >= profile->buildGeometry.radiusMeters &&
-                       (*found)->heightMeters >= profile->buildGeometry.heightMeters;
+                if (found == clearance.end() || ClearanceKey(**found) != key ||
+                    (*found)->heightMeters < profile->buildGeometry.heightMeters)
+                    return std::nullopt;
+                return (*found)->radiusMeters;
             }
 
             /** @brief Projects and verifies finite, exact-generation, exact-surface, filter-compatible endpoint evidence. */
@@ -221,6 +222,7 @@ namespace Horo::Navigation {
                 const NavigationTraversalDescriptor *descriptor{};
                 NavigationSurfaceHit start;
                 NavigationSurfaceHit end;
+                float clearanceRadius{};
             };
 
             /** @brief Records a candidate rejection without changing its authored or generated identity. */
@@ -306,17 +308,22 @@ namespace Horo::Navigation {
             }
 
             /** @brief Requires measured free clearance for the final projected forward and optional reverse corridor. */
-            [[nodiscard]] bool CheckClearance(const CandidateState &candidate) {
+            [[nodiscard]] bool CheckClearance(CandidateState &candidate) {
                 auto start = candidate.link.start;
                 auto end = candidate.link.end;
                 start.position = candidate.start.position;
                 end.position = candidate.end.position;
-                if (start.connectionRadiusMeters < profile->buildGeometry.radiusMeters ||
-                    end.connectionRadiusMeters < profile->buildGeometry.radiusMeters || !HasClearance({.start = start, .end = end}) ||
-                    (candidate.link.direction == NavigationLinkDirection::Bidirectional && !HasClearance({.start = end, .end = start}))) {
+                const auto forward = ProvenRadius({.start = start, .end = end});
+                const auto reverse = forward.has_value() && candidate.link.direction == NavigationLinkDirection::Bidirectional
+                                         ? ProvenRadius({.start = end, .end = start})
+                                         : forward;
+                const float radius =
+                    std::min({start.connectionRadiusMeters, end.connectionRadiusMeters, forward.value_or(0.0F), reverse.value_or(0.0F)});
+                if (radius <= 0.0F || radius < profile->buildGeometry.radiusMeters) {
                     Reject(candidate, NavigationLinkValidationRule::Clearance);
                     return false;
                 }
+                candidate.clearanceRadius = radius;
                 return true;
             }
 
@@ -354,8 +361,7 @@ namespace Horo::Navigation {
                                                        .kind = link.kind,
                                                        .direction = link.direction,
                                                        .area = candidate.descriptor->area,
-                                                       .radiusMeters =
-                                                           std::min(link.start.connectionRadiusMeters, link.end.connectionRadiusMeters)};
+                                                       .radiusMeters = candidate.clearanceRadius};
                 if (IsDuplicate(accepted)) {
                     Reject(candidate, NavigationLinkValidationRule::DuplicateTraversal);
                     return;

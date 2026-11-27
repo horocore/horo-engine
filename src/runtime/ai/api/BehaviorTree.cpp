@@ -63,6 +63,10 @@ namespace Horo::AI {
                     const auto &opaque = std::get<BehaviorTreeOpaqueProperty>(property.value);
                     return opaque.contractVersion != 0 && opaque.bytes.size() <= limits.maximumPropertyBytes;
                 }
+                case QueryOutput: {
+                    const auto *output = std::get_if<BehaviorTreeQueryOutput>(&property.value);
+                    return output && output->IsValid();
+                }
                 case Count:
                     return false;
             }
@@ -103,7 +107,7 @@ namespace Horo::AI {
                 return false;
             if (!node.call)
                 return true;
-            return node.call->asset.IsValid() && node.call->kind < DecisionPlanKind::Utility && node.call->schema.IsValid();
+            return node.call->asset.IsValid() && node.call->kind < DecisionPlanKind::Count && node.call->schema.IsValid();
         }
 
         [[nodiscard]] bool ValidControlBounds(const BehaviorTreeNode &node) noexcept {

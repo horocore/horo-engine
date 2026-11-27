@@ -4,6 +4,7 @@
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "Horo/Scene/SceneSource.h"
 #include "editor/document/SceneDocumentInternal.h"
 #include "editor/project_model/EditorModelErrors.h"
 
@@ -224,7 +225,7 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocument::Snapshot */
     SceneDocumentSnapshot SceneDocument::Snapshot() const {
-        return SceneDocumentSnapshot{m_revision, m_state, m_objects, m_prefabInstances};
+        return SceneDocumentSnapshot{m_revision, m_state, m_objects, m_prefabInstances, m_childScenes};
     }
 
     /** @copydoc SceneDocument::Objects */
@@ -275,7 +276,10 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc SceneDocument::LoadSaved */
-    Result<void> SceneDocument::LoadSaved(std::vector<SceneObjectSnapshot> objects, std::vector<ScenePrefabInstance> prefabInstances) {
+    Result<void> SceneDocument::LoadSaved(std::vector<SceneObjectSnapshot> objects, std::vector<ScenePrefabInstance> prefabInstances,
+                                          std::vector<SceneChildReference> childScenes) {
+        if (const auto children = SceneSource::ValidateSceneChildReferences(childScenes); children.HasError())
+            return children;
         if (auto generated = ValidateGeneratedOwners(objects); generated.HasError())
             return generated;
         auto metadata = CollectLoadedSceneMetadata(objects);
@@ -299,6 +303,7 @@ namespace Horo::Editor {
         ++m_replacementEpoch;
         m_objects = std::move(objects);
         m_prefabInstances = std::move(prefabInstances);
+        m_childScenes = std::move(childScenes);
         m_revision = {};
         m_savedRevision = {};
         m_state = DocumentStateId{1};
@@ -316,8 +321,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SceneDocument::LoadRecovered */
-    Result<void> SceneDocument::LoadRecovered(std::vector<SceneObjectSnapshot> objects, std::vector<ScenePrefabInstance> prefabInstances) {
-        if (Result<void> loaded = LoadSaved(std::move(objects), std::move(prefabInstances)); loaded.HasError())
+    Result<void> SceneDocument::LoadRecovered(std::vector<SceneObjectSnapshot> objects, std::vector<ScenePrefabInstance> prefabInstances,
+                                              std::vector<SceneChildReference> childScenes) {
+        if (Result<void> loaded = LoadSaved(std::move(objects), std::move(prefabInstances), std::move(childScenes)); loaded.HasError())
             return loaded;
         m_revision = DocumentRevision{1};
         m_state = DocumentStateId{2};

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <span>
+#include <string_view>
 
 using namespace Horo;
 using namespace Horo::Packages;
@@ -31,12 +32,12 @@ namespace {
         return std::move(version).Value();
     }
 
-    std::shared_ptr<PackageRestoreGraph> Graph() {
+    std::shared_ptr<PackageRestoreGraph> Graph(std::string_view id = "com.horo.install-fixture") {
         auto bytes = Horo::Tests::Packages::ValidPackageArchiveBytes();
         auto verified = ValidatedPackageArchive::Verify(bytes);
         REQUIRE(verified.HasValue());
         auto archive = std::make_shared<const ValidatedPackageArchive>(std::move(verified).Value());
-        LockedPackage lock{.package = PackageId("com.horo.install-fixture"),
+        LockedPackage lock{.package = PackageId(id),
                            .version = Version("1.0.0"),
                            .source = SourceId("fixture.source"),
                            .artifactDigest = archive->Digest(),
@@ -145,6 +146,36 @@ TEST_CASE("Package install atomically retains the previous record on invalid evi
     CHECK(ReadFile(recordPath) == originalRecord);
 }
 
+TEST_CASE("Package install retains the graph when replacement would break a locked dependency", "[packages][install]") {
+    TemporaryDirectory project;
+    NativeDurableFileSystem files;
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
+    REQUIRE(created.HasValue());
+    auto service = std::move(created).Value();
+    auto graph = Graph();
+    auto dependency = Graph("com.horo.required-fixture");
+    graph->packages.front().lock.dependencies.emplace_back(dependency->packages.front().lock.package, Version("1.0.0"));
+    graph->packages.push_back(std::move(dependency->packages.front()));
+    REQUIRE(service.Install(graph, {}).HasValue());
+    const auto committed = service.InstalledRecord();
+    const auto recordPath = project.Path() / ".horo/packages.installed.json";
+    const auto originalRecord = ReadFile(recordPath);
+
+    SECTION("the dependency disappeared") {
+        graph->packages.pop_back();
+    }
+    SECTION("the dependency version changed without updating the dependent edge") {
+        graph->packages.back().lock.version = Version("2.0.0");
+    }
+    const auto rejected = service.Install(graph, {});
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == PackageInstallErrors::InvalidInput.code.Value());
+    CHECK(rejected.ErrorValue().message == "Package com.horo.install-fixture requires com.horo.required-fixture at version 1.0.0.");
+    CHECK(service.InstalledRecord() == committed);
+    CHECK(ReadFile(recordPath) == originalRecord);
+    CHECK_FALSE(std::filesystem::exists(project.Path() / ".horo/packages.install.pending"));
+}
+
 TEST_CASE("Package install leaves the previous record active when a durable commit fails", "[packages][install]") {
     TemporaryDirectory project;
     FaultyFiles files;
@@ -171,6 +202,45 @@ TEST_CASE("Package install leaves the previous record active when a durable comm
     CHECK(service.ActiveGraph() == committed);
     CHECK(ReadFile(recordPath) == originalRecord);
     CHECK_FALSE(std::filesystem::exists(project.Path() / ".horo/packages.install.pending"));
+}
+
+TEST_CASE("Mounted package assets resolve only through the exact installed record", "[packages][install][mounted-asset]") {
+    TemporaryDirectory project;
+    NativeDurableFileSystem files;
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
+    REQUIRE(created.HasValue());
+    auto service = std::move(created).Value();
+    auto graph = Graph();
+    graph->packages.front().lock.contributions = {"assets"};
+    REQUIRE(service.Install(graph, {}).HasValue());
+    const auto installed = service.InstalledRecord();
+    REQUIRE(installed);
+
+    constexpr std::string_view portable = "package://com.horo.install-fixture/assets/data.bin";
+    constexpr std::string_view pinned = "package-pinned://com.horo.install-fixture@1.0.0/assets/data.bin";
+    for (const auto reference : {portable, pinned}) {
+        const auto read = installed->ReadMountedAsset(reference, 14);
+        REQUIRE(read.HasValue());
+        const std::string_view text{reinterpret_cast<const char *>(read.Value().data()), read.Value().size()};
+        CHECK(text == "verified bytes");
+        CHECK(installed->ReadMountedAsset(reference, 13).HasError());
+    }
+    for (const auto reference : {"package://com.horo.other/assets/data.bin", "package://com.horo.install-fixture/assets/DATA.bin",
+                                 "package://com.horo.install-fixture/horo-package.toml",
+                                 "package-pinned://com.horo.install-fixture@2.0.0/assets/data.bin"}) {
+        const auto unavailable = installed->ReadMountedAsset(reference, 14);
+        REQUIRE(unavailable.HasError());
+        CHECK(unavailable.ErrorValue().code.Value() == PackageInstallErrors::MountedAssetUnavailable.code.Value());
+    }
+    for (const auto reference : {"file://assets/data.bin", "package://com.horo.install-fixture/assets/../data.bin",
+                                 "package://com.horo.install-fixture/assets/%64ata.bin",
+                                 "package://com.horo.install-fixture@1.0.0/assets/data.bin", "package://com.horo.install-fixture/"})
+        CHECK(installed->ReadMountedAsset(reference, 14).HasError());
+
+    graph->packages.front().lock.contributions.clear();
+    REQUIRE(service.Install(graph, {}).HasValue());
+    REQUIRE(service.InstalledRecord()->ReadMountedAsset(portable, 14).HasError());
+    CHECK(installed->ReadMountedAsset(portable, 14).HasValue());
 }
 
 TEST_CASE("Package install rejects noncanonical project roots and incomplete graphs", "[packages][install]") {

@@ -61,6 +61,19 @@ namespace Horo::Audio {
         AudioStreamUnderrunPolicy underrunPolicy{AudioStreamUnderrunPolicy::ContinueWithSilence};
     };
 
+    /** @brief Fixed storage and exact processing format for one host-admitted live PCM producer. */
+    struct AudioLivePcmRequest final {
+        AudioProcessingFormat format;
+        std::uint32_t ringFrames{};
+    };
+
+    /** @brief Source-neutral facts used by a prepared playback voice. */
+    struct AudioStreamPlaybackFacts final {
+        AudioProcessingFormat format;
+        std::optional<std::uint64_t> frameCount; /**< Absent for a live stream. */
+        bool seekable{};
+    };
+
     /** @brief Service-local generation-checked stream identity. */
     struct AudioStreamHandle final {
         std::uint32_t slot{};
@@ -151,6 +164,20 @@ namespace Horo::Audio {
         bool retained_{}; /**< Control-only pin bookkeeping; Render never reads this flag. */
     };
 
+    /** @brief Control-observed reason an empty ring cannot currently supply media; never callback policy. */
+    enum class AudioStreamStarvationCause : std::uint8_t {
+        None,
+        AwaitingPump,
+        WorkerPending,
+        SchedulerRejected,
+        Positioning,
+        Suspended,
+        Failed,
+        Cancelled,
+        Stopped,
+        AwaitingLiveInput,
+    };
+
     /** @brief Control-owner view of worker and callback facts. */
     struct AudioStreamSnapshot final {
         std::uint32_t bufferedFrames{};
@@ -161,6 +188,20 @@ namespace Horo::Audio {
         bool cancelled{};
         bool stopped{};
         std::optional<Error> failure; /**< Original worker failure, retained on control until retirement. */
+        std::size_t reservedBytes{};  /**< Ring, decode scratch and worst-case package charge, not allocator RSS. */
+        std::uint32_t capacityFrames{};
+        std::uint64_t decodeNanoseconds{};        /**< Saturating cumulative worker Decode time; excludes open/seek and scheduler wait. */
+        std::uint64_t fillSubmissionRejections{}; /**< Scheduler overload; no media was dropped or published. */
+        AudioStreamStarvationCause starvationCause{}; /**< Current control observation, not retrospective callback causality. */
+    };
+
+    /** @brief Control-owned aggregate reservations and admission rejection counters, retained across stream retirement. */
+    struct AudioStreamingSnapshot final {
+        std::size_t reservedBytes{};
+        std::size_t maximumBytes{};
+        std::uint32_t activeStreams{};
+        std::uint64_t invalidRequests{};
+        std::uint64_t budgetRejections{}; /**< Bytes or stream slots exhausted; distinct from callback starvation. */
     };
 
     /** @brief Control-only rate-limited starvation fact for diagnostics and telemetry. */
@@ -168,6 +209,7 @@ namespace Horo::Audio {
         std::uint64_t missingFrames{};
         std::uint64_t callbackCount{};
         std::uint64_t observedSampleFrame{};
+        AudioStreamStarvationCause cause{}; /**< Current control observation at reporting time. */
     };
 
     /**
@@ -199,6 +241,13 @@ namespace Horo::Audio {
         [[nodiscard]] static Result<std::unique_ptr<AudioStreamingService>> Create(JobSystem &jobs, AudioStreamPackageSource source,
                                                                                    AudioStreamingLimits limits = {});
 
+        /** @brief Creates a streaming service without a package provider.
+         * @param jobs Process-owned scheduler, retained for the service lifetime.
+         * @param limits Shared stream and byte limits.
+         * @return Empty live PCM service or a typed capacity failure. No work is scheduled.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<AudioStreamingService>> CreateLive(JobSystem &jobs, AudioStreamingLimits limits = {});
+
         /**
          * @brief Factory-only allocation seam for std::make_unique, not a host admission bypass.
          * @param key Private construction authority originated only after Create validates inputs.
@@ -206,7 +255,7 @@ namespace Horo::Audio {
          * @param source Validated source transferred with its provider/code lease.
          * @param limits Validated finite stream storage and join budgets.
          * @throws std::bad_alloc When fixed slot allocation fails; Create translates this failure.
-         * @pre Create has validated the source and limits. No worker is started during construction.
+         * @pre The factory has validated the source mode and limits. No worker is started during construction.
          */
         AudioStreamingService(ConstructionKey key, JobSystem &jobs, AudioStreamPackageSource source, AudioStreamingLimits limits);
 
@@ -218,9 +267,50 @@ namespace Horo::Audio {
          * @brief Preallocates and admits one package stream on the control lane.
          * @param request Borrowed exact decoder facts and bounded prefetch policy; admission retains an independent owned copy.
          * @return Generation-checked identity or typed invalid/capacity error; no worker starts yet.
+         * @details Copies descriptors inside the allocation-failure boundary; does not consume caller storage.
          * Allocation failure publishes neither a stream nor a byte reservation and preserves the caller's request.
          */
         [[nodiscard]] Result<AudioStreamHandle> Admit(const AudioStreamRequest &request);
+
+        /** @brief Prepares one nonseekable live source on the control lane.
+         * @param request Fixed format and buffer capacity, charged against the ordinary service budget.
+         * @return Fresh stream handle or a typed invalid or capacity failure.
+         */
+        [[nodiscard]] Result<AudioStreamHandle> AdmitLivePcm(const AudioLivePcmRequest &request);
+
+        /** @brief Copies a complete interleaved block from the sole live producer without waiting.
+         * @param handle Exact live generation. This operation runs on the stream service control lane.
+         * @param samples Finite PCM in the admitted channel order, already timed and ordered by the host.
+         * @return Success or typed stale, invalid, stopped or capacity failure. A rejected block publishes no samples.
+         * @details The host owns admission and timing. Stop discards the generation and prevents subsequent writes.
+         */
+        [[nodiscard]] Result<void> SubmitLivePcm(AudioStreamHandle handle, std::span<const AudioSample> samples);
+
+        /** @brief Stops one exact live source from a control-side revoke or teardown path.
+         * @param handle Generation to stop.
+         * @return True for a live slot, including one already stopped. False for stale or package handles.
+         * @details The ordinary detached Retire path releases storage. This operation never waits or allocates.
+         */
+        bool RevokeLivePcm(AudioStreamHandle handle) noexcept;
+        /**
+         * @brief Prepares a separate unpublished replacement using a pinned new package generation.
+         * @param previous Live last-known-good stream, never stopped or modified by staging.
+         * @param source Immutable replacement binding with its provider/code owner lease.
+         * @param request Same asset and processing format; new duration/codec and buffering are validated independently.
+         * @return Candidate identity or typed compatibility/capacity failure. Pump prepares it under ordinary budgets.
+         * @details Candidate ports are unavailable until CommitReplacement. Retire cancels an abandoned candidate.
+         * Old voices retain their old port and payload; voice control owns fade/restart and eventual detached retirement.
+         */
+        [[nodiscard]] Result<AudioStreamHandle> StageReplacement(AudioStreamHandle previous, AudioStreamPackageSource source,
+                                                                 const AudioStreamRequest &request);
+        /**
+         * @brief Makes a verified, prefetched replacement eligible for a new callback port on control.
+         * @param previous Still-live, non-stopped exact predecessor identity; completed worker failures are reconciled before admission.
+         * @param candidate Candidate returned by StageReplacement for this predecessor.
+         * @return Success only after lookahead or a complete short stream is available; failures preserve the predecessor.
+         * @details Does not retarget any existing port or release media. The voice owner explicitly publishes a new port.
+         */
+        [[nodiscard]] Result<void> CommitReplacement(AudioStreamHandle previous, AudioStreamHandle candidate);
         /** @brief Borrows the sole callback endpoint. @param handle Live stream identity. @return Port or stale/duplicate error. */
         [[nodiscard]] Result<AudioStreamRenderPort> RenderPort(AudioStreamHandle handle);
         /** @brief Borrow the sole port with a control-owned retirement pin.
@@ -232,9 +322,14 @@ namespace Horo::Audio {
          */
         [[nodiscard]] Result<AudioStreamRenderPort> RetainedRenderPort(AudioStreamHandle handle);
         /** @brief Copy actual admitted decoder facts on control, never caller-trusted replacement metadata.
-         * @param handle Live exact stream identity. @return Owned facts or typed stale failure.
+         * @param handle Exact package stream identity. @return Owned facts or typed stale or unsupported-source failure.
          */
         [[nodiscard]] Result<AudioStreamDecoderSpec> DecoderSpec(AudioStreamHandle handle) const;
+        /** @brief Returns generation-scoped playback facts for a package or live source.
+         * @param handle Exact live stream identity.
+         * @return Owned format and duration facts, or a typed stale or allocation failure.
+         */
+        [[nodiscard]] Result<AudioStreamPlaybackFacts> PlaybackFacts(AudioStreamHandle handle) const;
         /** @brief Reaps completed fills and admits priority-ordered lookahead jobs without waiting. */
         void Pump();
         /** @brief Requests cancellation and closes further fill admission. @param handle Live identity. @return Success or stale-handle
@@ -250,6 +345,10 @@ namespace Horo::Audio {
         /** @brief Reads bounded counters and terminal facts on control. @param handle Live identity. @return Snapshot or stale-handle
          * error. */
         [[nodiscard]] Result<AudioStreamSnapshot> Snapshot(AudioStreamHandle handle) const;
+        /** @brief Read global control-owned reservations and saturating rejection counts.
+         * @return Aggregate facts without logging, formatting or changing stream state.
+         */
+        [[nodiscard]] AudioStreamingSnapshot Snapshot() const noexcept;
         /**
          * @brief Takes a coalesced underrun fact on control, never on the callback.
          * @param handle Live stream identity.
@@ -269,17 +368,27 @@ namespace Horo::Audio {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        /** @brief Allocates service storage after the caller has selected its source mode. */
+        [[nodiscard]] static Result<std::unique_ptr<AudioStreamingService>> CreateService(JobSystem &jobs, AudioStreamPackageSource source,
+                                                                                          AudioStreamingLimits limits);
         struct Slot;
         [[nodiscard]] AudioStreamState *Find(AudioStreamHandle handle) noexcept;
         [[nodiscard]] const AudioStreamState *Find(AudioStreamHandle handle) const noexcept;
         /** @brief Issue the sole callback port after one shared liveness/duplicate check, with optional control retirement pin. */
         [[nodiscard]] Result<AudioStreamRenderPort> IssueRenderPort(AudioStreamHandle handle, bool retained);
+        /** @brief Shared validated admission with an immutable per-stream package binding. */
+        [[nodiscard]] Result<AudioStreamHandle> AdmitWithSource(const AudioStreamRequest &request, AudioStreamPackageSource source);
+        /** @brief Charges one prevalidated stream reservation and publishes its slot after allocation. */
+        [[nodiscard]] Result<AudioStreamHandle> Reserve(const AudioStreamRequest &request, AudioStreamPackageSource source,
+                                                         std::size_t bytes);
 
         JobSystem &jobs_;
         AudioStreamPackageSource source_;
         AudioStreamingLimits limits_;
         std::vector<Slot> slots_;
         std::size_t reservedBytes_{};
+        std::uint64_t invalidRequests_{};
+        std::uint64_t budgetRejections_{};
         bool closed_{};
         bool shutdownComplete_{};
     };

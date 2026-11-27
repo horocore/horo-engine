@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetImportMetadata.h"
 #include "Horo/Assets/AssetSourcePublication.h"
+#include "NativePublicationFiles.h"
 #include "OwnedTestDirectory.h"
 
 #include <array>
@@ -35,6 +36,26 @@ namespace {
             auto lease = files.TryAcquireExclusive(path.Value(), "reimport-source-policy-test");
             REQUIRE(lease.HasValue());
             return std::move(lease).Value();
+        }
+    };
+
+    /** @brief Captures the actual sealed native stage before its tracked canonical replacement. */
+    class NativeAttemptSnapshot final : public TestSupport::NativePublicationFiles {
+    public:
+        std::filesystem::path live;
+        std::filesystem::path restarted;
+        std::filesystem::path observed;
+
+        Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
+                                         const std::filesystem::perms permissions) override {
+            auto written = native.WritePrivateDurable(path, bytes, created, permissions);
+            if (written.HasValue() && path.filename() == "payload.tmp") {
+                observed = restarted / path.lexically_relative(live);
+                std::filesystem::create_directories(observed.parent_path());
+                for (const auto &file : std::filesystem::directory_iterator(path.parent_path()))
+                    std::filesystem::copy_file(file.path(), observed.parent_path() / file.path().filename());
+            }
+            return written;
         }
     };
 }  // namespace
@@ -153,4 +174,97 @@ TEST_CASE("Captured import metadata decodes the admitted generation with the exi
     CHECK(DecodeAssetImportMetadata("{invalid").HasError());
     CHECK(DecodeAssetImportMetadata(std::string(1024 * 1024 + 1, ' ')).HasError());
     CHECK(DecodeAssetImportMetadata(R"({"schemaVersion":2})").HasError());
+}
+
+namespace {
+    /** @brief Reopens a native stage captured before the canonical replacement. */
+    struct RestartableSourceFixture final {
+        const std::array<std::byte, 2> original{std::byte{0x01}, std::byte{0x02}};
+        const std::array<std::byte, 3> planned{std::byte{0x11}, std::byte{0x12}, std::byte{0x13}};
+        const AssetSourceIdentity accepted{true, original.size(), ComputeSha256(original)};
+        const AssetSourcePublicationAttempt attempt{AssetId::Parse("00000000-0000-0000-0000-000000000081").Value(),
+                                                    {true, planned.size(), ComputeSha256(planned)}};
+        ReimportSourceProject live;
+        ReimportSourceProject restarted;
+        NativeAttemptSnapshot snapshot;
+        ExclusiveFileLock restartedLease{restarted.Lease()};
+
+        RestartableSourceFixture() {
+            REQUIRE(live.files.WriteDurable(live.source, original).HasValue());
+            REQUIRE(restarted.files.WriteDurable(restarted.source, original).HasValue());
+            snapshot.live = live.directory.Path();
+            snapshot.restarted = restarted.directory.Path();
+            auto lease = live.Lease();
+            REQUIRE(PublishAssetSourceAttempt(snapshot.live, live.source, accepted, planned, attempt, lease, snapshot).HasValue());
+            REQUIRE_FALSE(snapshot.observed.empty());
+            REQUIRE(std::filesystem::is_regular_file(snapshot.observed));
+        }
+
+        Result<void> Retire(const AssetSourcePublicationAttempt &candidate) {
+            return RetireAssetSourcePublicationAttempt(snapshot.restarted, restarted.source, candidate, restartedLease, restarted.files);
+        }
+    };
+}  // namespace
+
+TEST_CASE("Restartable asset source attempts retire exact sealed stages and preserve foreign evidence", "[assets][source-attempt]") {
+    RestartableSourceFixture fixture;
+    SECTION("the complete observed stage can be retired without canonical replacement") {
+        REQUIRE(fixture.Retire(fixture.attempt).HasValue());
+        CHECK_FALSE(std::filesystem::exists(fixture.snapshot.observed.parent_path()));
+        REQUIRE(fixture.Retire(fixture.attempt).HasValue());
+        CHECK(CaptureAssetSource(fixture.snapshot.restarted, fixture.restarted.source, 1024).Value().identity == fixture.accepted);
+    }
+    SECTION("a stale seal binding is denied") {
+        auto stale = fixture.attempt;
+        ++stale.payload.bytes;
+        REQUIRE(fixture.Retire(stale).HasError());
+        CHECK(std::filesystem::is_regular_file(fixture.snapshot.observed));
+    }
+    SECTION("an interrupted partial stage is preserved and cannot block a fresh attempt") {
+        const auto partial = std::span{fixture.planned}.first(1);
+        REQUIRE(fixture.restarted.files.WriteDurable(fixture.snapshot.observed, partial).HasValue());
+        REQUIRE(fixture.Retire(fixture.attempt).HasError());
+        const auto nextId = AssetId::Parse("00000000-0000-0000-0000-000000000082").Value();
+        const AssetSourcePublicationAttempt next{nextId, fixture.attempt.payload};
+        const auto result = PublishAssetSourceAttempt(fixture.snapshot.restarted, fixture.restarted.source, fixture.accepted,
+                                                      fixture.planned, next, fixture.restartedLease, fixture.restarted.files);
+        REQUIRE(result.HasValue());
+        CHECK(result.Value().status == AssetSourcePublicationStatus::Durable);
+        REQUIRE(fixture.Retire(next).HasValue());
+        CHECK(CaptureAssetSource(fixture.snapshot.restarted, fixture.snapshot.observed, 1024).Value().identity.digest ==
+              ComputeSha256(partial));
+        CHECK(CaptureAssetSource(fixture.snapshot.restarted, fixture.restarted.source, 1024).Value().identity == fixture.attempt.payload);
+    }
+    SECTION("a stage with foreign siblings is neither reused nor retired") {
+        const auto foreign = fixture.snapshot.observed.parent_path() / "unowned.tmp";
+        REQUIRE(fixture.restarted.files.WriteDurable(foreign, fixture.original).HasValue());
+        REQUIRE(PublishAssetSourceAttempt(fixture.snapshot.restarted, fixture.restarted.source, fixture.accepted, fixture.planned,
+                                          fixture.attempt, fixture.restartedLease, fixture.restarted.files)
+                    .HasError());
+        REQUIRE(fixture.Retire(fixture.attempt).HasError());
+        CHECK(std::filesystem::is_regular_file(foreign));
+        CHECK(std::filesystem::is_regular_file(fixture.snapshot.observed));
+    }
+    SECTION("a multiply linked stage is never removed") {
+        const auto alias = fixture.restarted.source.parent_path() / "another-link.tmp";
+        std::error_code error;
+        std::filesystem::create_hard_link(fixture.snapshot.observed, alias, error);
+        if (error)
+            SKIP("Host does not permit hard links.");
+        REQUIRE(fixture.Retire(fixture.attempt).HasError());
+        CHECK(std::filesystem::is_regular_file(alias));
+        CHECK(std::filesystem::is_regular_file(fixture.snapshot.observed));
+    }
+}
+
+TEST_CASE("Restartable asset source attempts preserve redirected stages", "[assets][source-attempt]") {
+    RestartableSourceFixture fixture;
+    REQUIRE(fixture.restarted.files.RemoveDurable(fixture.snapshot.observed).HasValue());
+    std::error_code error;
+    std::filesystem::create_symlink(fixture.restarted.source, fixture.snapshot.observed, error);
+    if (error)
+        SKIP("Host does not permit symlinks.");
+    REQUIRE(fixture.Retire(fixture.attempt).HasError());
+    CHECK(std::filesystem::is_symlink(fixture.snapshot.observed));
+    CHECK(CaptureAssetSource(fixture.snapshot.restarted, fixture.restarted.source, 1024).Value().identity == fixture.accepted);
 }

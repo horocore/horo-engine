@@ -5,6 +5,7 @@
  * @brief RuntimeScene conversion and residency seam for dependency-neutral perception memory.
  */
 
+#include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/PerceptionMemory.h"
 #include "Horo/AI/PerceptionSpatialBroadphase.h"
@@ -25,11 +26,16 @@ namespace Horo::AI {
      */
     [[nodiscard]] PerceptionSourceLiveness PerceptionSceneLiveness(Runtime::RuntimeScene &scene) noexcept;
 
-    /** @brief Both keys are required writable collections with capacity for the admitted memory profile (at most
-     * MaximumBlackboardCollectionElements). */
-    struct PerceptionBlackboardProjection final {
-        BlackboardKeyId sources;   /**< EntityReference collection; exact admitted identities. */
-        BlackboardKeyId positions; /**< WorldCoordinate collection; last-known memory facts only. */
+    class PerceptionSenseGeneration;
+
+    /** @brief A detached query input authorized by the exact live Perception owners. */
+    struct PerceptionQueryInput final {
+        Runtime::RuntimeSceneView scene;
+        AgentHandle agent;
+        std::uint64_t spatialRevision{};
+        PerceptionMemorySnapshot memory;
+        std::shared_ptr<const BlackboardValueAuthorization> authorization;
+        std::weak_ptr<const PerceptionSenseGeneration> provider;
     };
 
     /** @brief One complete filtered value publication shared by blackboard and debug readers. */
@@ -50,18 +56,32 @@ namespace Horo::AI {
      */
     class PerceptionPublication final {
     public:
+        PerceptionPublication(const PerceptionPublication &) = delete;
+        PerceptionPublication &operator=(const PerceptionPublication &) = delete;
+        PerceptionPublication(PerceptionPublication &&) noexcept = default;
+        PerceptionPublication &operator=(PerceptionPublication &&) = delete;
+
+        /** @brief Admits one listener and its typed projection keys before sensing.
+         * @param scene Current destination Scene view. @param listener Exact live recipient entity.
+         * @param blackboard Recipient's admitted blackboard. @param projection Distinct, writable typed collections.
+         * @return An owner-lane publisher for this binding, or a typed Scene, key, access or schema error.
+         * @details No mutable Scene or blackboard borrow is retained. Schema or instance replacement requires readmission.
+         */
+        [[nodiscard]] static Result<PerceptionPublication> PrepareAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                              Runtime::EntityRef listener,
+                                                                              const BlackboardInstance &blackboard,
+                                                                              PerceptionBlackboardProjection projection);
+
         /** @brief Filters the complete memory before publishing one blackboard batch and matching debug values.
          * @param scene Current Scene owner, borrowed synchronously. @param filtering Latest committed filter owner.
-         * @param listener Exact recipient listener. @param memory Exact agent memory.
-         * @param blackboard Same agent's active blackboard. @param projection Distinct typed collection keys.
+         * @param memory Exact agent memory. @param blackboard The same active blackboard admitted during preparation.
          * @param simulationTick Monotonic completed tick. Repeated identical tick/filter publication is idempotent.
          * @return One revisioned complete result or typed failure; no partial blackboard or debug publication.
          */
         [[nodiscard]] Result<PerceptionPublicationSnapshot> PublishAtBlackboardSync(Runtime::RuntimeScene &scene,
                                                                                     const PerceptionSpatialBroadphase &filtering,
-                                                                                    Runtime::EntityRef listener, AIPerceptionMemory &memory,
+                                                                                    AIPerceptionMemory &memory,
                                                                                     BlackboardInstance &blackboard,
-                                                                                    PerceptionBlackboardProjection projection,
                                                                                     std::uint64_t simulationTick);
         /** @brief Reads debug values only against their current filter/Scene publication.
          * @param scene Fresh Scene view. @param filtering Current filter owner. @param blackboard Current recipient blackboard.
@@ -70,13 +90,32 @@ namespace Horo::AI {
         [[nodiscard]] Result<PerceptionPublicationSnapshot> Current(const Runtime::RuntimeSceneView &scene,
                                                                     const PerceptionSpatialBroadphase &filtering,
                                                                     const BlackboardInstance &blackboard) const;
+
+        /** @brief Returns the number of policy-admitted facts in the last capacity-rejected batch.
+         * @return Zero before a rejection or after a successful replacement or reset. Read on the owner lane.
+         */
+        [[nodiscard]] std::size_t RejectedByCapacity() const noexcept {
+            return rejectedByCapacity_;
+        }
+
         /** @brief Revokes stored debug publication at disable, replacement or unload. */
         void Reset() noexcept;
 
     private:
+        /** @brief Retains only immutable admission evidence and the recipient's exact identity. */
+        PerceptionPublication(const Runtime::RuntimeSceneView &scene, Runtime::EntityRef listener, BlackboardInstanceBinding binding,
+                              std::shared_ptr<const BlackboardSchema> schema, PerceptionBlackboardProjection projection,
+                              std::size_t capacity) noexcept;
+        /** @brief Checks the exact Scene recipient and the admitted blackboard generation and schema. */
+        [[nodiscard]] bool MatchesBinding(const Runtime::RuntimeSceneView &scene, const BlackboardInstance &blackboard) const;
+        Runtime::RuntimeSceneView scene_;
+        Runtime::EntityRef listener_;
+        BlackboardInstanceBinding binding_;
+        std::shared_ptr<const BlackboardSchema> schema_;
+        PerceptionBlackboardProjection projection_;
+        std::size_t capacity_;
         std::optional<PerceptionPublicationSnapshot> current_;
         std::shared_ptr<const PerceptionSpatialSnapshot> filtering_;
-        BlackboardInstanceBinding binding_;
-        PerceptionBlackboardProjection projection_;
+        std::size_t rejectedByCapacity_{};
     };
 }  // namespace Horo::AI

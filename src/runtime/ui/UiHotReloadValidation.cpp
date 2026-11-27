@@ -6,6 +6,13 @@
 #include <memory>
 
 namespace Horo::Runtime::Ui::UiReloadDetail {
+    /** @copydoc MatchesActionOwner */
+    bool MatchesActionOwner(const UiActionOwnerContext &owner, const UiElementTree &tree) noexcept {
+        return owner.IsValid() && owner.instance == tree.Instance() && owner.canvas == tree.Canvas() &&
+               owner.document == tree.SourceDocument() && owner.documentRevision == tree.SourceDocumentRevision() &&
+               owner.treeRevision == tree.Revision();
+    }
+
     namespace {
         [[nodiscard]] Result<void> Invalid() {
             return Result<void>::Failure(MakeError(UiErrors::DocumentInvalid));
@@ -56,13 +63,6 @@ namespace Horo::Runtime::Ui::UiReloadDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Verifies exact source lineage of an actual action/control owner. */
-        [[nodiscard]] bool Matches(const UiActionOwnerContext &owner, const UiElementTree &tree) noexcept {
-            return owner.IsValid() && owner.instance == tree.Instance() && owner.canvas == tree.Canvas() &&
-                   owner.document == tree.SourceDocument() && owner.documentRevision == tree.SourceDocumentRevision() &&
-                   owner.treeRevision == tree.Revision();
-        }
-
         /** @brief Checks each actual control's authored association and its real tree/source owner. */
         [[nodiscard]] Result<void> Controls(const UiReloadCanvas &canvas) {
             if (canvas.controls.size() > canvas.tree.Size())
@@ -70,7 +70,7 @@ namespace Horo::Runtime::Ui::UiReloadDetail {
             for (std::size_t i = 0; i < canvas.controls.size(); ++i) {
                 const auto &entry = canvas.controls[i];
                 if (const auto handle = canvas.tree.Find(entry.id); handle.HasError() || handle.Value() != entry.control.Element() ||
-                                                                    !Matches(entry.control.Owner(), canvas.tree) ||
+                                                                    !MatchesActionOwner(entry.control.Owner(), canvas.tree) ||
                                                                     entry.control.LifecycleState() != UiControlLifecycleState::Active)
                     return Invalid();
                 for (std::size_t j = 0; j < i; ++j)
@@ -92,7 +92,8 @@ namespace Horo::Runtime::Ui::UiReloadDetail {
                     owner.documentRevision != tree.SourceDocumentRevision() || owner.treeRevision != tree.Revision())
                     return Invalid();
             }
-            if (canvas.actions && (canvas.actions->State() != UiActionRouterState::Active || !Matches(canvas.actions->Owner(), tree)))
+            if (canvas.actions &&
+                (canvas.actions->State() != UiActionRouterState::Active || !MatchesActionOwner(canvas.actions->Owner(), tree)))
                 return Invalid();
             if (canvas.bindings) {
                 if (const auto valid = canvas.bindings->ValidateOwner(tree); valid.HasError())

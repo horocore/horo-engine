@@ -20,6 +20,11 @@
 #include <variant>
 
 namespace Horo::Runtime {
+    /** @brief Save error domain withheld from raw support-bundle entries. */
+    inline constexpr std::string_view SaveDiagnosticErrorDomain{"horo.save"};
+    /** @brief Save diagnostic code namespace used even when a flattened record omits its error domain. */
+    inline constexpr std::string_view SaveDiagnosticCodeNamespace{"save"};
+
     inline constexpr std::size_t MaximumSaveDiagnosticContextEntries = 8;
     inline constexpr std::size_t MaximumSaveDiagnosticCauseDepth = 4;
     inline constexpr std::size_t MaximumSavePartialDataFacts = 8;
@@ -220,6 +225,15 @@ namespace Horo::Runtime {
         std::size_t causeCount_{};
         SavePrivateEvidenceSummary privateEvidence_{};
     };
+
+    /**
+     * @brief Projects a Save failure into an error safe for shared diagnostics and product presentation.
+     * @param error Internal failure that may contain private or untrusted provider data.
+     * @return A fresh error containing canonical Save descriptors and at most MaximumSaveDiagnosticCauseDepth causes.
+     * Unknown descriptors become DiagnosticUnsupported. Source text, attached diagnostics and context never transfer.
+     * @throws std::bad_alloc If storage for the projected error cannot be allocated.
+     */
+    [[nodiscard]] Error RedactSaveDiagnosticError(const Error &error);
 
     /** @brief Returns every canonical Runtime Save descriptor admitted by diagnostics. */
     [[nodiscard]] std::span<const ErrorCodeDescriptor *const> SaveDiagnosticErrorDescriptors() noexcept;

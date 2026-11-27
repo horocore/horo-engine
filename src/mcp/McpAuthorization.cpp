@@ -1,7 +1,9 @@
 #include "Horo/Mcp/McpAuthorization.h"
 
 #include "Horo/Foundation/Sha256.h"
+#include "Horo/Foundation/Telemetry/Operation.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "McpAuditTelemetry.h"
 #include "McpJsonBounds.h"
 
 #include <algorithm>
@@ -94,6 +96,7 @@ namespace Horo::Mcp {
         std::weak_ptr<void> issuer;
         McpSessionAdmission admission;
         Clock::time_point expires;
+        const std::uint64_t auditIdentity{Telemetry::AllocateOperationId()};
         bool revoked{};
         CancellationSource cancellation;
     };
@@ -114,6 +117,7 @@ namespace Horo::Mcp {
             Sha256Digest fingerprint;
             Clock::time_point expires;
             bool approved{};
+            McpSessionHandle auditSession;
         };
 
         std::mutex mutex;
@@ -181,6 +185,11 @@ namespace Horo::Mcp {
     /** @copydoc McpAuthority::Cancellation */
     CancellationToken McpAuthority::Cancellation() const noexcept {
         return record_->cancellation.Token();
+    }
+
+    /** @copydoc McpAuthority::AuditIdentity */
+    std::uint64_t McpAuthority::AuditIdentity() const noexcept {
+        return record_->auditIdentity;
     }
 
     /** @copydoc McpAuthority::ExpiresAt */
@@ -299,7 +308,9 @@ namespace Horo::Mcp {
             state_->nextChallenge == std::numeric_limits<std::uint64_t>::max())
             return Result<std::uint64_t>::Failure(MakeError(McpErrors::AuthorizationDenied));
         const auto id = state_->nextChallenge++;
-        state_->approvals.try_emplace(id, context.authority, fingerprint.Value(), Clock::now() + lifetime, false);
+        state_->approvals.try_emplace(id, context.authority, fingerprint.Value(), Clock::now() + lifetime, false, context.session);
+        EmitMcpAudit(
+            {.event = "approval.requested", .principal = context.authority->AuditIdentity(), .session = context.session, .approval = id});
         return Result<std::uint64_t>::Success(id);
     }
 
@@ -310,6 +321,12 @@ namespace Horo::Mcp {
         const auto found = state_->approvals.find(challenge);
         if (found == state_->approvals.end())
             return Result<void>::Failure(MakeError(McpErrors::ApprovalRequired));
+        if (const auto authority = found->second.authority.lock())
+            EmitMcpAudit({.event = "approval.decided",
+                          .principal = authority->AuditIdentity(),
+                          .session = found->second.auditSession,
+                          .approval = challenge,
+                          .status = approved ? "approved" : "denied"});
         if (!approved)
             state_->approvals.erase(found);
         else
@@ -335,8 +352,13 @@ namespace Horo::Mcp {
         });
         if (found == state_->approvals.end())
             return Result<void>::Failure(MakeError(McpErrors::ApprovalRequired));
-        if (consume)
+        if (consume) {
+            EmitMcpAudit({.event = "approval.consumed",
+                          .principal = context.authority->AuditIdentity(),
+                          .session = context.session,
+                          .approval = found->first});
             state_->approvals.erase(found);
+        }
         return Result<void>::Success();
     }
 

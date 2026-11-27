@@ -12,4 +12,9 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
                                                                                      const SaveNamespaceId &name);
     /** @brief Reuses existing cloud metadata validation for a single exact retained generation. */
     [[nodiscard]] bool ValidRetentionCloud(const Retired &record, const SaveNamespaceId &name);
+    /** @brief Encodes a validated selected-index cloud sidecar. */
+    [[nodiscard]] nlohmann::json EncodeCatalogCloud(const SaveCloudRevisionMetadata &cloud);
+    /** @brief Decodes bounded selected cloud evidence bound to the catalog's admitted namespace. */
+    [[nodiscard]] SaveCloudRevisionMetadata DecodeCatalogCloud(const nlohmann::json &value, const SaveNamespaceId &name,
+                                                               std::size_t maximumRecords);
 }  // namespace Horo::Runtime::SaveSlotLifecycleDetail

@@ -12,8 +12,10 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/DirectionalShadow.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
+#include "editor/renderer/EditorViewportImageCapture.h"
 #include "editor/renderer/EditorViewportScene.h"
 
+#include <functional>
 #include <optional>
 
 namespace Horo::Render {
@@ -58,6 +60,36 @@ namespace Horo::Editor {
     public:
         virtual ~IEditorViewportRenderer() = default;
 
+        /** @brief Requests a bounded copy from the exact offscreen viewport while the supplied authority remains current. */
+        [[nodiscard]] virtual Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion, std::function<bool()>) {
+            return Result<std::uint64_t>::Failure(MakeError(RendererErrors::ViewportCapabilityUnavailable));
+        }
+
+        /** @brief Observes an exact capture without blocking on renderer work. */
+        [[nodiscard]] virtual std::optional<EditorViewportImageSnapshot> ReadImageCapture(std::uint64_t) {
+            return std::nullopt;
+        }
+
+        /** @brief Withdraws an exact pending capture or its ready artifact. */
+        virtual bool CancelImageCapture(std::uint64_t) noexcept {
+            return false;
+        }
+
+        /** @brief Opts in to a cross-fade compositor before viewport textures are first allocated. */
+        [[nodiscard]] virtual Result<void> EnableCameraCrossFade() {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        }
+
+        /** @brief Reports the live reservation and its currently available views. */
+        [[nodiscard]] virtual EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept {
+            return {};
+        }
+
+        /** @brief Prepares the optional pair from the same frozen viewport snapshot as the upcoming mesh pass. */
+        [[nodiscard]] virtual Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) {
+            return crossFade ? Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported)) : Result<void>::Success();
+        }
+
         /** @brief Activates only explicit genuine cooked color inputs at cold startup. @param inputs Exact decoded generation.
          * @return Typed unsupported on implementations without the actual complete color executor. */
         [[nodiscard]] virtual Result<void> PrepareColorPipeline(const EditorViewportColorInputs &inputs) {
@@ -77,7 +109,17 @@ namespace Horo::Editor {
             static_cast<void>(deltaSeconds);
         }
 
-        /** @brief Finishes a prepared candidate only after actual native Present, or cancels it. @param accepted Actual frame acceptance.
+        /** @brief Captures the identity prefix for the next ordinary desktop mesh pass.
+         * @param source Identities from the same extracted draw list, or empty for an untracked scene.
+         * @return Success or a typed validation failure before the mesh pass starts.
+         */
+        [[nodiscard]] virtual Result<void> PrepareTemporalMotion(EditorViewportMotionSource source) {
+            static_cast<void>(source);
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves prepared color after the host finishes or cancels the frame.
+         * @param accepted The host present result; a viewport with its own exact native submission receipt uses that authority.
          */
         virtual void FinishColorFrame(bool accepted) noexcept {
             static_cast<void>(accepted);
@@ -138,6 +180,11 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Stages optional view history for the frozen viewport and exact host frame before graph preparation. */
+        [[nodiscard]] virtual Result<void> PrepareTemporalFrame(const Render::StaticMeshPassDescriptor &, std::uint64_t) {
+            return Result<void>::Success();
+        }
+
         /** @brief Executes one prepared editor frame through the existing frontend frame/submission owner.
          * @param frame Exact active frontend scope. @param passes Frozen borrowed scene/output descriptors.
          * @return Original execution failure; no second frame, backend selection or submission authority is created.
@@ -182,6 +229,14 @@ namespace Horo::Editor {
 
         /** @brief Reports whether a complete viewport image is available for presentation. */
         [[nodiscard]] virtual bool IsReady() const noexcept = 0;
+
+        /** @brief Selects a transient display-linear accessibility transform for the next viewport frame.
+         * @param preview Desired preview settings, or no override to restore the admitted output transform.
+         * @return Success or a typed unsupported/invalid result before changing the preview.
+         */
+        [[nodiscard]] virtual Result<void> RequestColorAccessibilityPreview(const std::optional<Accessibility::ColorblindSettings> &preview) {
+            return preview ? Result<void>::Failure(MakeError(Render::ColorPipelineErrors::UnsupportedOutput)) : Result<void>::Success();
+        }
 
     private:
         Render::RenderViewId lightingView_;

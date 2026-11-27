@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Ui/UiCanvasSpace.h"
+#include "Horo/Runtime/Ui/UiCpuWorkStatistics.h"
 #include "Horo/Runtime/Ui/UiElementTree.h"
 #include "Horo/Runtime/Ui/UiLayoutWork.h"
 
@@ -324,6 +325,18 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] auto operator<=>(const UiLayoutPivot &) const noexcept = default;
     };
 
+    /** @brief Horizontal reading direction of a complete layout publication. */
+    enum class UiLayoutInlineDirection : std::uint8_t {
+        LeftToRight,
+        RightToLeft,
+    };
+
+    /** @brief Controls whether one element's placement follows the reading direction. */
+    enum class UiLayoutHorizontalPlacement : std::uint8_t {
+        FollowDirection,
+        Physical,
+    };
+
     /** @brief Typed sizing and box-model descriptor for one element. */
     struct UiLayoutStyle final {
         UiLength width{UiLength::Auto()};         /**< Preferred content width. */
@@ -345,6 +358,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutContainerStyle container;                                /**< Direct-child layout policy. */
         UiLayoutFlex flex;                                               /**< Flex weights when this element is a flex item. */
         UiLayoutGridPlacement grid;                                      /**< Grid cell when this element is a grid item. */
+        UiLayoutHorizontalPlacement horizontalPlacement{UiLayoutHorizontalPlacement::FollowDirection}; /**< Horizontal mirroring policy. */
 
         /** @brief Checks all typed size, box, anchor, and alignment fields. @return Whether the style can enter layout. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -370,9 +384,10 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Immutable authored-style and intrinsic source descriptor for one current element handle. */
     struct UiLayoutElementDescriptor final {
-        UiElementHandle element;           /**< Exact generation-safe retained element. */
-        UiLayoutStyle style;               /**< Typed sizing and placement semantics. */
-        UiLayoutIntrinsicSource intrinsic; /**< Optional text/image measurement source. */
+        UiElementHandle element;                 /**< Exact generation-safe retained element. */
+        UiLayoutStyle style;                     /**< Typed sizing and placement semantics. */
+        UiLayoutIntrinsicSource intrinsic;       /**< Optional text/image measurement source. */
+        std::int32_t minimumInteractiveExtent{}; /**< View-owned logical floor on both axes, used only when the layout permits. */
         /** @brief Checks handle, style, and source evidence. @return Whether the descriptor is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiLayoutElementDescriptor &) const noexcept = default;
@@ -380,10 +395,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Immutable request supplied to a text or image intrinsic measurement provider. */
     struct UiLayoutIntrinsicRequest final {
-        UiElementHandle element;   /**< Exact element being measured. */
-        UiLogicalExtent available; /**< Finite logical upper bound for the measurement. */
-        bool widthDefinite{};      /**< Whether width is independently definite. */
-        bool heightDefinite{};     /**< Whether height is independently definite. */
+        UiElementHandle element;         /**< Exact element being measured. */
+        UiLogicalExtent available;       /**< Finite logical upper bound for the measurement. */
+        bool widthDefinite{};            /**< Whether width is independently definite. */
+        bool heightDefinite{};           /**< Whether height is independently definite. */
+        UiCanvasScaleFactor fontScale{}; /**< Text scale for MeasureText. MeasureImage receives the neutral scale. */
     };
 
     /** @brief Revision-scoped intrinsic contribution returned by a provider. */
@@ -428,6 +444,8 @@ namespace Horo::Runtime::Ui {
         bool dependsOnParentHeight{}; /**< Whether a changed assigned height requires one remeasure. */
         UiLayoutConstraintResult constraintResult{UiLayoutConstraintResult::Satisfied}; /**< Deterministic clamp/unsatisfied evidence. */
         std::int32_t baseline{NoUiBaseline};                                            /**< Optional intrinsic baseline. */
+        bool dependsOnFontScale{
+            true}; /**< Whether font scale can change this direct measurement. Custom evaluators default to sensitive. */
         /** @brief Checks that desired extent is clamped to its measure range.
          * @param constraints Exact range used for measurement.
          * @return Whether this contribution is valid.
@@ -485,6 +503,8 @@ namespace Horo::Runtime::Ui {
         UiLogicalRect overflow;              /**< Finite descendant overflow extent. */
         UiLogicalRect hitTest;               /**< Backend-neutral interaction geometry. */
         std::int32_t baseline{NoUiBaseline}; /**< Content-relative baseline or sentinel. */
+        UiLayoutHorizontalPlacement horizontalPlacement{
+            UiLayoutHorizontalPlacement::FollowDirection}; /**< Placement used by this record. */
         /** @brief Checks every rectangle and baseline representation. @return Whether the arrangement may be published. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiLayoutArrangement &) const noexcept = default;
@@ -499,6 +519,7 @@ namespace Horo::Runtime::Ui {
         bool remeasure{};                                   /**< True only after the bounded retry. */
         std::span<UiLayoutChildPlacement> childScratch{};   /**< Preallocated placement scratch, matching children when supplied. */
         std::span<UiLayoutLine> lineScratch{};              /**< Preallocated line scratch, matching the bounded child capacity. */
+        UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Reading direction for this arrangement. */
     };
 
     /**
@@ -547,6 +568,16 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<UiDeclarativeLayoutEvaluator> Create(std::span<const UiLayoutElementDescriptor> descriptors,
                                                                          const UiLayoutIntrinsicProvider *intrinsic = nullptr);
 
+        /** @brief Creates an evaluator and optionally identifies a rejected descriptor by its handle.
+         * @param descriptors Current-generation element descriptors sorted by handle.
+         * @param intrinsic Revision-frozen provider for required intrinsic sources.
+         * @param failedElement Optional immediate output. Reset on entry; populated only for descriptor-local failure.
+         * @return The same evaluator or canonical error as the two-argument overload.
+         */
+        [[nodiscard]] static Result<UiDeclarativeLayoutEvaluator> Create(std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                         const UiLayoutIntrinsicProvider *intrinsic,
+                                                                         UiElementHandle *failedElement);
+
         UiDeclarativeLayoutEvaluator(UiDeclarativeLayoutEvaluator &&) noexcept = default;
         UiDeclarativeLayoutEvaluator &operator=(UiDeclarativeLayoutEvaluator &&) noexcept = default;
         UiDeclarativeLayoutEvaluator(const UiDeclarativeLayoutEvaluator &) = delete;
@@ -583,6 +614,8 @@ namespace Horo::Runtime::Ui {
         UiLayoutSourceRevisions sources;   /**< Complete immutable input lineage. */
         UiInteractionRevision interaction; /**< Published layout/interaction generation. */
         UiCanvasScaleFactor fontScale{};   /**< Accessibility text scale consumed by this generation. */
+        UiLayoutInlineDirection inlineDirection{
+            UiLayoutInlineDirection::LeftToRight}; /**< Reading direction consumed by this generation. */
     };
 
     /**
@@ -609,6 +642,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t invalidationCapacity{};             /**< Maximum queued dirty records. */
         std::uint32_t concurrentSnapshots{};              /**< Preallocated immutable storage slots; at least two. */
         UiInteractionRevision initialInteractionRevision; /**< First successful publication revision. */
+        bool measureCpuWork{};                            /**< Samples layout preparation attempts on the owner thread. */
         /** @brief Validates identities and all hard-bounded capacities. @return Whether this descriptor can be created. */
         [[nodiscard]] bool IsValid() const noexcept;
     };
@@ -620,6 +654,8 @@ namespace Horo::Runtime::Ui {
         UiLogicalRect rootContent;            /**< Definite logical root assignment. */
         const UiLayoutEvaluator *evaluator{}; /**< Borrowed only for this synchronous call. */
         UiCanvasScaleFactor fontScale{};      /**< Accessibility text scale forwarded to intrinsic measurement. */
+        UiLayoutInlineDirection inlineDirection{UiLayoutInlineDirection::LeftToRight}; /**< Reading direction forwarded to arrangement. */
+        UiElementHandle *failedElement{}; /**< Optional synchronous failure output. Reset on entry; never retained. */
     };
 
     /** @brief Explicit admission lifecycle for one canvas layout cache. */
@@ -753,6 +789,8 @@ namespace Horo::Runtime::Ui {
         void Shutdown() const noexcept;
         /** @brief Returns the explicit admission lifecycle. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiLayoutEngineState State() const noexcept;
+        /** @brief Reads lifetime preparation timing on the owner thread. @return Disabled evidence after move. */
+        [[nodiscard]] UiCpuWorkStatistics CpuWorkStatistics() const noexcept;
         /** @brief Reports whether no external immutable snapshot lease remains. @return True when retirement may finish. */
         [[nodiscard]] bool IsDrained() const noexcept;
 

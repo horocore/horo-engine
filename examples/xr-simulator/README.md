@@ -38,6 +38,12 @@ RuntimeHost frame after import while the imported simulator remains paused.
 After the last step, synthetic Input becomes neutral and the consumed preview
 becomes unavailable. Reset the simulator session to return to live controls.
 
+Use `Scenarios/focus-and-session-loss.json` to exercise a delayed frame wait,
+focus loss, focus recovery, and terminal session loss. The cube moves on the
+two valid samples, for a total of 0.75 units along X. The Game view clears
+during the failed and unfocused steps. A reset admits a fresh session after
+the final loss.
+
 To record, select **Record interaction**, change controls while Play runs, then
 **Finish recording** and **Export synthetic recording** before stopping Play.
 The output is under `.horo/xr-simulator/captures/` in that project. A partial

@@ -14,7 +14,7 @@ The normative scope of this document is:
 - which layer owns mutable device state, immutable frames, and semantic resolution
 - `InputContextKind` priority ordering and the host responsible for each level
 - `EditorInteractionScope` ↔ `InputContextKind` mapping
-- `FocusedGuiWidget` per-frame context lifecycle
+- `FocusedGuiWidget` frame and explicit-widget lifetimes
 - `PointerCaptureToken` cancellation catalogue
 - frame-order invariants for snapshot commit, context mutations, and modal stack
 - `InputService` composition helper vs. direct composition
@@ -118,20 +118,39 @@ consumption.
 |---|---|---|---|
 | 0 (lowest) | `GlobalNonMutating` | Application host | Full editor session |
 | 1 | `Gameplay` | Runtime play session | Active play session |
-| 2 | `EditorWorkspace` | `BuildEditorInputActions()` registration | Active workspace screen |
+| 2 | `EditorWorkspace` | Active workspace screen | Active workspace screen |
 | 3 | `EditorToolCapture` | Active viewport tool (gizmo, placement, brush) | Duration of tool gesture |
-| 4 | `FocusedGuiWidget` | Per-frame by ImGui `WantTextInput` check | Single frame (re-acquired each frame) |
+| 4 | `FocusedGuiWidget` | Host `WantTextInput` check or an explicit active widget | One host frame or the visible widget's owned edit/capture session |
 | 5 | `ModalRoot` | `EditorModalHost::OpenRoot()` | Until modal is removed from stack |
 | 6 | `ModalChild` | `EditorModalHost::PushChild()` | Until child is removed from stack |
 | 7 (highest) | `NativeDialog` | Caller wrapping a native OS dialog | Duration of native dialog |
 
 Only one context token is active per level in the standard editor composition.
+
+Explicit inspection is the narrow exception to cross-level exclusion:
+`PushContext(id, FocusedGuiWidget, GameplayPassThrough)` allows the existing
+Gameplay context below that widget only. Other registered contexts still impose
+their normal exclusion, including ordinary focused widgets and editor workspace
+contexts. Modal/native-dialog/window-focus barriers always win. Inspection does
+not consume or duplicate transitions, share text ownership, or create gameplay
+authority. An existing Gameplay pointer capture remains exclusive until its
+ordinary release/cancellation; opening a modal still cancels it. Invalid kinds,
+policies and pass-through/non-widget combinations return an empty token before
+touching focus, capture or modal barriers. Default registration stays Exclusive.
+
+When inspection propagation admits both contexts, capture ownership also gates
+mouse-button and wheel action bindings and direct pointer-button/motion
+consumption. A non-owner receives neutral mouse action state and cannot consume
+the captured delivery. Keyboard/gamepad actions retain their normal eligibility;
+touch contacts retain independent contact ownership. Releasing capture restores
+ordinary mouse routing without changing either context's propagation policy.
 If two distinct logical contexts ever hold the same `InputContextKind`
 simultaneously (for example, two viewports each pushing an `EditorToolCapture`
 token), `IsContextActive()` returns `true` only for the most-recently pushed
-token at that kind. In the current host, `FocusedGuiWidget` is always held by a
-single member field; there is never more than one token of that kind live at a
-time.
+token at that kind. The host's per-frame text token and explicitly owned widget
+tokens may coexist; this does not grant two eligible focus owners. Each widget
+releases only its own token. Action-map construction is inert metadata and does
+not acquire a context.
 
 ## `EditorInteractionScope` ↔ `InputContextKind` Mapping
 
@@ -180,10 +199,10 @@ When `EditorModalHost::OpenRoot()` pushes a `ModalRoot` context:
 When the root modal is removed, the `ModalRoot` token is destroyed and the
 router reverts to whichever contexts remain below it.
 
-## `FocusedGuiWidget` Per-Frame Context Lifecycle
+## `FocusedGuiWidget` Frame And Widget Lifetimes
 
-The `FocusedGuiWidget` context exists for exactly one frame. The application
-host re-acquires it each frame when ImGui signals that a text widget is focused.
+The application's `WantTextInput` token exists for exactly one frame. The host
+re-acquires that token each frame when ImGui signals text ownership.
 
 Frame-by-frame pattern (from `HoroEditorApp`):
 
@@ -208,12 +227,36 @@ This pattern means:
 - if ImGui loses text focus mid-frame (for example, a modal closes during `Draw()`),
   the context is still active for the rest of that frame; it disappears at the
   next frame boundary
-- only one `FocusedGuiWidget` token exists at a time because the single
-  `focusedWidgetInputContext_` member holds the previous frame's token until reset
+- the host holds at most one of its own `WantTextInput` tokens at a time; this
+  does not describe tokens owned by explicit widget edit sessions
 
 Consequence: text shortcuts in ImGui text fields are suppressed from editor
 command handlers during the frame that `WantTextInput` is set, because
 `FocusedGuiWidget` outranks `EditorWorkspace`.
+
+### INP-001.6 Focus Ownership Revision
+
+The earlier statement that every focused-widget token was a single-frame host
+token is revised. Hierarchy search/rename, Inspector name editing and Input
+Mapping binding capture have explicit widget owners. Those owners retain one
+token for their visible interaction and release it when editing/capture ends,
+presentation hides, or the owner detaches. A binding capture requires the same
+exact token across committed frames; recreating it each frame would cancel the
+capture and lose deliberate axis baselines.
+
+This changes the documented lifetime, not priority or modal ownership. There is
+still exactly one eligible focus context, selected by the router. A newer
+same-priority widget preempts a capture; the capture must cancel rather than
+reacquire a token to steal focus. Modal/native-dialog contexts retain their
+higher priority and central dispatch barrier. Widget capture does not create a
+second modal stack or register an editor document. Pointer button/wheel gestures
+outside Input Mapping abandon that widget's capture before authoring a binding
+for another surface's interaction.
+
+The existing host text path requires no migration. Explicit widget owners must
+retain RAII ownership and withdraw only their own context. The shared capture
+preemption, hidden-presentation and outside-surface regressions record this
+boundary; their current execution state belongs to the qualification matrix.
 
 ## `PointerCaptureToken` Cancellation Catalogue
 
@@ -477,7 +520,8 @@ preserve them:
 - context priority and consumption: lower-priority contexts cannot consume
   inputs consumed by higher-priority contexts
 - `IsContextActive()` returns `true` only for the highest-priority,
-  most-recent token at each level
+  most-recent eligible token, plus Gameplay beneath explicit passing inspection;
+  ordinary GUI/editor and modal/focus barriers remain enforced
 - modal blocking: `EditorWorkspace` actions are not readable while a
   `ModalRoot` context is active
 - `FocusedGuiWidget` outranks `EditorWorkspace` actions during text focus

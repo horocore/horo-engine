@@ -4,16 +4,18 @@
  * @brief Scene-qualified owner of real movement, avoidance and discontinuity retirement.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Navigation/NavigationVelocityPipeline.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 namespace Horo::Navigation {
     /** @brief Exact host-published identity used to admit one Scene navigation lifecycle owner. */
     struct NavigationSceneAgentLifecycleDescriptor final {
-        Runtime::EntityRef entity;         /**< Exact live Scene entity. */
-        CrowdAgentHandle agent;            /**< Its enabled logical registration. */
-        NavigationPathCaller caller;       /**< Unique host caller incarnation. */
-        std::uint64_t characterRevision{}; /**< Nonzero Character reset incarnation; zero rejects admission. */
+        Runtime::EntityRef entity;           /**< Exact live Scene entity. */
+        CrowdAgentHandle agent;              /**< Its enabled logical registration. */
+        NavigationPathCaller caller;         /**< Unique host caller incarnation. */
+        std::uint64_t characterRevision{};   /**< Nonzero Character reset incarnation; zero rejects admission. */
+        CancellationToken ownerCancellation; /**< Optional owning gameplay agent lifetime, supplied by the host. */
     };
 
     /** @brief Explicit host-composed navigation owner for one exact live Scene entity.
@@ -39,10 +41,12 @@ namespace Horo::Navigation {
          * @param movement Owned admitted movement controller.
          * @param velocity Owned admitted avoidance pipeline.
          * @param revision Validated Character reset incarnation.
+         * @param ownerCancellation Optional gameplay lifetime; does not retain the Scene or gameplay owner.
          */
         NavigationSceneAgentLifecycle(ConstructionKey, NavigationAgentRegistry &registry, Runtime::EntityRef entity,
                                       std::unique_ptr<NavigationMovementController> movement,
-                                      std::unique_ptr<NavigationVelocityPipeline> velocity, std::uint64_t revision) noexcept;
+                                      std::unique_ptr<NavigationVelocityPipeline> velocity, std::uint64_t revision,
+                                      CancellationToken ownerCancellation = {}) noexcept;
         /** @brief Validate the exact Scene entity and compose real movement/pipeline owners outside fixed-tick work.
          * @param registry Logical registration authority. @param world Committed navigation world owner.
          * @param coordinator Canonical query/JobSystem owner. @param scene Current committed Scene view.
@@ -156,5 +160,6 @@ namespace Horo::Navigation {
         std::optional<std::uint64_t> motionTick_;
         std::optional<std::uint64_t> resetTick_;
         std::uint64_t characterRevision_;
+        CancellationToken ownerCancellation_;
     };
 }  // namespace Horo::Navigation

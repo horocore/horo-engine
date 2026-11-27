@@ -1,36 +1,137 @@
 #include "Horo/Editor/EditorConfiguration.h"
+#include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/ExtensionInventory.h"
+#include "Horo/Gameplay/GameplayAccessibility.h"
 #include "editor/modals/settings/SettingsModalInternal.h"
 #include "editor/update/UpdateExperienceSession.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
+#include "support/editor/SettingsPresentationFixture.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
 #include <thread>
 
 namespace {
-    struct SettingsPresentationFixture {
-        explicit SettingsPresentationFixture(const ImVec2 displaySize = {1280.0F, 800.0F})
-            : gui{displaySize}, settings{Horo::Editor::DefaultEditorSettings(), configuration, gui.editorEvents, gui.localization},
-              modal{gui.context, settings, 0} {
-            if (const auto refreshed = extensions.Refresh(); refreshed.HasError())
-                throw std::runtime_error(refreshed.ErrorValue().message);
-            Horo::Editor::LoadSettingsForModal(modal.Draft(), settings);
-            modal.Draft().extensionInventory = &extensions;
+    using Horo::Editor::Tests::SettingsPresentationFixture;
+
+    /** @brief Synthetic permission host reports captured level evidence without a device or PCM. */
+    struct MicrophoneLevelFixture final : Horo::Editor::IEditorMicrophonePermission {
+        Horo::Editor::EditorMicrophoneTestStatus state{Horo::Editor::EditorMicrophoneTestStatus::Idle};
+        mutable unsigned levelReads{};
+
+        Horo::Editor::EditorMicrophonePermissionStatus Status() override {
+            return Horo::Editor::EditorMicrophonePermissionStatus::Granted;
         }
 
-        Horo::Editor::Tests::EditorGuiContextFixture gui;
-        Horo::ConfigurationService configuration = Horo::Editor::CreateEditorConfigurationService(Horo::Editor::DefaultEditorSettings());
-        Horo::Editor::EditorSettingsService settings;
-        Horo::Extensions::ExtensionInventory extensions{std::filesystem::temp_directory_path() / "horo-settings-presentation-extensions"};
-        Horo::Editor::SettingsModal modal;
+        void Request() override {
+            // Permission is already granted by the fixture.
+        }
+
+        void ScanInputs() noexcept override {
+            // The meter does not depend on an input catalog.
+        }
+
+        std::span<const std::string> Inputs() const noexcept override {
+            return {};
+        }
+
+        void StartTest(std::size_t) noexcept override {
+            state = Horo::Editor::EditorMicrophoneTestStatus::Starting;
+        }
+
+        void StopTest() noexcept override {
+            state = Horo::Editor::EditorMicrophoneTestStatus::Idle;
+        }
+
+        void AdvanceTest(bool) noexcept override {
+            // The test advances capture evidence explicitly between draws.
+        }
+
+        Horo::Editor::EditorMicrophoneTestStatus TestStatus() const noexcept override {
+            return state;
+        }
+
+        float TestPeakLevel() const noexcept override {
+            ++levelReads;
+            return 0.75F;
+        }
     };
+
+    /** @brief Supplies deterministic device labels while the headless test draws the real Settings controls. */
+    struct MonitorControlsFixture final : Horo::Editor::IEditorMicrophoneMonitor {
+        using Status = Horo::Editor::EditorMicrophoneMonitorStatus;
+        using Option = Horo::Editor::EditorMicrophoneMonitorOption;
+        Status state{Status::Ready};
+        const std::array<Option, 1> input{{{1, "Test microphone"}}};
+        const std::array<Option, 1> output{{{2, "Private headphones"}}};
+        mutable unsigned outputReads{};
+
+        bool CanConfigure() const noexcept override {
+            return state == Status::Ready;
+        }
+        void Scan() noexcept override {
+            state = Status::Scanning;
+        }
+        std::span<const Option> InputOptions() const noexcept override {
+            return input;
+        }
+        std::span<const Option> OutputOptions() const noexcept override {
+            ++outputReads;
+            return output;
+        }
+        void StartListening(std::size_t, std::size_t, bool) noexcept override {
+            state = Status::Starting;
+        }
+        void StopListening() noexcept override {
+            state = Status::Stopping;
+        }
+        Status MonitorStatus() const noexcept override {
+            return state;
+        }
+    };
+
+    /** @brief Restores the shared theme after each generated presentation case. */
+    struct RestoreTheme {
+        ~RestoreTheme() {
+            Horo::Editor::Theme::SelectThemeByIndex(0);
+        }
+    };
+
+    /** @brief Checks all color channels so native and token regressions remain visible. */
+    void CheckColor(const ImVec4 &actual, const ImVec4 &expected) {
+        CHECK(actual.x == expected.x);
+        CHECK(actual.y == expected.y);
+        CHECK(actual.z == expected.z);
+        CHECK(actual.w == expected.w);
+    }
+
+    /** @brief Verifies both presentation layers against their committed theme. */
+    void CheckRestoredTheme(const int expectedTheme, const ImVec4 &expectedNative, const ImVec4 &expectedTokens) {
+        CHECK(Horo::Editor::Theme::GetActiveThemeIndex() == expectedTheme);
+        CheckColor(ImGui::GetStyle().Colors[ImGuiCol_WindowBg], expectedNative);
+        CheckColor(Horo::Editor::Theme::GetActiveTokens().colors.surfaceRoot, expectedTokens);
+    }
+
+    /** @brief Draws the modal through its normal frame lifecycle. */
+    void DrawModalFrame(SettingsPresentationFixture &fixture) {
+        fixture.gui.imgui.BeginFrame();
+        static_cast<void>(fixture.modal.Draw());
+        fixture.gui.imgui.EndFrame();
+    }
+
+    /** @brief Advances the committed theme while the modal retains its older preview. */
+    void CommitExternalTheme(SettingsPresentationFixture &fixture, const Horo::SettingKey &key) {
+        Horo::ConfigurationDraft external{.baseRevision = 0, .source = Horo::ConfigurationSource::User};
+        external.proposedValues.emplace(key, std::string{"midnight"});
+        REQUIRE(fixture.configuration.Commit(external).HasValue());
+    }
 
     void DrawPluginWhiteBoxFrame(SettingsPresentationFixture &fixture, const int selectedPlugin, const int detailTab) {
         using namespace Horo::Editor::SettingsModalInternal;
@@ -148,11 +249,220 @@ TEST_CASE("Settings presentation consumes a deferred theme selection before rend
     fixture.modal.Draft().appearance.pendingThemeIndex = 0;
     fixture.modal.Draft().activeTab = 1;
 
-    fixture.gui.imgui.BeginFrame();
-    static_cast<void>(fixture.modal.Draw());
-    fixture.gui.imgui.EndFrame();
+    DrawModalFrame(fixture);
 
     REQUIRE(fixture.modal.Draft().appearance.pendingThemeIndex == -1);
+}
+
+TEST_CASE("Cancelling a shared theme preview restores both committed theme layers", "[unit][editor][gui][configuration][cancel]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const bool externalChange = GENERATE(false, true);
+    SettingsPresentationFixture fixture;
+    EditorModalHost host{fixture.gui.editorEvents, fixture.gui.input};
+    EditorModalContext lifecycle{fixture.gui.editorEvents, host};
+    REQUIRE(fixture.modal.OnOpen(lifecycle).HasValue());
+    Theme::RefreshThemeList();
+    const int expectedTheme = externalChange ? 1 : 0;
+    Theme::SelectThemeByIndex(expectedTheme);
+    const auto expectedNative = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    const auto expectedTokens = Theme::GetActiveTokens().colors.surfaceRoot;
+    Theme::SelectThemeByIndex(0);
+
+    RestoreTheme restoreTheme;
+
+    const SettingKey key{"editor.theme.active"};
+    auto &state = fixture.modal.Draft();
+    REQUIRE(state.configuration->Edit(key, "light").HasValue());
+    state.appearance.pendingThemeIndex = 2;
+    state.configurationPreviewed = true;
+    DrawModalFrame(fixture);
+    REQUIRE(Theme::GetActiveThemeIndex() == 2);
+    CHECK(fixture.configuration.Snapshot().Revision() == 0);
+    CHECK(Theme::GetActiveTokens().colors.surfaceRoot.x != expectedTokens.x);
+    if (externalChange) {
+        CommitExternalTheme(fixture, key);
+    }
+    const auto committedRevision = fixture.configuration.Snapshot().Revision();
+    int reverted = 0;
+    const auto subscription = fixture.gui.editorEvents.Subscribe<EditorSettingsChangedEvent>([&](const auto &event) {
+        if (event.phase != SettingsChangePhase::Reverted)
+            return;
+        ++reverted;
+        CheckRestoredTheme(expectedTheme, expectedNative, expectedTokens);
+        CHECK_FALSE(state.configurationPreviewed);
+        fixture.modal.OnClose(ModalCloseReason::Cancelled);
+    });
+    fixture.modal.OnClose(ModalCloseReason::Cancelled);
+    CHECK(reverted == 1);
+    CheckRestoredTheme(expectedTheme, expectedNative, expectedTokens);
+    CHECK_FALSE(state.configurationPreviewed);
+    CHECK_FALSE(state.configuration->Preview());
+    CHECK(state.configuration->Draft().proposedValues.empty());
+    CHECK(fixture.configuration.Snapshot().Revision() == committedRevision);
+    CHECK(std::get<std::string>(fixture.configuration.Snapshot().Get(key)) == (externalChange ? "midnight" : "horo_dark"));
+}
+
+TEST_CASE("Shared configuration fields render long provenance and typed errors across localized theme layouts",
+          "[unit][editor][gui][configuration]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const bool light = GENERATE(false, true);
+    const float width = GENERATE(720.0F, 1280.0F);
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    ConfigurationSchema schema;
+    const SettingKey longKey{"module." + std::string(180, 'x')};
+    REQUIRE(schema
+                .Register({.key = longKey,
+                           .type = SettingValueType::String,
+                           .defaultValue = std::string(180, 'y'),
+                           .scope = SettingScope::User,
+                           .reloadPolicy = ReloadPolicy::ProcessRestart,
+                           .sensitivity = SettingSensitivity::Public})
+                .HasValue());
+    REQUIRE(schema
+                .Register({.key = SettingKey{"module.token"},
+                           .type = SettingValueType::CredentialReference,
+                           .defaultValue = CredentialReference{},
+                           .scope = SettingScope::User,
+                           .reloadPolicy = ReloadPolicy::NextOperation,
+                           .sensitivity = SettingSensitivity::SecretReference})
+                .HasValue());
+    SettingsPresentationFixture fixture{{width, 640.0F}, std::move(schema)};
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(fixture.gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(fixture.gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(fixture.gui.localization.ActivatePrepared(&error));
+    Theme::RefreshThemeList();
+
+    RestoreTheme restoreTheme;
+
+    Theme::SelectThemeByIndex(light ? 2 : 0);
+    ConfigurationResolutionRequest request;
+    request.user.emplace(longKey,
+                         ConfigurationInputValue{.value = std::string(180, 'y'), .location = SourceLocation{.source = "editor-user"}});
+    request.environment.emplace(longKey, ConfigurationInputValue{.value = std::string{"environment choice"},
+                                                                 .location = SourceLocation{
+                                                                     .source = "HORO_LONG_CONFIGURATION_BINDING_WITH_LOCALIZED_ORIGIN"}});
+    REQUIRE(fixture.configuration.ResolveAndCommit(request).HasValue());
+    LoadSettingsForModal(fixture.modal.Draft(), fixture.settings);
+    REQUIRE(fixture.modal.Draft().configuration->Edit(SettingKey{"editor.appearance.ui_scale_percent"}, "invalid-number").HasError());
+    fixture.modal.Draft().activeTab = static_cast<int>(SettingsModalInternal::SettingsTab::Configuration);
+    DrawModalFrame(fixture);
+    REQUIRE(ImGui::GetDrawData() != nullptr);
+    CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
+    CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(SettingKey{"editor.appearance.ui_scale_percent"})) == 100);
+}
+
+TEST_CASE("Audio settings show the localized microphone meter only while capturing", "[unit][editor][gui][audio]") {
+    using namespace Horo::Editor;
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    MicrophoneLevelFixture microphone;
+    Tests::EditorGuiContextFixture gui{{720.0F, 800.0F}};
+    gui.context.microphonePermission = &microphone;
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(gui.localization.ActivatePrepared(&error));
+    CHECK(gui.localization.Get("editor", "settings.audio.microphone.input_level") ==
+          (locale == "en-US" ? "Input level" : "Giriş seviyesi"));
+
+    SettingsState state{};
+    state.activeTab = static_cast<int>(SettingsModalInternal::SettingsTab::Audio);
+    const auto draw = [&gui, &state] {
+        gui.imgui.BeginFrame();
+        ImGui::SetNextWindowSize({600.0F, 640.0F}, ImGuiCond_Always);
+        ImGui::Begin("Audio settings test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        SettingsModalInternal::DrawContent(state, gui.context);
+        ImGui::End();
+        gui.imgui.EndFrame();
+    };
+    draw();
+    CHECK(microphone.levelReads == 0);
+    microphone.state = EditorMicrophoneTestStatus::Capturing;
+    draw();
+    CHECK(microphone.levelReads == 1);
+    microphone.state = EditorMicrophoneTestStatus::Failed;
+    draw();
+    CHECK(microphone.levelReads == 1);
+}
+
+TEST_CASE("Audio settings discard headphone confirmation when listening choices are withdrawn", "[unit][editor][gui][audio]") {
+    using namespace Horo::Editor;
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    MicrophoneLevelFixture permission;
+    MonitorControlsFixture monitor;
+    Tests::EditorGuiContextFixture gui{{450.0F, 760.0F}};
+    gui.context.microphonePermission = &permission;
+    gui.context.microphoneMonitor = &monitor;
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(gui.localization.ActivatePrepared(&error));
+    SettingsAudioTab audio{.monitorInput = 0, .monitorOutput = 0, .monitorPrivateListening = true};
+    const auto draw = [&] {
+        gui.imgui.BeginFrame();
+        ImGui::SetNextWindowSize({390.0F, 560.0F}, ImGuiCond_Always);
+        ImGui::Begin("Microphone monitor test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        SettingsModalInternal::DrawMicrophoneMonitor(audio, gui.context);
+        ImGui::End();
+        gui.imgui.EndFrame();
+    };
+    draw();
+    CHECK(monitor.outputReads > 0);
+    CHECK(audio.monitorPrivateListening);
+
+    monitor.state = EditorMicrophoneMonitorStatus::Stopping;
+    draw();
+    CHECK(audio.monitorInput == -1);
+    CHECK(audio.monitorOutput == -1);
+    CHECK_FALSE(audio.monitorPrivateListening);
+}
+
+TEST_CASE("Gameplay accessibility settings share the user draft and Apply transaction", "[unit][editor][gui][accessibility]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using namespace SettingsModalInternal;
+
+    ConfigurationSchema schema;
+    const auto contribution = Gameplay::MakeGameplayAccessibilityContribution();
+    for (const auto &descriptor : contribution.settings)
+        REQUIRE(schema.Register(descriptor).HasValue());
+
+    const auto locale = GENERATE(std::string{"en-US"}, std::string{"tr-TR"});
+    SettingsPresentationFixture fixture{{720.0F, 640.0F}, std::move(schema)};
+    LocalizationError error;
+    const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
+    REQUIRE(fixture.gui.localization.LoadCatalogFile(catalog, &error));
+    REQUIRE(fixture.gui.localization.Prepare(LocaleTag{locale}, &error));
+    REQUIRE(fixture.gui.localization.ActivatePrepared(&error));
+
+    auto &state = fixture.modal.Draft();
+    REQUIRE(HasGameplayAccessibilitySettings(state));
+    REQUIRE(state.configuration);
+    for (const auto &descriptor : contribution.settings) {
+        REQUIRE(descriptor.label);
+        CHECK_FALSE(fixture.gui.localization.Get(descriptor.label->namespaceId, descriptor.label->key).starts_with("[missing:"));
+        CHECK(state.configuration->EditBuffer(descriptor.key) != nullptr);
+    }
+    state.activeTab = static_cast<int>(SettingsTab::Accessibility);
+    const SettingKey aim{"accessibility.gameplay.aim_assist"};
+    REQUIRE(state.configuration->Edit(aim, "1001").HasError());
+    DrawModalFrame(fixture);
+    REQUIRE(ImGui::GetDrawData()->TotalVtxCount > 0);
+    REQUIRE_FALSE(fixture.modal.ApplyDraft());
+    CHECK(std::get<std::int64_t>(fixture.configuration.Snapshot().Get(aim)) == 0);
+
+    REQUIRE(state.configuration->Edit(aim, "750").HasValue());
+    state.activeTab = static_cast<int>(SettingsTab::Configuration);
+    DrawModalFrame(fixture);
+    REQUIRE(fixture.modal.ApplyDraft());
+    const auto tick = Gameplay::GameplayAssistTickSnapshot::Capture(fixture.configuration.Snapshot());
+    REQUIRE(tick.HasValue());
+    CHECK(tick.Value().Preferences().aimAssist == 0.75F);
 }
 
 TEST_CASE("Settings presentation renders extension and plugin detail surfaces", "[unit][editor][gui][settings]") {
@@ -166,9 +476,7 @@ TEST_CASE("Settings presentation renders extension and plugin detail surfaces", 
 
     fixture.modal.Draft().activeTab = 8;
     fixture.modal.Draft().pluginSectionTab = 1;
-    fixture.gui.imgui.BeginFrame();
-    static_cast<void>(fixture.modal.Draw());
-    fixture.gui.imgui.EndFrame();
+    DrawModalFrame(fixture);
 
     REQUIRE(fixture.modal.Draft().selectedPlugin == 2);
     REQUIRE(fixture.modal.Draft().pluginDetailTab[2] == 3);

@@ -3,9 +3,9 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
-#include "editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.h"
-#include "editor/screens/workspace/panels/inspector/UiInspectorWidgets.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiCanvasInspectorPanel.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorAuthoringWidgets.h"
+#include "editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorWidgets.h"
 #include "support/UiStyleWorkspaceFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -52,6 +52,10 @@ namespace {
     public:
         const std::string &Get(std::string_view, const std::string_view key) const override {
             return messages_.try_emplace(std::string(key), "Uzun yerelleştirilmiş arayüz özelliği " + std::string(key)).first->second;
+        }
+
+        [[nodiscard]] bool Saw(const std::string_view key) const {
+            return messages_.contains(std::string{key});
         }
 
     private:
@@ -212,6 +216,33 @@ TEST_CASE("UI inspector shared layout and style controls render bounded localize
         CHECK(layout == baseline);
         CHECK(layoutText.IsValid() == (scenario != RenderScenario::InvalidText));
     }
+}
+
+TEST_CASE("UI canvas inspector follows an exact diagnostic override only in the accepted resource generation",
+          "[editor][ui][inspector][render]") {
+    UiRenderHarness harness;
+    auto source = SelectedSource();
+    source.inspectorStyles = RuntimeStyleGeneration::Create(1).Value();
+    source.inspectorResourcePublication = 1;
+    SerializedUiId bytes{};
+    bytes.back() = 9;
+    const auto asset = RuntimeStyleAssetId::Create(bytes).Value();
+    const auto token = UiStyleTokenId::Create(bytes).Value();
+    const auto property = CoreUiStylePropertyId(UiCoreStyleProperty::Fill);
+    source.selectedElement->presentation->inlineStyle = {{CoreUiStylePropertyId(UiCoreStyleProperty::Width),
+                                                          UiStyleValueSource::Literal(UiStyleDimension{64}), false},
+                                                         {property, UiStyleValueSource::Token({asset, token}), false}};
+    source.preview.problemStyleProperty = property;
+    UiCanvasInspectorPanel panel;
+    panel.QueueStyleProblemFocus(source, source.selection, property);
+    bool expectedTokenField = true;
+    SECTION("the accepted diagnostic selects the token override") {}
+    SECTION("resource replacement abandons the stale focus") {
+        ++source.inspectorResourcePublication;
+        expectedTokenField = false;
+    }
+    DrawSource(panel, source, harness);
+    CHECK(harness.localization.Saw("workspace.ui_inspector.token_asset") == expectedTokenField);
 }
 
 TEST_CASE("UI canvas inspector host surface captures and releases exact selected source frames", "[editor][ui][inspector][render]") {

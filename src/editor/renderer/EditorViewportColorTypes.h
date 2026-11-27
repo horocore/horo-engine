@@ -27,6 +27,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Render::CookedColorTransform> look;
         Render::ColorGradingSettings grading;
         std::uint64_t maximumTransformBytes{64U * 1024U * 1024U};
+        std::optional<Accessibility::ColorMatrix> displayAccessibility; /**< Explicit preview transform for the composed viewport. */
     };
     /** @brief Completion observation from the actual selected backend's registered resource owner. */
     enum class EditorViewportColorReadiness : std::uint8_t {

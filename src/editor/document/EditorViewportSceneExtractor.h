@@ -16,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace Horo::Editor {
@@ -69,11 +70,14 @@ namespace Horo::Editor {
         Runtime::SceneRuntimeId runtimeSceneId;
         Render::SceneColorSourcePolicy lightColorSourcePolicy; /**< Explicit Editor interpretation retained for all light previews. */
         EditorViewportCamera camera;
+        std::optional<EditorViewportCameraCrossFade> cameraCrossFade;
         std::vector<Runtime::PrimitiveMeshLease> meshLeases;
         std::vector<EditorAssetMeshLease> importedMeshLeases;
         std::vector<EditorViewportMeshResourceView> meshResources;
         std::vector<EditorViewportInstance> instances;
         std::vector<SceneObjectId> instanceObjects;
+        std::vector<Render::RenderMotionObjectId>
+            instanceMotionObjects;                  /**< Tracked draw prefix. Transient editor previews append no IDs. */
         std::vector<std::uint8_t> instancePickable; /**< Parallel 0/1 editor-picking policy for render instances. */
         std::vector<Render::RenderLight> lights;
         std::vector<SceneObjectId> lightObjects;
@@ -98,6 +102,36 @@ namespace Horo::Editor {
         void Clear() noexcept;
         [[nodiscard]] EditorViewportSceneView View() const noexcept;
 
+        /** @brief Copies the selected frontend capability after cold preparation, before preview camera publication. */
+        void SetCameraCrossFadeCapacity(EditorViewportCrossFadeCapacity capacity) noexcept {
+            m_cameraCrossFadeCapacity = capacity;
+        }
+
+        /** @brief Returns the last host observation, if the composition has published one. */
+        [[nodiscard]] std::optional<EditorViewportCrossFadeCapacity> CameraCrossFadeCapacity() const noexcept {
+            return m_cameraCrossFadeCapacity;
+        }
+
+        /** @brief Copies the visual accessibility scale for the workspace's next camera extraction. */
+        void SetCameraShakeScale(float scale) noexcept {
+            m_cameraShakeScale = scale;
+        }
+
+        /** @brief Returns the scale captured by the composition. */
+        [[nodiscard]] float CameraShakeScale() const noexcept {
+            return m_cameraShakeScale;
+        }
+
+        /** @brief Carries the workspace camera publication failure to the next desktop extraction. */
+        void SetCameraPreviewError(Error error) noexcept {
+            m_cameraPreviewError = std::move(error);
+        }
+
+        /** @brief Consumes the exact typed failure before admitting any viewport work. */
+        [[nodiscard]] std::optional<Error> TakeCameraPreviewError() noexcept {
+            return std::exchange(m_cameraPreviewError, std::nullopt);
+        }
+
         /** @brief Returns the document revision represented by the current handoff snapshot. */
         [[nodiscard]] DocumentRevision Revision() const noexcept {
             return m_snapshot.documentRevision;
@@ -121,6 +155,9 @@ namespace Horo::Editor {
     private:
         EditorViewportSceneSnapshot m_snapshot{};
         std::uint64_t m_meshResourceGeneration{};
+        std::optional<EditorViewportCrossFadeCapacity> m_cameraCrossFadeCapacity;
+        std::optional<Error> m_cameraPreviewError;
+        float m_cameraShakeScale{1.0F};
     };
 
     /** @brief Resolved object and parent world matrices used by editor manipulation tools. */
@@ -174,6 +211,20 @@ namespace Horo::Editor {
     [[nodiscard]] Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
                                                                    std::span<const SceneObjectTransformPreview> previews,
                                                                    EditorViewportSceneSnapshot &snapshot);
+
+    /** @brief Appends an identity-free, non-pickable copy of the geometry affected by a reviewed transform.
+     * @param scene Exact immutable authored preview scene.
+     * @param previews Validated local transforms for one Scene review.
+     * @param snapshot Canonical viewport snapshot with no active transient draws.
+     * @return True if the separate geometry fits and was published, false for text-only review, or a validation failure.
+     */
+    [[nodiscard]] Result<bool> AppendEditorViewportSceneReviewGhosts(const Runtime::RuntimeSceneView &scene,
+                                                                    std::span<const SceneObjectTransformPreview> previews,
+                                                                    EditorViewportSceneSnapshot &snapshot);
+
+    /** @brief Removes review ghosts while preserving canonical geometry and other transient draws.
+     * @return Whether any ghosts were removed. */
+    bool ClearEditorViewportSceneReviewGhosts(EditorViewportSceneSnapshot &snapshot) noexcept;
 
     /**
      * @brief Applies or clears one editor-owned transient Light-component overlay.

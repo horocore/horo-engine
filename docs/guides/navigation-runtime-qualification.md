@@ -56,6 +56,53 @@ exclude worker-thread and direct C/native allocator calls, resident memory,
 fixture construction and Catch assertions. They must not be reported as an
 allocation-free query/provider or complete process memory measurement.
 
+## CrowdSmall solver workloads
+
+The `[crowd][scale]` tests exercise the solver boundary at the ADR-109
+CrowdSmall limit of 64 registered agents and 64 evaluations per fixed tick.
+Each normal workload runs for 32 ticks at 60 Hz with at most 16 neighbor and
+16 boundary facts per agent. The corpus covers opposing lanes, a bottleneck
+with two obstacle boxes, a moving grid formation and opposing groups with
+different right-of-way priorities.
+
+The qualified provider must reproduce the same ordered agent indices, stop
+reasons and velocity bits when motion samples and solve requests are supplied
+in reverse order. The best-effort run uses one native Detour job per tick and
+prints median and p95 job execution time with the build, platform and compiler.
+Queue wait and snapshot construction are outside that timing. The workload
+also reports the largest per-tick sum of owner-thread C++ allocation requests
+for capture and batch submission. It checks that Detour's worker-side solve
+makes zero C++ allocation requests across all four workloads. A separate run
+saturates the one-job queue, replaces the capture after teleport and removal,
+and checks that the old work is rejected and its provider pin released. It
+reports cumulative owner-thread C++ allocation requests across construction,
+overlapping captures and retirement.
+
+The live-memory run measures simultaneously live requested bytes and
+allocator-reported usable block capacity across owner and worker threads.
+Detour's allocation callback uses the same probe, so its native allocations
+are included. The run reports both peaks for each layout in both modes and for
+the overlapping-capture case, separately from timing. The tracker uses
+caller-owned storage and reports an incomplete sample if it cannot track or
+measure every block.
+The scene's dynamic registry sizes slot and staging tables from the validated
+configuration and snapshots only active records.
+
+The scripted solver workload advances authored input positions. The native
+formation run feeds 64 committed capsule roots and achieved velocities into
+the next crowd capture, requires forward displacement with bounded lateral
+travel, and applies one command per controller per tick. Revoking its full
+pending queue and closing the world prevents subsequent movement callbacks.
+
+The Gameplay formation retirement case separately admits 64 moves with
+Character feedback pending. It retires the group, rejects late access, and
+checks that the Character, Navigation job, and topology owners drain. The test
+checks the 4 MiB ADR-109 limit against peak usable block capacity, including
+Detour storage and worker-side C++ allocations. Each measured workload must also
+release all tracked storage after its owners and worker jobs retire. The usable
+capacity includes any rounding exposed by the allocator. Allocator metadata
+outside the usable block and other direct C allocations still require accounting.
+
 ## Reference corpus and exact outcomes
 
 | Case | Expected outcome |

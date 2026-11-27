@@ -1,6 +1,7 @@
 #pragma once
 /** @file UiPaintFrameUpload.h @brief Finite reusable UI vertex/index/uniform ring updates at the owning render safe point. */
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/UiPaintWorkload.h"
 
 namespace Horo::Render {
@@ -33,6 +34,7 @@ namespace Horo::Render {
     struct NativeUiPaintFrameUpdate final {
         std::array<std::uint64_t, 3> instances{};
         UiPaintFrameUpdate update;
+        FrameToken frame; /**< Exact active scene frame before recording, or empty for the ordinary outside-frame upload. */
     };
 
     /** @brief Validates bounded complete finite geometry and parameter ABI before any native write.

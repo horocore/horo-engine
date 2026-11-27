@@ -54,6 +54,29 @@ namespace Horo::AI {
         return Result<AgentHandle>::Failure(MakeError(AIErrors::HandleInvalid));
     }
 
+    /** @copydoc AiRuntimeCapability::ResolveAgentOwner */
+    Result<Runtime::EntityRef> AiRuntimeCapability::ResolveAgentOwner(const AgentHandle agent) const {
+        using Return = Result<Runtime::EntityRef>;
+        auto state = Lock();
+        if (state.HasError())
+            return Return::Failure(state.ErrorValue());
+        const auto slot = RequireAgent(*state.Value(), agent);
+        if (slot.HasError())
+            return Return::Failure(slot.ErrorValue());
+        return Return::Success(slot.Value()->record.owner);
+    }
+
+    /** @copydoc AiRuntimeCapability::CaptureAgentLifetime */
+    Result<CancellationToken> AiRuntimeCapability::CaptureAgentLifetime(const AgentHandle agent) const {
+        const auto state = Lock();
+        if (state.HasError())
+            return Result<CancellationToken>::Failure(state.ErrorValue());
+        const auto slot = RequireAgent(*state.Value(), agent);
+        if (slot.HasError())
+            return Result<CancellationToken>::Failure(slot.ErrorValue());
+        return Result<CancellationToken>::Success(slot.Value()->cancellation.Token());
+    }
+
     /** @copydoc AiRuntimeCapability::StartTask */
     Result<TaskHandle> AiRuntimeCapability::StartTask(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
                                                       CancellationToken cancellation,
@@ -109,6 +132,12 @@ namespace Horo::AI {
 
     /** @copydoc AiRuntimeCapability::CancelTask */
     Result<AiTaskTransitionDisposition> AiRuntimeCapability::CancelTask(AgentHandle agent, TaskHandle task) const {
+        return CancelTask(agent, task, AiTaskCancellationReason::Requested);
+    }
+
+    /** @copydoc AiRuntimeCapability::CancelTask(AgentHandle,TaskHandle,AiTaskCancellationReason) */
+    Result<AiTaskTransitionDisposition> AiRuntimeCapability::CancelTask(AgentHandle agent, TaskHandle task,
+                                                                        AiTaskCancellationReason reason) const {
         auto state = Lock();
         if (state.HasError())
             return Result<AiTaskTransitionDisposition>::Failure(state.ErrorValue());
@@ -117,7 +146,7 @@ namespace Horo::AI {
             return Result<AiTaskTransitionDisposition>::Failure(lifecycle.ErrorValue());
         if (state.Value()->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<AiTaskTransitionDisposition>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
-        auto changed = lifecycle.Value()->RequestCancellation(AiTaskCancellationReason::Requested);
+        auto changed = lifecycle.Value()->RequestCancellation(reason);
         if (changed.HasValue() && changed.Value() == AiTaskTransitionDisposition::Applied)
             ++state.Value()->revision;
         return changed;
@@ -134,6 +163,23 @@ namespace Horo::AI {
         if (state.Value()->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<AiTaskTransitionDisposition>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
         auto changed = lifecycle.Value()->CompleteSuccess(agent);
+        if (changed.HasValue() && changed.Value() == AiTaskTransitionDisposition::Applied)
+            ++state.Value()->revision;
+        return changed;
+    }
+
+    /** @copydoc AiRuntimeCapability::FailTask */
+    Result<AiTaskTransitionDisposition> AiRuntimeCapability::FailTask(AgentHandle agent, TaskHandle task,
+                                                                      AiTaskFailureDetail failure) const {
+        auto state = Lock();
+        if (state.HasError())
+            return Result<AiTaskTransitionDisposition>::Failure(state.ErrorValue());
+        auto lifecycle = RequireTask(*state.Value(), agent, task);
+        if (lifecycle.HasError())
+            return Result<AiTaskTransitionDisposition>::Failure(lifecycle.ErrorValue());
+        if (state.Value()->revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<AiTaskTransitionDisposition>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        auto changed = lifecycle.Value()->CompleteFailure(agent, std::move(failure));
         if (changed.HasValue() && changed.Value() == AiTaskTransitionDisposition::Applied)
             ++state.Value()->revision;
         return changed;
@@ -195,6 +241,11 @@ namespace Horo::AI {
 
     /** @copydoc AiRuntimeCapability::CommitBlackboardWrite */
     Result<BlackboardCommitResult> AiRuntimeCapability::CommitBlackboardWrite(AgentHandle agent, BlackboardWriteBatch batch) const {
+        return CommitBlackboardWrite(agent, batch, true);
+    }
+
+    Result<BlackboardCommitResult> AiRuntimeCapability::CommitBlackboardWrite(AgentHandle agent, BlackboardWriteBatch &batch,
+                                                                              const bool notifyAuthorizationRefresh) const {
         auto state = Lock();
         if (state.HasError())
             return Result<BlackboardCommitResult>::Failure(state.ErrorValue());
@@ -205,9 +256,13 @@ namespace Horo::AI {
             return Result<BlackboardCommitResult>::Failure(MakeError(AIErrors::CapabilityUnavailable));
         if (state.Value()->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<BlackboardCommitResult>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
-        auto committed = slot.Value()->blackboard->CommitAtBlackboardSync(std::move(batch));
-        if (committed.HasValue() && committed.Value().changedKeyCount != 0)
-            ++state.Value()->revision;
+        const auto plan = slot.Value()->cookedPlan;
+        auto committed = slot.Value()->blackboard->CommitAtBlackboardSync(std::move(batch), notifyAuthorizationRefresh);
+        if (committed.HasError() || committed.Value().Changes().empty())
+            return committed;
+        ++state.Value()->revision;
+        if (state.Value()->scheduler && plan)
+            state.Value()->scheduler->QueueBlackboardWake(agent, plan, committed.Value().Changes());
         return committed;
     }
 }  // namespace Horo::AI

@@ -1,11 +1,16 @@
 # Behavior-tree control-flow runtime
 
-`HoroEngine::AI` owns `BehaviorTreeRuntime.h`. Existing `BehaviorTreeAsset` and
-`DecisionAssetValidation.h` declarations remain unchanged. Consumers first use
+`HoroEngine::AI` owns `BehaviorTreeRuntime.h`. Consumers first use
 `DecisionAssetCompiler` for descriptor/schema admission, then compile typed
 `BehaviorTreeExecutionNode` and service attachments against that immutable plan.
 Every admitted node must be accounted for exactly once. Child-vector order is
 semantic priority; source-array order and display labels never select execution.
+Decision validation findings now carry a `DecisionDiagnosticTarget` with the
+exact graph and node for node-scoped failures, and the schema and key for
+Blackboard binding failures. Readers should test each identity before offering
+navigation. The diagnostic path remains presentation context. The report layout
+changed, so native consumers must rebuild against the updated HoroAI header.
+
 The generated public-header consumer covers the new header through its narrow
 HoroAI owner; no target dependency or repository-wide include root is added.
 

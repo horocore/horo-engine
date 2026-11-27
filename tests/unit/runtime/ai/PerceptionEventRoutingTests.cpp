@@ -1,11 +1,15 @@
 #include "AiTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/PerceptionEventSource.h"
 #include "Horo/Network/NetworkWorldBinding.h"
+#include "Horo/Runtime/RuntimeHost.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -37,13 +41,16 @@ namespace Horo::AI {
             const PerceptionDescriptorOrigin origin{.provider = MakeIdentity<PerceptionProviderId>(1)};
             const std::array senses{SenseTypeDescriptor{SenseTypeIds::Damage, origin, "damage", {}},
                                     SenseTypeDescriptor{SenseTypeIds::Touch, origin, "touch", {}},
+                                    SenseTypeDescriptor{SenseTypeIds::Hearing, origin, "hearing", {}},
                                     SenseTypeDescriptor{SenseTypeIds::Team, origin, "team", {}}};
             const std::array stimuli{StimulusTypeDescriptor{StimulusTypeIds::Damage, origin, "damage", 1, {}},
                                      StimulusTypeDescriptor{StimulusTypeIds::Contact, origin, "contact", 1, {}},
+                                     StimulusTypeDescriptor{StimulusTypeIds::Sound, origin, "sound", 1, {}},
                                      StimulusTypeDescriptor{StimulusTypeIds::Team, origin, "team", 1, {}}};
             const std::array listeners{Listener(10, SenseTypeIds::Damage, StimulusTypeIds::Damage),
                                        Listener(11, SenseTypeIds::Touch, StimulusTypeIds::Contact),
-                                       Listener(12, SenseTypeIds::Team, StimulusTypeIds::Team)};
+                                       Listener(12, SenseTypeIds::Team, StimulusTypeIds::Team),
+                                       Listener(13, SenseTypeIds::Hearing, StimulusTypeIds::Sound)};
             auto result = PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, {});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
@@ -146,14 +153,25 @@ namespace Horo::AI {
             return composition;
         }
 
-        [[nodiscard]] AiControllerDescriptor Controller() {
+        [[nodiscard]] AiControllerDescriptor Controller(const std::optional<PerceptionBlackboardProjection> projection = {}) {
             BlackboardSchemaDescriptor schemaInput;
             schemaInput.identity = MakeIdentity<BlackboardSchemaId>(1);
             schemaInput.version = 1;
-            const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
-                                                          .kind = BlackboardValueKind::Boolean,
-                                                          .maximumCollectionElements = 1,
-                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{false}}}};
+            std::vector keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(2),
+                                                     .kind = BlackboardValueKind::Boolean,
+                                                     .maximumCollectionElements = 1,
+                                                     .defaultValue = BlackboardValue{BlackboardScalarValue{false}}}};
+            if (projection) {
+                const auto collection = [](BlackboardKeyId key, BlackboardValueKind kind) {
+                    return BlackboardKeyDescriptor{.key = key,
+                                                   .kind = kind,
+                                                   .cardinality = BlackboardValueCardinality::Collection,
+                                                   .maximumCollectionElements = 1,
+                                                   .defaultValue = BlackboardValue{BlackboardCollectionValue{.elementKind = kind}}};
+                };
+                keys.push_back(collection(projection->sources, BlackboardValueKind::EntityReference));
+                keys.push_back(collection(projection->positions, BlackboardValueKind::WorldCoordinate));
+            }
             schemaInput.keys = keys;
             auto captured = BlackboardSchema::Capture(schemaInput);
             REQUIRE(captured.HasValue());
@@ -223,7 +241,7 @@ namespace Horo::AI {
                 const auto snapshot = ai.Snapshot().Value();
                 recipient = snapshot.Agents()[0].handle;
                 other = snapshot.Agents()[1].handle;
-                const std::array senses{SenseTypeIds::Damage, SenseTypeIds::Touch, SenseTypeIds::Team};
+                const std::array senses{SenseTypeIds::Damage, SenseTypeIds::Touch, SenseTypeIds::Team, SenseTypeIds::Hearing};
                 for (std::size_t index = 0; index < sources.size(); ++index) {
                     sources[index].entity = Entity(index + 1);
                     sources[index].layers = 1;
@@ -262,7 +280,474 @@ namespace Horo::AI {
                 REQUIRE(captured.HasValue());
                 return std::move(captured).Value();
             }
+
+            [[nodiscard]] CommittedPerceptionDelivery Sound() const {
+                return {{recipient, MakeIdentity<PerceptionListenerTypeId>(13),
+                         HearingPerceptionEvent{.source = Source(2),
+                                                .location = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0),
+                                                .intensity = 0.5,
+                                                .radiusMeters = 1,
+                                                .tags = 7,
+                                                .emittedTick = 3,
+                                                .lifetimeTicks = 2},
+                         4},
+                        PerceptionFilterDecision::Accept};
+            }
         };
+
+        /** @brief Drives an approved Gameplay batch through the real scheduler's prepare and publication callbacks. */
+        class HearingFixedParticipant final : public Runtime::RuntimeLifecycleParticipant {
+        public:
+            HearingFixedParticipant(Gameplay::GameplayHearingPublisher &publisher, const Runtime::RuntimeSceneView &scene,
+                                    std::span<const Gameplay::GameplayHearingDelivery> deliveries)
+                : publisher_(publisher), scene_(scene), deliveries_(deliveries) {}
+
+            Result<void> Startup(const CancellationToken &) override {
+                return Result<void>::Success();
+            }
+            Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+                return Result<void>::Success();
+            }
+            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+                if (context.simulationTick < stageAt)
+                    return Result<void>::Success();
+                attempted = context.dispatchEvidence;
+                auto result = sceneTick ? publisher_.PrepareForSceneTick(scene_, attempted, *sceneTick, deliveries_)
+                                        : publisher_.Prepare(scene_, attempted, deliveries_);
+                premature = publisher_.Commit(attempted);
+                return result;
+            }
+            Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &) override {
+                return reject ? Result<void>::Failure(MakeError(AIErrors::PerceptionEventInvalid)) : Result<void>::Success();
+            }
+            void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                if (context.simulationTick < stageAt)
+                    return;
+                committed = publisher_.Commit(context.dispatchEvidence);
+                duplicate = publisher_.Commit(context.dispatchEvidence);
+            }
+            void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                publisher_.Abort(context.dispatchEvidence);
+            }
+            void Shutdown() noexcept override {}
+
+            Runtime::RuntimeDispatchEvidence attempted;
+            std::optional<std::uint64_t> sceneTick;
+            std::uint64_t stageAt{1};
+            bool reject{};
+            bool premature{};
+            bool committed{};
+            bool duplicate{};
+
+        private:
+            Gameplay::GameplayHearingPublisher &publisher_;
+            Runtime::RuntimeSceneView scene_;
+            std::span<const Gameplay::GameplayHearingDelivery> deliveries_;
+        };
+
+        /** @brief Checks the publisher's tick stamp and the ordinary committed hearing admission path. */
+        void RequireCommittedHearing(const Fixture &fixture, const Gameplay::GameplayHearingPublisher &publisher, const bool committed) {
+            const auto view = fixture.scene->View();
+            CHECK(publisher.Read(view, 1).Value().empty());
+            CHECK(publisher.Read(view, 3).Value().empty());
+            const auto records = publisher.Read(view, 2).Value();
+            REQUIRE(records.size() == (committed ? 1 : 0));
+            if (records.empty())
+                return;
+            const auto &record = records.front();
+            CHECK(record.delivery.simulationTick == 2);
+            CHECK(std::get<HearingPerceptionEvent>(record.delivery.event).emittedTick == 2);
+            auto memory = fixture.Memory(fixture.recipient);
+            REQUIRE(fixture.Capture(std::span{&record, 1}).Deliver(0, memory).HasValue());
+            CHECK(memory.StoredCount() == 1);
+        }
+
+        TEST_CASE("Gameplay hearing publishes only a committed fixed attempt to its next sensing tick", "[unit][ai][perception][hearing]") {
+            Fixture fixture;
+            const auto view = fixture.scene->View();
+            const auto sound = fixture.Sound();
+            const Gameplay::GameplayHearingDelivery proposal{sound.delivery.recipient, sound.delivery.listener,
+                                                             std::get<HearingPerceptionEvent>(sound.delivery.event), sound.filter};
+            std::array<Gameplay::GameplayHearingDelivery, PerceptionEventSource::MaximumDeliveries + 1> proposals;
+            proposals.fill(proposal);
+            struct TestClock final : Clock {
+                Duration now{};
+                Duration MonotonicNow() const override {
+                    return now;
+                }
+            } clock;
+            const auto quantum = Duration::FromMilliseconds(10);
+            auto created = Runtime::FrameScheduler::Create(clock, {.fixedStep = quantum});
+            REQUIRE(created.HasValue());
+            auto scheduler = std::move(created).Value();
+            Gameplay::GameplayHearingPublisher publisher{scheduler->DispatchSource(), view};
+            Runtime::RuntimeLifecycle lifecycle;
+            CancellationSource cancellation;
+            std::size_t count = 1;
+            bool rejectCommit{};
+            std::optional<std::uint64_t> sceneTick;
+            SECTION("successful commitment stamps an exact next-tick delivery") {}
+            SECTION("a failed fixed preparation never publishes its staged hearing") {
+                rejectCommit = true;
+            }
+            SECTION("an oversized producer batch fails before partial publication") {
+                count = proposals.size();
+            }
+            SECTION("a Scene opened after the scheduler started uses its own sensing tick") {
+                sceneTick = 1;
+            }
+            SECTION("a Scene cannot advance its sensing tick ahead of the scheduler") {
+                sceneTick = 3;
+            }
+            const bool rejected = rejectCommit || count > PerceptionEventSource::MaximumDeliveries || sceneTick == 3;
+            auto callback = std::make_unique<HearingFixedParticipant>(publisher, view, std::span{proposals}.first(count));
+            auto &participant = *callback;
+            participant.reject = rejectCommit;
+            participant.sceneTick = sceneTick;
+            if (sceneTick) {
+                participant.stageAt = 2;
+            }
+            REQUIRE(lifecycle.AddParticipant(std::move(callback)).HasValue());
+            REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
+            REQUIRE(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+            clock.now = quantum;
+            if (sceneTick) {
+                REQUIRE(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+                CHECK_FALSE(participant.committed);
+                clock.now += quantum;
+            }
+            CHECK(scheduler->RunFrame(lifecycle, cancellation.Token(), false).HasError() == rejected);
+            CHECK_FALSE(participant.premature);
+            CHECK_FALSE(participant.duplicate);
+            CHECK(participant.committed == !rejected);
+            CHECK_FALSE(publisher.Commit(participant.attempted));
+            RequireCommittedHearing(fixture, publisher, !rejected);
+            if (sceneTick && !rejected) {
+                clock.now += quantum;
+                ExpectError(scheduler->RunFrame(lifecycle, cancellation.Token(), false), AIErrors::PerceptionEventStale);
+                RequireCommittedHearing(fixture, publisher, true);
+            }
+            scheduler->RetireDispatch();
+            const auto retired = publisher.Read(view, 2);
+            REQUIRE(retired.HasError());
+            CHECK(retired.ErrorValue().code.Value() == AIErrors::PerceptionEventUnauthorized.code.Value());
+        }
+
+        TEST_CASE("headless committed hearing coalesces sound facts for the same source and listener",
+                  "[unit][ai][perception][events][hearing]") {
+            Fixture server(Network::NetworkProjectRole::DedicatedServer);
+            auto memory = server.Memory(server.recipient);
+            auto other = server.Memory(server.other);
+            std::array records{server.Sound(), server.Sound()};
+            auto &latest = std::get<HearingPerceptionEvent>(records[1].delivery.event);
+            latest.location = Math::WorldCoordinate64::FromMillimeters(900, 0, 0);
+            const auto source =
+                PerceptionEventSource::Capture(*server.scene, server.ai, server.host, Network::NetworkModeWorldKind::AuthorityServer,
+                                               server.registry, server.filtering, records);
+            REQUIRE(source.HasValue());
+            REQUIRE(source.Value().Deliver(0, memory).HasValue());
+            REQUIRE(source.Value().Deliver(1, memory).HasValue());
+            REQUIRE(source.Value().Deliver(0, memory).HasValue());
+            ExpectError(source.Value().Deliver(1, other), AIErrors::PerceptionEventInvalid);
+            const auto snapshot = memory.Snapshot(4, PerceptionSceneLiveness(*server.scene)).Value();
+            REQUIRE(snapshot.count == 1);
+            CHECK(snapshot.entries[0].key.sense == SenseTypeIds::Hearing);
+            CHECK(snapshot.entries[0].key.stimulus == StimulusTypeIds::Sound);
+            CHECK(snapshot.entries[0].lastKnownPosition == latest.location);
+            ExpectError(other.Observe({.key = snapshot.entries[0].key}, 4), AIErrors::PerceptionEventUnauthorized);
+            CHECK(other.StoredCount() == 0);
+        }
+
+        TEST_CASE("Authoritative Gameplay hearing enters owned memory during the Scene sensing phase", "[unit][ai][perception][hearing]") {
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto host = Host(Network::NetworkProjectRole::DedicatedServer);
+            auto registry = std::make_shared<const PerceptionDescriptorRegistry>(Registry());
+            const PerceptionBlackboardProjection projection{MakeIdentity<BlackboardKeyId>(3), MakeIdentity<BlackboardKeyId>(4)};
+            auto controller = Controller(projection);
+            const auto hearing = MakeIdentity<PerceptionListenerTypeId>(13);
+            controller.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
+                AiControllerPerceptionEndpoints{.registry = registry,
+                                                .listeners = {hearing},
+                                                .sources = {SenseTypeIds::Hearing},
+                                                .blackboardProjection = projection});
+            const AiControllerComponent binding{.controller = controller.controller,
+                                                .decisionAsset = controller.decisionAsset,
+                                                .blackboardSchema = controller.blackboardSchema->Identity(),
+                                                .requiredCapabilities = AiCapabilitySet::Of(AiCapability::Perception)};
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+            for (std::uint64_t id : {1U, 2U, 3U}) {
+                const AiAgentComponent agent{.agent = MakeIdentity<AgentId>(id)};
+                builder.Add({.object = Runtime::SceneObjectId{id}, .components = {.aiAgent = agent, .aiController = binding}});
+            }
+            const auto definition = std::move(builder).Build().Value();
+            const auto scene = Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{99}).Value();
+            const auto view = scene->View();
+            const auto listener = *view.Find(Runtime::SceneObjectId{1});
+            const auto source = *view.Find(Runtime::SceneObjectId{2});
+            const auto independentSource = *view.Find(Runtime::SceneObjectId{3});
+            const auto soundPosition = Math::WorldCoordinate64::FromMillimeters(500, 0, 0);
+            const auto independentPosition = Math::WorldCoordinate64::FromMillimeters(600, 0, 0);
+            PerceptionSpatialBroadphase spatial;
+            const auto generation = PerceptionSenseGeneration::Capture({}, std::make_shared<const std::atomic_bool>(true)).Value();
+            const auto positions = [&](const Runtime::RuntimeSceneView &) {
+                return Result<std::vector<AiScenePerceptionPosition>>::Success(
+                    {{listener, {}}, {source, soundPosition}, {independentSource, independentPosition}});
+            };
+            const AiScenePerceptionExecution execution{
+                .generation = generation, .memory = {.listenerMaximumEntries = 1}, .visibleLayers = 1, .workUnitsPerTick = 1};
+            AiSceneActivationParticipant participant{runtime, std::span{&controller, 1},
+                                                      AiScenePerceptionActivationInput{spatial, {}, positions, execution}};
+            auto activation = participant.Prepare(definition, view);
+            REQUIRE(activation.HasValue());
+            REQUIRE(activation.Value()->ValidatePublication().HasValue());
+            activation.Value()->Publish();
+
+            const auto recipient = runtime.CapabilityAtSafePoint().ResolveAgent(MakeIdentity<AgentId>(1)).Value();
+            const CommittedPerceptionDelivery sound{
+                {recipient, hearing, HearingPerceptionEvent{ProjectPerceptionSource(source), soundPosition, 0.5, 1, 77, 1, 1}, 1},
+                PerceptionFilterDecision::Accept};
+            const CommittedPerceptionDelivery independentSound{
+                {recipient, hearing, HearingPerceptionEvent{ProjectPerceptionSource(independentSource), independentPosition, 0.5, 1, 77, 1, 1}, 1},
+                PerceptionFilterDecision::Accept};
+            auto superseded = sound;
+            auto &older = std::get<HearingPerceptionEvent>(superseded.delivery.event);
+            older.emittedTick = 0;
+            older.lifetimeTicks = 2;
+            const std::array batch{sound, independentSound, superseded};
+            const auto quantum = Duration::FromNanoseconds(execution.memory.fixedStep.count());
+            PerceptionSpatialBroadphase foreignSpatial;
+            const auto inputs = spatial.Current()->Inputs();
+            REQUIRE(foreignSpatial.Publish(view, 1, inputs.listeners, inputs.sources, inputs.filtering).HasValue());
+            const auto foreign = PerceptionEventSource::Capture(*scene, runtime, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                                 *registry, foreignSpatial, std::span{&sound, 1});
+            REQUIRE(foreign.HasValue());
+            ExpectError(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, foreign.Value().Feed()),
+                        AIErrors::PerceptionEventStale);
+            auto closed = PerceptionEventSource::Capture(*scene, runtime, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                          *registry, spatial, std::span{&sound, 1});
+            REQUIRE(closed.HasValue());
+            auto closedWindow = std::move(closed).Value();
+            const auto expiredFeed = closedWindow.Feed();
+            closedWindow.Close();
+            ExpectError(runtime.PollPerceptionAtSensePoll(view, spatial, 1, quantum, expiredFeed), AIErrors::PerceptionEventUnauthorized);
+            using Window = Result<std::optional<PerceptionEventSource>>;
+            std::size_t captures{};
+            const Gameplay::PerceptionEventSourceFactory producer =
+                [&](const Runtime::RuntimeSceneView &current, const AiSceneRuntime &owner, const PerceptionSpatialBroadphase &filter,
+                    const std::uint64_t tick) -> Window {
+                ++captures;
+                CHECK(tick == sound.delivery.simulationTick);
+                auto captured = PerceptionEventSource::Capture(current, owner, host, Network::NetworkModeWorldKind::AuthorityServer,
+                                                                *registry, filter, batch);
+                if (captured.HasError())
+                    return Window::Failure(captured.ErrorValue());
+                return Window::Success(std::move(captured).Value());
+            };
+            ExpectError(Gameplay::PollPerceptionWithGameplay(runtime, view, foreignSpatial, 1, quantum, producer),
+                        AIErrors::PerceptionSpatialStale);
+            ExpectError(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 0, quantum, producer), AIErrors::PerceptionMemoryInvalid);
+            CHECK(captures == 0);
+            REQUIRE(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 1, quantum, producer).HasValue());
+            REQUIRE(Gameplay::PollPerceptionWithGameplay(runtime, view, spatial, 1, quantum, producer).HasValue());
+            CHECK(captures == 1);
+            REQUIRE(runtime.PublishPerceptionBlackboardsAtBlackboardSync(view, spatial, 1).HasValue());
+            const auto perceived = runtime.ReadPerceptionAtSafePoint(view, listener);
+            REQUIRE(perceived.HasValue());
+            REQUIRE(perceived.Value().count == 1);
+            CHECK(perceived.Value().entries[0].lastKnownPosition == independentPosition);
+            CHECK(runtime.ReadPerceptionAtSafePoint(view, source).Value().count == 0);
+            CHECK(runtime.ReadPerceptionAtSafePoint(view, independentSource).Value().count == 0);
+            const auto projected = runtime.CapabilityAtSafePoint().ReadBlackboard(recipient, projection.positions);
+            REQUIRE(projected.HasValue());
+            REQUIRE(projected.Value());
+            const auto &positionsValue = std::get<BlackboardCollectionValue>(*projected.Value());
+            REQUIRE(positionsValue.count == 1);
+            CHECK(std::get<Math::WorldCoordinate64>(positionsValue.elements[0]) == independentPosition);
+            runtime.BeginShutdown();
+        }
+
+        TEST_CASE("Gameplay sensing windows acquired from a Scene view expire after structural publication",
+                  "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            const auto sound = fixture.Sound();
+            const auto captured =
+                PerceptionEventSource::Capture(fixture.scene->View(), fixture.ai, fixture.host, Network::NetworkModeWorldKind::Standalone,
+                                               fixture.registry, fixture.filtering, std::span{&sound, 1});
+            REQUIRE(captured.HasValue());
+            Runtime::SceneCommandBuffer addUnrelatedEntity;
+            (void)addUnrelatedEntity.Create({});
+            REQUIRE(fixture.scene->Commit(addUnrelatedEntity).HasValue());
+            ExpectError(captured.Value().Deliver(0, memory), AIErrors::PerceptionEventStale);
+            CHECK(memory.StoredCount() == 0);
+        }
+
+        TEST_CASE("Hearing coalesces by emission tick before producer order and only among admitted sounds",
+                  "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            std::array records{fixture.Sound(), fixture.Sound(), fixture.Sound()};
+            auto &newest = std::get<HearingPerceptionEvent>(records[0].delivery.event);
+            newest.emittedTick = 2;
+            newest.lifetimeTicks = 3;
+            newest.location = Math::WorldCoordinate64::FromMillimeters(700, 0, 0);
+            auto &older = std::get<HearingPerceptionEvent>(records[1].delivery.event);
+            older.emittedTick = 1;
+            older.lifetimeTicks = 4;
+            auto &unavailable = std::get<HearingPerceptionEvent>(records[2].delivery.event);
+            SECTION("producer rejects the newest candidate") {
+                records[2].filter = PerceptionFilterDecision::Reject;
+            }
+            SECTION("newest candidate is expired") {
+                unavailable.lifetimeTicks = 1;
+            }
+            SECTION("newest candidate is outside the listener radius") {
+                unavailable.radiusMeters = 0.1;
+            }
+            SECTION("newest candidate has malformed metadata") {
+                unavailable.intensity = std::numeric_limits<double>::quiet_NaN();
+            }
+            const auto source = fixture.Capture(records);
+            REQUIRE(source.Deliver(0, memory).HasValue());
+            REQUIRE(source.Deliver(1, memory).HasValue());
+            const auto snapshot = memory.Snapshot(4, PerceptionSceneLiveness(*fixture.scene));
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().count == 1);
+            CHECK(snapshot.Value().entries[0].lastKnownPosition == newest.location);
+        }
+
+        TEST_CASE("A full Gameplay sensing window bounds noise and ages mixed stimuli deterministically",
+                  "[unit][ai][perception][events][qualification]") {
+            Fixture fixture;
+            auto admitted = AIPerceptionMemory::Create(99, fixture.recipient,
+                                                       {.listenerMaximumEntries = 1,
+                                                        .profileMaximumEntries = 4,
+                                                        .fixedStep = std::chrono::seconds{1},
+                                                        .memoryDurationSeconds = 2});
+            REQUIRE(admitted.HasValue());
+            auto memory = std::move(admitted).Value();
+            std::array<CommittedPerceptionDelivery, PerceptionEventSource::MaximumDeliveries + 1> records;
+            records.fill(fixture.Sound());
+            records[0] = {{fixture.recipient, MakeIdentity<PerceptionListenerTypeId>(10),
+                           DamagePerceptionEvent{fixture.Source(2), Math::WorldCoordinate64::FromMillimeters(7, 0, 0), 2}, 4},
+                          PerceptionFilterDecision::Accept};
+            records[1] = {{fixture.recipient, MakeIdentity<PerceptionListenerTypeId>(11),
+                           ProximityPerceptionEvent{fixture.Source(3), Math::WorldCoordinate64::FromMillimeters(9, 0, 0)}, 4},
+                          PerceptionFilterDecision::Accept};
+            records[2] = fixture.Team();
+            records[2].delivery.simulationTick = 4;
+
+            const auto capture = [&](std::span<const CommittedPerceptionDelivery> batch) {
+                return PerceptionEventSource::Capture(*fixture.scene, fixture.ai, fixture.host, Network::NetworkModeWorldKind::Standalone,
+                                                      fixture.registry, fixture.filtering, batch);
+            };
+            ExpectError(capture(records), AIErrors::PerceptionEventInvalid);
+            const auto bounded = std::span{records}.first(PerceptionEventSource::MaximumDeliveries);
+            const auto finalSound = Math::WorldCoordinate64::FromMillimeters(700, 0, 0);
+            std::get<HearingPerceptionEvent>(bounded.back().delivery.event).location = finalSound;
+            auto captured = capture(bounded);
+            REQUIRE(captured.HasValue());
+            auto window = std::move(captured).Value();
+            for (std::size_t index = 0; index < bounded.size(); ++index) {
+                REQUIRE(window.Deliver(index, memory).HasValue());
+                CHECK(memory.StoredCount() <= memory.Capacity());
+            }
+            ExpectError(window.Deliver(bounded.size(), memory), AIErrors::PerceptionEventInvalid);
+            const auto liveness = PerceptionSceneLiveness(*fixture.scene);
+            const auto observed = memory.Snapshot(4, liveness);
+            REQUIRE(observed.HasValue());
+            REQUIRE(observed.Value().count == 4);
+            const auto &entries = observed.Value().entries;
+            CHECK(entries[0].key.sense == SenseTypeIds::Damage);
+            CHECK(entries[1].key.sense == SenseTypeIds::Touch);
+            CHECK(entries[2].key.sense == SenseTypeIds::Team);
+            CHECK(entries[3].key.sense == SenseTypeIds::Hearing);
+            CHECK(entries[3].lastKnownPosition == finalSound);
+
+            auto explicitlyRetired = memory;
+            REQUIRE(explicitlyRetired.ForgetSource(fixture.Source(3)).HasValue());
+            const auto afterRetirement = explicitlyRetired.Snapshot(4, liveness);
+            REQUIRE(afterRetirement.HasValue());
+            CHECK(afterRetirement.Value().count == 2);
+
+            Runtime::SceneCommandBuffer unload;
+            unload.Destroy(fixture.Entity(3));
+            REQUIRE(fixture.scene->Commit(unload).HasValue());
+            ExpectError(window.Deliver(2, memory), AIErrors::PerceptionEventStale);
+            const auto surviving = memory.Snapshot(5, liveness);
+            REQUIRE(surviving.HasValue());
+            REQUIRE(surviving.Value().count == 2);
+            CHECK(surviving.Value().entries[0].key.sense == SenseTypeIds::Damage);
+            CHECK(surviving.Value().entries[1].key.sense == SenseTypeIds::Hearing);
+            const auto expired = memory.Snapshot(6, liveness);
+            REQUIRE(expired.HasValue());
+            CHECK(expired.Value().count == 0);
+            window.Close();
+            fixture.ai.BeginShutdown();
+            ExpectError(window.Deliver(0, memory), AIErrors::PerceptionEventUnauthorized);
+        }
+
+        TEST_CASE("sound delivery rejects expired, inaudible and unauthorized events", "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            auto record = fixture.Sound();
+            auto &sound = std::get<HearingPerceptionEvent>(record.delivery.event);
+            const auto deliver = [&] {
+                return fixture.Capture(std::span{&record, 1}).Deliver(0, memory);
+            };
+            SECTION("expired") {
+                record.delivery.simulationTick = 5;
+                ExpectError(deliver(), AIErrors::PerceptionEventStale);
+            }
+            SECTION("future") {
+                record.delivery.simulationTick = 2;
+                ExpectError(deliver(), AIErrors::PerceptionEventInvalid);
+            }
+            SECTION("outside radius") {
+                sound.radiusMeters = 0.999;
+                ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
+            }
+            SECTION("producer denied") {
+                record.filter = PerceptionFilterDecision::Reject;
+                ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
+            }
+            SECTION("source hidden") {
+                fixture.sources[1].visibility = PerceptionGameplayVisibility::Hidden;
+                REQUIRE(fixture.filtering.Publish(fixture.scene->View(), 2, fixture.listeners, fixture.sources).HasValue());
+                ExpectError(deliver(), AIErrors::PerceptionEventFiltered);
+            }
+            CHECK(memory.StoredCount() == 0);
+        }
+
+        TEST_CASE("sound delivery rejects malformed acoustic metadata", "[unit][ai][perception][events][hearing]") {
+            Fixture fixture;
+            auto memory = fixture.Memory(fixture.recipient);
+            auto record = fixture.Sound();
+            auto &sound = std::get<HearingPerceptionEvent>(record.delivery.event);
+            SECTION("non-finite intensity") {
+                sound.intensity = std::numeric_limits<double>::infinity();
+            }
+            SECTION("NaN intensity") {
+                sound.intensity = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("non-positive intensity") {
+                sound.intensity = 0;
+            }
+            SECTION("excessive intensity") {
+                sound.intensity = 1.01;
+            }
+            SECTION("non-finite radius") {
+                sound.radiusMeters = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("non-positive radius") {
+                sound.radiusMeters = 0;
+            }
+            SECTION("empty lifetime") {
+                sound.lifetimeTicks = 0;
+            }
+            ExpectError(fixture.Capture(std::span{&record, 1}).Deliver(0, memory), AIErrors::PerceptionEventInvalid);
+            CHECK(memory.StoredCount() == 0);
+        }
 
         TEST_CASE("committed damage and contact enter only the declared recipient memory", "[unit][ai][perception][events]") {
             Fixture fixture;

@@ -51,6 +51,22 @@ namespace Horo::Runtime::Ui {
         std::vector<UiPresentedInteractionState> presentations;
     };
 
+    /** @brief Caller-owned row budgets applied to a single canvas inspection. */
+    struct UiCanvasInspectionLimits final {
+        std::size_t providers{MaximumUiBindingProviders};
+        std::size_t bindings{MaximumUiBindingDescriptors};
+        std::size_t actions{2U * MaximumUiActionCommands};
+    };
+
+    /** @brief Binding/provider records and one exact canvas or route action source. */
+    struct UiCanvasInspectionSnapshot final {
+        UiCanvasInstanceId canvas;
+        UiRuntimeTreeRevision tree;
+        std::optional<UiRouteInstanceId> route;
+        std::optional<UiBindingInspectionSnapshot> bindings;
+        std::optional<UiActionInspectionSnapshot> actions;
+    };
+
     /** @brief Bounded semantic preservation evidence; transient interactions never migrate. */
     struct UiReloadReconciliation final {
         std::uint32_t preservedControls{};
@@ -176,6 +192,19 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiReloadLease> Acquire() const;
         /** @brief Borrows the current mutable owner until this operation ends. @return Active generation or null after shutdown. */
         [[nodiscard]] UiReloadGeneration *Current() noexcept;
+
+        /**
+         * @brief Captures diagnostic rows from the exact active generation without retaining live owners.
+         * @param lease Exact generation selected by the inspector; replaced leases are rejected.
+         * @param canvas Stable authored canvas to inspect.
+         * @param limits Independent budgets for providers, bindings and actions.
+         * @param route Exact route incarnation; empty selects the canvas-level action router.
+         * @return Owned redacted snapshot or typed stale, missing target, capacity or lifecycle failure.
+         * @note Owner thread only. Explicit tooling operation outside layout, input, rendering and publication.
+         */
+        [[nodiscard]] Result<UiCanvasInspectionSnapshot> Inspect(const UiReloadLease &lease, UiCanvasId canvas,
+                                                                 const UiCanvasInspectionLimits &limits = {},
+                                                                 std::optional<UiRouteInstanceId> route = {}) const;
         /**
          * @brief Reconciles a detached replacement against a lifetime-pinned read-only active generation.
          * @param replacement Complete newer closure and typed owner composition.
@@ -210,6 +239,7 @@ namespace Horo::Runtime::Ui {
          * @param canvas Stable authored canvas.
          * @param receipt Renderer-neutral terminal evidence for an admitted view and current interaction revision.
          * @return Whether input eligibility advanced, or a typed stale/provenance/lifecycle failure.
+         * @post A withdrawn World plane cancels capture for its view before another receipt can restore it.
          */
         [[nodiscard]] Result<bool> ApplyPresentation(UiCanvasId canvas, const UiPresentationReceipt &receipt);
         /** @brief Checks exact current successfully presented input eligibility without allocation.

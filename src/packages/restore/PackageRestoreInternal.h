@@ -35,6 +35,7 @@ namespace Horo::Packages::RestoreInternal {
         std::string currentPackage;
         std::uint64_t revision{};
         std::optional<PackageRestoreGraph> candidate;
+        std::optional<Sha256Digest> stagedLockDigest;
         std::optional<Error> error;
     };
 
@@ -50,7 +51,7 @@ namespace Horo::Packages::RestoreInternal {
     [[nodiscard]] Result<void> ValidateStartRequest(const PackageRestoreRequest &request, const PackageRestoreLimits &limits);
     [[nodiscard]] Result<void> RunRestoreJob(const RestoreContext &context, const PackageRestoreRequest &request,
                                              PackageRestoreOperationId operation, const CancellationToken &cancellation,
-                                             const std::shared_ptr<Completion> &completion);
+                                             const std::shared_ptr<Completion> &completion, bool staging);
 }  // namespace Horo::Packages::RestoreInternal
 
 namespace Horo::Packages {
@@ -64,6 +65,8 @@ namespace Horo::Packages {
             std::shared_ptr<RestoreInternal::Completion> completion;
             std::optional<JobHandle> job;
             std::uint64_t observedCompletionRevision{};
+            std::optional<StagedPackageRestoreRecord> staged;
+            bool staging{};
         };
 
         JobSystem &jobs;
@@ -92,8 +95,9 @@ namespace Horo::Packages {
             const CancellationToken cancellation = operationState.cancellation.Token();
             const auto completion = operationState.completion;
             return jobs.SubmitResult(JobDescriptor{.parentCancellation = cancellation},
-                                     [this, completion, requestCopy, id](const CancellationToken &jobCancellation) {
-                return RestoreInternal::RunRestoreJob(Context(), requestCopy, id, jobCancellation, completion);
+                                     [this, completion, requestCopy, id,
+                                      staging = operationState.staging](const CancellationToken &jobCancellation) {
+                return RestoreInternal::RunRestoreJob(Context(), requestCopy, id, jobCancellation, completion, staging);
             });
         }
 

@@ -104,6 +104,7 @@ namespace Horo::Render::Detail {
 
         std::uint32_t frameCount{};
         VkSwapchainKHR chain{};
+        std::uint64_t outputRevision{};
         VkFormat format{};
         FramebufferExtent extent;
         std::array<Image, MaximumImages> images{};

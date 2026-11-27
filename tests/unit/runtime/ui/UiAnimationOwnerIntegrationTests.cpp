@@ -11,6 +11,132 @@ namespace {
 
 }  // namespace
 
+TEST_CASE("Runtime accessibility publishes registry contrast and focused variants on the same immutable frame",
+          "[runtime_ui][animation][integration][accessibility]") {
+    HostFixture fixture{{.contrastVariants = true, .focusAccess = true}};
+    auto &participant = *fixture.participant;
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto ordinary = Frame(participant);
+    REQUIRE(fixture.attachedFocus);
+    REQUIRE(fixture.attachedFocus->FocusDefault().HasValue());
+    const auto focus = fixture.attachedFocus->CurrentFocus();
+    REQUIRE(focus.HasValue());
+    REQUIRE(focus.Value());
+    const auto focused = focus.Value()->element;
+    const auto fill = CoreUiStylePropertyId(UiCoreStyleProperty::Fill);
+    auto color = [&](const UiAnimationFrameLease &frame, const UiElementHandle target, const float expected) {
+        const auto record = frame.Styles().Get(target);
+        REQUIRE(record.HasValue());
+        const auto properties = frame.Styles().Properties(record.Value());
+        const auto found = std::ranges::find(properties, fill, &UiComputedStyleProperty::property);
+        REQUIRE(found != properties.end());
+        CHECK(std::get<UiStyleColor>(found->value).red == expected);
+        if (expected != 0.3F)
+            CHECK(found->provenance.origin == UiStyleOrigin::AccessibilityPolicy);
+    };
+    color(ordinary, focused, 0.3F);
+    REQUIRE(participant.SetVisualAccessibility({20, true, false}).HasValue());
+    CHECK(participant.SetVisualAccessibility({19, false, false}).HasError());
+    CHECK(participant.SetVisualAccessibility({20, false, false}).HasError());
+    color(ordinary, focused, 0.3F);
+    const auto beforeContrast = Horo::Tests::AllocationProbe::Count();
+    const auto contrasted = fixture.host->RunFrame();
+    const auto afterContrast = Horo::Tests::AllocationProbe::Count();
+    REQUIRE(contrasted.HasValue());
+    CHECK(afterContrast == beforeContrast);
+    auto contrast = Frame(participant);
+    color(contrast, focused, 1.0F);
+    for (const auto &row : contrast.Styles().Records())
+        if (row.element != focused)
+            color(contrast, row.element, 0.0F);
+    CHECK(contrast.Styles().Descriptor().geometry == ordinary.Styles().Descriptor().geometry);
+    REQUIRE(participant.SetVisualAccessibility({21, false, false}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    color(Frame(participant), focused, 0.3F);
+    color(contrast, focused, 1.0F);
+    fixture.host->Shutdown();
+    CHECK(participant.SetVisualAccessibility({22, true, true}).HasError());
+}
+
+TEST_CASE("Runtime reduced motion completes decorative timelines once and preserves essential timing",
+          "[runtime_ui][animation][integration][accessibility]") {
+    bool decorative{};
+    SECTION("explicit decorative motion") {
+        decorative = true;
+    }
+    SECTION("authored essential timing") {}
+    HostFixture fixture{{.decorativeMotion = decorative}};
+    auto &participant = *fixture.participant;
+    const auto timeline = participant.Start(Stable<UiAnimationId>(1));
+    REQUIRE(timeline.HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto original = Frame(participant);
+    REQUIRE(original.Timelines().size() == 1);
+    CHECK(original.Timelines().front().playback.outcome == UiAnimationOutcome::None);
+    REQUIRE(participant.SetVisualAccessibility({1, false, true}).HasValue());
+    const auto beforeMotionChange = Horo::Tests::AllocationProbe::Count();
+    const auto applied = fixture.host->RunFrame();
+    const auto afterMotionChange = Horo::Tests::AllocationProbe::Count();
+    REQUIRE(applied.HasValue());
+    CHECK(afterMotionChange == beforeMotionChange);
+    auto next = Frame(participant);
+    REQUIRE(next.Timelines().size() == 1);
+    CHECK(next.Timelines().front().timeline == timeline.Value());
+    CHECK(next.Timelines().front().playback.newTerminalOutcome == decorative);
+    CHECK(next.Timelines().front().playback.outcome == (decorative ? UiAnimationOutcome::Completed : UiAnimationOutcome::None));
+    CHECK(next.Timelines().front().playback.elapsed == original.Timelines().front().playback.elapsed);
+    CheckGeometry(next, decorative ? 50 : 200);
+    original = {};
+    REQUIRE(participant.SetVisualAccessibility({2, false, false}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto repeated = Frame(participant);
+    REQUIRE(repeated.Timelines().size() == 1);
+    CHECK_FALSE(repeated.Timelines().front().playback.newTerminalOutcome);
+    CHECK(repeated.Timelines().front().playback.outcome == next.Timelines().front().playback.outcome);
+    CheckGeometry(repeated, decorative ? 50 : 200);
+}
+
+TEST_CASE("Runtime flash suppression removes tagged styling and keeps timeline events",
+          "[runtime_ui][animation][integration][accessibility]") {
+    HostFixture fixture{{.flashTrack = true}};
+    auto &owner = *fixture.participant;
+    REQUIRE(owner.Start(Stable<UiAnimationId>(1)).HasValue());
+    REQUIRE(owner.Start(Stable<UiAnimationId>(4)).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto initial = Frame(owner);
+    const auto element = initial.Controls().front().source.element;
+    const auto fill = [element](const UiAnimationFrameLease &frame) {
+        const auto record = frame.Styles().Get(element);
+        REQUIRE(record.HasValue());
+        const auto properties = frame.Styles().Properties(record.Value());
+        const auto color =
+            std::ranges::find(properties, CoreUiStylePropertyId(UiCoreStyleProperty::Fill), &UiComputedStyleProperty::property);
+        REQUIRE(color != properties.end());
+        return std::get<UiStyleColor>(color->value).red;
+    };
+    CHECK(fill(initial) == 0.9F);
+    REQUIRE(owner.SetVisualAccessibility({.revision = 1, .suppressFlash = true}).HasValue());
+    CHECK(owner.SetVisualAccessibility({.revision = 1}).HasError());
+    CHECK(fill(initial) == 0.9F);
+    fixture.clock.Advance(Duration::FromMilliseconds(60));
+    const auto before = Horo::Tests::AllocationProbe::Count();
+    const auto updated = fixture.host->RunFrame();
+    CHECK(Horo::Tests::AllocationProbe::Count() == before);
+    REQUIRE(updated.HasValue());
+    auto suppressed = Frame(owner);
+    CHECK(fill(suppressed) == 0.3F);
+    REQUIRE(suppressed.Markers().size() == 1);
+    CHECK(suppressed.Markers().front().marker == Stable<UiAnimationMarkerId>(1));
+    CheckGeometry(suppressed, 110);
+    initial = {};
+    REQUIRE(owner.SetVisualAccessibility({.revision = 2}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto resumed = Frame(owner);
+    CHECK(fill(resumed) > 0.7F);
+    CHECK(fill(resumed) < 0.9F);
+    CHECK(resumed.Markers().empty());
+}
+
 TEST_CASE("Real host animation publishes matching style layout and clipping while retained geometry remains immutable",
           "[runtime_ui][animation][integration]") {
     HostFixture fixture;
@@ -41,6 +167,38 @@ TEST_CASE("Real host animation publishes matching style layout and clipping whil
     CHECK(first.Clipping()->Scrolls().front().maximumOffset.y == 200);
     CHECK(next.Clipping()->Scrolls().front().maximumOffset.y == 50);
     CHECK(participant->Acquire().HasError());
+}
+
+TEST_CASE("Runtime host direction change publishes new geometry before renewed input admission",
+          "[runtime_ui][animation][integration][direction]") {
+    HostFixture fixture;
+    auto *participant = fixture.participant;
+    auto viewport = Config().viewport;
+    viewport.constraints.maximum.width = 200;
+    viewport.content.extent.width = 200;
+    REQUIRE(participant->SetViewport(viewport).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto left = Frame(*participant);
+    const auto before = Receipt(left, 1);
+    REQUIRE(participant->ApplyPresentation(before).HasValue());
+    REQUIRE(participant->InputEligible(before.view));
+    const auto leaf = left.Layout().Records().back().element;
+    const auto original = left.Layout().Get(leaf).Value().arrangement.contentBox;
+    REQUIRE(original.origin.x == 0);
+
+    viewport.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+    REQUIRE(participant->SetViewport(viewport).HasValue());
+    fixture.clock.Advance(Duration::FromMilliseconds(16));
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto right = Frame(*participant);
+    CHECK(right.Layout().Descriptor().inlineDirection == UiLayoutInlineDirection::RightToLeft);
+    CHECK(right.Layout().Get(leaf).Value().arrangement.contentBox.origin.x == 200 - original.extent.width);
+    CHECK(left.Layout().Get(leaf).Value().arrangement.contentBox == original);
+    CHECK_FALSE(participant->InputEligible(before.view));
+    CHECK(participant->ApplyPresentation(before).HasError());
+    const auto presented = Receipt(right, 2);
+    REQUIRE(participant->ApplyPresentation(presented).HasValue());
+    CHECK(participant->InputEligible(presented.view));
 }
 
 TEST_CASE("Actual presented control replacement preserves draft Cancel baseline and rejects previous frame sources",
@@ -77,9 +235,11 @@ TEST_CASE("Actual presented control replacement preserves draft Cancel baseline 
 }
 
 TEST_CASE("Presented text commands preserve selection and history across interaction publication", "[runtime_ui][text_edit][integration]") {
+    const bool changeFontScale = GENERATE(false, true);
     HostFixture fixture;
     auto &participant = *fixture.participant;
-    REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
+    if (!changeFontScale)
+        REQUIRE(participant.Start(Stable<UiAnimationId>(1)).HasValue());
     REQUIRE(fixture.host->RunFrame().HasValue());
     auto first = Frame(participant);
     const auto source = first.Controls().front().source;
@@ -89,9 +249,15 @@ TEST_CASE("Presented text commands preserve selection and history across interac
     REQUIRE(participant.HandleControl(receipt.view, Edge(source, UiControlInputKind::FocusGained, 1)).HasValue());
     REQUIRE(participant.EditControlText(receipt.view, source, 2, {UiTextEditKind::Home}).HasValue());
     REQUIRE(participant.EditControlText(receipt.view, source, 3, {UiTextEditKind::Insert, Text("x")}).HasValue());
+    auto viewport = Config().viewport;
+    if (changeFontScale) {
+        viewport.fontScale = {3, 2};
+        REQUIRE(participant.SetViewport(viewport).HasValue());
+    }
     fixture.clock.Advance(Duration::FromMilliseconds(10));
     REQUIRE(fixture.host->RunFrame().HasValue());
     auto current = Frame(participant);
+    CHECK(current.Layout().Descriptor().fontScale == viewport.fontScale);
     const auto currentSource = current.Controls().front().source;
     REQUIRE(currentSource.owner != source.owner);
     CHECK(std::get<UiTextInputControlState>(current.Controls().front().state).text.View() == "xbase");

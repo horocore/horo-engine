@@ -124,21 +124,31 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardSnapshot::Revision */
     Result<std::uint64_t> BlackboardSnapshot::Revision() const {
-        if (!generationActive_->load())
+        if (!generationActive_ || !generationActive_->load())
             return Result<std::uint64_t>::Failure(Failure(AIErrors::BlackboardInstanceStale));
         return Result<std::uint64_t>::Success(revision_);
     }
 
     /** @copydoc BlackboardSnapshot::Read */
     Result<std::optional<BlackboardValue>> BlackboardSnapshot::Read(const BlackboardKeyId key) const {
-        if (!generationActive_->load())
-            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardInstanceStale));
-        const std::size_t index = FindKey(*schema_, key);
-        if (index == schema_->Keys().size())
-            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardUnknownValueRejected));
+        using ReadResult = Result<std::optional<BlackboardValue>>;
+        auto read = ReadBound(schema_ ? FindKey(*schema_, key) : 0);
+        if (read.HasError())
+            return ReadResult::Failure(std::move(read).ErrorValue());
+        const auto *value = read.Value();
+        return ReadResult::Success(value ? std::optional{*value} : std::nullopt);
+    }
+
+    /** @copydoc BlackboardSnapshot::ReadBound */
+    Result<const BlackboardValue *> BlackboardSnapshot::ReadBound(const std::size_t index) const {
+        using ReadResult = Result<const BlackboardValue *>;
+        if (!generationActive_ || !generationActive_->load())
+            return ReadResult::Failure(Failure(AIErrors::BlackboardInstanceStale));
+        if (index >= values_.size())
+            return ReadResult::Failure(Failure(AIErrors::BlackboardUnknownValueRejected));
         if (authorizations_[index] && !authorizations_[index]->IsCurrent())
-            return Result<std::optional<BlackboardValue>>::Failure(Failure(AIErrors::BlackboardInstanceStale));
-        return Result<std::optional<BlackboardValue>>::Success(values_[index]);
+            return ReadResult::Failure(Failure(AIErrors::BlackboardInstanceStale));
+        return ReadResult::Success(values_[index] ? std::addressof(*values_[index]) : nullptr);
     }
 
     /** @copydoc BlackboardInstance::Create */
@@ -291,6 +301,11 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardInstance::CommitAtBlackboardSync */
     Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch) {
+        return CommitAtBlackboardSync(std::move(batch), true);
+    }
+
+    Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch,
+                                                                              const bool notifyAuthorizationRefresh) {
         const auto consumed = std::move(batch).ConsumeForCommit();
 
         if (publishing_)
@@ -308,7 +323,10 @@ namespace Horo::AI {
             if (applied.HasError())
                 return Result<BlackboardCommitResult>::Failure(applied.ErrorValue());
             const auto index = FindKey(*schema_, write.key);
-            if (applied.Value() || authorizationScratch_[index] != write.authorization)
+            const auto &previous = authorizationScratch_[index];
+            const bool authorizationChanged =
+                previous != write.authorization && (notifyAuthorizationRefresh || !previous || !write.authorization);
+            if (applied.Value() || authorizationChanged)
                 result.changedKeys[result.changedKeyCount++] = write.key;
             authorizationScratch_[index] = write.authorization;
         }

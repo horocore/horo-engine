@@ -186,7 +186,8 @@ namespace Horo::Application::Detail {
 
     [[nodiscard]] static std::string BuildInputHashPrefix(const GameplayBuildRequest &request, const std::string_view compilerHash,
                                                           const std::string_view resolvedInputStructureHash) {
-        return std::format("{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n", Gameplay::CurrentGameplayBuildFingerprint(),
+        // Reconfigure successful caches created before the build exported compile commands.
+        return std::format("compile-commands-v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n", Gameplay::CurrentGameplayBuildFingerprint(),
                            request.environment.configuration, request.environment.gameplaySdkPackage.generic_string(),
                            request.environment.cxxCompiler.value_or(std::filesystem::path{}).generic_string(),
                            request.environment.generator.value_or(""), request.environment.generatorPlatform.value_or(""),

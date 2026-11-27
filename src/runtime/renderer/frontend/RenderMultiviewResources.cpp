@@ -4,6 +4,7 @@
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -53,6 +54,12 @@ namespace Horo::Render::Detail {
                         resolved.HasError())
                         return resolved;
                 }
+                if (target.predecessorDepth.IsValid()) {
+                    if (auto resolved = Resolve(target.predecessorDepthView, RenderResourceClass::TextureView, output.views,
+                                                output.viewCount, registry);
+                        resolved.HasError())
+                        return resolved;
+                }
             }
             return Result<void>::Success();
         }
@@ -88,19 +95,37 @@ namespace Horo::Render::Detail {
             return ResolveRasterReads(raster.reads, output, registry);
         }
 
+        Result<void> ResolveReconstructionImages(const RenderGraphNativeReconstruction &reconstruction, ResolvedMultiviewResources &output,
+                                                 const RenderResourceRegistry &registry) {
+            for (const auto &image : reconstruction.images) {
+                if (!image.view.IsValid())
+                    continue;
+                if (const auto resolved = Resolve(image.view, RenderResourceClass::TextureView, output.views, output.viewCount, registry);
+                    resolved.HasError())
+                    return resolved;
+            }
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc ResolveMultiviewResources */
     Result<ResolvedMultiviewResources> ResolveMultiviewResources(const std::span<const RenderGraphPassWorkload> workloads,
                                                                  const RenderResourceRegistry &registry) {
         ResolvedMultiviewResources output;
-        std::size_t scenes = 0;
+        std::array<bool, RenderGraphMultiview::MaximumPassesPerFrame> admitted{};
         for (const auto &entry : workloads) {
+            if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&entry.workload))
+                if (const auto resolved = ResolveReconstructionImages(*reconstruction, output, registry); resolved.HasError())
+                    return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&entry.workload))
                 if (auto resolved = ResolveMaterialRaster(*raster, output, registry); resolved.HasError())
                     return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());
             if (const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload)) {
-                if (++scenes > 1)
+                const auto outputIndex = static_cast<std::size_t>(scene->output);
+                if (outputIndex >= admitted.size())
+                    return Result<ResolvedMultiviewResources>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
+                if (std::exchange(admitted[outputIndex], true))
                     return Result<ResolvedMultiviewResources>::Failure(MakeError(MultiviewExtractionErrors::CapacityExceeded));
                 if (const auto resolved = ResolveScene(*scene, output, registry); resolved.HasError())
                     return Result<ResolvedMultiviewResources>::Failure(resolved.ErrorValue());

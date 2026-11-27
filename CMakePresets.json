@@ -251,6 +251,13 @@
       }
     },
     {
+      "name": "android-openxr-development",
+      "inherits": "android-debug",
+      "cacheVariables": {
+        "HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY": "ON"
+      }
+    },
+    {
       "name": "android-release",
       "inherits": "android-package-base",
       "cacheVariables": {

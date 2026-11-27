@@ -80,12 +80,11 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         return encoded;
     }
 
-    template <typename Id> [[nodiscard]] Result<Id> DecodeUiId(const Json &value) {
-        if (!value.is_string())
-            return Failed<Id>(UiErrors::DocumentSerializationInvalid, "Runtime UI identity is not text.");
-        const std::string text = value.get<std::string>();
+    /** @brief Decodes the common canonical persistent bytes for every typed Runtime UI identity. */
+    [[nodiscard]] Result<SerializedUiId> DecodeUiIdBytes(const std::string_view text) {
         if (!IsCanonicalHex(text))
-            return Failed<Id>(UiErrors::DocumentSerializationInvalid, "Runtime UI identity is not canonical lowercase hexadecimal.");
+            return Failed<SerializedUiId>(UiErrors::DocumentSerializationInvalid,
+                                          "Runtime UI identity is not canonical lowercase hexadecimal.");
         SerializedUiId bytes{};
         for (std::size_t index = 0; index < bytes.size(); ++index) {
             const auto decode = [](const char digit) -> std::uint8_t {
@@ -95,8 +94,14 @@ namespace Horo::Runtime::Ui::SerializationInternal {
             };
             bytes[index] = static_cast<std::uint8_t>((decode(text[index * 2]) << 4U) | decode(text[index * 2 + 1]));
         }
-        auto parsed = Id::Create(bytes);
-        return parsed.HasError() ? Result<Id>::Failure(parsed.ErrorValue()) : parsed;
+        return Result<SerializedUiId>::Success(bytes);
+    }
+
+    template <typename Id> [[nodiscard]] Result<Id> DecodeUiId(const Json &value) {
+        if (!value.is_string())
+            return Failed<Id>(UiErrors::DocumentSerializationInvalid, "Runtime UI identity is not text.");
+        const auto bytes = DecodeUiIdBytes(value.get_ref<const Json::string_t &>());
+        return bytes.HasError() ? Result<Id>::Failure(bytes.ErrorValue()) : Id::Create(bytes.Value());
     }
 
     [[nodiscard]] Result<std::string> ReadText(const Json &value, const UiDocumentSerializationLimits &limits) {
@@ -699,3 +704,15 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     template Result<UiPresentationProfileId> DecodeUiId<UiPresentationProfileId>(const Json &value);
 
 }  // namespace Horo::Runtime::Ui::SerializationInternal
+
+namespace Horo::Runtime::Ui {
+    /** @copydoc FormatUiStableId */
+    std::string FormatUiStableId(const SerializedUiId &identity) {
+        return SerializationInternal::EncodeUiId(identity);
+    }
+
+    /** @copydoc ParseUiStableId */
+    Result<SerializedUiId> ParseUiStableId(const std::string_view text) {
+        return SerializationInternal::DecodeUiIdBytes(text);
+    }
+}  // namespace Horo::Runtime::Ui

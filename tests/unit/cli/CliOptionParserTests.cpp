@@ -126,6 +126,15 @@ namespace Horo::Cli {
                                    .sensitivity = SettingSensitivity::Public,
                                    .sourcePolicy = sources})
                         .HasValue());
+            REQUIRE(schema
+                        .Register({.key = SettingKey{"cli.validation.mode"},
+                                   .type = SettingValueType::String,
+                                   .defaultValue = std::string{"safe"},
+                                   .scope = SettingScope::Invocation,
+                                   .reloadPolicy = ReloadPolicy::NextOperation,
+                                   .sensitivity = SettingSensitivity::Public,
+                                   .sourcePolicy = sources})
+                        .HasValue());
             REQUIRE(schema.Seal().HasValue());
             ConfigurationResolutionRequest request{.environment = environment, .user = user};
             auto resolved = ConfigurationResolver::Resolve(schema, request, 9);
@@ -182,6 +191,34 @@ namespace Horo::Cli {
         REQUIRE(FindOption(invocation.Value(), "output")->values[0].source == CliValueSource::Invocation);
     }
 
+    TEST_CASE("CLI primitive options reject credential references without exposing their identities",
+              "[unit][cli][parser][configuration]") {
+        const std::string identity = "cred:v1:" + std::string(48, 'a');
+        const auto reference = CredentialReference::Parse(identity);
+        REQUIRE(reference.HasValue());
+        ConfigurationSchema schema;
+        REQUIRE(schema
+                    .Register({.key = SettingKey{"cli.output.format"},
+                               .type = SettingValueType::CredentialReference,
+                               .defaultValue = reference.Value(),
+                               .scope = SettingScope::User,
+                               .reloadPolicy = ReloadPolicy::NextOperation,
+                               .sensitivity = SettingSensitivity::SecretReference})
+                    .HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService configuration{schema};
+        const auto snapshot = configuration.Snapshot();
+        const auto registry = Registry();
+        const auto arguments = std::to_array<std::string_view>({"project", "validate", "--count", "2"});
+        const auto parsed = CliOptionParser::Parse(arguments, registry, {.configuration = &snapshot});
+        RequireError(parsed, CliErrors::ParseFailed);
+        REQUIRE(std::ranges::any_of(parsed.ErrorValue().diagnostics, [](const auto &diagnostic) {
+            return diagnostic.code.Value() == "cli.configuration_value_incompatible";
+        }));
+        for (const auto &diagnostic : parsed.ErrorValue().diagnostics)
+            CHECK(diagnostic.message.find(identity) == std::string::npos);
+    }
+
     TEST_CASE("CLI parser normalizes option configuration and positional paths through one adapter", "[unit][cli][parser]") {
         CliCommandDescriptor descriptor = Descriptor();
         descriptor.positionals = {{.name = "input", .summary = "Input path.", .valueKind = CliOptionValueKind::Path, .required = true}};
@@ -234,6 +271,10 @@ namespace Horo::Cli {
         REQUIRE(malformed.ErrorValue().diagnostics[0].code.Value() == "cli.stdin_malformed");
         REQUIRE(malformed.ErrorValue().diagnostics[0].location.source == "stdin");
 
+        input.payload = Bytes("{}");
+        input.payload.push_back(std::byte{});
+        RequireError(CliOptionParser::Parse(arguments, registry, context), CliErrors::ParseFailed);
+
         input.fail = true;
         auto readFailure = CliOptionParser::Parse(arguments, registry, context);
         RequireError(readFailure, CliErrors::ParseFailed);
@@ -254,6 +295,11 @@ namespace Horo::Cli {
         input.payload = Bytes("{\"id\":1}\n\n");
         RequireError(CliOptionParser::Parse(arguments, registry, context), CliErrors::ParseFailed);
 
+        input.payload = Bytes("{\"id\":1}");
+        input.payload.push_back(std::byte{});
+        input.payload.push_back(std::byte{'\n'});
+        RequireError(CliOptionParser::Parse(arguments, registry, context), CliErrors::ParseFailed);
+
         descriptor.stdinPolicy = CliStdinPolicy::BinaryStream;
         registry = Registry(descriptor);
         input.payload = {std::byte{0}, std::byte{255}};
@@ -267,16 +313,36 @@ namespace Horo::Cli {
         CliCommandDescriptor descriptor = Descriptor();
         descriptor.interactive = CliInteractivePolicy::Required;
         descriptor.interactiveAlternativeOption = "mode";
-        descriptor.options[1].defaultValue.reset();
+        descriptor.options[1].configurationKey = "cli.validation.mode";
+        descriptor.stdinPolicy = CliStdinPolicy::JsonDocument;
         const CliCommandRegistry registry = Registry(std::move(descriptor));
-        const auto missing = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--non-interactive"});
-        RequireError(CliOptionParser::Parse(missing, registry, {.terminalAvailable = true}), CliErrors::InteractiveInputUnavailable);
 
-        const auto supplied =
-            std::to_array<std::string_view>({"project", "validate", "--count", "2", "--non-interactive", "--mode", "fast"});
-        auto parsed = CliOptionParser::Parse(supplied, registry, {.terminalAvailable = true});
+        ConfigurationSourceMap environment;
+        environment.try_emplace(SettingKey{"cli.validation.mode"}, ConfigurationInputValue{.value = std::string{"fast"}});
+        const auto configuration = Configuration(environment);
+        TestInputReader input;
+        input.payload = Bytes("{}");
+        CliParserContext context{.configuration = &configuration,
+                                 .inputReader = &input,
+                                 .stdinSelected = true,
+                                 .selectedStdinPolicy = CliStdinPolicy::JsonDocument,
+                                 .terminalAvailable = true};
+        const auto disabled = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--non-interactive"});
+        RequireError(CliOptionParser::Parse(disabled, registry, context), CliErrors::InteractiveInputUnavailable);
+
+        context.configuration = nullptr;
+        const auto noTerminal = std::to_array<std::string_view>({"project", "validate", "--count", "2"});
+        context.terminalAvailable = false;
+        RequireError(CliOptionParser::Parse(noTerminal, registry, context), CliErrors::InteractiveInputUnavailable);
+        CHECK(input.calls == 0);
+
+        const auto supplied = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--mode", "fast"});
+        const auto parsed = CliOptionParser::Parse(supplied, registry, context);
         REQUIRE(parsed.HasValue());
-        REQUIRE_FALSE(parsed.Value().interactive);
+        CHECK_FALSE(parsed.Value().interactive);
+        CHECK(input.calls == 1);
+        REQUIRE(FindOption(parsed.Value(), "mode"));
+        CHECK(FindOption(parsed.Value(), "mode")->values.front().source == CliValueSource::Invocation);
     }
 
     TEST_CASE("CLI parser bounds argv diagnostics and unknown commands before retaining input", "[unit][cli][parser]") {
@@ -293,13 +359,68 @@ namespace Horo::Cli {
         REQUIRE(parsed.ErrorValue().diagnostics.size() == 2);
     }
 
+    TEST_CASE("CLI parser rejects sensitive argv before normalization or stdin reads", "[unit][cli][parser][security]") {
+        auto descriptor = Descriptor();
+        descriptor.options.push_back({.name = "credential",
+                                      .shortName = 's',
+                                      .summary = "Protected credential input.",
+                                      .valueKind = CliOptionValueKind::Path,
+                                      .sensitive = true});
+        descriptor.stdinPolicy = CliStdinPolicy::JsonDocument;
+        const auto registry = Registry(descriptor);
+        TestPathNormalizer paths;
+        TestInputReader input;
+        input.payload = Bytes("{}");
+        const std::array<std::vector<std::string_view>, 4> cases{{{"--credential", "fake-cli-secret-731"},
+                                                                  {"--credential=fake-cli-secret-731"},
+                                                                  {"-s", "fake-cli-secret-731"},
+                                                                  {"-s=fake-cli-secret-731"}}};
+        for (const auto &suffix : cases) {
+            std::vector<std::string_view> arguments{"project", "validate", "--count", "2"};
+            arguments.insert(arguments.end(), suffix.begin(), suffix.end());
+            const auto parsed = CliOptionParser::Parse(arguments, registry,
+                                                       {.pathNormalizer = &paths,
+                                                        .inputReader = &input,
+                                                        .stdinSelected = true,
+                                                        .selectedStdinPolicy = CliStdinPolicy::JsonDocument});
+            RequireError(parsed, CliErrors::ParseFailed);
+            REQUIRE(parsed.ErrorValue().diagnostics.size() == 1);
+            REQUIRE(parsed.ErrorValue().diagnostics.front().code.Value() == "cli.sensitive_argument_forbidden");
+            REQUIRE(parsed.ErrorValue().diagnostics.front().message.find("fake-cli-secret-731") == std::string::npos);
+        }
+        REQUIRE(paths.calls == 0);
+        REQUIRE(input.calls == 0);
+    }
+
     TEST_CASE("CLI shared options have one deterministic backend-neutral schema", "[unit][cli][parser]") {
         const auto common = CliOptionParser::CommonOptions();
-        REQUIRE(common.size() == 4);
+        REQUIRE(common.size() == 5);
         REQUIRE(common[0].name == "log-level");
         REQUIRE(common[1].name == "non-interactive");
         REQUIRE(common[2].name == "output");
         REQUIRE(common[3].name == "project");
+        REQUIRE(common[4].name == "timeout-ms");
         REQUIRE(common[2].configurationKey == "cli.output.format");
+    }
+
+    TEST_CASE("CLI parser admits only supported positive bounded invocation timeouts before stdin", "[unit][cli][parser][timeout]") {
+        auto descriptor = Descriptor();
+        descriptor.stdinPolicy = CliStdinPolicy::JsonDocument;
+        const auto registry = Registry(descriptor);
+        TestInputReader input;
+        input.payload = Bytes("{}");
+        const auto accepted = std::to_array<std::string_view>({"project", "validate", "--count", "2", "--timeout-ms", "250"});
+        REQUIRE(CliOptionParser::Parse(accepted, registry).HasValue());
+        for (const auto milliseconds : {"0", "-1", "5001", "86400001", "9223372036854775807"}) {
+            const std::array<std::string_view, 6> arguments{"project", "validate", "--count", "2", "--timeout-ms", milliseconds};
+            RequireError(CliOptionParser::Parse(arguments, registry,
+                                                {.inputReader = &input,
+                                                 .stdinSelected = true,
+                                                 .selectedStdinPolicy = CliStdinPolicy::JsonDocument}),
+                         CliErrors::ParseFailed);
+        }
+        CHECK(input.calls == 0);
+        descriptor.timeout = {};
+        RequireError(CliOptionParser::Parse(accepted, Registry(descriptor)), CliErrors::ParseFailed);
     }
 }  // namespace Horo::Cli

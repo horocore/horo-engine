@@ -8,8 +8,8 @@ namespace Horo::Runtime::Ui::ThemeInternal {
                                              std::span<const UiThemeTokenFallback> fallbacks);
     /** @brief Checks surface consumer categories and invalidation effects before admitting a registry. */
     [[nodiscard]] Result<void> ValidateProperties(const RuntimeStyleRegistry &registry, const UiThemeSurfaceProperties &properties);
-    /** @brief Projects one resolved surface into declarative layout and solid-paint values. */
-    [[nodiscard]] Result<void> ProjectSurface(const UiComputedStyleSnapshot &snapshot, const UiThemeSurfaceInput &input,
-                                              const UiThemeSurfaceProperties &properties, UiLayoutElementDescriptor &layout,
-                                              UiDrawCommand &paint);
+    /** @brief Projects one resolved surface into declarative layout, solid paint and same-record state. */
+    [[nodiscard]] Result<UiVisualStateMask> ProjectSurface(const UiComputedStyleSnapshot &snapshot, const UiThemeSurfaceInput &input,
+                                                           const UiThemeSurfaceProperties &properties, UiLayoutElementDescriptor &layout,
+                                                           UiDrawCommand &paint);
 }  // namespace Horo::Runtime::Ui::ThemeInternal

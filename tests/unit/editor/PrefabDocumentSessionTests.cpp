@@ -1,6 +1,7 @@
 #include "../../support/NativePublicationFiles.h"
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "PrefabDocumentSessionTestSupport.h"
 
 #include <cstddef>
@@ -242,6 +243,49 @@ namespace Horo::Editor {
         CHECK(probe->shutdowns == 2);
     }
 
+    TEST_CASE("Prefab pending stage retires at edit reload and close fences before deferred completion",
+              "[editor][prefab][session][qualification]") {
+        Fixture fixture;
+        const auto initial = fixture.document->Snapshot();
+        auto sources = fixture.Capture();
+        auto probe = std::make_shared<StageProbe>();
+        EditorPlaySceneFactory factory = [probe](Runtime::SceneRuntimeId id,
+                                                 const Runtime::RuntimeSceneDefinition &) -> Result<std::unique_ptr<EditorPlaySceneHost>> {
+            return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(std::make_unique<StageHost>(id, probe));
+        };
+        REQUIRE(fixture.document->ActivateStage(fixture.project.registry.Snapshot(), sources.sources.resolver, {91}, factory).HasValue());
+        REQUIRE_FALSE(fixture.document->AdvanceStage().Value());
+        REQUIRE(fixture.document->HasStage());
+        bool closed{};
+        SECTION("local edit retires the pending source revision") {
+            fixture.Rename("Local intent");
+            CHECK(fixture.document->Snapshot().dirty);
+            CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "Local intent");
+        }
+        SECTION("external reload replaces the pending source revision") {
+            fixture.project.WriteSource("External replacement");
+            REQUIRE(fixture.document->Reload(initial.fence, false).HasValue());
+            CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "External replacement");
+            CHECK_FALSE(fixture.document->Snapshot().dirty);
+        }
+        SECTION("close revokes the pending session") {
+            REQUIRE(fixture.document->Close(initial.fence, false).HasValue());
+            closed = true;
+            CHECK(fixture.document->Execute(initial.fence, RenamePrefabObject{{0}, "Late edit"}).HasError());
+        }
+        CHECK(probe->shutdowns == 1);
+        CHECK_FALSE(fixture.document->HasStage());
+        probe->hold = false;
+        const auto advanced = fixture.document->AdvanceStage();
+        CHECK(advanced.HasError() == closed);
+        if (advanced.HasValue())
+            CHECK_FALSE(advanced.Value());
+        CHECK_FALSE(fixture.document->StageView().has_value());
+        CHECK(fixture.document->Snapshot().previewRevision == initial.previewRevision);
+        CHECK(probe->fixedUpdates == 0);
+        CHECK(probe->shutdowns == 1);
+    }
+
     TEST_CASE("Prefab save publishes canonical source and external conflicts retain local history", "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Saved");
@@ -264,6 +308,52 @@ namespace Horo::Editor {
         CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "External");
         CHECK_FALSE(fixture.document->Snapshot().dirty);
         CHECK_FALSE(fixture.document->Snapshot().canUndo);
+    }
+
+    TEST_CASE("Prefab sessions preserve the losing edit when another workspace publishes the same source",
+              "[editor][prefab][session][qualification][conflict]") {
+        Fixture fixture;
+        DocumentIdentityRegistry otherIdentities;
+        const auto identity = otherIdentities.Open(fixture.document->Snapshot().identity.key);
+        REQUIRE(identity.HasValue());
+        auto other = PrefabDocumentSession::Open(fixture.project.directory.path, fixture.project.source, fixture.project.asset,
+                                                 identity.Value().identity, PrefabAsset(10).Asset(), fixture.limits);
+        REQUIRE(other.HasValue());
+        fixture.Rename("First workspace intent");
+        REQUIRE(other.Value()->Execute(other.Value()->Snapshot().fence, RenamePrefabObject{{0}, "Second workspace intent"}).HasValue());
+        auto *winner = fixture.document.get();
+        auto *loser = other.Value().get();
+        SECTION("first workspace publishes first") {}
+        SECTION("second workspace publishes first") {
+            std::swap(winner, loser);
+        }
+        const auto pending = loser->Snapshot();
+        const auto published = winner->Save(winner->Snapshot().fence, fixture.project.mutations, fixture.project.files);
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().status == Assets::AssetSourcePublicationStatus::Durable);
+        const auto rejected = loser->Save(pending.fence, fixture.project.mutations, fixture.project.files);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+        const auto retained = loser->Snapshot();
+        CHECK(retained.externalConflict);
+        CHECK(retained.dirty);
+        CHECK(retained.canUndo);
+        CHECK(retained.fence.revision == pending.fence.revision);
+        CHECK(retained.sourceRevision == pending.sourceRevision);
+        CHECK(retained.acceptedSource == pending.acceptedSource);
+        CHECK(retained.source == pending.source);
+        const auto native = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                       Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(native.HasValue());
+        CHECK(native.Value().identity == published.Value().identity);
+        CHECK(loser->Reload(retained.fence, false).HasError());
+        REQUIRE(loser->Reload(retained.fence, true).HasValue());
+        CHECK(loser->Snapshot().sourceRevision == winner->Snapshot().sourceRevision);
+        CHECK(loser->Snapshot().fence.instance == pending.fence.instance);
+        CHECK_FALSE(loser->Snapshot().dirty);
+        const auto stale = loser->Execute(pending.fence, RenamePrefabObject{{0}, "Stale completion"});
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == SourceDocumentErrors::Stale.code.Value());
     }
 
     TEST_CASE("Prefab recovery is separate durable intent and cannot overwrite an external source", "[editor][prefab][session]") {
@@ -304,6 +394,159 @@ namespace Horo::Editor {
                                          Prefab::PrefabHardLimits::SourceDocumentBytes)
                   .Value()
                   .identity != Assets::AssetSourceIdentity{});
+    }
+
+    TEST_CASE("Prefab comparison keeps the exact local draft without accepting an external save base", "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Draft");
+        const auto before = fixture.document->Snapshot();
+        const auto firstWatch = fixture.document->CaptureExternalInspection();
+        REQUIRE(ComparePrefabExternal(firstWatch).HasValue());
+        CHECK_FALSE(ComparePrefabExternal(firstWatch).Value());
+        fixture.project.WriteSource("Disk version");
+        const auto observed = ComparePrefabExternal(firstWatch);
+        REQUIRE(observed.HasValue());
+        REQUIRE(observed.Value());
+        REQUIRE(observed.Value()->members.size() == 1);
+        CHECK(observed.Value()->members.front().draftName == "Draft");
+        CHECK(observed.Value()->members.front().diskName == "Disk version");
+
+        fixture.Rename("Current draft");
+        CHECK_FALSE(fixture.document->ObserveExternal(firstWatch, observed.Value()));
+        const auto current = fixture.document->Snapshot();
+        const auto currentWatch = fixture.document->CaptureExternalInspection();
+        const auto comparison = ComparePrefabExternal(currentWatch);
+        REQUIRE(comparison.HasValue());
+        REQUIRE(comparison.Value());
+        REQUIRE(fixture.document->ObserveExternal(currentWatch, comparison.Value()));
+        CHECK(fixture.document->KeepExternalDraft(current.fence, *observed.Value()).HasError());
+        REQUIRE(fixture.document->KeepExternalDraft(current.fence, *comparison.Value()).HasValue());
+        const auto kept = fixture.document->Snapshot();
+        CHECK(kept.source == current.source);
+        CHECK(kept.savedState == before.savedState);
+        CHECK(kept.acceptedSource == before.acceptedSource);
+        CHECK(kept.keepExternalDraft);
+        CHECK(kept.externalConflict);
+        CHECK(kept.dirty);
+        CHECK(kept.canUndo);
+        CHECK(fixture.document->Save(kept.fence, fixture.project.mutations, fixture.project.files).HasError());
+        const auto persisted = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                          Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(persisted.HasValue());
+        CHECK(persisted.Value().identity == comparison.Value()->observed);
+        fixture.project.WriteSource("Unseen disk revision");
+        CHECK(fixture.document->Reload(kept.fence, true, comparison.Value()->observed).HasError());
+        CHECK(fixture.document->Snapshot().source == kept.source);
+        fixture.project.WriteSource("Disk version");
+        REQUIRE(fixture.document->Reload(kept.fence, true, comparison.Value()->observed).HasValue());
+        const auto reloaded = fixture.document->Snapshot();
+        CHECK_FALSE(reloaded.externalConflict);
+        CHECK_FALSE(reloaded.keepExternalDraft);
+        CHECK_FALSE(reloaded.externalComparison);
+        CHECK(reloaded.source->Data().objects.front().name == "Disk version");
+    }
+
+    TEST_CASE("Prefab compares recurring disk bytes against the new draft after source restoration", "[editor][prefab][session]") {
+        Fixture fixture;
+        const auto accepted = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                         Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(accepted.HasValue());
+        fixture.Rename("First draft");
+        fixture.project.WriteSource("Repeatable disk content");
+        const auto firstWatch = fixture.document->CaptureExternalInspection();
+        const auto first = ComparePrefabExternal(firstWatch);
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value());
+        REQUIRE(fixture.document->ObserveExternal(firstWatch, first.Value()));
+        CHECK(fixture.document->Execute(firstWatch.fence, RenamePrefabObject{{0}, "Blocked"}).HasError());
+        CHECK(fixture.document->Replay(firstWatch.fence, false).HasError());
+
+        {
+            const auto &bytes = accepted.Value().bytes;
+            std::ofstream restored(fixture.project.source, std::ios::binary | std::ios::trunc);
+            restored.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(restored.good());
+        }
+        const auto restoredWatch = fixture.document->CaptureExternalInspection();
+        const auto restored = ComparePrefabExternal(restoredWatch);
+        REQUIRE(restored.HasValue());
+        REQUIRE_FALSE(restored.Value());
+        REQUIRE(fixture.document->ObserveExternal(restoredWatch, restored.Value()));
+        fixture.Rename("Second draft");
+        fixture.project.WriteSource("Repeatable disk content");
+
+        const auto newWatch = fixture.document->CaptureExternalInspection();
+        const auto compared = ComparePrefabExternal(newWatch);
+        REQUIRE(compared.HasValue());
+        REQUIRE(compared.Value());
+        REQUIRE(compared.Value()->members.size() == 1);
+        CHECK(compared.Value()->observed == first.Value()->observed);
+        CHECK(compared.Value()->members.front().draftName == "Second draft");
+        REQUIRE(fixture.document->ObserveExternal(newWatch, compared.Value()));
+        CHECK(fixture.document->KeepExternalDraft(newWatch.fence, *first.Value()).HasError());
+        REQUIRE(fixture.document->KeepExternalDraft(newWatch.fence, *compared.Value()).HasValue());
+    }
+
+    TEST_CASE("Malformed external prefab comparison retains the local draft and reports disk rejection", "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Retained draft");
+        const auto snapshot = fixture.document->Snapshot();
+        std::ofstream(fixture.project.source, std::ios::trunc) << "{malformed";
+        const auto inspection = fixture.document->CaptureExternalInspection();
+        const auto compared = ComparePrefabExternal(inspection);
+        REQUIRE(compared.HasValue());
+        REQUIRE(compared.Value());
+        CHECK(compared.Value()->diskError.has_value());
+        REQUIRE(fixture.document->ObserveExternal(inspection, compared.Value()));
+        CHECK(fixture.document->Snapshot().source == snapshot.source);
+        CHECK(fixture.document->Snapshot().dirty);
+        CHECK(fixture.document->Reload(snapshot.fence, true).HasError());
+        CHECK(fixture.document->Snapshot().externalConflict);
+    }
+
+    TEST_CASE("Detached prefab recovery checkpoints retain the captured state while the owner continues editing",
+              "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Scheduled intent");
+        const auto original = fixture.document->Snapshot();
+        const auto checkpoint = fixture.document->CaptureRecovery();
+        REQUIRE(checkpoint.HasValue());
+        REQUIRE(checkpoint.Value().has_value());
+        DocumentRecoveryService recovery(fixture.project.directory.path, fixture.project.mutations, fixture.project.files);
+        CHECK_FALSE(recovery.Inspect(fixture.project.asset, original.identity.key).Value().has_value());
+
+        CancellationSource cancelled;
+        cancelled.RequestCancellation();
+        const auto cancelledWrite = WritePrefabRecovery(*checkpoint.Value(), recovery, cancelled.Token());
+        REQUIRE(cancelledWrite.HasError());
+        CHECK(IsJobCancelled(cancelledWrite.ErrorValue()));
+        CHECK_FALSE(recovery.Inspect(fixture.project.asset, original.identity.key).Value().has_value());
+
+        fixture.Rename("Later intent");
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        auto submitted = jobs.SubmitResult({.resource = JobResource::Io}, [&checkpoint, &recovery](const CancellationToken &token) {
+            const auto written = WritePrefabRecovery(*checkpoint.Value(), recovery, token);
+            return written.HasError() ? Result<void>::Failure(written.ErrorValue()) : Result<void>::Success();
+        });
+        REQUIRE(submitted.HasValue());
+        REQUIRE(submitted.Value().Wait().HasValue());
+        fixture.document->AcknowledgeRecovery(*checkpoint.Value());
+        const auto newer = fixture.document->Snapshot();
+        CHECK(newer.source->Data().objects.front().name == "Later intent");
+        CHECK(newer.recoveryRevision == original.fence.revision);
+        CHECK(newer.dirty);
+        const auto persisted = recovery.Inspect(fixture.project.asset, original.identity.key);
+        REQUIRE(persisted.HasValue());
+        REQUIRE(persisted.Value().has_value());
+        CHECK(persisted.Value()->revision == original.fence.revision);
+        CHECK(persisted.Value()->acceptedSource == original.acceptedSource);
+        fixture.Autosave();
+        fixture.document->AcknowledgeRecovery(*checkpoint.Value());
+        CHECK(fixture.document->Snapshot().recoveryRevision == newer.fence.revision);
+        CHECK(Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                         Prefab::PrefabHardLimits::SourceDocumentBytes)
+                  .Value()
+                  .identity == original.acceptedSource);
     }
 
     TEST_CASE("Explicit prefab recovery discard preserves edits and refuses a replaced candidate", "[editor][prefab][session]") {
@@ -422,6 +665,15 @@ namespace Horo::Editor {
             const auto result = fixture.document->Execute(fence, RenamePrefabObject{{0}, "Reentrant"});
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            const auto reloaded = fixture.document->Reload(fence, true);
+            REQUIRE(reloaded.HasError());
+            CHECK(reloaded.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            const auto closed = fixture.document->Close(fence, true);
+            REQUIRE(closed.HasError());
+            CHECK(closed.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            const auto savedAgain = fixture.document->Save(fence, mutations, files);
+            REQUIRE(savedAgain.HasError());
+            CHECK(savedAgain.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
             ++rejected;
         };
         auto saved = fixture.document->Save(fence, mutations, files);

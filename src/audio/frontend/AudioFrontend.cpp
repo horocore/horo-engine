@@ -35,7 +35,7 @@ namespace Horo::Audio {
             return output.backend && output.clockDomain != 0 && output.backend->Owner() == resources.scope.owner &&
                    output.open.plannedEpoch.device.owner == resources.scope.owner && output.devices.backend == output.backend->Kind() &&
                    output.devices.owner == resources.scope.owner && ValidateAudioDeviceSnapshot(output.devices) &&
-                   ValidateAudioDeviceFormatRequest(output.open.format) &&
+                   ValidateAudioDeviceFormatRequest(output.open.format) && IsAudioLatencyProfile(output.open.latency) &&
                    resources.plan->SampleRate() == output.open.format.preferred.sampleRate;
         }
     }  // namespace
@@ -262,8 +262,23 @@ namespace Horo::Audio {
 
     /** @copydoc AudioFrontend::Snapshot */
     AudioFrontendSnapshot AudioFrontend::Snapshot() const {
-        AudioFrontendSnapshot snapshot{state_->phase, state_->resources->scope.owner, state_->voiceIdentity,
-                                       state_->output->open.plannedEpoch, state_->failure};
+        const auto &open = state_->output->open;
+        const bool outputAdmitted = state_->phase == AudioFrontendPhase::Starting || state_->phase == AudioFrontendPhase::Active;
+        AudioFrontendSnapshot snapshot{state_->phase, state_->resources->scope.owner, state_->voiceIdentity, open.plannedEpoch,
+                                       state_->failure};
+        snapshot.terminalVoice = state_->terminalVoice;
+        snapshot.outputTiming = {open.latency,
+                                 open.format.preferred.sampleRate,
+                                 open.format.period,
+                                 outputAdmitted ? state_->outputTiming : std::nullopt,
+                                 state_->mixerDspLatency,
+                                 state_->resamplerLookAhead};
+        if (outputAdmitted && state_->resources->streams) {
+            const auto stream = state_->resources->streams->Snapshot(state_->resources->stream);
+            if (stream.HasValue())
+                snapshot.outputTiming.decodedQueueDepth =
+                    AudioTimingFrames{stream.Value().bufferedFrames, state_->resamplerLookAhead.sampleRate};
+        }
         for (const auto &receipt : state_->receipts) {
             if (receipt.sequence.load(std::memory_order_acquire) == 0)  // NOSONAR - Owner observes initialized admission identity.
                 continue;
@@ -292,6 +307,8 @@ namespace Horo::Audio {
             // make_unique is outside the friend factory and cannot access the private constructor.
             std::unique_ptr<AudioFrontend> owner{new AudioFrontend(std::move(state))};  // NOSONAR - Friend-only construction.
             owner->state_->maximumFrames = resources.plan->MaximumFrames();
+            owner->state_->mixerDspLatency = {resources.plan->DspLatencyFrames(), resources.plan->SampleRate()};
+            owner->state_->resamplerLookAhead = resources.voice->ResamplerLookAhead();
             owner->state_->voiceIdentity = resources.voice->Voice();
             const auto published = resources.voice->Publish(resources.initialVoice, *resources.plan, resources.staging);
             if (published.HasError())

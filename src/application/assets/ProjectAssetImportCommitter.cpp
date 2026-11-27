@@ -217,13 +217,15 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
-        /** @brief Remove private copies before publishing registry references to the promoted batch. */
-        Result<void> ClearStages(std::vector<Entry> &entries, DurableFileSystem &files) {
+        /** @brief Remove private copies and honor cancellation before handing off to the registry. */
+        Result<void> ClearStages(std::vector<Entry> &entries, DurableFileSystem &files, const CancellationToken &cancellation) {
             for (auto &entry : entries) {
                 if (auto removed = files.RemoveDurable(entry.stage); removed.HasError())
                     return removed;
                 entry.staged = false;
             }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
             return Result<void>::Success();
         }
 
@@ -242,7 +244,8 @@ namespace Horo::Application {
 
         /** @brief Registry publication commits visibility; a later derived-index failure must not compensate sources. */
         Result<void> PublishRegistry(const std::filesystem::path &root, Assets::AssetRegistry *registry, ProjectAssetImportReceipt &receipt,
-                                     bool &complete, std::span<const Assets::AssetRecord> expected) {
+                                     bool &complete, std::span<const Assets::AssetRecord> expected,
+                                     const CancellationToken &cancellation) {
             if (!registry && expected.empty())
                 return Result<void>::Success();
             auto candidate = Assets::PrepareAssetRegistryCandidate(root);
@@ -252,6 +255,8 @@ namespace Horo::Application {
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed));
             if (auto planned = PlannedRecords(candidate.Value(), expected); planned.HasError())
                 return planned;
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
             if (!registry)
                 return Result<void>::Success();
             if (const auto report = registry->Publish(std::move(candidate).Value());
@@ -373,7 +378,8 @@ namespace Horo::Application {
 
     /** @copydoc ProjectAssetImportCommitter::CommitAuthored */
     Result<void> ProjectAssetImportCommitter::CommitAuthored(const PreparedAuthoredProjectAssetBatch &batch,
-                                                             const CancellationToken &cancellation) {
+                                                             const CancellationToken &cancellation,
+                                                             const std::function<Result<void>()> &admit) {
         if (busy_)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
         BusyScope busy(busy_);
@@ -383,6 +389,9 @@ namespace Horo::Application {
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Cancelled));
             if (auto lease = mutations_.TryAcquire({batch.projectRoot, Editor::ProjectMutationOwner::Asset, batch.operationId});
                 lease.HasValue()) {
+                if (admit)
+                    if (const auto admitted = admit(); admitted.HasError())
+                        return admitted;
                 auto prepared = PrepareAuthored(batch);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
@@ -430,9 +439,10 @@ namespace Horo::Application {
                 return staged;
             if (auto promoted = Promote(publication.entries, publication.root, files_, receipt_, cancellation); promoted.HasError())
                 return promoted;
-            if (auto removed = ClearStages(publication.entries, files_); removed.HasError())
+            if (auto removed = ClearStages(publication.entries, files_, cancellation); removed.HasError())
                 return removed;
-            if (auto registry = PublishRegistry(publication.root, registry_, receipt_, complete, publication.expected); registry.HasError())
+            if (auto registry = PublishRegistry(publication.root, registry_, receipt_, complete, publication.expected, cancellation);
+                registry.HasError())
                 return registry;
             receipt_.status = ProjectAssetImportStatus::Published;
             complete = true;

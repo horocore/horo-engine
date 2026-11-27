@@ -4,6 +4,7 @@
  * @brief Test-host composition of real Detour query/crowd providers and canonical Physics-backed Character movement.
  */
 #include "AllocationProbe.h"
+#include "Horo/Navigation/Backends/DeterministicCrowdProvider.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationCharacterAdapter.h"
@@ -15,12 +16,21 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <optional>
 #include <thread>
 
 namespace Horo::Navigation::Qualification {
     using namespace TestSupport;
     inline constexpr float RootHeight = 0.77F;
     inline constexpr float StepSeconds = 1.0F / 60.0F;
+
+    /** @brief Narrow native floor and a real stationary Character used to create sustained local crowd density. */
+    struct CrowdCorridor final {
+        float minimumZ{4.4F};
+        float maximumZ{5.6F};
+        float minimumSpeedScale{0.5F};
+        Math::Vec3 neighborRoot{0.35F, RootHeight, 5};
+    };
 
     /** @brief One finite workload slice below ADR-109 CrowdSmall capacities, independent of renderer selection. */
     inline NavigationPathBatchLimits QueryLimits() {
@@ -38,9 +48,12 @@ namespace Horo::Navigation::Qualification {
 
     /** @brief Build actual Detour polygons; disconnected mode leaves a deliberate physical gap in the path topology. */
     inline std::unique_ptr<INavigationQueryBackend> Provider(const NavigationGeneration topology = Topology(),
-                                                             const bool disconnected = false, const NavigationWorldId worldId = World()) {
+                                                             const bool disconnected = false, const NavigationWorldId worldId = World(),
+                                                             const std::optional<CrowdCorridor> &corridor = {}) {
+        const auto low = corridor ? corridor->minimumZ : 0.0F;
+        const auto high = corridor ? corridor->maximumZ : 10.0F;
         const std::array<Math::Vec3, 8> vertices{
-            {{0, 0, 0}, {5, 0, 0}, {5, 0, 10}, {0, 0, 10}, {6, 0, 0}, {10, 0, 0}, {10, 0, 10}, {6, 0, 10}}};
+            {{0, 0, low}, {5, 0, low}, {5, 0, high}, {0, 0, high}, {6, 0, low}, {10, 0, low}, {10, 0, high}, {6, 0, high}}};
         const auto area = Id<NavigationAreaId>(1);
         const auto surface = Id<SurfaceId>(1);
         std::array<GroundedNavigationPolygon, 2> polygons{
@@ -76,9 +89,46 @@ namespace Horo::Navigation::Qualification {
         return Physics::PhysicsWorldSettings::Capture(settings).Value();
     }
 
+    /** @brief Common capsule and native collision identities for reference navigation workloads. */
+    inline Character::CharacterControllerDescriptor ReferenceController(const Character::CharacterWorld &character) {
+        const auto &world = character.Descriptor();
+        Character::CharacterControllerDescriptor descriptor;
+        descriptor.sceneGeneration = world.sceneGeneration;
+        descriptor.characterWorld = world.identity;
+        descriptor.physicsWorld = world.physicsWorld;
+        descriptor.collisionProfile = Physics::CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
+        descriptor.queryChannel = Physics::PhysicsQueryChannelId::Parse("32345678-1234-4234-8234-123456789abc").Value();
+        descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 3,
+                                      Physics::PhysicsMaterialSlotId::FromValue(5)};
+        descriptor.capsule = {0.25F, 0.5F};
+        descriptor.collisionRootPosition = {1, RootHeight, 5};
+        descriptor.gravity = {};
+        return descriptor;
+    }
+
+    /** @brief Installs static query geometry on the same profile used by the reference capsule. */
+    inline void AddReferenceShape(Physics::PhysicsWorld &physics, const Character::CharacterControllerDescriptor &controller,
+                                  const Physics::PhysicsQueryFixtureShape &shape, const Math::Vec3 position) {
+        REQUIRE(physics
+                    .CreateQueryFixture({.shape = shape,
+                                         .pose = {.translation = position},
+                                         .layer = Physics::CollisionLayerId::Parse("42345678-1234-4234-8234-123456789abc").Value(),
+                                         .profile = controller.collisionProfile,
+                                         .channel = controller.queryChannel})
+                    .HasValue());
+    }
+
+    /** @brief Copies the exact publication identifiers required by Character's native query adapter. */
+    inline Character::CharacterPhysicsQueryExpectations ReferenceExpectations(const Character::CharacterWorld &world,
+                                                                              const std::uint64_t tick) {
+        const auto &d = world.Descriptor();
+        return {d.sceneGeneration,  d.identity, d.physicsWorld,           d.collisionFilterGeneration,
+                d.originGeneration, tick,       d.physicsSnapshotRevision};
+    }
+
     /** @brief Test host owns services in dependency order and drains jobs before provider/world destruction. */
     struct Host final {
-        JobSystem jobs{{.workerCount = 1}};
+        JobSystem jobs;
         NavigationWorldLifecycle navigation{NavigationWorldLifecycle::Create(4).Value()};
         std::unique_ptr<NavigationCoordinator> coordinator{
             std::make_unique<NavigationCoordinator>(NavigationCoordinator::Create(jobs, QueryLimits()).Value())};
@@ -91,11 +141,15 @@ namespace Horo::Navigation::Qualification {
         std::unique_ptr<Physics::PhysicsWorld> physics;
         std::unique_ptr<Character::CharacterWorld> character;
         Character::CharacterControllerHandle controller;
+        Character::CharacterControllerHandle neighborController;
         std::unique_ptr<NavigationAgentSceneCandidate> scene;
         CrowdAgentHandle agent;
+        CrowdAgentHandle neighbor;
+        const std::optional<CrowdCorridor> corridor;
         std::unique_ptr<NavigationMovementController> movement;
         std::unique_ptr<NavigationVelocityPipeline> velocity;
         std::unique_ptr<INavigationCrowdBackend> crowd;
+        std::unique_ptr<INavigationQualifiedCrowdBackend> deterministicCrowd;
         Character::CharacterCapability grant;
         NavigationCharacterAdapter bridge;
         std::uint32_t dispatched{};
@@ -107,8 +161,10 @@ namespace Horo::Navigation::Qualification {
         Tests::AllocationProbe::Measurement commitAllocations{};
         std::chrono::nanoseconds commitLatency{};
 
-        explicit Host(const bool disconnected = false, const bool wall = false) {
-            REQUIRE(navigation.Stage(activation, Provider(activation.topology, disconnected, activation.world)).HasValue());
+        explicit Host(const bool disconnected = false, const bool wall = false, std::optional<CrowdCorridor> layout = {},
+                      const std::uint32_t workers = 1)
+            : jobs({.workerCount = workers}), corridor(layout) {
+            REQUIRE(navigation.Stage(activation, Provider(activation.topology, disconnected, activation.world, corridor)).HasValue());
             REQUIRE(navigation.CommitAtSafePoint(activation.scene, activation.sceneGeneration).HasValue());
             physicsRuntime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical).Value();
             physics = physicsRuntime->PrepareWorld(PhysicsSettings()).Value();
@@ -123,7 +179,7 @@ namespace Horo::Navigation::Qualification {
 
         void PrepareCharacter() {
             Character::CharacterWorldSettingsDescriptor limits;
-            limits.capacities.maximumControllers = 1;
+            limits.capacities.maximumControllers = corridor ? 2 : 1;
             limits.capacities.maximumQueuedCommands = 4;
             limits.work.maximumCommandsPerTick = 4;
             character = Character::CharacterWorld::Prepare({activation.sceneGeneration.Value(), physics->Identity(), 1, 1},
@@ -142,16 +198,30 @@ namespace Horo::Navigation::Qualification {
         void ActivateOwners(const bool replacement) {
             REQUIRE(character->RefreshPhysicsSnapshot(physics->Identity(), physics->PublishedTick().publicationRevision).HasValue());
             controller = character->CreateController(Controller()).Value();
+            if (corridor) {
+                auto descriptor = Controller();
+                descriptor.collisionRootPosition = corridor->neighborRoot;
+                neighborController = character->CreateController(descriptor).Value();
+            }
             REQUIRE(character->Activate().HasValue());
             Character::CharacterPhysicsQueryAdapter queries(*physics);
-            REQUIRE(character->SpawnController(controller, queries.Context(Expectations(0))).HasValue());
-            const std::array descriptors{NavigationAgentDescriptor{.owner = {binding.scene, 1, 1},
-                                                                   .profile = Id<NavigationAgentProfileId>(1),
-                                                                   .filter = Id<NavigationFilterId>(1),
-                                                                   .radiusOverride = 0.25F}};
-            scene = agents.PrepareScene(binding, descriptors).Value();
+            const auto context = queries.Context(Expectations(0));
+            REQUIRE(character->SpawnController(controller, context).HasValue());
+            if (corridor)
+                REQUIRE(character->SpawnController(neighborController, context).HasValue());
+            std::array descriptors{NavigationAgentDescriptor{.owner = {binding.scene, 1, 1},
+                                                             .profile = Id<NavigationAgentProfileId>(1),
+                                                             .filter = Id<NavigationFilterId>(1),
+                                                             .radiusOverride = 0.25F},
+                                   NavigationAgentDescriptor{}};
+            descriptors.back() = descriptors.front();
+            descriptors.back().owner.entityIndex = 2;
+            scene = agents.PrepareScene(binding, std::span(descriptors).first(corridor ? 2 : 1)).Value();
             scene->Publish();
-            agent = agents.Snapshot().Value().Agents().front().handle;
+            const auto registered = agents.Snapshot().Value();
+            agent = registered.Agents().front().handle;
+            if (corridor)
+                neighbor = registered.Agents().back().handle;
             if (replacement)
                 REQUIRE(dynamic.ReplaceSceneAtSafePoint(activation, 1).HasValue());
             else
@@ -189,7 +259,7 @@ namespace Horo::Navigation::Qualification {
             binding = {activation.world, activation.scene, activation.sceneGeneration};
             callers[0].generation = Id<NavigationDynamicOwnerGeneration>(callers[0].generation.Value() + 1);
             ++characterRevision;
-            REQUIRE(navigation.Stage(activation, Provider(activation.topology, false, activation.world)).HasValue());
+            REQUIRE(navigation.Stage(activation, Provider(activation.topology, false, activation.world, corridor)).HasValue());
             REQUIRE(navigation.CommitAtSafePoint(activation.scene, activation.sceneGeneration).HasValue());
             PrepareCharacter();
             AdvancePhysics();
@@ -207,35 +277,15 @@ namespace Horo::Navigation::Qualification {
         Host &operator=(const Host &) = delete;
 
         Character::CharacterControllerDescriptor Controller() const {
-            Character::CharacterControllerDescriptor descriptor;
-            descriptor.sceneGeneration = activation.sceneGeneration.Value();
-            descriptor.characterWorld = character->Descriptor().identity;
-            descriptor.physicsWorld = physics->Identity();
-            descriptor.collisionProfile = Physics::CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
-            descriptor.queryChannel = Physics::PhysicsQueryChannelId::Parse("32345678-1234-4234-8234-123456789abc").Value();
-            descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 3,
-                                          Physics::PhysicsMaterialSlotId::FromValue(5)};
-            descriptor.capsule = {0.25F, 0.5F};
-            descriptor.collisionRootPosition = {1, RootHeight, 5};
-            descriptor.gravity = {};
-            return descriptor;
+            return ReferenceController(*character);
         }
 
         void AddShape(const Physics::PhysicsQueryFixtureShape &shape, const Math::Vec3 position) {
-            const auto descriptor = Controller();
-            REQUIRE(physics
-                        ->CreateQueryFixture({.shape = shape,
-                                              .pose = {.translation = position},
-                                              .layer = Physics::CollisionLayerId::Parse("42345678-1234-4234-8234-123456789abc").Value(),
-                                              .profile = descriptor.collisionProfile,
-                                              .channel = descriptor.queryChannel})
-                        .HasValue());
+            AddReferenceShape(*physics, Controller(), shape, position);
         }
 
         Character::CharacterPhysicsQueryExpectations Expectations(const std::uint64_t tick) const {
-            const auto &d = character->Descriptor();
-            return {d.sceneGeneration,  d.identity, d.physicsWorld,           d.collisionFilterGeneration,
-                    d.originGeneration, tick,       d.physicsSnapshotRevision};
+            return ReferenceExpectations(*character, tick);
         }
 
         NavigationOutcomeProvenance Source() const {
@@ -270,27 +320,52 @@ namespace Horo::Navigation::Qualification {
             REQUIRE(movement->Start(request, Now(lastTick)).HasValue());
         }
 
+        /** @brief Samples the same live Character publications the motion owner uses for this tick. */
+        NavigationCrowdMotionSample Sample(CrowdAgentHandle id, Character::CharacterControllerHandle handle) const {
+            const auto snapshot = character->ControllerLocomotionSnapshot(handle);
+            return {.handle = id,
+                    .position = character->ControllerTransform(handle).Value().position,
+                    .velocity = snapshot.HasValue() ? snapshot.Value().movement.achievedVelocityMetersPerSecond : Math::Vec3{}};
+        }
+
         NavigationCrowdSnapshot Capture(const std::uint64_t tick) const {
-            const auto snapshot = character->ControllerLocomotionSnapshot(controller);
-            const std::array motions{NavigationCrowdMotionSample{.handle = agent,
-                                                                 .position = Now(tick).position,
-                                                                 .velocity = snapshot.HasValue()
-                                                                                 ? snapshot.Value().movement.achievedVelocityMetersPerSecond
-                                                                                 : Math::Vec3{}}};
-            const std::array profiles{NavigationCrowdProfileFacts{.profile = Id<NavigationAgentProfileId>(1),
-                                                                  .radiusMeters = 0.25F,
-                                                                  .neighborRadiusMeters = 4,
-                                                                  .maximumNeighbors = 16,
-                                                                  .maximumBoundarySegments = 16}};
-            const NavigationCrowdSnapshotLimits limits{.maximumAgents = 4,
-                                                       .maximumBoundarySegments = 16,
-                                                       .maximumCellEntries = 32,
-                                                       .maximumNeighborFacts = 16,
-                                                       .maximumBoundaryFacts = 16,
-                                                       .maximumPairChecks = 16,
-                                                       .maximumBoundaryChecks = 64};
-            return BuildNavigationCrowdSnapshot(agents.Snapshot().Value(), dynamic.Snapshot().Value(), motions, profiles, limits, tick)
+            std::array motions{Sample(agent, controller), NavigationCrowdMotionSample{}};
+            if (corridor)
+                motions.back() = Sample(neighbor, neighborController);
+            const std::array profiles{
+                NavigationCrowdProfileFacts{.profile = Id<NavigationAgentProfileId>(1),
+                                            .radiusMeters = 0.25F,
+                                            .neighborRadiusMeters = 4,
+                                            .maximumNeighbors = 16,
+                                            .maximumBoundarySegments = 16,
+                                            .densitySaturationNeighbors = corridor ? 1U : 0U,
+                                            .minimumDensitySpeedScale = corridor ? corridor->minimumSpeedScale : 1.0F}};
+            NavigationCrowdSnapshotLimits limits{.maximumAgents = 4,
+                                                 .maximumBoundarySegments = 16,
+                                                 .maximumCellEntries = 32,
+                                                 .maximumNeighborFacts = 16,
+                                                 .maximumBoundaryFacts = 16,
+                                                 .maximumPairChecks = 16,
+                                                 .maximumBoundaryChecks = 64};
+            if (deterministicCrowd) {
+                const auto &evidence = deterministicCrowd->Qualification();
+                limits.mode = AvoidanceExecutionMode::DeterministicQualified;
+                limits.deterministicStamp = {activation.topology, evidence.topologyContent, evidence.profile};
+            }
+            return BuildNavigationCrowdSnapshot(agents.Snapshot().Value(), dynamic.Snapshot().Value(),
+                                                std::span(motions).first(corridor ? 2 : 1), profiles, limits, tick)
                 .Value();
+        }
+
+        /** @brief Chooses the fixture's exact provider before consuming the canonical motion publication. */
+        Result<NavigationAvoidanceOutcome> SolveCrowd(const NavigationCrowdSnapshot &capture, const NavigationAvoidanceRequest &request) {
+            if (!deterministicCrowd)
+                return crowd->Solve(capture, request);
+            auto result = NavigationCrowdBatch::RunQualified(capture, std::span{&request, 1}, *deterministicCrowd,
+                                                             deterministicCrowd->Qualification(), activation.topology);
+            if (result.HasError())
+                return Result<NavigationAvoidanceOutcome>::Failure(std::move(result).ErrorValue());
+            return Result<NavigationAvoidanceOutcome>::Success(std::move(result).Value().front().outcome);
         }
 
         /** @brief Test-only finite synchronization between simulation ticks; the runtime APIs remain nonblocking. */
@@ -320,12 +395,14 @@ namespace Horo::Navigation::Qualification {
                 return result;
             }();
             const auto current = Now(tick);
-            const auto work =
-                velocity->Prepare(current, capture, {.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = StepSeconds});
+            const auto work = velocity->Prepare(current, capture,
+                                                {.maximumSpeedMetersPerSecond = corridor ? 2.0F : 3.5F,
+                                                 .maximumAccelerationMetersPerSecondSquared = 20,
+                                                 .stepSeconds = StepSeconds});
             RequireSameRoot(before);
             if (work.HasError())
                 return Result<NavigationVelocityPublication>::Failure(work.ErrorValue());
-            const auto sampled = crowd->Solve(capture, work.Value().request);
+            const auto sampled = SolveCrowd(capture, work.Value().request);
             REQUIRE(sampled.HasValue());
             const auto commitStart = std::chrono::steady_clock::now();
             auto publication = [&] {
@@ -341,6 +418,18 @@ namespace Horo::Navigation::Qualification {
             const auto admitted = bridge.Submit(motion.Value(), current);
             REQUIRE(admitted.HasValue());
             RequireSameRoot(before);
+            StepCharacter(tick);
+            const auto afterCharacter = character->ControllerTransform(controller).Value();
+            REQUIRE(bridge.ObserveFeedback().HasValue());
+            RequireSameRoot(afterCharacter);
+            DispatchTick(tick);
+            RequireSameRoot(afterCharacter);
+            return publication;
+        }
+
+        /** @brief Advances the native world pair through completed Character movement. */
+        void StepCharacter(const std::uint64_t tick) {
+            const auto before = character->ControllerTransform(controller).Value();
             AdvancePhysics();
             RequireSameRoot(before);
             REQUIRE(character->RefreshPhysicsSnapshot(physics->Identity(), physics->PublishedTick().publicationRevision).HasValue());
@@ -351,13 +440,12 @@ namespace Horo::Navigation::Qualification {
                                             .fixedDelta = Duration::FromNanoseconds(16'666'667),
                                             .query = queries.Context(Expectations(tick))})
                         .HasValue());
-            const auto afterCharacter = character->ControllerTransform(controller).Value();
-            REQUIRE(bridge.ObserveFeedback().HasValue());
-            RequireSameRoot(afterCharacter);
+        }
+
+        /** @brief Dispatches queued path work only after the Character step. */
+        void DispatchTick(const std::uint64_t tick) {
             dispatched = coordinator->Dispatch(tick);
-            RequireSameRoot(afterCharacter);
             lastTick = tick;
-            return publication;
         }
 
         void RequireSameRoot(const Character::CharacterTransformPublication &before) const {

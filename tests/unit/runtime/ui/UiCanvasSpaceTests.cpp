@@ -105,6 +105,20 @@ namespace Horo::Runtime::Ui {
             REQUIRE(resized.Value().logicalExtent == UiCanvasLogicalExtent{1536 * 64, 864 * 64});
         }
 
+        TEST_CASE("User scale composes once with authored scale and preserves the independent text factor", "[runtime_ui][canvas]") {
+            auto canvas = Canvas(UiRenderMode::ScreenSpaceOverlay, UiScaleMode::ConstantPhysicalSize);
+            canvas.presentation = {.safeArea = UiSafeAreaMode::Inset, .uiScale = {5, 4}, .fontScale = {3, 2}};
+            const auto resolved = ResolveUiScreenCanvasWithEvidence(canvas, {{320, 144}, {6, 4}, {10, 0, 10, 0}, {4, 5}});
+            REQUIRE(resolved.HasValue());
+            CHECK(resolved.Value().pixelsPerDip == UiCanvasDeviceScale{3, 2});
+            CHECK(resolved.Value().logicalExtent == UiCanvasLogicalExtent{200 * 64, 96 * 64});
+            CHECK(resolved.Value().uiScale == UiCanvasScaleFactor{5, 4});
+            CHECK(resolved.Value().userUiScale == UiCanvasScaleFactor{4, 5});
+            CHECK(resolved.Value().fontScale == UiCanvasScaleFactor{3, 2});
+            const auto invalid = ResolveUiScreenCanvasWithEvidence(canvas, {{320, 144}, {6, 4}, {}, {3, 0}});
+            RequireFailureCode(invalid, UiErrors::CanvasSpaceInvalid);
+        }
+
         TEST_CASE("Presentation evidence rejects malformed DPI and safe-area changes transactionally", "[runtime_ui][canvas][failure]") {
             auto canvas = Canvas();
             canvas.presentation.safeArea = UiSafeAreaMode::Inset;

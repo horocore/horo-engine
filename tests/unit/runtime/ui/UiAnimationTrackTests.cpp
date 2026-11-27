@@ -207,3 +207,15 @@ TEST_CASE("Animation owner admission rejects unknown layout value policy", "[run
     definition.layoutBindings.front().values = UiAnimationLayoutValuePolicy::Count;
     CHECK(ValidateDefinitions(definition, canvas, registry, {}).HasError());
 }
+
+TEST_CASE("Flash track admission requires paint-only properties", "[runtime_ui][animation][accessibility]") {
+    const auto tree = Tree();
+    CHECK(ValidatePropertyTrack(Track(), tree, Registry(), 3, true).HasValue());
+    auto dimension = Track();
+    dimension.keyframes = {{0, UiStyleDimension{0}}, {End, UiStyleDimension{20}}};
+    const auto registry = Registry(true);
+    REQUIRE(ValidatePropertyTrack(dimension, tree, registry, 2).HasValue());
+    const auto rejected = ValidatePropertyTrack(dimension, tree, registry, 2, true);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == UiErrors::AnimationPolicyInvalid.code.Value());
+}

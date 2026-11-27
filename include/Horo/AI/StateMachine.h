@@ -92,6 +92,16 @@ namespace Horo::AI {
         SourceLocation location;
     };
 
+    /** @brief Orders transitions after the active source state has been chosen.
+     * @param left Candidate to consider first. @param right Candidate to compare.
+     * @return True for higher priority or, on a tie, a lower stable transition identity.
+     * @details The runner chooses source states from the active leaf toward its ancestors before applying this order.
+     */
+    [[nodiscard]] constexpr bool StateMachineTransitionPrecedes(const StateMachineTransition &left,
+                                                                const StateMachineTransition &right) noexcept {
+        return left.priority != right.priority ? left.priority > right.priority : left.id < right.id;
+    }
+
     /** @brief Borrowed-by-value .horo_sm semantic source with no editor layout or runtime pointers. */
     struct StateMachineAssetDescriptor final {
         DecisionNodeId initial;
@@ -151,6 +161,16 @@ namespace Horo::AI {
         [[nodiscard]] std::span<const StateMachineTransition> Transitions() const noexcept {
             return source_.transitions;
         }
+
+        /** @brief Returns the authored upper bound on transitions in one evaluation. */
+        [[nodiscard]] std::size_t MaximumTransitionsPerStep() const noexcept {
+            return source_.maximumTransitionsPerStep;
+        }
+
+        /** @brief Checks whether existing state indices, transitions and provider roles can be retained.
+         * @param candidate Compiled replacement machine.
+         * @return True if the shape, executable state data and provider roles match. */
+        [[nodiscard]] bool IsCompatible(const CookedStateMachinePlan &candidate) const noexcept;
 
     private:
         friend class StateMachineInstance;
@@ -306,11 +326,21 @@ namespace Horo::AI {
 
         /** @brief Returns the deepest active state or invalid when unstarted/terminal. @return Stable authored identity. */
         [[nodiscard]] DecisionNodeId ActiveState() const noexcept;
+
+        /** @brief Reads committed transitions from the last admitted step in execution order.
+         * @return Borrowed stable identities, valid until the next admitted Step or Restart.
+         * @details Rejected cycle edges and failed transition actions are excluded. Earlier commits survive a later failure.
+         */
+        [[nodiscard]] std::span<const DecisionNodeId> CommittedTransitions() const noexcept {
+            return std::span{committedTransitions_}.first(committedTransitionCount_);
+        }
+
         StateMachineInstance(const StateMachineInstance &) = delete;
         StateMachineInstance &operator=(const StateMachineInstance &) = delete;
 
     private:
         friend class CookedStateMachinePlan;
+        friend class DecisionGraphInstance;
         using Path = std::array<std::size_t, StateMachineLimits::Depth>;
         [[nodiscard]] std::size_t MakePath(DecisionNodeId target, Path &path) const noexcept;
         [[nodiscard]] Result<void> CheckBoundary(const BlackboardSnapshot &blackboard);
@@ -346,6 +376,8 @@ namespace Horo::AI {
         Path path_{};
         std::size_t depth_{};
         std::optional<std::uint64_t> lastTick_;
+        std::array<DecisionNodeId, StateMachineLimits::TransitionsPerStep> committedTransitions_{};
+        std::size_t committedTransitionCount_{};
         std::array<AiTaskState, StateMachineLimits::States> childOutcomes_{};
         StateMachineActions *actions_{}; /**< Borrowed only while Step holds its scope guard. */
         bool evaluating_{};

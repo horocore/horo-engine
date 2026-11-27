@@ -32,6 +32,9 @@ namespace Horo::AI {
     struct StimulusTypeIdentityTag;
     struct PerceptionListenerTypeIdentityTag;
     struct PerceptionProviderIdentityTag;
+    struct QueryIdentityTag;
+    struct QueryItemTypeIdentityTag;
+    struct QueryResultSchemaIdentityTag;
 
     /** @brief Persistent authored identity of an AI agent, independent of display name and runtime instance. */
     using AgentId = AiStableIdentity<AgentIdentityTag>;
@@ -51,6 +54,12 @@ namespace Horo::AI {
     using PerceptionListenerTypeId = AiStableIdentity<PerceptionListenerTypeIdentityTag>;
     /** @brief Persistent identity of a native, script, or package descriptor provider. */
     using PerceptionProviderId = AiStableIdentity<PerceptionProviderIdentityTag>;
+    /** @brief Stable authored EQS asset identity; AssetRegistry binds it to an AssetId outside HoroAI. */
+    using QueryId = AiStableIdentity<QueryIdentityTag>;
+    /** @brief Stable item payload type identity. */
+    using QueryItemTypeId = AiStableIdentity<QueryItemTypeIdentityTag>;
+    /** @brief Stable identity of an authored query result schema. */
+    using QueryResultSchemaId = AiStableIdentity<QueryResultSchemaIdentityTag>;
 
     /**
      * @brief Encodes a persistent AI identity in canonical network byte order.

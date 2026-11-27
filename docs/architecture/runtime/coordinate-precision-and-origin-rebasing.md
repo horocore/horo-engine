@@ -271,6 +271,28 @@ Subsystem-specific transformation and backend adapters remain separate follow-up
 contracts; this transaction defines only gathering, fencing, atomic application and
 generation publication.
 
+A runtime mount that carries canonical coordinates creates its origin through
+`WorldStreamingRuntimeComposition::CreateWithOrigin` alongside the active
+registry publication for the exact partition, epoch, and runtime owner. The host
+supplies the initial global origin and a unique frame identity. The partition's
+grid anchor remains indexing metadata. Consumers borrow the read-only owner on
+the authority lane and retain generation leases across reads. The composition
+retains one prepared transaction, fences it by the current service revision,
+and commits only at the post-simulation safe point. Cancellation rolls back
+prepared receipts and expires leases before the host retires the registry.
+Compositions without a canonical runtime mount do not provide an origin.
+
+The standalone mounted Scene exposes a cold render capture for an explicit
+camera and a bounded ordered list of procedural draw objects from the same
+active baseline. The capture resolves current entity generations against the
+attached cell occurrence. It requires an authored camera target and exact
+global coordinates for every selected draw. The existing CPU primitive cache
+pins actual render resources. Local rotation and scale form the draw basis.
+A local translation change withdraws capture until a fresh World position
+publication exists. Renderer projection also requires the same mounted
+`OriginFrameOwner`. Prepared packet reads reject a retired Scene or old
+renderer origin.
+
 ### 2. Two-Phase Rebasing Execution Flow
 
 ```text
@@ -312,6 +334,34 @@ generation publication.
   The constant buffer stores $M_{\text{view\_rel}}$ and $P_{\text{projection}}$.
 - **Shadow Map Cascades & Frustum Culling**:
   Shadow cascade splits and frustum culling calculations operate in camera-relative coordinates $P_{\text{cam\_rel}}$, ensuring sub-millimeter shadow map depth precision near the near clipping plane regardless of global distance.
+
+The renderer-owned `RenderOriginSceneAdapter` in
+`HoroSceneRenderExtraction` participates in the canonical transaction for one
+`OriginFrameOwner` and one frontend-issued render view. The composition supplies
+64-bit camera endpoints and placement anchors from the same world authority.
+Capture subtracts exact millimeter coordinates before narrowing and supplies
+one camera-relative packet to the existing static-mesh, lighting, and culling
+paths. The adapter reserves a finite number of frame slots at creation. A
+retained packet pins its camera, matrices, light and material bytes until its
+last holder releases it. Slot exhaustion reports backpressure before publishing
+any work.
+
+The mounted World composition can request an origin-relative packet for a
+consumer whose pose shares the canonical World origin. The same selected
+camera, mesh, and light anchors are projected into the committed origin frame.
+Its typed borrow carries the renderer view and a lease for the exact origin
+generation. The desktop packet API accepts camera-relative captures only. A
+mounted packet also requires the originating RuntimeScene incarnation to remain
+current. A pose consumer still owns admission, phase ordering, and replacement
+of its own pose source.
+
+A prepared rebase receipt advances the renderer only when its own canonical
+owner publishes the exact successor. Retained packets then fail new submission
+and history admission. Already accepted work keeps its immutable packet
+and uses the existing renderer completion and retirement contract. A new
+canonical world owner uses a new frontend render-view identity. Composition
+roots choose when to prepare and commit the world origin on the post-simulation
+safe point.
 
 ### 2. Physics Subsystem
 

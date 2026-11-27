@@ -2,6 +2,7 @@
 
 /** @file ProjectMutation.h @brief Shared project mutation serialization contract. */
 
+#include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Foundation/Platform.h"
 
 #include <filesystem>
@@ -9,6 +10,11 @@
 #include <string>
 
 namespace Horo::Editor {
+    /** @brief Describes existing project-mutation errors without acquiring locks or changing project state.
+     * @return Owned inert metadata containing process-lifetime immutable descriptor pointers.
+     */
+    [[nodiscard]] ModuleErrorDomainDescriptor ProjectMutationErrorDomain();
+
     /** @brief Names the subsystem requesting exclusive authored-project mutation authority. */
     enum class ProjectMutationOwner : std::uint8_t {
         Migration,
@@ -36,6 +42,12 @@ namespace Horo::Editor {
         ProjectMutationLease(ProjectMutationLease &&) noexcept;
         ProjectMutationLease &operator=(ProjectMutationLease &&) noexcept;
         ~ProjectMutationLease();
+
+        /** @brief Checks whether this live lease protects the exact canonical project root.
+         * @param canonicalRoot Absolute canonical project root selected by the caller's project host.
+         * @return True only while this lease holds the native project mutation lock for that root.
+         */
+        [[nodiscard]] bool ProtectsProject(const std::filesystem::path &canonicalRoot) const;
 
     private:
         friend class ProjectMutationCoordinator;

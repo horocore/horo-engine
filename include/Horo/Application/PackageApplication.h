@@ -4,6 +4,7 @@
  * @brief One project-bound application operation owner shared by package presentation adapters.
  */
 #include "Horo/Packages/PackageLifecycle.h"
+#include "Horo/Packages/PackageRequest.h"
 
 #include <functional>
 #include <thread>
@@ -14,7 +15,8 @@ namespace Horo::Application {
         Restore,
         Install,
         Activate,
-        Disable
+        Disable,
+        Remove
     };
     /** @brief Authoritative operation disposition, separate from installed and active package state. */
     enum class PackageOperationOutcome : std::uint8_t {
@@ -29,7 +31,8 @@ namespace Horo::Application {
         Restoring,
         Installing,
         Activating,
-        Completed
+        Completed,
+        Removing
     };
 
     /** @brief Non-wrapping identity scoped to the explicitly injected application service. */
@@ -50,6 +53,8 @@ namespace Horo::Application {
         std::optional<Error> diagnostic;
         std::optional<std::uint64_t> installedRevision; /**< Actual sealed availability publication, including before activation failure. */
         std::optional<std::uint64_t> activeGeneration;  /**< Actual existing active graph, never inferred from requested enablement. */
+        std::optional<std::uint64_t> attemptedActivationGeneration; /**< Set only when this operation reached a lifecycle attempt. */
+        std::vector<Packages::PackageModuleReport> moduleReports;   /**< Exact attempted role outcomes, including unpublished failures. */
     };
 
     /** @brief Evidence shown by adapters; neither value grants execution trust. */
@@ -66,6 +71,7 @@ namespace Horo::Application {
         std::optional<std::uint64_t> expandedBytes;
         std::optional<std::size_t> verifiedFiles;
         std::optional<Packages::PackagePublisherVerificationDecision> publisher;
+        std::vector<Packages::LockedPackageReference> requiredBy; /**< Direct dependents in this exact plan, in package-ID order. */
     };
 
     /** @brief Complete bounded plan; semantic package-kind/license/import-copy facts remain explicitly unavailable.
@@ -77,13 +83,27 @@ namespace Horo::Application {
         std::vector<PackagePlanEntry> packages;
     };
 
+    /** @brief Exact graph effects and live native ownership observed in one removal preview. */
+    struct PackageRemovalPreview final {
+        Packages::PackageRemovalGraphPreview graph;
+        std::vector<Packages::HoroPackageId> activeOrRetiring; /**< Departing packages whose native owners have not drained. */
+        bool supportsApply{}; /**< The host supplies saved-reference and publication authorities. */
+    };
+
+    /** @brief Host-prepared project publication work. It owns its removal reservation through completion. */
+    using PackageRemovalWork = std::function<Result<void>(const CancellationToken &)>;
+
     /** @brief Exact host policy; no portable package request can approve execution or select a native loader. */
     struct PackageApplicationConfiguration final {
         Packages::PackageRestoreRequest restore;
-        std::optional<Packages::ValidatedPackageLockfileV1> lockedPlan; /**< Already validated host project snapshot, when available. */
+        std::optional<Packages::ValidatedPackageLockfileV1> lockedPlan;   /**< Already validated host project snapshot, when available. */
+        std::optional<Packages::ValidatedPackageRequest> portableRequest; /**< Exact request for the same locked snapshot. */
         std::function<Result<void>()> validateAdmission; /**< Owner-lane current metadata/policy check; retained through Close. */
         const WallClock *wallClock{};                    /**< Host clock retained through Close; mandatory for publisher verification. */
-        std::size_t maximumEnabledDescriptors{64};
+        std::size_t maximumEnabledDescriptors{64};       /**< Application bound for descriptor or module selections. */
+        /** @brief Owner-lane callback that prepares a worker against the exact current project. Absent for read-only adapters. */
+        std::function<Result<PackageRemovalWork>(const Packages::HoroPackageId &, std::shared_ptr<const Packages::PackageRemovalLease>)>
+            prepareRemoval;
     };
 
     /**
@@ -136,7 +156,14 @@ namespace Horo::Application {
          * @return New operation or typed validation/admission failure. */
         [[nodiscard]] Result<PackageOperationId> Activate(std::span<const Packages::EnabledPackageExtension> enabled,
                                                           const CancellationToken &cancellation = {});
-        /** @brief Queues empty enablement without uninstalling content or changing trust.
+        /** @brief Queues an explicit role-aware selection through the same restore/install and activation operation.
+         * @param enabled Exact package/descriptor/module/role identities with required or optional policy.
+         * @param cancellation Parent cancellation.
+         * @return New operation or typed admission failure. Lifecycle selects the owning hosts and enforces trust at the safe point.
+         */
+        [[nodiscard]] Result<PackageOperationId> ActivateModules(std::span<const Packages::EnabledPackageModule> enabled,
+                                                                 const CancellationToken &cancellation = {});
+        /** @brief Queues withdrawal of the current composition without uninstalling content or changing trust.
          * @param cancellation Parent cancellation. @return New operation or typed admission failure. */
         [[nodiscard]] Result<PackageOperationId> Disable(const CancellationToken &cancellation = {});
         /** @brief Advances completed work and, only when quiescent, queued activation without waiting.
@@ -148,9 +175,42 @@ namespace Horo::Application {
         /** @brief Returns the current operation projection without inventing an operation or mutating authorities.
          * @return Current retained operation, empty before admission, or typed owner-lane failure. */
         [[nodiscard]] Result<std::optional<PackageOperationSnapshot>> Current() const;
+        /** @brief Observes whether the current activation attempt has authoritative execution trust denial evidence.
+         * @return True for the typed lifecycle trust-required cause in the terminal operation or an independently denied role,
+         * false with no current denial, or typed owner-lane failure. Does not copy operation reports or change activation.
+         */
+        [[nodiscard]] Result<bool> ActivationTrustRequired() const;
         /** @brief Returns the immutable precomputed plan, with evidence status separate from actual installed/active state.
          * @return Owning read-only plan or typed missing-evidence/owner-lane failure. */
         [[nodiscard]] Result<std::shared_ptr<const PackagePlanSnapshot>> Plan() const;
+        /** @brief Previews withdrawal of one package from the current exact locked graph.
+         * @param package Package from the displayed lock. @return Read-only graph impacts or a stale/missing evidence failure. */
+        [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(const Packages::HoroPackageId &package) const;
+        /** @brief Previews withdrawal from the locked graph and reports native owners observed on the composition lane.
+         * @param package Package from the displayed lock.
+         * @return Read-only graph and lifetime evidence or a stale/missing evidence failure.
+         * @details The preview is a point-in-time observation. A mutation must independently recheck native owners and project references. */
+        [[nodiscard]] Result<PackageRemovalPreview> InspectRemoval(const Packages::HoroPackageId &package) const;
+        /** @brief Submits explicitly confirmed package removal against a currently displayed plan.
+         * @param package Direct dependency selected in the preview.
+         * @param reviewed Exact immutable plan held when the caller showed the preview.
+         * @param cancellation Parent I/O stop token.
+         * @return Operation ID or typed admission error. Success revokes further mutations on the old plan.
+         */
+        [[nodiscard]] Result<PackageOperationId> Remove(const Packages::HoroPackageId &package,
+                                                        const std::shared_ptr<const PackagePlanSnapshot> &reviewed,
+                                                        const CancellationToken &cancellation = {});
+        /** @brief Observes durable withdrawal on the owner lane so the host can reload package metadata. @return Commit evidence. */
+        [[nodiscard]] bool RemovalPublished() const noexcept;
+        /**
+         * @brief Previews an explicitly resolved candidate against the current project package plan.
+         * @param candidate Portable intent for the candidate.
+         * @param candidateLock Exact lock for that intent.
+         * @return Read-only changes or typed stale authority, incompatibility, or request-to-lock failure.
+         * @post Does not fetch artifacts, start an operation, or change the project.
+         */
+        [[nodiscard]] Result<Packages::PackageUpdatePreview> PreviewUpdate(const Packages::ValidatedPackageRequest &candidate,
+                                                                           const Packages::ValidatedPackageLockfileV1 &candidateLock) const;
         /** @brief Requests cooperative cancellation of one exact current operation.
          * @param operation Expected operation identity. @return Success or typed stale/owner failure. */
         [[nodiscard]] Result<void> RequestCancel(PackageOperationId operation);

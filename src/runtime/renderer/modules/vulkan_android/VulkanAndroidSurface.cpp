@@ -6,18 +6,26 @@
 
 namespace Horo::Render::AndroidVulkan {
     namespace {
+        /** @brief Native discovery or creation can lose its surface before a swapchain exists. */
+        Error SurfaceError(std::string_view operation, VkResult result) {
+            auto native = NativeError(operation, result);
+            if (result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_OUT_OF_DATE_KHR)
+                return WrapError(Errors::Pending, std::move(native));
+            return native;
+        }
+
         /** @brief Selects only an actual legacy SDR storage/space pair, without assuming a calibrated output. */
         Result<VkFormat> SelectFormat(const Dispatch &vk, VkPhysicalDevice physical, VkSurfaceKHR surface) {
             std::array<VkSurfaceFormatKHR, 256> formats{};
             std::uint32_t count{};
             auto result = vk.surfaceFormats(physical, surface, &count, nullptr);
             if (result != VK_SUCCESS)
-                return Result<VkFormat>::Failure(NativeError("vkGetPhysicalDeviceSurfaceFormatsKHR", result));
+                return Result<VkFormat>::Failure(SurfaceError("vkGetPhysicalDeviceSurfaceFormatsKHR", result));
             if (count > formats.size())
                 return Result<VkFormat>::Failure(MakeError(Errors::Capacity));
             result = vk.surfaceFormats(physical, surface, &count, formats.data());
             if (result != VK_SUCCESS)
-                return Result<VkFormat>::Failure(NativeError("vkGetPhysicalDeviceSurfaceFormatsKHR", result));
+                return Result<VkFormat>::Failure(SurfaceError("vkGetPhysicalDeviceSurfaceFormatsKHR", result));
             for (const auto &format : std::span{formats}.first(count))
                 if (format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR &&
                     (format.format == VK_FORMAT_R8G8B8A8_UNORM || format.format == VK_FORMAT_B8G8R8A8_UNORM))
@@ -32,12 +40,12 @@ namespace Horo::Render::AndroidVulkan {
             std::uint32_t count{};
             auto result = vk.surfaceModes(physical, surface, &count, nullptr);
             if (result != VK_SUCCESS)
-                return Result<void>::Failure(NativeError("vkGetPhysicalDeviceSurfacePresentModesKHR", result));
+                return Result<void>::Failure(SurfaceError("vkGetPhysicalDeviceSurfacePresentModesKHR", result));
             if (count > modes.size())
                 return Result<void>::Failure(MakeError(Errors::Capacity));
             result = vk.surfaceModes(physical, surface, &count, modes.data());
             if (result != VK_SUCCESS)
-                return Result<void>::Failure(NativeError("vkGetPhysicalDeviceSurfacePresentModesKHR", result));
+                return Result<void>::Failure(SurfaceError("vkGetPhysicalDeviceSurfacePresentModesKHR", result));
             if (std::ranges::find(std::span{modes}.first(count), VK_PRESENT_MODE_FIFO_KHR) == std::span{modes}.first(count).end())
                 return Result<void>::Failure(MakeError(Errors::Unsupported, "The Android surface does not expose FIFO presentation."));
             return Result<void>::Success();
@@ -84,16 +92,18 @@ namespace Horo::Render::AndroidVulkan {
         surface_->window = std::move(lease);
         const VkAndroidSurfaceCreateInfoKHR info{.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR,
                                                  .window = static_cast<ANativeWindow *>(surface_->window.NativeHandle())};
-        auto result = vk_.createSurface(instance_, &info, nullptr, &surface_->native);
+        VkSurfaceKHR native{};
+        auto result = vk_.createSurface(instance_, &info, nullptr, &native);
         if (result != VK_SUCCESS) {
             DestroySurface();
-            return Result<void>::Failure(NativeError("vkCreateAndroidSurfaceKHR", result));
+            return Result<void>::Failure(SurfaceError("vkCreateAndroidSurfaceKHR", result));
         }
+        surface_->native = native;
         VkBool32 supported{};
         result = vk_.surfaceSupport(physical_, family_, surface_->native, &supported);
         if (result != VK_SUCCESS) {
             DestroySurface();
-            return Result<void>::Failure(NativeError("vkGetPhysicalDeviceSurfaceSupportKHR", result));
+            return Result<void>::Failure(SurfaceError("vkGetPhysicalDeviceSurfaceSupportKHR", result));
         }
         if (!supported) {
             DestroySurface();
@@ -107,15 +117,12 @@ namespace Horo::Render::AndroidVulkan {
     Result<void> Runtime::FinishSurface(const Result<void> &prepared) {
         const auto outcome = prepared.HasValue() ? RenderSurfaceRealization::Ready : RenderSurfaceRealization::Lost;
         const auto completed = CompleteRealization(outcome);
-        if (prepared.HasError()) {
+        if (prepared.HasError() || completed.HasError())
             DestroySurface();
-            return prepared;
-        }
-        if (completed.HasError()) {
-            DestroySurface();
+        // A retryable native result cannot hide a failed canonical state transition.
+        if (completed.HasError() && (prepared.HasValue() || IsPending(prepared.ErrorValue())))
             return completed;
-        }
-        return Result<void>::Success();
+        return prepared;
     }
 
     /** @brief Freezes exact queried window/output facts before creating native swapchain children. */
@@ -160,16 +167,19 @@ namespace Horo::Render::AndroidVulkan {
         VkSurfaceCapabilitiesKHR caps{};
         const auto result = vk_.surfaceCapabilities(physical_, surface_->native, &caps);
         if (result != VK_SUCCESS)
-            return Result<VkSwapchainCreateInfoKHR>::Failure(NativeError("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", result));
+            return Result<VkSwapchainCreateInfoKHR>::Failure(SurfaceError("vkGetPhysicalDeviceSurfaceCapabilitiesKHR", result));
+        const auto window = surface_->window.Snapshot();
+        const FramebufferExtent extent{window.extent.width, window.extent.height};
+        const bool fixedExtent = caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max();
+        if (caps.maxImageExtent.width == 0 || caps.maxImageExtent.height == 0 ||
+            (fixedExtent && extent != FramebufferExtent{caps.currentExtent.width, caps.currentExtent.height}))
+            return Result<VkSwapchainCreateInfoKHR>::Failure(MakeError(Errors::Pending));
         const auto alpha = SelectCompositeAlpha(caps.supportedCompositeAlpha);
         if (alpha.HasError())
             return Result<VkSwapchainCreateInfoKHR>::Failure(alpha.ErrorValue());
-        const auto window = surface_->window.Snapshot();
-        surface_->extent = {window.extent.width, window.extent.height};
+        surface_->extent = extent;
         surface_->format = format.Value();
         surface_->compositeAlpha = alpha.Value();
-        if (caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max())
-            surface_->extent = {caps.currentExtent.width, caps.currentExtent.height};
         if (!AdmitsSurface(caps, surface_->extent))
             return Result<VkSwapchainCreateInfoKHR>::Failure(
                 MakeError(Errors::Unsupported,
@@ -205,9 +215,11 @@ namespace Horo::Render::AndroidVulkan {
         const auto frozen = BeginRealization();
         if (frozen.HasError())
             return frozen;
-        const auto result = vk_.createSwapchain(device_, &resolved.Value(), nullptr, &surface_->swapchain);
+        VkSwapchainKHR swapchain{};
+        const auto result = vk_.createSwapchain(device_, &resolved.Value(), nullptr, &swapchain);
         if (result != VK_SUCCESS)
-            return Result<void>::Failure(NativeError("vkCreateSwapchainKHR", result));
+            return Result<void>::Failure(SurfaceError("vkCreateSwapchainKHR", result));
+        surface_->swapchain = swapchain;
         auto pass = CreateRenderPass();
         if (pass.HasError())
             return pass;

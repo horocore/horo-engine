@@ -86,6 +86,8 @@ namespace Horo::Animation::AnimationErrors {
     extern const ErrorCodeDescriptor PoseTransformInvalid;
     /** @brief Pose evaluation references a joint absent from the immutable hierarchy. */
     extern const ErrorCodeDescriptor PoseJointMissing;
+    /** @brief A pose query references a socket absent from the immutable skeleton. */
+    extern const ErrorCodeDescriptor PoseSocketMissing;
     /** @brief A requested model matrix has not been evaluated for the current local pose. */
     extern const ErrorCodeDescriptor PoseNotEvaluated;
     /** @brief A pose operation targets a retired or non-monotonic frame identity. */

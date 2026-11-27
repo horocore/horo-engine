@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "Horo/Runtime/Render/UiPaintWorkload.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,57 @@
 namespace Horo::Render {
     namespace {
         using Payload = Result<std::span<const std::uint8_t>>;
+
+        struct ParameterRole final {
+            std::string_view name;
+            ShaderValueType scalar;
+            std::uint8_t width;
+            std::size_t offset;
+        };
+
+        constexpr auto Float = ShaderValueType::Float32;
+        constexpr auto Uint = ShaderValueType::Uint32;
+        constexpr auto Reserved = offsetof(UiPaintParameters, reserved);
+        constexpr std::array VulkanParameters{ParameterRole{"Extent", Float, 2, offsetof(UiPaintParameters, extent)},
+                                              ParameterRole{"Opacity", Float, 1, offsetof(UiPaintParameters, opacity)},
+                                              ParameterRole{"Sampling", Uint, 1, offsetof(UiPaintParameters, sampling)},
+                                              ParameterRole{"Flags", Uint, 1, offsetof(UiPaintParameters, flags)},
+                                              ParameterRole{"Reserved0", Uint, 1, Reserved},
+                                              ParameterRole{"Reserved1", Uint, 1, Reserved + sizeof(std::uint32_t)},
+                                              ParameterRole{"Reserved2", Uint, 1, Reserved + 2 * sizeof(std::uint32_t)},
+                                              ParameterRole{"MaskExtent", Float, 2, offsetof(UiPaintParameters, maskExtent)},
+                                              ParameterRole{"MaskReserved", Uint, 2, offsetof(UiPaintParameters, maskReserved)},
+                                              ParameterRole{"CornerRadii", Float, 4, offsetof(UiPaintParameters, cornerRadii)}};
+
+        /** @brief Matches one compiler-reported scalar/vector field with the exact buffered UiPaintParameters ABI. */
+        bool VulkanParameterMatches(const ShaderReflectedParameter &actual, const ParameterRole &expected) noexcept {
+            return actual.binding == ShaderBindingId{1} && actual.active && actual.type == expected.scalar && actual.rows == 1 &&
+                   actual.columns == expected.width && actual.arrayCount == 1 && actual.byteOffset == expected.offset &&
+                   actual.arrayStride == 0 && actual.matrixStride == 0 && actual.columnMajor;
+        }
+
+        /** @brief Admits exact native raster locations and fixed descriptor-visible parameter members only. */
+        bool VulkanLayoutMatches(const NormalizedShaderReflection &reflection) {
+            if (reflection.parameters.size() != VulkanParameters.size() || reflection.stageInterface.size() != 10)
+                return false;
+            for (std::uint32_t index = 0; index < VulkanParameters.size(); ++index) {
+                const auto parameter =
+                    std::ranges::find(reflection.parameters, ShaderParameterId{index + 1}, &ShaderReflectedParameter::id);
+                if (parameter == reflection.parameters.end() || !VulkanParameterMatches(*parameter, VulkanParameters[index]))
+                    return false;
+            }
+            constexpr std::array widths{2, 2, 4};
+            const auto matches = [&](const auto &value) {
+                if (value.type != Float || value.rows != 1 || value.arrayCount != 1)
+                    return false;
+                if (value.stage == ShaderStage::Fragment && value.direction == ShaderInterfaceDirection::Output)
+                    return value.location == 0 && value.columns == 4;
+                const bool vertexInput = value.stage == ShaderStage::Vertex && value.direction == ShaderInterfaceDirection::Input;
+                const auto expected = vertexInput ? widths : std::array{2, 4, 2};
+                return value.location < expected.size() && value.columns == expected[value.location];
+            };
+            return std::ranges::all_of(reflection.stageInterface, matches);
+        }
 
         template <typename T> std::optional<T> Read(const std::span<const std::uint8_t> bytes, std::size_t &cursor) {
             if (cursor > bytes.size() || sizeof(T) > bytes.size() - cursor)
@@ -85,7 +137,7 @@ namespace Horo::Render {
         using enum ShaderResourceKind;
         using enum ShaderResourceAccess;
         ShaderManifest manifest{.schemaVersion = 1,
-                                .sourceIdentity = "horo/runtime/ui_paint.hlsl",
+                                .sourceIdentity = std::string{UiPaintShaderSourceIdentity},
                                 .sourceRevision = 3,
                                 .entryPoints = {{ShaderStage::Vertex, "PaintVertex"}, {ShaderStage::Fragment, "PaintFragment"}}};
         manifest.bindings = {{{1}, UniformBuffer, ReadOnly, 1, ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
@@ -93,7 +145,30 @@ namespace Horo::Render {
                              {{3}, SampledTexture, ReadOnly, 1, ShaderStageVisibility::Fragment},
                              {{4}, Sampler, ReadOnly, 1, ShaderStageVisibility::Fragment}};
         manifest.targets = {target};
+        if (target.backend == ShaderTargetBackend::Vulkan) {
+            for (std::uint32_t index = 0; index < VulkanParameters.size(); ++index) {
+                const auto &role = VulkanParameters[index];
+                manifest.parameters.push_back({{index + 1}, {1}, role.scalar, 1, role.width, 1});
+            }
+        }
         return manifest;
+    }
+
+    /** @copydoc UiPaintVulkanTarget */
+    ShaderTargetRequirement UiPaintVulkanTarget() noexcept {
+        return {ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 1, 1, 4, 0, false, false};
+    }
+
+    /** @copydoc UiPaintVulkanReflectionNames */
+    std::vector<ShaderReflectionBindingName> UiPaintVulkanReflectionNames() {
+        std::vector<ShaderReflectionParameterName> members;
+        members.reserve(VulkanParameters.size());
+        for (std::uint32_t index = 0; index < VulkanParameters.size(); ++index)
+            members.push_back({{index + 1}, std::string{VulkanParameters[index].name}});
+        return {{{1}, "type.PaintParameters", std::move(members)},
+                {{2}, "PaintTexture", {}},
+                {{3}, "CoverageTexture", {}},
+                {{4}, "PaintSampler", {}}};
     }
 
     /** @copydoc ValidateCookedUiPaintKernel */
@@ -123,7 +198,8 @@ namespace Horo::Render {
         if (const auto valid = ValidateReflectedShaderArtifact(kernel.artifact, record); valid.HasError())
             return Validation::Failure(valid.ErrorValue());
         const auto &value = record.reflection;
-        if (value.bindings.size() != 4 || value.targetBindings.size() != 4 || !value.parameters.empty() || !value.sourceMap.empty() ||
+        const bool validLayout = backend == ShaderTargetBackend::Vulkan ? VulkanLayoutMatches(value) : value.parameters.empty();
+        if (value.bindings.size() != 4 || value.targetBindings.size() != 4 || !validLayout || !value.sourceMap.empty() ||
             value.stageInterface.size() > 10 ||
             std::ranges::any_of(value.targetBindings,
                                 [](const auto &entry) {
@@ -139,7 +215,7 @@ namespace Horo::Render {
         if (reflection.HasError())
             return reflection;
         if (reflection.Value().interfaceCompatibility != value.interfaceCompatibility || reflection.Value().targetBindings.size() != 4 ||
-            !reflection.Value().parameters.empty() || std::ranges::any_of(reflection.Value().bindings, [](const auto &binding) {
+            std::ranges::any_of(reflection.Value().bindings, [](const auto &binding) {
             return !binding.active;
         }))
             return Validation::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));

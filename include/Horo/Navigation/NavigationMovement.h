@@ -6,6 +6,7 @@
 
 #include "Horo/Navigation/NavigationAgentRegistry.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
+#include "Horo/Navigation/NavigationTraversal.h"
 
 #include <array>
 #include <memory>
@@ -31,6 +32,7 @@ namespace Horo::Navigation {
         Querying,
         Following,
         Holding,
+        Traversing,
         Arrived,
         Superseded,
         Cancelled,
@@ -100,13 +102,23 @@ namespace Horo::Navigation {
         std::optional<NavigationMovementStatus> superseded;
     };
 
-    /** @brief Tick-addressed desired velocity; only Character/Physics may commit actual movement. */
+    /** @brief Exact admitted crossing handed to the host-owned action executor. */
+    struct NavigationMovementTraversal final {
+        NavigationTraversalGrant grant;
+        Math::Vec3 entrance;
+        Math::Vec3 exit;
+
+        [[nodiscard]] bool operator==(const NavigationMovementTraversal &) const noexcept = default;
+    };
+
+    /** @brief Tick-addressed motion intent; only Character/Physics may commit actual movement. */
     struct NavigationMovementIntent final {
         NavigationMovementId operation;
         PathId path;
         std::uint64_t tick{};
         Math::Vec3 desiredVelocity{}; /**< Zero for pending, held, invalidated or terminal operations. */
         NavigationMovementState state{NavigationMovementState::Idle};
+        std::optional<NavigationMovementTraversal> traversal{}; /**< Crossing request with zero ordinary velocity. */
     };
 
     /**
@@ -127,28 +139,34 @@ namespace Horo::Navigation {
             ConstructionKey() = default;
         };
 
+        /** @brief Validated registration and host authority supplied by Create. */
+        struct InitialBinding {
+            NavigationAgentRecord agent;
+            NavigationAgentSceneBinding scene;
+            NavigationPathCaller caller;
+        };
+
     public:
         /** @brief Factory-only construction; the private key preserves validated agent/caller admission.
          * @param registry Borrowed agent authority. @param world Borrowed world authority.
-         * @param coordinator Borrowed query owner. @param agent Validated owned registration snapshot.
-         * @param binding Validated Scene/world incarnation. @param caller Validated unique host authority.
+         * @param coordinator Borrowed query owner. @param binding Validated agent, Scene and caller authority.
+         * @param traversal Optional same-Scene catalog, outliving this controller.
          */
         NavigationMovementController(ConstructionKey, NavigationAgentRegistry &registry, NavigationWorldLifecycle &world,
-                                     NavigationCoordinator &coordinator, const NavigationAgentRecord &agent,
-                                     NavigationAgentSceneBinding binding, NavigationPathCaller caller) noexcept;
+                                     NavigationCoordinator &coordinator, const InitialBinding &binding,
+                                     NavigationTraversalCatalog *traversal) noexcept;
         /** @brief Bind one live agent and host-selected caller authority outside fixed-tick work.
          * @param registry Scene-bound agent authority, outliving the controller.
          * @param world Navigation publication authority, outliving the controller.
          * @param coordinator Canonical process-job query owner, outliving the controller.
          * @param agent Exact registered handle.
          * @param caller Unique logical caller and incarnation published by the host for this agent.
+         * @param traversal Optional same-Scene catalog. The host advances action state and the controller consumes the receipt.
          * @return Prepared controller or typed invalid/stale/capacity failure.
          */
-        [[nodiscard]] static Result<std::unique_ptr<NavigationMovementController>> Create(NavigationAgentRegistry &registry,
-                                                                                          NavigationWorldLifecycle &world,
-                                                                                          NavigationCoordinator &coordinator,
-                                                                                          CrowdAgentHandle agent,
-                                                                                          NavigationPathCaller caller);
+        [[nodiscard]] static Result<std::unique_ptr<NavigationMovementController>> Create(
+            NavigationAgentRegistry &registry, NavigationWorldLifecycle &world, NavigationCoordinator &coordinator, CrowdAgentHandle agent,
+            NavigationPathCaller caller, NavigationTraversalCatalog *traversal = nullptr);
         NavigationMovementController(const NavigationMovementController &) = delete;
         NavigationMovementController &operator=(const NavigationMovementController &) = delete;
         /** @brief Cancel and relinquish outstanding queries without joining; coordinator reclaims after worker drain. */
@@ -209,6 +227,11 @@ namespace Horo::Navigation {
             return agent_.handle;
         }
 
+        /** @brief Return the exact Scene entity bound to the movement registration. @return Copied owner identity. */
+        [[nodiscard]] NavigationAgentOwner Owner() const noexcept {
+            return agent_.owner;
+        }
+
         /** @brief Return the exact bound Scene/world incarnation. @return Prepared owner binding. */
         [[nodiscard]] NavigationAgentSceneBinding Binding() const noexcept {
             return binding_;
@@ -255,6 +278,30 @@ namespace Horo::Navigation {
         void DrainRetired();
         /** @brief Clear movement authority and cancel outstanding work. */
         void Finish(NavigationMovementState state, std::optional<Error> error = {}) noexcept;
+
+        /** @brief Holds the exact reservation while the controller crosses a link. */
+        struct Crossing {
+            NavigationTraversalCatalog *catalog{};
+            std::optional<NavigationMovementTraversal> intent;
+
+            /** @brief Releases the reservation when motion loses authority or leaves its corridor. */
+            void Abandon(CrowdAgentHandle agent) noexcept;
+            /** @brief Releases a grant as soon as the observed path becomes unavailable. */
+            void ObservePath(NavigationMovementController &movement, const NavigationPathObservation &path);
+            /** @brief Checks the installed corridor and any grant before handing off motion. */
+            [[nodiscard]] bool HasPathAuthority(NavigationMovementController &movement, const NavigationMovementIntent &expected,
+                                                const NavigationPathObservation &path);
+            /** @brief Admits a reached boundary and publishes the exact crossing or a stopped intent. */
+            [[nodiscard]] NavigationMovementIntent Begin(NavigationMovementController &movement, const NavigationPathPortal &portal,
+                                                         NavigationGeneration topology, PathId path, std::uint64_t tick);
+            /** @brief Polls a pending crossing when present. Empty allows ground following. */
+            [[nodiscard]] std::optional<NavigationMovementIntent> Poll(NavigationMovementController &movement,
+                                                                       const NavigationMovementObservation &current,
+                                                                       const NavigationPath &corridor, std::uint64_t tick);
+            /** @brief Terminates movement with the action owner's end reason or invalid exit evidence. */
+            static void Finish(NavigationMovementController &movement, NavigationTraversalEnd reason);
+        };
+
         /** @brief Install one exact published query or preserve its typed terminal failure. */
         void Consume(const NavigationPathObservation &current);
         /** @brief Validate the complete waypoint contract and install the exact accepted query path. */
@@ -271,6 +318,7 @@ namespace Horo::Navigation {
         NavigationAgentRecord agent_;
         NavigationAgentSceneBinding binding_;
         NavigationPathCaller caller_;
+        Crossing crossing_;
         NavigationMovementStatus status_;
         NavigationMovementRequest request_;
         NavigationPathPolicy policy_{{}};

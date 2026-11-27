@@ -24,6 +24,66 @@ namespace {
         CHECK_FALSE(graph->packages.front().publisher.has_value());
     }
 
+    TEST_CASE("Package restore admits a canonical empty graph without fetching packages", "[packages][restore][removal]") {
+        RestoreFixture fixture;
+        ServiceFixture service(fixture.bytes);
+        auto request = fixture.Request(PackageRestoreMode::Offline);
+        const auto lock = ValidatedPackageLockfileV1::Generate({}, {}, request.expectedRequestHash, {});
+        REQUIRE(lock.HasValue());
+        request.lockfileJson = lock.Value().SerializeCanonical();
+        const auto restored = RestoreReady(service, std::move(request));
+        CHECK(restored.totalPackages == 0);
+        CHECK(service.source.calls == 0);
+        REQUIRE(service.service->ActiveGraph());
+        CHECK(service.service->ActiveGraph()->packages.empty());
+    }
+
+    TEST_CASE("Staged package restore binds verified artifacts to the exact lock and keeps the active graph",
+              "[packages][restore][update]") {
+        RestoreFixture fixture;
+        ServiceFixture service(fixture.bytes);
+        const auto prior = RestoreReady(service, fixture.Request());
+        const auto active = service.service->ActiveGraph();
+        REQUIRE(active);
+        CHECK_FALSE(service.service->Staged(prior.operationId));
+
+        auto request = fixture.Request(PackageRestoreMode::Offline);
+        CHECK(service.service->StartStaged(request).HasError());
+        request.projectRoot = std::filesystem::canonical(service.temporary.Path());
+        REQUIRE(std::filesystem::create_directories(request.projectRoot / ".horo/local"));
+        request.lockfileJson += '\n';
+        const auto started = service.service->StartStaged(request);
+        REQUIRE(started.HasValue());
+        const auto id = started.Value().Id();
+        REQUIRE(WaitForTerminal(*service.service, id).outcome == PackageRestoreOutcome::Ready);
+        const auto staged = service.service->Staged(id);
+        REQUIRE(staged);
+        CHECK(staged->LockDigest() == Digest(request.lockfileJson));
+        CHECK(staged->ProjectRoot() == request.projectRoot);
+        REQUIRE(staged->Graph()->packages.size() == 1);
+        CHECK(staged->Graph()->packages.front().archive->Digest() == fixture.archive.Digest());
+        CHECK(staged->Graph()->packages.front().cacheHit);
+        CHECK(service.service->ActiveGraph() == active);
+        CHECK(service.source.calls == 1U);
+
+        Horo::CancellationSource cancellation;
+        auto expectedOutcome = PackageRestoreOutcome::Failed;
+        SECTION("the next staging operation uses a stale request") {
+            request.expectedRequestHash = Digest("stale request");
+        }
+        SECTION("the next staging operation is cancelled") {
+            cancellation.RequestCancellation();
+            request.cancellation = cancellation.Token();
+            expectedOutcome = PackageRestoreOutcome::Cancelled;
+        }
+        const auto rejected = service.service->StartStaged(request);
+        REQUIRE(rejected.HasValue());
+        REQUIRE(WaitForTerminal(*service.service, rejected.Value().Id()).outcome == expectedOutcome);
+        CHECK_FALSE(service.service->Staged(rejected.Value().Id()));
+        CHECK_FALSE(service.service->Staged(id));
+        CHECK(service.service->ActiveGraph() == active);
+    }
+
     TEST_CASE("Package restore fails closed when release requires unavailable publisher evidence", "[packages][restore][release]") {
         RestoreFixture fixture;
         ServiceFixture service(fixture.bytes);

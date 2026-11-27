@@ -44,7 +44,7 @@ namespace Horo::Application::DecisionCookDetail {
 
         private:
             const Prepared *Find(const Assets::CookSourceView &source) const {
-                if (!state_->environment.nodes->CanUse() || source.target != state_->target)
+                if (source.target != state_->target || (!state_->inputs.empty() && !state_->environment.nodes->CanUse()))
                     return nullptr;
                 const auto found = std::ranges::lower_bound(state_->prepared, source.id, {}, &Prepared::asset);
                 if (found == state_->prepared.end() || found->asset != source.id || found->type != source.type ||
@@ -65,7 +65,12 @@ namespace Horo::Application::DecisionCookDetail {
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(registered.ErrorValue());
         }
         const auto strategy = std::make_shared<Strategy>(state);
-        for (const auto type : {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType}) {
+        for (const auto type : {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType,
+                                AI::BlackboardSchemaAssetType, AI::EnvironmentQuerySourceAssetType, AI::LocalPolicyAssetType}) {
+            if (type == AI::EnvironmentQuerySourceAssetType && !state->querySchema)
+                continue;
+            if (type == AI::LocalPolicyAssetType && !state->localPolicy)
+                continue;
             auto parsed = Assets::AssetTypeId::Parse(type);
             if (parsed.HasError())
                 return Result<std::shared_ptr<const Assets::CookerCatalogSnapshot>>::Failure(parsed.ErrorValue());

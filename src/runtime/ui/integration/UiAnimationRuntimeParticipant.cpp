@@ -13,8 +13,9 @@ namespace Horo::Runtime {
                  (static_cast<std::uint8_t>(view.presentation->available) & 240U) != 0))
                 return false;
             return config.application <= UiAnimationApplication::Manual && config.clockCommands > 0 && config.clockCommands <= 4'096 &&
-                   view.constraints.IsValid() && view.content.IsValid() && view.fontScale.IsValid() && view.intrinsic.IsValid() &&
-                   view.canvas.IsValid() && view.policy.IsValid();
+                   view.constraints.IsValid() && view.content.IsValid() && view.fontScale.IsValid() &&
+                   view.minimumControlTargetDips <= Ui::MaximumUiAccessibleTargetDips && view.intrinsic.IsValid() &&
+                   view.canvas.IsValid() && view.policy.IsValid() && view.inlineDirection <= Ui::UiLayoutInlineDirection::RightToLeft;
         }
 
         /** @brief Only the explicit application boundary selects optional domains; no authored descriptor can enable them. */
@@ -35,7 +36,9 @@ namespace Horo::Runtime {
     /** @copydoc UiAnimationRuntimeParticipant::Compose */
     Result<UiAnimationRuntimeComposition> UiAnimationRuntimeParticipant::Compose(Ui::UiAnimationOwner owner, RuntimeDispatchSource source,
                                                                                  UiAnimationRuntimeConfig config) {
-        if (!ValidConfig(config) || source.BindingStatus() != RuntimeDispatchStatus::Valid)
+        CommittedFixedStepEvidence fixedBaseline;
+        Duration presentationBaseline;
+        if (!ValidConfig(config) || source.ReadClockBaseline(fixedBaseline, presentationBaseline) != RuntimeDispatchStatus::Valid)
             return Result<UiAnimationRuntimeComposition>::Failure(MakeError(Ui::UiErrors::ClockInputInvalid));
         auto ledger = Ui::IntegrationInternal::CommittedTickLedger::Create(config.unreadFixedAttempts);
         if (ledger.HasError())
@@ -54,6 +57,8 @@ namespace Horo::Runtime {
             auto storage =
                 std::make_unique<Storage>(std::move(owner), std::move(source), std::move(config), std::move(ledger).Value(), controls);
             storage->binding = storage->owner.SourceBinding();
+            storage->ledger.StartAt(fixedBaseline);
+            storage->consumedPresentation = presentationBaseline;
             auto participant = std::make_unique<UiAnimationRuntimeParticipant>(std::move(storage));
             return Result<UiAnimationRuntimeComposition>::Success(
                 {std::move(participant), UiAnimationClockController{std::move(controls)}});
@@ -159,6 +164,13 @@ namespace Horo::Runtime {
         return storage_->owner.Detach(attachment);
     }
 
+    /** @copydoc UiAnimationRuntimeParticipant::SetVisualAccessibility */
+    Result<void> UiAnimationRuntimeParticipant::SetVisualAccessibility(const Ui::UiVisualPresentationPolicy &policy) {
+        if (!storage_ || storage_->stopped || storage_->controls->frameReserved)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::AnimationLifecycleUnavailable));
+        return storage_->owner.SetVisualAccessibility(policy);
+    }
+
     /** @copydoc UiAnimationRuntimeParticipant::SetViewport */
     Result<void> UiAnimationRuntimeParticipant::SetViewport(Ui::UiAnimationViewport viewport) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->stopped || storage_->controls->frameReserved)
@@ -167,8 +179,11 @@ namespace Horo::Runtime {
         config.viewport = viewport;
         if (!ValidConfig(config))
             return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileMalformed));
-        if (storage_->config.viewport.presentation && storage_->config.viewport != viewport &&
-            (!viewport.presentation || viewport.presentation->revision <= storage_->config.viewport.presentation->revision))
+        const auto &current = storage_->config.viewport;
+        if (current.minimumControlTargetDips != viewport.minimumControlTargetDips && viewport.policy <= current.policy)
+            return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileSourceStale));
+        if (current.presentation && current != viewport &&
+            (!viewport.presentation || viewport.presentation->revision <= current.presentation->revision))
             return Result<void>::Failure(MakeError(Ui::UiErrors::PresentationProfileSourceStale));
         storage_->config.viewport = std::move(viewport);
         return Result<void>::Success();

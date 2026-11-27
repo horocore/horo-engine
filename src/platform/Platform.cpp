@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 
 #include "PlatformFileInternal.h"
 
@@ -20,6 +21,10 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 namespace Horo {
@@ -32,15 +37,22 @@ namespace Horo {
 #endif
     namespace {
 #if defined(_WIN32)
+        /** @brief Preserves a native out-of-space result before handle cleanup can replace it. */
+        const ErrorCodeDescriptor *PrivateWriteFailure(const DWORD code) noexcept {
+            return code == ERROR_DISK_FULL || code == ERROR_HANDLE_DISK_FULL || code == ERROR_DISK_QUOTA_EXCEEDED
+                       ? &FileStorageErrors::Capacity
+                       : &IoFailed;
+        }
+
         /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
-        [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
-                                              const std::span<const std::byte> bytes, bool *created = nullptr,
-                                              const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
+        [[nodiscard]] const ErrorCodeDescriptor *AppendPrivateBytes(
+            const std::filesystem::path &path, const std::uint64_t expectedOffset, const std::span<const std::byte> bytes,
+            bool *created = nullptr, const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             const DWORD disposition = expectedOffset == 0U ? CREATE_NEW : OPEN_EXISTING;
             HANDLE handle = CreateFileW(NativeApiPath(path).c_str(), GENERIC_WRITE, 0, nullptr, disposition,
                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (handle == INVALID_HANDLE_VALUE)
-                return false;
+                return PrivateWriteFailure(GetLastError());
             if (created)
                 *created = true;
             BY_HANDLE_FILE_INFORMATION info{};
@@ -53,10 +65,14 @@ namespace Horo {
             if (ok)
                 ok = SetFilePointerEx(handle, zero, nullptr, FILE_END) != 0;
             std::size_t offset = 0U;
+            const auto *failure = &IoFailed;
             while (ok && offset < bytes.size()) {
                 const auto count = static_cast<DWORD>((std::min)(bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
                 DWORD written{};
-                ok = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) && written == count;
+                const bool wrote = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) != 0;
+                if (!wrote)
+                    failure = PrivateWriteFailure(GetLastError());
+                ok = wrote && written == count;
                 offset += written;
             }
             if (ok && permissions != std::filesystem::perms::unknown) {
@@ -66,23 +82,30 @@ namespace Horo {
                                            : FILE_ATTRIBUTE_NORMAL;
                 ok = SetFileInformationByHandle(handle, FileBasicInfo, &basic, sizeof(basic)) != 0;
             }
-            if (ok)
-                ok = FlushFileBuffers(handle) != 0;
+            if (ok && !FlushFileBuffers(handle)) {
+                failure = PrivateWriteFailure(GetLastError());
+                ok = false;
+            }
             if (!CloseHandle(handle))
                 ok = false;
-            return ok;
+            return ok ? nullptr : failure;
         }
 #else
+        /** @brief Preserves the capacity outcome from a failed POSIX write or durability check. */
+        const ErrorCodeDescriptor *PrivateWriteFailure(const int code) noexcept {
+            return code == ENOSPC || code == EDQUOT ? &FileStorageErrors::Capacity : &IoFailed;
+        }
+
         /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
-        [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
-                                              const std::span<const std::byte> bytes, bool *created = nullptr,
-                                              const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
+        [[nodiscard]] const ErrorCodeDescriptor *AppendPrivateBytes(
+            const std::filesystem::path &path, const std::uint64_t expectedOffset, const std::span<const std::byte> bytes,
+            bool *created = nullptr, const std::filesystem::perms permissions = std::filesystem::perms::unknown) {
             if (expectedOffset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
-                return false;
+                return &IoFailed;
             const int flags = O_WRONLY | O_NOFOLLOW | O_CLOEXEC | (expectedOffset == 0U ? O_CREAT | O_EXCL : 0);
             const int descriptor = open(path.c_str(), flags, 0600);
             if (descriptor < 0)
-                return false;
+                return PrivateWriteFailure(errno);
             if (created)
                 *created = true;
             struct stat status{};
@@ -91,10 +114,13 @@ namespace Horo {
             if (ok)
                 ok = lseek(descriptor, static_cast<off_t>(expectedOffset), SEEK_SET) == static_cast<off_t>(expectedOffset);
             std::size_t offset = 0U;
+            const auto *failure = &IoFailed;
             while (ok && offset < bytes.size()) {
                 const auto count = (std::min)(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
                 const ssize_t written = write(descriptor, bytes.data() + offset, count);
                 if (written <= 0) {
+                    if (written < 0)
+                        failure = PrivateWriteFailure(errno);
                     ok = false;
                     break;
                 }
@@ -102,11 +128,13 @@ namespace Horo {
             }
             if (ok && permissions != std::filesystem::perms::unknown)
                 ok = fchmod(descriptor, static_cast<mode_t>(permissions) & 07777U) == 0;
-            if (ok)
-                ok = FlushFileDescriptor(descriptor);
+            if (ok && !FlushFileDescriptor(descriptor)) {
+                failure = PrivateWriteFailure(errno);
+                ok = false;
+            }
             if (close(descriptor) != 0)
                 ok = false;
-            return ok;
+            return ok ? nullptr : failure;
         }
 #endif
     }  // namespace
@@ -286,8 +314,8 @@ namespace Horo {
                                                               bool &created, const std::filesystem::perms permissions) {
         if (created || path.empty() || !path.is_absolute() || path.parent_path().empty())
             return Result<void>::Failure(FsError(IoFailed, path));
-        if (!AppendPrivateBytes(path, 0, bytes, &created, permissions))
-            return Result<void>::Failure(FsError(IoFailed, path));
+        if (const auto *failure = AppendPrivateBytes(path, 0, bytes, &created, permissions))
+            return Result<void>::Failure(FsError(*failure, path));
         return SyncDirectory(path.parent_path());
     }
 
@@ -297,8 +325,9 @@ namespace Horo {
         if (path.empty() || path.parent_path().empty() || bytes.empty() ||
             bytes.size() > std::numeric_limits<std::uint64_t>::max() - expectedOffset)
             return Result<void>::Failure(FsError(IoFailed, path));
-        return AppendPrivateBytes(path, expectedOffset, bytes) ? SyncDirectory(path.parent_path())
-                                                               : Result<void>::Failure(FsError(IoFailed, path));
+        if (const auto *failure = AppendPrivateBytes(path, expectedOffset, bytes))
+            return Result<void>::Failure(FsError(*failure, path));
+        return SyncDirectory(path.parent_path());
     }
 
     /** @copydoc DurableFileSystem::CopyDurable */
@@ -354,6 +383,105 @@ namespace Horo {
         return SyncDirectory(destination.parent_path());
     }
 
+    namespace {
+        /** @brief Accepts only a single normalized absolute publication filename. */
+        bool PublicationPath(const std::filesystem::path &path) {
+            return path.is_absolute() && !path.filename().empty() && path == path.lexically_normal() &&
+                   path.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos;
+        }
+
+        enum class RenameOutcome {
+            Moved,
+            CrossVolume,
+            Unsupported,
+            Failed
+        };
+
+        /** @brief Commits a native exclusive rename and captures the OS outcome before further filesystem calls. */
+        RenameOutcome RenameNoReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
+#if defined(_WIN32)
+            const auto sourceName = NativeApiPath(prepared);
+            const auto targetName = NativeApiPath(destination);
+            if (MoveFileExW(sourceName.c_str(), targetName.c_str(), MOVEFILE_WRITE_THROUGH))
+                return RenameOutcome::Moved;
+            const auto error = GetLastError();
+            if (error == ERROR_NOT_SAME_DEVICE)
+                return RenameOutcome::CrossVolume;
+            if (error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_FUNCTION)
+                return RenameOutcome::Unsupported;
+#elif defined(__APPLE__) || (defined(__linux__) && defined(SYS_renameat2))
+#if defined(__APPLE__)
+            const auto result = renameatx_np(AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL);
+#else
+            const auto result = syscall(SYS_renameat2, AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE);
+#endif
+            if (result == 0)
+                return RenameOutcome::Moved;
+            const auto error = errno;
+            if (error == EXDEV)
+                return RenameOutcome::CrossVolume;
+            if (error == ENOSYS || error == ENOTSUP || error == EOPNOTSUPP)
+                return RenameOutcome::Unsupported;
+#else
+            static_cast<void>(prepared);
+            static_cast<void>(destination);
+            return RenameOutcome::Unsupported;
+#endif
+            return RenameOutcome::Failed;
+        }
+
+        /** @brief Checks entry shape and commits an exclusive rename with directory durability tracking. */
+        Result<void> PublishPath(NativeDurableFileSystem &files, const std::filesystem::path &prepared,
+                                 const std::filesystem::path &destination, const FileEntryKind kind, AtomicFileReplacementReceipt &receipt,
+                                 const bool requireSibling = true) {
+            if (receipt.WasCommitted() || !PublicationPath(prepared) || !PublicationPath(destination) || prepared == destination ||
+                (requireSibling && prepared.parent_path() != destination.parent_path()))
+                return Result<void>::Failure(FsError(IoFailed, destination));
+            const auto source = files.InspectEntry(prepared);
+            if (source.HasError())
+                return Result<void>::Failure(source.ErrorValue());
+            const auto &entry = source.Value();
+            if (!entry || entry->kind != kind || (kind == FileEntryKind::RegularFile && entry->hardLinks != 1))
+                return Result<void>::Failure(FsError(IoFailed, prepared));
+            const auto moved = RenameNoReplace(prepared, destination);
+            if (!requireSibling && moved == RenameOutcome::CrossVolume)
+                return Result<void>::Failure(FsError(DurableFileErrors::CrossVolume, destination));
+            if (!requireSibling && moved == RenameOutcome::Unsupported)
+                return Result<void>::Failure(FsError(DurableFileErrors::MoveUnsupported, destination));
+            if (moved != RenameOutcome::Moved)
+                return Result<void>::Failure(FsError(IoFailed, destination));
+            receipt.RecordCommitted();
+            const auto target = files.SyncDirectory(destination.parent_path());
+            if (!requireSibling && prepared.parent_path() != destination.parent_path()) {
+                auto original = files.SyncDirectory(prepared.parent_path());
+                if (target.HasValue())
+                    return original;
+            }
+            return target;
+        }
+    }  // namespace
+
+    /** @copydoc NativeDurableFileSystem::PublishDirectoryNoReplaceTracked */
+    Result<void> NativeDurableFileSystem::PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                           const std::filesystem::path &destination,
+                                                                           AtomicFileReplacementReceipt &receipt) {
+        return PublishPath(*this, prepared, destination, FileEntryKind::Directory, receipt);
+    }
+
+    /** @copydoc NativeDurableFileSystem::PublishFileNoReplaceTracked */
+    Result<void> NativeDurableFileSystem::PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                      const std::filesystem::path &destination,
+                                                                      AtomicFileReplacementReceipt &receipt) {
+        return PublishPath(*this, prepared, destination, FileEntryKind::RegularFile, receipt);
+    }
+
+    /** @copydoc NativeDurableFileSystem::MoveFileNoReplaceTracked */
+    Result<void> NativeDurableFileSystem::MoveFileNoReplaceTracked(const std::filesystem::path &source,
+                                                                   const std::filesystem::path &destination,
+                                                                   AtomicFileReplacementReceipt &receipt) {
+        return PublishPath(*this, source, destination, FileEntryKind::RegularFile, receipt, false);
+    }
+
     /** @copydoc DurableFileSystem::RemoveDurable */
     Result<void> NativeDurableFileSystem::RemoveDurable(const std::filesystem::path &path) {
         if (std::error_code error; !std::filesystem::remove(NativeApiPath(path), error) && error)
@@ -376,10 +504,10 @@ namespace Horo {
 #endif
     }
 
-    /** @copydoc PlatformServices::PlatformServices */
-    PlatformServices::PlatformServices(FileSystem &files, Clock &clock, ProcessService &processes,  // NOSONAR(cpp:S107)
-                                       UserDirectories &directories, const PlatformCapabilities capabilities, CredentialStore *credentials,
-                                       NativeDialogs *dialogs, CrashService *crash) noexcept
+    /** @copydoc PlatformHostServices::PlatformHostServices */
+    PlatformHostServices::PlatformHostServices(FileSystem &files, Clock &clock, ProcessService &processes,  // NOSONAR(cpp:S107)
+                                               UserDirectories &directories, const PlatformCapabilities capabilities,
+                                               CredentialStore *credentials, NativeDialogs *dialogs, CrashService *crash) noexcept
         : files(files), clock(clock), processes(processes), directories(directories), capabilities(capabilities), credentials(credentials),
 
           dialogs(dialogs), crash(crash) {
@@ -388,8 +516,8 @@ namespace Horo {
         this->capabilities.hasCrashService = crash != nullptr;
     }
 
-    /** @copydoc PlatformServices::Capabilities */
-    const PlatformCapabilities &PlatformServices::Capabilities() const noexcept {
+    /** @copydoc PlatformHostServices::Capabilities */
+    const PlatformCapabilities &PlatformHostServices::Capabilities() const noexcept {
         return capabilities;
     }
 

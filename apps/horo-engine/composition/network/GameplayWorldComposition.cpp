@@ -1,11 +1,15 @@
 #include "GameplayWorldComposition.h"
 
+#include "Horo/AI/AISceneActivation.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
+#include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
+#include "ProjectScenePerception.h"
 
 #include <array>
 #include <new>
@@ -145,7 +149,8 @@ namespace Horo::Application::Internal {
                                                           .character = CharacterContext(),
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
-                                                          .vfxModuleId = vfxModuleId_});
+                                                          .vfxModuleId = vfxModuleId_,
+                                                          .animation = animationContext_});
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -153,14 +158,15 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc GameplayWorldComposition::RegisterModule */
-    Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection) {
+    Result<void> GameplayWorldComposition::RegisterModule(const GameplayWorldSelection &selection,
+                                                          const GameplayPreparedDecisions *prepared) {
         using namespace Gameplay;
         if (auto admitted = ResolveVfx(selection); admitted.HasError())
             return admitted;
         if (auto admitted = ResolveRuntimeUi(selection); admitted.HasError())
             return admitted;
         if (!selection.nativeArtifact.empty()) {
-            if (auto registered = RegisterNativeModule(selection); registered.HasError())
+            if (auto registered = RegisterNativeModule(selection, prepared); registered.HasError())
                 return registered;
         } else {
             auto loaded = LuaBehaviorProgram::LoadFiles(selection.scriptSource, selection.scriptSidecar);
@@ -171,6 +177,14 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
             if (auto registered = registry_.Register(script_->Registration()); registered.HasError())
                 return registered;
+            if (!selection.animation.expired()) {
+                scriptAnimationLifetime_.emplace();
+                auto grant = CreateGameplayAnimationContext(selection.animation, Runtime::SceneRuntimeId{physics_->Binding().scene},
+                                                            selection.moduleId, scriptAnimationLifetime_->Token());
+                if (grant.HasError())
+                    return Result<void>::Failure(grant.ErrorValue());
+                animationContext_ = std::move(grant).Value();
+            }
         }
         if (auto frozen = registry_.Freeze(); frozen.HasError())
             return frozen;
@@ -178,7 +192,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc GameplayWorldComposition::RegisterNativeModule */
-    Result<void> GameplayWorldComposition::RegisterNativeModule(const GameplayWorldSelection &selection) {
+    Result<void> GameplayWorldComposition::RegisterNativeModule(const GameplayWorldSelection &selection,
+                                                                const GameplayPreparedDecisions *prepared) {
         using namespace Gameplay;
         if (!selection.moduleRetirements)
             return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired,
@@ -188,11 +203,33 @@ namespace Horo::Application::Internal {
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
         retirementAdmission_.emplace(std::move(admission).Value());
-        GameModuleHostOptions options{{}, {.physics = physics_, .character = character_, .runtimeUi = runtimeUi_}};
+        navigation_ = selection.navigationContext;
+        if (navigation_ && (navigation_->Binding().scene.scene.Value() != physics_->Binding().scene ||
+                            navigation_->Binding().scene.sceneGeneration.Value() != physics_->Binding().sceneGeneration))
+            return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        GameModuleHostOptions options{{},
+                                      {.physics = physics_, .character = character_, .navigation = navigation_, .runtimeUi = runtimeUi_}};
+        if (!selection.animation.expired()) {
+            const Runtime::SceneRuntimeId scene{physics_->Binding().scene};
+            options.runtimeServices.animation = [runtime = selection.animation, scene](std::string_view module,
+                                                                                       const CancellationToken &lifetime) {
+                return CreateGameplayAnimationContext(runtime, scene, std::string{module}, lifetime);
+            };
+        }
         options.replicationAdmission = selection.replicationAdmission;
         GameModuleHost loader{std::move(options)};
-        auto loaded =
-            loader.Load(selection.nativeArtifact, {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
+        const GameModuleLoadExpectation expectation{selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision};
+        const auto activate = [&]() -> Result<GameModuleLoadCandidate> {
+            if (prepared)
+                return loader.ActivatePrepared(prepared->image, prepared->cancellation);
+            if (!selection.recordReplayImage)
+                return loader.Load(selection.nativeArtifact, expectation);
+            auto recorded = GameModuleHost::PrepareRecordedImage(selection.nativeArtifact, expectation);
+            if (recorded.HasError())
+                return Result<GameModuleLoadCandidate>::Failure(recorded.ErrorValue());
+            return loader.ActivatePrepared(*recorded.Value());
+        };
+        auto loaded = activate();
         if (loaded.HasError())
             return Result<void>::Failure(loaded.ErrorValue());
         auto candidate = std::move(loaded).Value();
@@ -202,6 +239,7 @@ namespace Horo::Application::Internal {
             retirementAdmission_.reset();
             return Result<void>::Failure(*candidate.diagnostic);
         }
+        animationContext_ = native_->AnimationContext();
         return native_->ContributeBehaviorsTo(registry_);
     }
 
@@ -224,9 +262,15 @@ namespace Horo::Application::Internal {
             replicationLease_.emplace(std::move(acquired).Value());
         }
         const std::array modules{ModuleId{selection.moduleId}};
-        return selection.replicationAdmission->RequireAdmission(replicationLease_ ? replicationLease_->Descriptors()
-                                                                                  : Network::ReplicationDescriptorSnapshotPtr{},
-                                                                modules);
+        auto assessment = selection.replicationAdmission->Assess(replicationLease_ ? replicationLease_->Descriptors()
+                                                                                   : Network::ReplicationDescriptorSnapshotPtr{},
+                                                                 modules);
+        if (assessment.HasError())
+            return Result<void>::Failure(assessment.ErrorValue());
+        if (auto required = assessment.Value().RequireAdmission(); required.HasError())
+            return required;
+        replicationAssessment_.emplace(std::move(assessment).Value());
+        return Result<void>::Success();
     }
 
     /** @copydoc GameplayWorldComposition::Create */
@@ -246,12 +290,61 @@ namespace Horo::Application::Internal {
         return CreateServiceBacked(scenes, nullptr, world, sceneGeneration, selection, nullptr, character);
     }
 
+    /** @copydoc GameplayWorldComposition::CreatePrepared */
+    Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::CreatePrepared(
+        Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld &world,
+        const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, Character::CharacterWorld &character,
+        const GameplayPreparedDecisions &prepared) {
+        if (selection.nativeArtifact.empty())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(
+                MakeError(Gameplay::GameplayErrors::InvalidGameModuleDescriptor));
+        return CreateServiceBacked(scenes, templates, &world, sceneGeneration, selection, nullptr, &character, &prepared);
+    }
+
+    /** @copydoc GameplayWorldComposition::SpawnReplicaPrefab */
+    Result<Prefab::PrefabOperation> GameplayWorldComposition::SpawnReplicaPrefab(
+        Prefab::PrefabSpawnRequest request, std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+        const CancellationToken &cancellation) const {
+        if (!prefabs_)
+            return Result<Prefab::PrefabOperation>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
+        return prefabs_->SpawnReplica(std::move(request), std::move(publication), cancellation);
+    }
+
+    /** @copydoc GameplayWorldComposition::DespawnReplicaPrefab */
+    Result<Prefab::PrefabOperation> GameplayWorldComposition::DespawnReplicaPrefab(const Prefab::PrefabInstance &instance,
+                                                                                   const CancellationToken &cancellation) const {
+        if (!prefabs_)
+            return Result<Prefab::PrefabOperation>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
+        return prefabs_->DespawnReplica(instance, cancellation);
+    }
+
+    /** @copydoc GameplayWorldComposition::BindPrefab */
+    Result<void> GameplayWorldComposition::BindPrefab(const GameplayWorldSelection &selection, Runtime::RuntimeSceneService &scenes,
+                                                      Runtime::SceneRuntimeId scene, Prefab::PrefabTemplateProvider *templates,
+                                                      const Gameplay::ComponentRegistry *components) {
+        if (selection.prefabPermission == GameplayPrefabPermission::Denied)
+            return Result<void>::Success();
+        prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components ? components : &prefabComponents_,
+                                                                &builtinProjector_);
+        if (selection.prefabPermission == GameplayPrefabPermission::ReplicaOnly)
+            return Result<void>::Success();
+        if (selection.prefabGroupPublication) {
+            if (auto installed = prefabs_->InstallGroupPublicationOwner(selection.prefabGroupPublication); installed.HasError())
+                return installed;
+        }
+        auto admitted = prefabs_->Acquire({selection.moduleId, scene, true, true});
+        if (admitted.HasError())
+            return Result<void>::Failure(admitted.ErrorValue());
+        prefabContext_ = std::move(admitted).Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc GameplayWorldComposition::CreateServiceBacked */
     Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::CreateServiceBacked(
         Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
         const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
-        Character::CharacterWorld *character) {
-        if (selection.prefabPermission == GameplayPrefabPermission::Granted && templates == nullptr)
+        Character::CharacterWorld *character, const GameplayPreparedDecisions *prepared) {
+        if (selection.prefabPermission != GameplayPrefabPermission::Denied && templates == nullptr)
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(
                 MakeError(Prefab::PrefabErrors::AdmissionRejected,
                           "This host selected no cooked prefab provider; a prefab grant cannot be activated."));
@@ -276,17 +369,29 @@ namespace Horo::Application::Internal {
         if (selectedCharacter.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(selectedCharacter.ErrorValue());
         composition->character_ = std::move(selectedCharacter).Value();
-        if (selection.prefabPermission == GameplayPrefabPermission::Granted) {
-            composition->prefabs_ =
-                std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components ? components : &composition->prefabComponents_,
-                                                             &composition->builtinProjector_);
-            auto admitted = composition->prefabs_->Acquire({selection.moduleId, active->RuntimeId(), true, true});
-            if (admitted.HasError())
-                return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
-            composition->prefabContext_ = std::move(admitted).Value();
-        }
-        if (auto registered = composition->RegisterModule(selection); registered.HasError())
+        if (auto admitted = composition->BindPrefab(selection, scenes, active->RuntimeId(), templates, components); admitted.HasError())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
+        if (auto registered = composition->RegisterModule(selection, prepared); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
+        if (prepared) {
+            if (prepared->perception) {
+                auto generation = composition->native_->AcquirePerceptionSenses();
+                if (generation.HasError())
+                    return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(generation.ErrorValue());
+                const auto &policy = prepared->perception->policy;
+                const AI::AiScenePerceptionExecution execution{.generation = std::move(generation).Value(),
+                                                               .capabilities = policy.capabilities,
+                                                               .radiusMillimeters = policy.radiusMillimeters,
+                                                               .visibleLayers = policy.visibleLayers,
+                                                               .workUnitsPerTick = policy.workUnitsPerTick,
+                                                               .scheduling = policy.scheduling};
+                const auto activated = prepared->scene.ActivatePerceptionAtSafePoint(*active, prepared->perception->spatial, execution);
+                if (activated.HasError())
+                    return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
+            }
+            if (auto activated = prepared->scene.ActivateCookedDecisionsAtSafePoint(prepared->execution); activated.HasError())
+                return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
+        }
         if (auto activated = composition->ActivateServiceRunner(scenes, components); activated.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
         return Result<std::unique_ptr<GameplayWorldComposition>>::Success(std::move(composition));
@@ -303,10 +408,12 @@ namespace Horo::Application::Internal {
         }
         auto runtime = Gameplay::BehaviorRuntime::Create(scenes, registry_, {},
                                                          {.physics = physics_,
+                                                          .navigation = navigation_,
                                                           .character = CharacterContext(),
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
-                                                          .vfxModuleId = vfxModuleId_},
+                                                          .vfxModuleId = vfxModuleId_,
+                                                          .animation = animationContext_},
                                                          prefabContext_);
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
@@ -349,12 +456,12 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::FixedUpdate(std::span<const Gameplay::GameplayInputAction>,Gameplay::FixedDeltaTime) */
     Result<void> GameplayWorldComposition::FixedUpdate(const std::span<const Gameplay::GameplayInputAction> input,
-                                                       const Gameplay::FixedDeltaTime delta) {
+                                                       const Gameplay::FixedDeltaTime delta, Gameplay::BehaviorFixedEvidence *evidence) {
         if (!behaviors_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable));
         if (vfxScene_ && !vfxTickOpen_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
-        const auto result = behaviors_->FixedUpdate(input, delta);
+        const auto result = behaviors_->FixedUpdate(input, delta, evidence);
         if (result.HasError())
             Shutdown();
         return result;
@@ -367,7 +474,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext&,std::span<const Gameplay::GameplayInputAction>) */
     Result<void> GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext &context,
-                                                     const std::span<const Gameplay::GameplayInputAction> input) {
+                                                     const std::span<const Gameplay::GameplayInputAction> input,
+                                                     Gameplay::BehaviorFixedEvidence *evidence) {
         if (auto begun = BeginVfxTick(context); begun.HasError())
             return begun;
         tick_ = context.simulationTick;
@@ -377,7 +485,36 @@ namespace Horo::Application::Internal {
                 return advanced;
             }
         }
-        return FixedUpdate(input, Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
+        return FixedUpdate(input, Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0},
+                           evidence);
+    }
+
+    /** @copydoc GameplayWorldComposition::ReplayProfile */
+    GameplayReplayProfile GameplayWorldComposition::ReplayProfile() const noexcept {
+        const auto hashText = [](const std::string_view text) {
+            return ComputeSha256(std::as_bytes(std::span{text}));
+        };
+        const auto profile = [&](const Sha256Digest &left, const Sha256Digest &right, const Sha256Digest &source,
+                                 const std::uint64_t revision, const bool native) {
+            std::array<std::byte, 9> identity{};
+            identity[0] = static_cast<std::byte>(native);
+            for (std::size_t byte = 0; byte < sizeof(revision); ++byte)
+                identity[byte + 1] = static_cast<std::byte>(revision >> (byte * 8));
+            const auto replication = replicationLease_ ? replicationLease_->Descriptors()->Fingerprint() : Sha256Digest{};
+            const std::array<std::span<const std::byte>, 5> parts{std::as_bytes(std::span{left.bytes}),
+                                                                  std::as_bytes(std::span{right.bytes}),
+                                                                  std::as_bytes(std::span{source.bytes}),
+                                                                  std::as_bytes(std::span{replication.bytes}), identity};
+            return GameplayReplayProfile{ComputeSha256Fragments(parts), source, revision, native};
+        };
+        if (native_) {
+            if (const auto source = native_->RecordedArtifactDigest())
+                return profile(hashText(native_->ModuleId()), hashText(native_->BuildFingerprint()), *source, native_->DescriptorRevision(),
+                               true);
+        } else if (script_) {
+            return profile(hashText(script_->Descriptor().typeId.Value()), {}, script_->SourceDigest(), script_->Revision(), false);
+        }
+        return {};
     }
 
     /** @copydoc GameplayWorldComposition::OnPhase */
@@ -506,12 +643,16 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::RevokeCapabilities */
     void GameplayWorldComposition::RevokeCapabilities() noexcept {
+        if (scriptAnimationLifetime_)
+            scriptAnimationLifetime_->RequestCancellation();
         if (runtimeUi_)
             runtimeUi_->Revoke();
         if (prefabContext_)
             prefabContext_->Revoke();
         if (prefabs_)
             prefabs_->Shutdown();
+        if (navigation_)
+            navigation_->Revoke();
         if (character_)
             character_->Revoke();
         if (physics_)
@@ -525,6 +666,7 @@ namespace Horo::Application::Internal {
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();
+        navigation_.reset();
         vfx_.reset();
         vfxModuleId_.clear();
         vfxScene_.reset();
@@ -536,6 +678,7 @@ namespace Horo::Application::Internal {
         scenes_ = nullptr;
         registry_ = Gameplay::BehaviorRegistry{};
         replicationLease_.reset();
+        replicationAssessment_.reset();
         if (native_ && retirementAdmission_)
             retirementAdmission_->Retain(std::move(native_));
         retirementAdmission_.reset();
@@ -547,6 +690,16 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::PhysicsContext */
     std::shared_ptr<const Gameplay::GameplayPhysicsContext> GameplayWorldComposition::PhysicsContext() const noexcept {
         return physics_;
+    }
+
+    /** @copydoc GameplayWorldComposition::Replication */
+    const Gameplay::GameplayReplicationLease *GameplayWorldComposition::Replication() const noexcept {
+        return replicationLease_ ? &*replicationLease_ : nullptr;
+    }
+
+    /** @copydoc GameplayWorldComposition::AdmittedReplicationSchemas */
+    std::span<const Network::ReplicationSchemaId> GameplayWorldComposition::AdmittedReplicationSchemas() const noexcept {
+        return replicationAssessment_ ? replicationAssessment_->AdmittedSchemas() : std::span<const Network::ReplicationSchemaId>{};
     }
 
     /** @copydoc GameplayWorldComposition::CharacterContext */

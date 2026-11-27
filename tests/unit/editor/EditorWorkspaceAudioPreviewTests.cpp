@@ -108,6 +108,26 @@ namespace {
         CHECK(fixture.host.Snapshot().output->phase == Audio::AudioFrontendPhase::Active);
         CHECK_FALSE(fixture.controller->ViewModel().audioPreviewFailure);
         CHECK(fixture.evidence->peak > 0.01F);
+        const auto &preview = fixture.controller->ViewModel().audioPreview;
+        REQUIRE(preview);
+        REQUIRE(preview->output);
+        const auto beforeSwitch = preview->output->device;
+        fixture.Process({.command = EditorWorkspaceViewCommand::StartAudioComponentPreview,
+                         .objectPayload = fixture.object,
+                         .audioPreviewRevision = revision,
+                         .audioPreviewOutputSwitch = AudioComponentPreviewOutputSwitch{beforeSwitch, Audio::AudioDefaultDeviceRole::Console,
+                                                                                       AudioComponentPreviewSwitchPolicy::Restart}});
+        REQUIRE(fixture.host.Snapshot().outputSwitch);
+        CHECK(fixture.host.Snapshot().outputSwitch->status == AudioComponentPreviewSwitchStatus::Pending);
+        Pump(fixture.host);
+        fixture.controller->ReconcileAudioPreview();
+        const auto &switched = fixture.controller->ViewModel().audioPreview;
+        REQUIRE(switched);
+        REQUIRE(switched->output);
+        REQUIRE(switched->outputSwitch);
+        CHECK(switched->outputSwitch->status == AudioComponentPreviewSwitchStatus::Applied);
+        CHECK(switched->outputSwitch->target == switched->output->device);
+        CHECK(switched->output->device != beforeSwitch);
         fixture.Process({.command = EditorWorkspaceViewCommand::StopAudioComponentPreview});
         Pump(fixture.host);
         REQUIRE(fixture.host.Snapshot().output);

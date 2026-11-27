@@ -42,6 +42,18 @@ namespace Horo::Runtime {
         return storage_.Get() != nullptr;
     }
 
+    /** @copydoc RuntimeDispatchSource::ReadClockBaseline */
+    RuntimeDispatchStatus RuntimeDispatchSource::ReadClockBaseline(CommittedFixedStepEvidence &fixed,
+                                                                   Duration &presentation) const noexcept {
+        const auto status = ValidateRun();
+        if (status == RuntimeDispatchStatus::Valid) {
+            const auto &facts = storage_->facts;
+            fixed = {facts.committedTick, facts.committedAttempt, facts.committedFrame, facts.committedDuration};
+            presentation = facts.presentationAdmittedDuration;
+        }
+        return status;
+    }
+
     /** @copydoc RuntimeDispatchSource::Initialize */
     bool RuntimeDispatchSource::Initialize() {
         try {

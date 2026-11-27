@@ -40,11 +40,29 @@ namespace Horo::Editor {
         if (!ShouldTick())
             return Result<void>::Success();
         fixedAttempt_.emplace(sceneHost_.get(), context.dispatchEvidence, facts, state_ == EditorPlaySessionState::Paused);
+        auto staged = RunFixedCallbacks(input, context);
+        if (staged.HasError())
+            return RejectFixedAttempt(context, std::move(staged).ErrorValue());
+        return staged;
+    }
+
+    /** @copydoc EditorPlaySessionController::RunFixedCallbacks */
+    Result<void> EditorPlaySessionController::RunFixedCallbacks(std::span<const Gameplay::GameplayInputAction> input,
+                                                                const Runtime::FixedStepContext &context) {
+        if (auto assists = CaptureGameplayAssists(); assists.HasError())
+            return assists;
         const Gameplay::FixedDeltaTime delta{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0};
+        const auto evaluated = fixedAttempt_->scene->EvaluateDecisionBeforeGameplay(context);
+        if (evaluated.HasError())
+            return Result<void>::Failure(evaluated.ErrorValue());
+        fixedAttempt_->decisionsAdvanced = evaluated.Value();
         if (auto gameplay = RunGameplayFixed(input, delta); gameplay.HasError())
-            return RejectFixedAttempt(context, gameplay.ErrorValue());
+            return gameplay;
+        if (auto staged = fixedAttempt_->scene->BeforeNativeFixedUpdate(context); staged.HasError())
+            return staged;
         if (auto native = fixedAttempt_->scene->OnRuntimeFixedUpdate(context); native.HasError())
-            return RejectFixedAttempt(context, native.ErrorValue());
+            return native;
+        fixedAttempt_->scene->StagePresentationInput(input);
         return Result<void>::Success();
     }
 
@@ -108,8 +126,11 @@ namespace Horo::Editor {
             return;
         if (!MatchesFixedAttempt(context))
             return;
+        const bool retire = fixedAttempt_->decisionsAdvanced;
         fixedAttempt_->scene->AbortRuntimeFixedUpdate(context);
         fixedAttempt_.reset();
+        if (retire)
+            Stop();
     }
 
     void EditorPlaySessionController::FlushPendingStop() noexcept {

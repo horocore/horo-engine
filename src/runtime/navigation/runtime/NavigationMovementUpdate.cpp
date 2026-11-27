@@ -23,6 +23,40 @@ namespace Horo::Navigation {
         double Distance(const Math::Vec3 from, const Math::Vec3 to) noexcept {
             return std::hypot(static_cast<double>(to.x) - from.x, static_cast<double>(to.y) - from.y, static_cast<double>(to.z) - from.z);
         }
+
+        /** @brief Traversal boundaries must never be skipped by ordinary waypoint following. */
+        bool IsTraversalBoundary(const NavigationPathWaypoint &waypoint) noexcept {
+            using enum NavigationPathWaypointKind;
+            return waypoint.provenance.kind == TraversalEntrance || waypoint.provenance.kind == TraversalExit;
+        }
+
+        /** @brief Skips reached ground waypoints without exposing the target beyond a traversal entrance. */
+        std::size_t NextGroundWaypoint(const std::span<const NavigationPathWaypoint> points, std::size_t waypoint,
+                                       const Math::Vec3 position, const float radius) noexcept {
+            while (waypoint + 1 < points.size() && !IsTraversalBoundary(points[waypoint]) &&
+                   Distance(position, points[waypoint].position) <= radius)
+                ++waypoint;
+            return waypoint;
+        }
+
+        /** @brief Matches achieved motion to the exact previous publication before admitting arrival. */
+        bool AcknowledgedArrival(const NavigationMovementObservation &current, const NavigationMovementIntent &intent,
+                                 const std::optional<std::uint64_t> previousTick, const float arrivalSpeed) noexcept {
+            return current.feedback && previousTick && current.feedback->operation == intent.operation &&
+                   current.feedback->path == intent.path && current.feedback->tick == *previousTick && *previousTick < intent.tick &&
+                   current.feedback->achievedSpeedMetersPerSecond <= arrivalSpeed;
+        }
+
+        /** @brief Produces a finite desired velocity that reaches the waypoint without overshooting the step. */
+        Math::Vec3 VelocityToward(const Math::Vec3 position, const Math::Vec3 target, const float step, const float maximumSpeed) noexcept {
+            const auto distance = Distance(position, target);
+            if (distance == 0.0)
+                return {};
+            const auto speed = std::min(static_cast<double>(maximumSpeed), distance / step);
+            return {static_cast<float>((static_cast<double>(target.x) - position.x) / distance * speed),
+                    static_cast<float>((static_cast<double>(target.y) - position.y) / distance * speed),
+                    static_cast<float>((static_cast<double>(target.z) - position.z) / distance * speed)};
+        }
     }  // namespace
 
     /** @copydoc NavigationMovementController::CheckAuthority */
@@ -165,7 +199,8 @@ namespace Horo::Navigation {
                                             .targetTick = path.tick + 1,
                                             .deadlineTick = deadline_,
                                             .cancellation = request_.cancellation,
-                                            .operation = request_.operation};
+                                            .operation = request_.operation,
+                                            .agent = agent_.handle};
         auto accepted = coordinator_.Submit(world_, std::move(submission), path.tick);
         if (accepted.HasError()) {
             if (!IsError(accepted.ErrorValue(), NavigationErrors::AdmissionRejected))
@@ -182,6 +217,80 @@ namespace Horo::Navigation {
         status_.state = NavigationMovementState::Querying;
     }
 
+    /** @copydoc NavigationMovementController::Crossing::Begin */
+    NavigationMovementIntent NavigationMovementController::Crossing::Begin(NavigationMovementController &movement,
+                                                                           const NavigationPathPortal &portal,
+                                                                           const NavigationGeneration topology, const PathId path,
+                                                                           const std::uint64_t tick) {
+        using enum NavigationMovementState;
+        movement.lastIntent_.reset();
+        if (!catalog) {
+            movement.Finish(Failed,
+                            MakeError(NavigationErrors::CapabilityUnavailable, "Off-mesh traversal requires a composed traversal owner."));
+            return {movement.status_.id, {}, tick, {}, movement.status_.state};
+        }
+        auto grant = catalog->Reserve(portal.link, topology, movement.agent_.handle, tick, movement.deadline_);
+        if (grant.HasError()) {
+            if (IsError(grant.ErrorValue(), NavigationErrors::AdmissionRejected)) {
+                movement.status_.state = Holding;
+                return {movement.status_.id, path, tick, {}, movement.status_.state};
+            }
+            movement.Finish(Failed, std::move(grant).ErrorValue());
+            return {movement.status_.id, {}, tick, {}, movement.status_.state};
+        }
+        intent = NavigationMovementTraversal{std::move(grant).Value(), portal.left, portal.right};
+        movement.status_.state = Traversing;
+        return {movement.status_.id, path, tick, {}, movement.status_.state, intent};
+    }
+
+    /** @copydoc NavigationMovementController::Crossing::Poll */
+    std::optional<NavigationMovementIntent> NavigationMovementController::Crossing::Poll(NavigationMovementController &movement,
+                                                                                         const NavigationMovementObservation &current,
+                                                                                         const NavigationPath &corridor,
+                                                                                         const std::uint64_t tick) {
+        using enum NavigationMovementState;
+        if (!intent.has_value())
+            return {};
+        const auto result = catalog->Take(intent->grant.reservation, movement.agent_.handle, tick);
+        if (!result)
+            return NavigationMovementIntent{movement.status_.id, movement.policy_.Id(), tick, {}, Traversing, intent};
+        const auto &portal = corridor.portals[corridor.waypoints[movement.waypoint_].provenance.portalIndex];
+        intent.reset();
+        if (result->reason == NavigationTraversalEnd::Completed && Distance(current.position, portal.right) <= portal.linkRadiusMeters) {
+            movement.waypoint_ += 2;
+            movement.status_.state = Following;
+            return {};
+        }
+        Finish(movement, result->reason);
+        return NavigationMovementIntent{movement.status_.id, {}, tick, {}, movement.status_.state};
+    }
+
+    /** @copydoc NavigationMovementController::Crossing::Finish */
+    void NavigationMovementController::Crossing::Finish(NavigationMovementController &movement, const NavigationTraversalEnd reason) {
+        using enum NavigationMovementState;
+        switch (reason) {
+            case NavigationTraversalEnd::Completed:
+                movement.Finish(Failed,
+                                MakeError(NavigationErrors::OutcomeDescriptorInvalid, "Traversal did not complete at the admitted exit."));
+                break;
+            case NavigationTraversalEnd::Cancelled:
+                movement.Finish(Cancelled);
+                break;
+            case NavigationTraversalEnd::ActionFailed:
+                movement.Finish(Failed, MakeError(NavigationErrors::ProviderFailed, "The traversal action reported failure."));
+                break;
+            case NavigationTraversalEnd::Deadline:
+                movement.Finish(TimedOut);
+                break;
+            case NavigationTraversalEnd::AgentRetired:
+                movement.Finish(AgentLost, MakeError(NavigationErrors::AgentRegistryStale));
+                break;
+            case NavigationTraversalEnd::LinkRetired:
+                movement.Finish(Failed, MakeError(NavigationErrors::StaleSnapshot));
+                break;
+        }
+    }
+
     /** @copydoc NavigationMovementController::Follow */
     NavigationMovementIntent NavigationMovementController::Follow(const NavigationMovementObservation &current,
                                                                   const NavigationPathObservation &path) {
@@ -189,16 +298,19 @@ namespace Horo::Navigation {
         const auto *corridor = policy_.CurrentPath(path);
         if (!corridor)
             return intent;
+        if (const auto crossing = crossing_.Poll(*this, current, *corridor, path.tick); crossing.has_value())
+            return *crossing;
         intent.path = policy_.Id();
         const auto &points = corridor->waypoints;
-        while (waypoint_ + 1 < points.size() && Distance(current.position, points[waypoint_].position) <= request_.waypointRadiusMeters)
-            ++waypoint_;
+        waypoint_ = NextGroundWaypoint(points, waypoint_, current.position, request_.waypointRadiusMeters);
+        const auto &target = points[waypoint_];
+        if (IsTraversalBoundary(target)) {
+            const auto &portal = corridor->portals[target.provenance.portalIndex];
+            if (Distance(current.position, target.position) <= std::min(request_.waypointRadiusMeters, portal.linkRadiusMeters))
+                return crossing_.Begin(*this, portal, corridor->sourceGeneration, intent.path, path.tick);
+        }
         const bool atEnd = waypoint_ + 1 == points.size() && Distance(current.position, goal_) <= request_.acceptanceRadiusMeters;
-        if (const bool acknowledged = current.feedback && lastIntent_.has_value() && current.feedback->operation == status_.id &&
-                                      current.feedback->path == intent.path && current.feedback->tick == *lastIntent_ &&
-                                      *lastIntent_ < path.tick &&
-                                      current.feedback->achievedSpeedMetersPerSecond <= request_.arrivalSpeedMetersPerSecond;
-            atEnd && acknowledged) {
+        if (atEnd && AcknowledgedArrival(current, intent, lastIntent_, request_.arrivalSpeedMetersPerSecond)) {
             if (request_.mode == NavigationMovementMode::MoveTo) {
                 Finish(NavigationMovementState::Arrived);
                 intent.path = {};
@@ -209,16 +321,8 @@ namespace Horo::Navigation {
         } else {
             status_.state = NavigationMovementState::Following;
         }
-        if (!atEnd) {
-            const auto target = points[waypoint_].position;
-            const auto distance = Distance(current.position, target);
-            if (distance > 0.0) {
-                const auto speed = std::min(static_cast<double>(request_.speedMetersPerSecond), distance / current.stepSeconds);
-                intent.desiredVelocity = {static_cast<float>((static_cast<double>(target.x) - current.position.x) / distance * speed),
-                                          static_cast<float>((static_cast<double>(target.y) - current.position.y) / distance * speed),
-                                          static_cast<float>((static_cast<double>(target.z) - current.position.z) / distance * speed)};
-            }
-        }
+        if (!atEnd)
+            intent.desiredVelocity = VelocityToward(current.position, target.position, current.stepSeconds, request_.speedMetersPerSecond);
         lastIntent_ = path.tick;
         intent.state = status_.state;
         return intent;
@@ -254,6 +358,7 @@ namespace Horo::Navigation {
             Finish(Failed, observed.ErrorValue());
             return stopped();
         }
+        crossing_.ObservePath(*this, path);
         if (current.feedback && current.feedback->requestRepath && lastIntent_.has_value() && current.feedback->operation == status_.id &&
             current.feedback->path == policy_.Id() && current.feedback->tick == *lastIntent_ && *lastIntent_ < path.tick) {
             RetireQuery();
@@ -275,6 +380,15 @@ namespace Horo::Navigation {
         return Return::Success(Follow(current, path));
     }
 
+    /** @copydoc NavigationMovementController::Crossing::ObservePath */
+    void NavigationMovementController::Crossing::ObservePath(NavigationMovementController &movement,
+                                                             const NavigationPathObservation &path) {
+        if (intent.has_value() && !movement.policy_.CurrentPath(path)) {
+            Abandon(movement.agent_.handle);
+            movement.status_.state = NavigationMovementState::Querying;
+        }
+    }
+
     /** @copydoc NavigationMovementController::ResetMotionAtSafePoint */
     Result<void> NavigationMovementController::ResetMotionAtSafePoint(const NavigationMovementObservation &current) {
         using enum NavigationMovementState;
@@ -287,6 +401,7 @@ namespace Horo::Navigation {
         NavigationPathPolicy replacement{request_.repath};
         if (const auto valid = replacement.ForceRepath(path); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());
+        crossing_.Abandon(agent_.handle);
         RetireQuery();
         policy_ = std::move(replacement);
         lastIntent_.reset();
@@ -298,12 +413,22 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationMovementController::IsCurrentIntent */
     bool NavigationMovementController::IsCurrentIntent(const NavigationMovementIntent &intent) const noexcept {
-        if (shutdown_ || !lastUpdate_.has_value() || intent.tick != *lastUpdate_ || intent.operation != status_.id ||
-            intent.state != status_.state)
+        if (shutdown_ || lastUpdate_ != intent.tick || intent.operation != status_.id || intent.state != status_.state ||
+            intent.traversal != crossing_.intent || (intent.traversal.has_value() && intent.desiredVelocity != Math::Vec3{}))
             return false;
-        return intent.path == (status_.state == NavigationMovementState::Following || status_.state == NavigationMovementState::Holding
-                                   ? policy_.Id()
-                                   : PathId{});
+        using enum NavigationMovementState;
+        const bool followsPath = status_.state >= Following && status_.state <= Traversing;
+        return intent.path == (followsPath ? policy_.Id() : PathId{});
+    }
+
+    /** @copydoc NavigationMovementController::Crossing::HasPathAuthority */
+    bool NavigationMovementController::Crossing::HasPathAuthority(NavigationMovementController &movement,
+                                                                  const NavigationMovementIntent &expected,
+                                                                  const NavigationPathObservation &path) {
+        if (expected.path.IsValid() && !movement.policy_.CurrentPath(path))
+            return false;
+        return !expected.traversal.has_value() ||
+               catalog->IsLive(expected.traversal->grant.reservation, movement.agent_.handle, expected.tick);
     }
 
     /** @copydoc NavigationMovementController::ValidateIntentAtSafePoint */
@@ -313,12 +438,16 @@ namespace Horo::Navigation {
             return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
         if (!CheckAuthority(current))
             return Result<void>::Failure(MakeError(NavigationErrors::AgentRegistryStale));
+        if (request_.cancellation.IsCancellationRequested() && status_.state < NavigationMovementState::Arrived) {
+            Finish(NavigationMovementState::Cancelled);
+            return Result<void>::Failure(MakeError(NavigationErrors::QueryCancelled));
+        }
         auto path = current.path;
         path.goalRevision = goalRevision_;
         if (const auto observed = policy_.Observe(path); observed.HasError())
             return Result<void>::Failure(observed.ErrorValue());
-        if (intent.path.IsValid() && !policy_.CurrentPath(path))
-            return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
-        return Result<void>::Success();
+        crossing_.ObservePath(*this, path);
+        return crossing_.HasPathAuthority(*this, intent, path) ? Result<void>::Success()
+                                                               : Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
     }
 }  // namespace Horo::Navigation

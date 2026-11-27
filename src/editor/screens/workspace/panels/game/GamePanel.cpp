@@ -1,11 +1,96 @@
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <format>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Selects a localized label for the typed runtime phase. */
+        std::string_view DecisionProblemPhaseText(EditorPlayDecisionPhase phase) {
+            switch (phase) {
+                case EditorPlayDecisionPhase::TaskProvider:
+                    return "ai_problem_provider";
+                case EditorPlayDecisionPhase::Commit:
+                    return "ai_problem_commit";
+                case EditorPlayDecisionPhase::Evaluate:
+                    return "ai_problem_evaluate";
+            }
+            return "ai_problem_evaluate";
+        }
+
+        /** @brief Displays an owner-correlated runtime diagnostic and emits a typed selection intent. */
+        void DrawDecisionProblem(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                 const EditorGuiContext &context) {
+            const auto &problem = viewModel.playDecisionProblem;
+            if (!problem)
+                return;
+            const auto text = [&](std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(context.localization, key);
+            };
+            const auto &fonts = context.theme.fonts;
+            const auto color = problem->error.severity >= ErrorSeverity::Error ? Theme::Err() : Theme::Warn();
+            const auto &phase = text(DecisionProblemPhaseText(problem->phase));
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            std::format("{} · {} · {} {} · {} · {}", text("ai_problem"), phase, text("ai_problem_tick"), problem->tick,
+                                        problem->error.code.Value(), problem->error.message),
+                            color, fonts);
+            if (problem->graph.IsValid() && problem->node.IsValid()) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                                std::format("{} {} · {} {}", text("ai_problem_graph"), problem->graph.Value(), text("ai_problem_node"),
+                                            problem->node.Value()),
+                                Theme::Muted(), fonts);
+                if (Ui::Button({.label = text("ai_problem_open_graph").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans,
+                                .componentSize = Ui::ComponentSize::Small}) &&
+                    command.command == EditorWorkspaceViewCommand::None) {
+                    command.command = EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem;
+                    command.playDecisionGraphNavigation =
+                        PlayDecisionGraphNavigationRequest{problem->scene, problem->tick, problem->agent, problem->graph, problem->node};
+                }
+            }
+            if (viewModel.playDecisionGraphUnavailable)
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_problem_graph_unavailable"), Theme::Muted(), fonts);
+            if (!problem->entity || !viewModel.playDecisionObjectAvailable) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_problem_object_unavailable"), Theme::Muted(), fonts);
+                return;
+            }
+            if (Ui::Button({.label = text("ai_problem_select_object").c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small}) &&
+                command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::NavigatePlayDecisionProblem;
+                command.playDecisionNavigation = PlayDecisionNavigationRequest{problem->tick, problem->agent, *problem->entity};
+            }
+        }
+
+        /** @brief Opens the existing project Input Mapping surface from paused Play. */
+        void DrawPausedInputMapping(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                    const EditorGuiContext &context) {
+            if (viewModel.playState != EditorPlayState::Paused)
+                return;
+            constexpr auto panelId = InputMappingPanel::kPanelId;
+            const auto placement = viewModel.panelDockAreas.find(panelId);
+            if (placement == viewModel.panelDockAreas.end())
+                return;
+            const auto &label = InputMappingPanel::kTextScope.Text(context.localization, "title");
+            if (Ui::Button({.label = label.c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = context.theme.fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small})) {
+                command.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+                command.targetIndex = static_cast<int>(placement->second);
+                command.stringPayload = std::string{panelId};
+            }
+        }
+    }  // namespace
+
     /** @copydoc GamePanel::OnAttach */
     void GamePanel::OnAttach(PanelContext &context) {
         viewportRenderer_ = context.viewportRenderer;
@@ -57,13 +142,22 @@ namespace Horo::Editor {
 
     /** @copydoc GamePanel::DrawPanel */
     void GamePanel::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
-                              EditorWorkspaceViewCommandData &, const EditorGuiContext &context) {
+                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::BeginChild("##GameContent", size, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        const bool visible =
+            ImGui::BeginChild("##GameContent", size, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        if (!visible) {
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
         if (viewModel.playViewSource != EditorPlayViewSource::AuthoredCamera) {
             const auto key = viewModel.playViewSource == EditorPlayViewSource::Simulator ? "simulator_preview" : "xr_mirror";
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, key).c_str());
         }
+        DrawPausedInputMapping(viewModel, command, context);
+        DrawDecisionProblem(viewModel, command, context);
+        DrawAgentInspection(viewModel, command, context);
         const auto origin = ImGui::GetCursorScreenPos();
         const float height = std::max(0.0F, ImGui::GetContentRegionAvail().y);
         RequestViewport(size.x, height);

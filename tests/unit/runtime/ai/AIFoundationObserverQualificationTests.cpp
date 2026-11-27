@@ -30,7 +30,7 @@ namespace Horo::AI {
                 state.binding = fixture.binding;
                 const std::array slots{Horo::Handle<AgentHandleTag>{0, 1}};
                 auto agents = Detail::PrepareStructuralAgents(fixture.binding, std::array{fixture.agent}, std::array{fixture.descriptor},
-                                                              AiSceneRuntimeSettings{}.availableCapabilities, slots);
+                                                              AiSceneRuntimeSettings{}, slots);
                 REQUIRE(agents.HasValue());
                 state.agents = std::move(agents).Value();
                 state.agentsByOwner.emplace(fixture.owner, 0);

@@ -131,6 +131,24 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         SampleProgress(sample, policy, completed);
     }
 
+    /** @brief Completes a decorative timeline at its authored endpoint without inventing elapsed clocks or marker crossings. */
+    [[nodiscard]] inline PlaybackCursor FinishReducedMotion(const PlaybackCursor &current, const UiAnimationTimePolicy &policy) noexcept {
+        auto result = current;
+        auto &sample = result.sample;
+        sample.newTerminalOutcome = false;
+        sample.crossedIterations = 0;
+        if (sample.outcome != UiAnimationOutcome::None)
+            return result;
+        sample.state = UiAnimationState::Completed;
+        sample.outcome = UiAnimationOutcome::Completed;
+        sample.newTerminalOutcome = true;
+        sample.contributesValue = policy.fill == UiAnimationFill::Forwards || policy.fill == UiAnimationFill::Both;
+        if (policy.loop.kind == UiLoopKind::Finite)
+            sample.iteration = policy.loop.iterations - 1;
+        sample.progress = ReverseIteration(policy.direction, sample.iteration) ? 0 : std::numeric_limits<std::uint32_t>::max();
+        return result;
+    }
+
     /** @brief Evaluates an inactive cursor without mutating current state; every arithmetic/work error retains the prior cursor. */
     [[nodiscard]] inline Result<PlaybackCursor> AdvancePlayback(const PlaybackCursor &current, const UiAnimationTimePolicy &policy,
                                                                 const UiDuration domainDelta, const std::uint32_t crossingBudget) {

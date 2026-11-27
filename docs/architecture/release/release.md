@@ -427,6 +427,22 @@ The manifest uses a canonical serialization format before hashing or signing.
 Unknown required manifest fields cause validation failure. Optional extensions
 are namespaced and versioned.
 
+A host that requires detached manifest authentication supplies its independently
+trusted publisher verifier explicitly. The final directory contains one
+canonical `manifest.json` and one `manifest.signature.json` envelope for those
+exact bytes. Both root metadata names are reserved outside the artifact list.
+Keeping the envelope outside the list lets it sign the final manifest without
+creating a digest cycle. The existing exact-tree path for hosts without
+detached manifest policy still rejects any undeclared envelope. Declared
+platform signing and notarization requirements remain a separate check.
+
+Private staging promotion verifies both metadata files before the atomic rename.
+Final candidate verification checks the entire directory before and after smoke
+probes and binds the exact envelope byte identity to its result. Publication
+validates that identity against the local tree and the upload receipt. A
+destination carrying a detached envelope must check its size and SHA-256
+before the channel changes.
+
 Checksum metadata is a deterministic projection of post-sign artifact records.
 It lists each final artifact's SHA-256 digest in portable path order, before
 `checksums.txt` and `manifest.json` are written. Neither metadata file may list
@@ -652,9 +668,9 @@ launch, and compatibility probes still need host composition and qualification.
 
 The publication dispatcher accepts only that verified identity and the same
 final manifest under a preflight-authorized destination. It checks local bytes,
-asks the destination adapter to upload only declared files, validates the
-receipt identity, asks the adapter to verify remote bytes and signatures, and
-rechecks local bytes before committing the channel. The adapter must keep
+asks the destination adapter to upload declared files and verified final
+metadata, validates the receipt identity, asks the adapter to verify remote
+bytes and signatures, and rechecks the local tree before committing the channel. The adapter must keep
 upload idempotent and channel commit atomic. Concrete destination qualification
 and approval policy still belong to host composition.
 
@@ -694,9 +710,12 @@ channel state is unchanged.
 
 The GitHub Releases destination lives in `HoroReleaseGitHub`, outside the shared
 release application target. Its host-owned client resolves an existing tagged
-release, uploads only final-manifest files and canonical `manifest.json`, reads
-each remote asset back for size and SHA-256 verification, and binds the channel
-commit to the same remote release ID. The destination requires a canonical Git
+release and uploads the declared files and canonical `manifest.json`. A
+candidate with authenticated detached metadata also carries its verified
+`manifest.signature.json`. The adapter reads each remote asset back for size
+and SHA-256 verification and binds the channel commit to that remote release
+ID. The CLI client checks both finalized metadata files against that receipt
+immediately before the stable channel update. The destination requires a canonical Git
 commit SHA in the candidate and peels the existing Git tag to that exact commit.
 A missing release, retargeted tag, or changed release ID fails
 without creating a tag or release. The `GitHubReleaseCliClient` uses the host's

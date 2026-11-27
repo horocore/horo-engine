@@ -16,6 +16,9 @@ static_assert(!std::is_constructible_v<Horo::Gameplay::GameplayPrefabContext, st
 using AcquireMethod = Horo::Result<std::shared_ptr<Horo::Gameplay::GameplayPrefabContext>> (Horo::Prefab::PrefabSpawnService::*)(
     Horo::Prefab::GameplayPrefabBinding) const;
 using AdvanceMethod = Horo::Result<void> (Horo::Prefab::PrefabSpawnService::*)(std::uint64_t) const;
+using ResolveMemberMethod = Horo::Result<Horo::Prefab::PrefabSpawnedMember> (Horo::Prefab::PrefabInstance::*)(
+    const Horo::Prefab::PrefabObjectAddress &, const Horo::Runtime::RuntimeSceneView &) const;
+static_assert(std::is_same_v<decltype(&Horo::Prefab::PrefabInstance::ResolveMember), ResolveMemberMethod>);
 static_assert(std::is_same_v<decltype(&Horo::Prefab::PrefabSpawnService::Acquire), AcquireMethod>);
 static_assert(std::is_same_v<decltype(&Horo::Prefab::PrefabSpawnService::Advance), AdvanceMethod>);
 
@@ -65,5 +68,10 @@ namespace {
 
 int main() {
     Horo::Prefab::PrefabOperation empty;
-    return empty.State() == Horo::Prefab::PrefabSpawnState::Failed && empty.Spawned().HasError() ? 0 : 1;
+    const Horo::Prefab::PrefabInstance instance;
+    const Horo::Runtime::RuntimeSceneView scene;
+    return empty.State() == Horo::Prefab::PrefabSpawnState::Failed && empty.Spawned().HasError() &&
+                   instance.ResolveMember({}, scene).HasError()
+               ? 0
+               : 1;
 }

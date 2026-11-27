@@ -66,6 +66,8 @@ namespace Horo::Runtime {
                                         transform.rotation.Rotate({0.0F, 1.0F, 0.0F}), lens.Value()};
         if (!values.IsValid())
             return Result<CameraProposal>::Failure(MakeError(CameraErrors::InvalidTarget));
-        return Result<CameraProposal>::Success({camera, values});
+        CameraProposal proposal{camera, values};
+        proposal.sceneRevision = scene.StructuralRevision();
+        return Result<CameraProposal>::Success(proposal);
     }
 }  // namespace Horo::Runtime

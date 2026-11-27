@@ -842,31 +842,16 @@ distinct presentation cues, but cannot relabel them as the marker occurrence.
 
 ## Root Motion Integration
 
-Animation root motion may provide a movement delta.
-
-```cpp
-enum class RootMotionPriority {
-    GameplayOnly,
-    Suggest,     // root motion is used only when gameplay declares no translation
-    Additive,    // root and gameplay translations are summed before collision
-    Override     // root motion replaces gameplay translation for this fixed tick
-};
-
-struct RootMotionRequest {
-    Vec3 deltaTranslation;
-    Quat deltaRotation;
-    bool applyToPosition;
-    bool applyToOrientation;
-    RootMotionPriority priority = RootMotionPriority::Suggest;
-};
-```
+Animation root motion may provide a rigid movement delta. Character resolves
+translation through `CharacterRootTranslation` and rotation through
+`CharacterRootRotation`.
 
 The controller treats root motion as one tick-addressed movement request and
 resolves it through the same collision passes. Animation produces it directly from
 the authoritative fixed-tick interval; presentation frames never accumulate root
 motion. This ensures animation-driven movement respects walls, slopes, and steps.
 
-The request identifies its scene, animation instance, simulation tick, and root-
+The Scene request identifies its scene, animation instance, simulation tick, and root-
 motion generation. Controller resolution stages a consumption marker in the tick
 transaction; only successful tick commit makes that marker durable. Aborting an
 attempt discards its marker and request lease, so a retry of the same simulation
@@ -877,12 +862,46 @@ are invalid. Reverse player traversal may submit the inverse directed delta when
 animation and gameplay policy admit it; the controller still performs ordinary
 forward collision resolution and does not reverse physics.
 
+The non-installed Scene fixed-tick boundary keeps a resolved candidate private
+until the host commits the exact tick and scheduler attempt. The paired Scene
+owner can copy candidate root feedback before publication. Controller transforms,
+events, and the tick watermark become visible together at commit. An aborted
+attempt releases the queue for retry and retains its gameplay commands. A root
+command must carry the current scheduler attempt before the world can stage it.
+
+Editor Play and the authoritative headless Scene host route opted-in actors
+through the published Character binding for their current Scene. The staged
+packet can supply movement when there is no gameplay command, without taking a
+sequence number from the gameplay queue. With a gameplay command present the
+host's suggestion preserves explicit velocity intent, including zero. An actor
+without a live Character binding keeps an unavailable result. If native
+Physics has already attempted its in-place step, abort fences that Scene
+incarnation from further ticks so it cannot continue with mismatched owners.
+Replica Animation instances can load the same authored component and sample it
+for presentation without producing an authoritative movement request.
+
 Gameplay selects the admitted translation/rotation mode before command closure.
 `Suggest` uses an explicit gameplay-translation presence bit, not a velocity
 epsilon. Platform carry applies first. Desired gameplay heading establishes the
 pre-root basis, root translation is rotated by that basis, and admitted root twist
 then composes under ADR-089. Root pitch/roll remains visual and never tilts the
 capsule.
+
+`CharacterMovementRequest::rootMotion` carries that rigid delta and the source
+scheduler tick and attempt. The receiving controller keeps the last committed
+source for its lifetime. A host validates its Scene and animation instance before
+converting the source to a Character command. The translation intent sweep
+attributes each accepted segment to its root contribution. Slide and slope
+constraints apply to the combined path and to its ordinary movement contribution
+using the same collision evidence. The solver uses their difference to carry root
+attribution into the next segment. A completed step attributes the horizontal
+travel. Platform carry, ground correction, and gravity stay outside this result.
+
+`CharacterMovementResult::rootMotion` retains the applied displacement in the
+starting root frame and the remainder from that applied pose to the requested
+endpoint. Collision heading consumes only the selected twist. Keeping the
+remainder explicit lets callers distinguish a blocked interval from one that
+completed. An unresolved or rejected command publishes no consumption marker.
 
 ## Physics Material Query
 

@@ -26,7 +26,8 @@ namespace Horo::Editor {
         std::vector<std::pair<RenderBufferHandle, RenderGraphResourceId>> buffers;
         std::vector<RenderGraphImportedState> initial;
         std::optional<Error> error;
-        RenderGraphResourceId color, depth, atlas;
+        RenderGraphResourceId color, depth, atlas, presentation;
+        RenderGraphPassRef presentationProducer;
         std::array<RenderGraphResourceId, 4> lightBuffers;
         std::array<RenderBufferHandle, 4> bufferHandles;
         std::array<RenderGraphPassRef, 9> passes;
@@ -68,6 +69,19 @@ namespace Horo::Editor {
         void Use(const RenderGraphPassRef pass, const RenderGraphResourceId resource, const RenderGraphAccess access,
                  const RenderGraphUsageKind kind) {
             Take(builder.AddUsage({pass, resource, access, kind}));
+        }
+
+        /** @brief Records the bounded copy after color writes and before the live primary encoder is opened. */
+        RenderGraphPassWorkload Readback(const EditorGraphViewportImageCapture::Copy &copy) {
+            const auto staging = Take(builder.ImportBuffer(copy.staging, RenderGraphResourceClass::Persistent));
+            initial.push_back({staging, {}, RenderGraphInitialContents::Discarded});
+            const auto pass = Take(builder.AddPass(RenderPassKind::Copy, RenderQueueRole::Graphics));
+            Take(builder.AddDependency({presentationProducer, pass, RenderGraphDependencyKind::ExecutionOrder}));
+            Take(builder.AddDependency({pass, passes[BaseCount() - 1], RenderGraphDependencyKind::ExecutionOrder}));
+            Use(pass, presentation, RenderGraphAccess::Read, RenderGraphUsageKind::CopySource);
+            Use(pass, staging, RenderGraphAccess::Write, RenderGraphUsageKind::CopyDestination);
+            const auto &region = copy.region;
+            return {pass, RenderGraphColorReadback{presentation, staging, region.x, region.y, {region.width, region.height}}};
         }
 
         void AuthorPassesAndCulling() {
@@ -229,6 +243,8 @@ namespace Horo::Editor {
             variant.colorGraph.AppendEncode(author.builder, *color_, final, resources_->PresentationTextureView(), selection);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
+        author.presentation = final;
+        author.presentationProducer = encoded.Value();
         author.Take(
             author.builder.AddDependency({encoded.Value(), passes[author.BaseCount() - 1], RenderGraphDependencyKind::ExecutionOrder}));
         const auto colorWork = variant.colorGraph.Workloads();
@@ -237,7 +253,8 @@ namespace Horo::Editor {
     }
 
     Result<void> MetalViewportClusteredFrame::BuildVariant(Slot &slot, Slot::Variant &variant, const std::uint32_t cascadeCount,
-                                                           const Render::StaticMeshPassDescriptor &descriptor) {
+                                                           const Render::StaticMeshPassDescriptor &descriptor,
+                                                           const EditorGraphViewportImageCapture::Copy *copy) {
         using namespace Render;
         const auto queues = Detail::RenderFrontendResourceAccess::QueueAssignments(*frontend_);
         if (queues.HasError())
@@ -258,6 +275,8 @@ namespace Horo::Editor {
                                 slot.uploaded.buffers.references};
         auto &lightBuffers = author.lightBuffers;
         author.AuthorPassesAndCulling();
+        author.presentation = author.color;
+        author.presentationProducer = author.passes[author.RasterIndex(6)];
         const auto &passes = author.passes;
         const auto culling = passes[1];
         if (programs_->UsesCulling())
@@ -269,11 +288,30 @@ namespace Horo::Editor {
         if (const auto color = AppendColorPasses(slot, variant, author, descriptor); color.HasError())
             return color;
         variant.workloads[author.BaseCount() - 1] = {passes[author.BaseCount() - 1], PrimaryOutputAttachment{}};
+        if (copy)
+            variant.workloads.back() = author.Readback(*copy);
         auto graph = CompileViewportGraph(author, queues.Value());
         if (graph.HasError())
             return Result<void>::Failure(graph.ErrorValue());
         variant.graph.emplace(std::move(graph).Value());
         return Result<void>::Success();
+    }
+
+    /** @copydoc MetalViewportClusteredFrame::PrepareCapture */
+    Result<void> MetalViewportClusteredFrame::PrepareCapture(const StaticMeshPassDescriptor &descriptor,
+                                                             const EditorGraphViewportImageCapture::Copy &copy) {
+        try {
+            auto candidate = std::make_unique<Slot::Variant>();
+            const auto cascades = shadow_ ? shadow_->cascadeCount : 0;
+            const auto prepared = BuildVariant(slots_[activeSlot_], *candidate, cascades, descriptor, &copy);
+            if (prepared.HasError())
+                return prepared;
+            captureVariant_ = std::move(candidate);
+            captureId_ = copy.id;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportGeometryCreationFailed));
+        }
     }
 
     /** @copydoc MetalViewportClusteredFrame::AttachRaster */

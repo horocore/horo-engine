@@ -15,6 +15,20 @@ namespace Horo::Render {
         std::string json;
     };
 
+    /** @brief Describes the only admitted Vulkan stereo coverage reduction stage and descriptor ABI. */
+    [[nodiscard]] ShaderManifest StereoCoverageReductionManifest();
+
+    /** @brief Returns the exact compiler resource/member names for the closed reduction stage. */
+    [[nodiscard]] std::vector<ShaderReflectionBindingName> StereoCoverageReductionReflectionNames();
+
+    /** @brief Validates the packaged compute entry and its bound, exact reflected layout.
+     * @param payload Canonical Vulkan stage package from the closed cooker.
+     * @param metadata Exact same-operation sidecar bytes.
+     * @return Bound reflection or a typed package, entry or layout failure. Performs no device work.
+     */
+    [[nodiscard]] Result<ReflectedShaderArtifact> ValidateStereoCoverageReductionCook(std::span<const std::uint8_t> payload,
+                                                                                      std::span<const std::uint8_t> metadata);
+
     /** @brief Validates a bounded float-register raster interface before invoking native translators.
      * @details Supports one read-only uniform block of float4/float4x4 fields and literal arrays,
      * with at most one ordinary sampled texture/sampler pair on OpenGL; Metal admits up to eight independent
@@ -40,7 +54,10 @@ namespace Horo::Render {
      */
     [[nodiscard]] Result<std::vector<std::uint32_t>> RegisterRasterVaryingLocations(const SpirvReflectionStage &stage);
 
-    /** @brief Normalizes bounded official SPIRV-Cross JSON against exact authored IDs and the existing manifest contract. */
+    /** @brief Normalizes bounded official SPIRV-Cross JSON against exact authored IDs and the manifest contract.
+     * @details The named closed compute profiles require exact entry, descriptor ABI, native output representation,
+     * uniform packing and fixed thread group dimensions.
+     */
     [[nodiscard]] Result<NormalizedShaderReflection> NormalizeVulkanReflection(const ShaderManifest &manifest,
                                                                                const ShaderTargetRequirement &target,
                                                                                std::span<const SpirvReflectionStage> stages,

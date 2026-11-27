@@ -55,6 +55,27 @@ namespace Horo::Security::Tests {
         CHECK(policy.AuthorizeContextDispatch(pending).reason == AgentPolicyReason::StaleAuthority);
     }
 
+    TEST_CASE("Project policy observers retire with their revision and owner", "[Security][Agent]") {
+        std::optional<CancellationToken> replacement;
+        {
+            AgentPolicy policy;
+            CHECK_FALSE(policy.ObserveProjectRevision());
+            REQUIRE(policy.SetProjectTrust(true, 1));
+            const auto first = policy.ObserveProjectRevision();
+            REQUIRE(first);
+            CHECK(policy.ObserveProjectRevision() == first);
+            CHECK_FALSE(policy.SetProjectTrust(false, 1));
+            CHECK_FALSE(first->IsCancellationRequested());
+
+            REQUIRE(policy.SetProjectTrust(false, 2));
+            CHECK(first->IsCancellationRequested());
+            replacement = policy.ObserveProjectRevision();
+            REQUIRE(replacement);
+            CHECK_FALSE(replacement->IsCancellationRequested());
+        }
+        CHECK(replacement->IsCancellationRequested());
+    }
+
     TEST_CASE("Dispatch rejects duplicate or changed context envelope metadata", "[Security][Agent]") {
         AgentPolicy policy;
         REQUIRE(policy.SetProjectTrust(true, 1));

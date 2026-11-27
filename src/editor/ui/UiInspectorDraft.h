@@ -3,6 +3,7 @@
 /** @file UiInspectorDraft.h
  * @brief Detached Runtime UI layout/style drafts; document and history remain host-owned.
  */
+#include "EditorNumberParsing.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
@@ -40,16 +41,8 @@ namespace Horo::Editor {
      */
     template <typename T, std::size_t N> [[nodiscard]] bool ParseUiInspectorNumber(const std::array<char, N> &bytes, T &value) noexcept {
         const auto end = std::find(bytes.begin(), bytes.end(), '\0');
-        const auto count = end == bytes.end() ? 0 : std::distance(bytes.begin(), end);
-        const char *last = bytes.data() + count;
-        T candidate{};
-        const auto parsed = std::from_chars(bytes.data(), last, candidate);
-        bool valid = parsed.ec == std::errc{} && parsed.ptr == last;
-        if constexpr (std::floating_point<T>)
-            valid = valid && std::isfinite(candidate);
-        if (valid)
-            value = candidate;
-        return valid;
+        return end != bytes.end() &&
+               ParseEditorNumber(std::string_view{bytes.data(), static_cast<std::size_t>(end - bytes.begin())}, value);
     }
 
     /** @brief Fixed storage for exact integers and fixed-point values, retaining invalid user input. */

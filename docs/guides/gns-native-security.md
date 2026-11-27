@@ -76,13 +76,16 @@ interface. Each child runs a real ProductHost, canonical admission and native
 transport; an observing forwarder retains only the actual local Connect handle.
 The receiving handler requires the runtime's own active lifecycle before replying.
 A successful process token follows actual shutdown and native-owner reuse.
+The live Scene case also checks that an authority-owned fixed gameplay command
+commits a changing transform and that the connected replica applies successive
+snapshot updates after initial state publication.
 
 This fixture currently requires native Physics and provable POSIX owner-only file
 semantics. Windows DACL qualification is separate; unsupported file protections
 fail closed. The positive parent CTest actually ran at the checkpoints recorded
-here. Windows runtime qualification remains incomplete. Fixed loopback port 48657 is an explicit qualification
-resource; an occupied port causes a reported startup failure, never a backend or
-trust fallback.
+here. Windows runtime qualification remains incomplete. CTest serializes use of
+the shared local qualification listener on port 48657. An occupied port causes a
+reported startup failure without a backend or trust fallback.
 
 ### Directional readiness migration
 

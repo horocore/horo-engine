@@ -40,8 +40,8 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeScene::CaptureVfx */
-    Vfx::VfxExtractionOutcome RuntimeScene::CaptureVfx(std::uint64_t frame) noexcept {
-        return vfxWorld_ ? vfxWorld_->Extract(frame, vfxOrigin_, vfxOriginRevision_) : Vfx::VfxExtractionOutcome{};
+    Vfx::VfxExtractionOutcome RuntimeScene::CaptureVfx(std::uint64_t frame, Vfx::VfxFlashPolicy flashes) noexcept {
+        return vfxWorld_ ? vfxWorld_->Extract(frame, vfxOrigin_, vfxOriginRevision_, flashes) : Vfx::VfxExtractionOutcome{};
     }
 
     namespace {
@@ -311,10 +311,14 @@ namespace Horo::Runtime {
     Result<std::unique_ptr<RuntimeScene>> RuntimeScene::CreateResolved(const RuntimeSceneDefinition &definition,
                                                                        const SceneRuntimeId runtimeId, const RuntimeSceneConfig config,
                                                                        const Assets::AssetRegistryRevision assetRevision,
-                                                                       std::vector<ResolvedAsset> &&assets) {
+                                                                       std::vector<ResolvedAsset> &&assets,
+                                                                       const ChildActivationAdmission children) {
         if (!runtimeId.IsValid() || config.maximumGeneration == 0)
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Runtime identity and maximum generation must be non-zero.");
+        if (!definition.ChildScenes().empty() && children != ChildActivationAdmission::ExplicitHost)
+            return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::BaselineUnsupported,
+                                                          "Cooked Scene children require an explicit host activation owner.");
         if (assets.size() != definition.AssetDependencies().size())
             return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::InvalidCandidate,
                                                           "Resolved asset set does not match the definition.");
@@ -456,6 +460,7 @@ namespace Horo::Runtime {
         slot.active = false;
         slot.authoredObject.reset();
         slot.parent.reset();
+        slot.replicaPresentationTransform.reset();
         slot.primitiveMesh.reset();
         slot.components = {};
         slot.baselineOwner.reset();
@@ -499,7 +504,7 @@ namespace Horo::Runtime {
     Result<StructuralCommitResult> RuntimeScene::CommitWithRegistry(
         const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
         std::span<const std::unique_ptr<SceneStructuralParticipant>> participants, std::optional<Error> *notificationError,
-        CommitPurpose purpose) {
+        CommitPurpose purpose, std::optional<StructuralCommitResult> *trackedResult) {
         if (commands.Empty())
             return Result<StructuralCommitResult>::Success({});
         if (auto admission = CommandApplier::ValidateResourceAdmission(commands, runtimeId_, registry, purpose); admission.HasError())
@@ -509,12 +514,16 @@ namespace Horo::Runtime {
         RuntimeSceneStorage candidate = storage_;
         StructuralCommitResult result;
         result.created.reserve(commands.commands_.size());
-        const CommandApplier applier{*this, candidate, result};
+        const CommandApplier applier{*this, candidate, result, purpose};
         if (const auto status = applier.ApplyCommands(commands); status.HasError())
             return Result<StructuralCommitResult>::Failure(status.ErrorValue());
         std::vector<std::unique_ptr<SceneStructuralCandidate>> owners;
         if (const auto ready = applier.PrepareOwners(participants, owners, purpose); ready.HasError())
             return Result<StructuralCommitResult>::Failure(ready.ErrorValue());
+        if (commands.groupPublication_) {
+            if (auto prepared = PrepareGroupPublication(commands, candidate, result, owners); prepared.HasError())
+                return Result<StructuralCommitResult>::Failure(prepared.ErrorValue());
+        }
         // Candidate preparation may allocate. Cancellation is sampled again only after all fallible work,
         // immediately before publication. Registry mutation is restricted to this same owner lane.
         const auto finalRevision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
@@ -525,8 +534,93 @@ namespace Horo::Runtime {
         RuntimeSceneStorage retired = std::move(storage_);
         storage_ = std::move(candidate);
         ++structuralRevision_;
+        static_assert(std::is_nothrow_move_constructible_v<StructuralCommitResult>);
+        if (trackedResult)
+            trackedResult->emplace(std::move(result));
         CommandApplier::NotifyOwners(owners, notificationError);
-        return Result<StructuralCommitResult>::Success(std::move(result));
+        return Result<StructuralCommitResult>::Success(trackedResult ? StructuralCommitResult{} : std::move(result));
+    }
+
+    /** @copydoc SceneCommandBuffer::BindGroupPublication */
+    Result<void> SceneCommandBuffer::BindGroupPublication(std::shared_ptr<const SceneGroupPublication> publication) {
+        if (!publication || groupPublication_ || !HasSingleOrdinaryGroup())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        groupPublication_ = std::move(publication);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneCommandBuffer::BindBaselinePublication */
+    Result<void> SceneCommandBuffer::BindBaselinePublication(std::shared_ptr<const SceneGroupPublication> publication) {
+        if (!publication || groupPublication_ || !HasSingleBaseline())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        groupPublication_ = std::move(publication);
+        return Result<void>::Success();
+    }
+
+    /** @brief Identifies a single independently committed baseline operation. */
+    bool SceneCommandBuffer::HasSingleBaseline() const noexcept {
+        return commands_.size() == 1 && (std::holds_alternative<AttachBaselineCommand>(commands_.front()) ||
+                                         std::holds_alternative<DetachBaselineCommand>(commands_.front()));
+    }
+
+    bool SceneCommandBuffer::HasSingleOrdinaryGroup() const noexcept {
+        if (commands_.size() != 1)
+            return false;
+        if (const auto *create = std::get_if<CreateGroupCommand>(&commands_.front()))
+            return create->uniformLineage && !create->restoreSeal;
+        return std::holds_alternative<DestroyGroupCommand>(commands_.front());
+    }
+
+    Result<void> RuntimeScene::PrepareGroupPublication(const SceneCommandBuffer &commands, const RuntimeSceneStorage &candidate,
+                                                       const StructuralCommitResult &result,
+                                                       std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+        try {
+            if (commands.HasSingleBaseline())
+                return PrepareBaselinePublication(commands, candidate, owners);
+            if (!commands.HasSingleOrdinaryGroup())
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+            const auto &publication = *commands.groupPublication_;
+            if (const auto *destroy = std::get_if<SceneCommandBuffer::DestroyGroupCommand>(&commands.commands_.front()))
+                return PrepareCommandOwner(publication, destroy->entities, false, owners);
+            std::vector<EntityRef> members;
+            members.reserve(result.created.size());
+            for (const auto &resolution : result.created)
+                members.push_back(resolution.entity);
+            return PrepareCommandOwner(publication, members, true, owners);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Could not allocate Scene group owner state."));
+        }
+    }
+
+    /** @copydoc RuntimeScene::PrepareBaselinePublication */
+    Result<void> RuntimeScene::PrepareBaselinePublication(const SceneCommandBuffer &commands, const RuntimeSceneStorage &candidate,
+                                                          std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+        const auto &command = commands.commands_.front();
+        const auto *attach = std::get_if<SceneCommandBuffer::AttachBaselineCommand>(&command);
+        const auto &baselines = attach ? candidate.baselines : storage_.baselines;
+        const auto definition = attach ? attach->definition.Id() : std::get<SceneCommandBuffer::DetachBaselineCommand>(command).id;
+        const auto baseline = std::ranges::find(baselines, definition, &BaselineAttachment::id);
+        if (baseline == baselines.end())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        std::vector<EntityRef> members;
+        members.reserve(baseline->entities.size());
+        for (const auto entity : baseline->entities)
+            members.push_back({runtimeId_, entity});
+        return PrepareCommandOwner(*commands.groupPublication_, members, attach != nullptr, owners);
+    }
+
+    /** @copydoc RuntimeScene::PrepareCommandOwner */
+    Result<void> RuntimeScene::PrepareCommandOwner(const SceneGroupPublication &publication, std::span<const EntityRef> members,
+                                                   bool creating, std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+        auto prepared = publication.Prepare(View(), members, creating);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        if (!prepared.Value() || !prepared.Value()->AgentIdentities().empty())
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        if (auto valid = prepared.Value()->ValidatePublication(); valid.HasError())
+            return valid;
+        owners.push_back(std::move(prepared).Value());
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Runtime

@@ -78,3 +78,50 @@ No whole-engine suite, native Windows/Linux filesystem qualification, provider
 transport, apply executor, GUI workflow, Sonar or Codacy scan was run for this change.
 These results qualify the inert contract and its codecs, not future physical
 containment, multi-file application or durable publication implementations.
+
+## Editor review qualification
+
+The Editor opens the review from a complete model reply tied to source snapshots
+that the user explicitly shared. Review cards list admitted operations, and the
+source tab presents the diff for per-file or per-hunk decisions. Apply publishes
+accepted text to source buffers. Save and Save All persist those buffers.
+Delete and rename also require a separate file-operation confirmation.
+
+Build the existing test targets in a configured build directory with
+`BUILD_TESTING` and `HORO_ENABLE_IMGUI_UI_TESTS` enabled to include the chat
+and source-tab workflows. Substitute the actual build directory for
+`build/skeleton`.
+
+```sh
+cmake --build build/skeleton --target HoroProposedChangeSetTests HoroEditorLocalAgentPanelRenderTests HoroModelProviderTests --parallel 1
+ctest --test-dir build/skeleton --output-on-failure -R '^(HoroProposedChangeSetTests|HoroEditorLocalAgentPanelRenderTests|HoroEditorLocalAgentDockHttpTests|HoroModelProviderContractTests)(::|$)'
+```
+
+| Configuration | Evidence to collect |
+|---|---|
+| Headless, without a model endpoint | Proposal admission and mixed decisions, exact source bases, atomic application at the configured limits, cancellation and group undo. |
+| Editor GUI with native project storage | Review UI and workspace ownership, explicit saves, structural confirmation and rollback, concurrent edits, checkpoint recovery and saved-revision validation. |
+| Editor GUI with the loopback local-model fixture | The chat panel receives complete replies and dispatches only the review associated with the offered source publication. |
+| Provider adapters with the loopback HTTP fixture | The provider contract suite covers local and OpenAI-compatible transport paths using test data. |
+
+The `[concurrency]` cases hold owner-lane publication until the preparation job
+has finished. They verify that retiring the workspace or replacing one file
+with different bytes of the same size and timestamp prevents the complete
+apply. Both buffers and disk files stay as observed just before publication,
+and the audit and undo state remain empty.
+
+Run the native storage cases on Windows, Linux and macOS when qualifying those
+platforms. Keep results per platform because path identity, exclusive moves and
+directory durability depend on the filesystem. The loopback fixture can run
+without a live model or real provider credentials. For a deployed provider
+configuration, verify model availability and credential approval with that
+configuration and record the result separately.
+
+In an Editor session, share two source files and request a change to both.
+Open each review card, accept one hunk and reject another, then apply. Check the
+diff in the active source tab and confirm that disk bytes change only when the
+accepted text is saved. Repeat after editing a reviewed file externally and
+verify that the stale review cannot apply. At standard and increased display
+scales, verify keyboard focus, readable decisions and a reachable Apply control
+in a narrow source tab. Reopen an interrupted review and confirm that it needs
+current evidence and a new explicit Apply action.

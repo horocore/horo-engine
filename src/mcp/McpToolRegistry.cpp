@@ -264,6 +264,12 @@ namespace Horo::Mcp {
             }
         }
 
+        /** @brief Shares proposal and execution input rules without touching an adapter. */
+        [[nodiscard]] bool ValidInput(const McpToolDescriptor &descriptor, const nlohmann::json &arguments) {
+            return BoundedValue(arguments, descriptor.bounds.maximumInputBytes, descriptor.bounds) &&
+                   MatchesSchema(descriptor.inputSchema, arguments);
+        }
+
         /** @brief Checks descriptor metadata without invoking or registering its adapter. */
         [[nodiscard]] bool ValidDescriptor(const McpToolDescriptor &descriptor) {
             if (!ValidIdentity(descriptor.id.value) || descriptor.version.major == 0 || descriptor.description.empty() ||
@@ -379,6 +385,27 @@ namespace Horo::Mcp {
                                 : Result<McpToolEffect>::Success(found.Value()->descriptor.effect);
     }
 
+    /** @copydoc McpToolSnapshot::InspectDraft */
+    Result<McpToolDraftInspection> McpToolSnapshot::InspectDraft(const McpToolId &id, const nlohmann::json &arguments,
+                                                                 const std::span<const std::string> capabilities) const {
+        using Output = Result<McpToolDraftInspection>;
+        const auto found = FindGranted(id, capabilities);
+        if (found.HasError())
+            return Output::Failure(found.ErrorValue());
+        const auto &descriptor = found.Value()->descriptor;
+        if (!ValidInput(descriptor, arguments))
+            return Output::Failure(MakeError(McpErrors::ToolInputInvalid));
+        if (const auto inspect = found.Value()->inspectDraft) {
+            auto scope = inspect(arguments);
+            if (scope.HasError())
+                return Output::Failure(scope.ErrorValue());
+            if (scope.Value().opening == 0 || scope.Value().objects.size() > McpToolDraftScope::MaximumObjects)
+                return Output::Failure(MakeError(McpErrors::ToolInputInvalid));
+            return Output::Success({descriptor.effect, std::move(scope).Value()});
+        }
+        return Output::Success({descriptor.effect, {}});
+    }
+
     /** @copydoc McpToolSnapshot::PrepareInvocation */
     Result<const McpToolRegistration *> McpToolSnapshot::PrepareInvocation(const McpToolId &id, const nlohmann::json &arguments,
                                                                            const McpRequestContext &context) const {
@@ -390,8 +417,7 @@ namespace Horo::Mcp {
         if (found.HasError())
             return found;
         const auto &descriptor = found.Value()->descriptor;
-        if (!BoundedValue(arguments, descriptor.bounds.maximumInputBytes, descriptor.bounds) ||
-            !MatchesSchema(descriptor.inputSchema, arguments))
+        if (!ValidInput(descriptor, arguments))
             return Result<const McpToolRegistration *>::Failure(MakeError(McpErrors::ToolInputInvalid));
         const McpRequest request{.id = context.requestIdentity,
                                  .method = "tools/call",

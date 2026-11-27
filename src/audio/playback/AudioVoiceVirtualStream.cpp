@@ -93,10 +93,12 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceRenderRuntime::State::ValidStreamPosition */
     bool AudioVoiceRenderRuntime::State::ValidStreamPosition(const AudioVoiceControlRequest &request) const noexcept {
+        if (!sourceFrames)
+            return false;
         if (request.control == AudioVoiceControl::Seek)
-            return request.seekFrame <= sourceFrames && (!streamPlayback.loop.enabled || request.seekFrame < streamPlayback.loop.end);
+            return request.seekFrame <= *sourceFrames && (!streamPlayback.loop.enabled || request.seekFrame < streamPlayback.loop.end);
         const auto loop = request.loop;
-        return loop.enabled ? loop.begin < loop.end && loop.end <= sourceFrames : loop.begin == 0 && loop.end == 0;
+        return loop.enabled ? loop.begin < loop.end && loop.end <= *sourceFrames : loop.begin == 0 && loop.end == 0;
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::AdvanceStream */
@@ -105,11 +107,11 @@ namespace Horo::Audio {
         const double advanced = position.fraction + sourceAdvance;
         const auto whole = static_cast<std::uint64_t>(advanced);
         position.fraction = advanced - static_cast<double>(whole);
-        const auto frame = position.frame + whole;  // Admitted stream <=2^40, one call <=4096*64.
+        const auto frame = position.frame + std::min(whole, std::numeric_limits<std::uint64_t>::max() - position.frame);
         if (const auto loop = streamPlayback.loop; loop.enabled && frame >= loop.end)
             position.frame = loop.begin + (frame - loop.begin) % (loop.end - loop.begin);
-        else if (frame >= sourceFrames)
-            position = {.frame = sourceFrames};
+        else if (sourceFrames && frame >= *sourceFrames)
+            position = {.frame = *sourceFrames};
         else
             position.frame = frame;
         if (streamPlayback.realizing) {
@@ -182,11 +184,27 @@ namespace Horo::Audio {
             streamPlayback.terminalReported = true;
             return {.terminal = first};
         }
+        if (!sourceFrames && stream->IsStopped())
+            return CancelLiveStream(frames);
         if (callback.streamState == AudioVoiceState::Virtual)
             return RenderVirtualStream(frames);
         if (callback.streamState != AudioVoiceState::Playing)
             return {};
-        return RenderStreamPcm(frames);
+        const auto rendered = RenderStreamPcm(frames);
+        return !sourceFrames && stream->IsStopped() ? CancelLiveStream(frames) : rendered;
+    }
+
+    /** @copydoc AudioVoiceRenderRuntime::State::CancelLiveStream */
+    AudioVoiceMixRenderResult AudioVoiceRenderRuntime::State::CancelLiveStream(const std::uint32_t frames) noexcept {
+        if (callback.streamState != AudioVoiceState::Cancelled)
+            (void)registry->TryCancel(voice);
+        callback.streamState = AudioVoiceState::Cancelled;
+        callback.buffered = 0;
+        callback.sourceEnded = true;
+        streamPlayback.terminalReported = true;
+        for (auto &plane : scratch.output)
+            std::fill_n(plane.samples.begin(), frames, 0.0F);
+        return {.terminal = true};
     }
 
     /** @copydoc AudioVoiceRenderRuntime::State::RenderStreamPcm */

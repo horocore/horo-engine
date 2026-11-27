@@ -1,7 +1,7 @@
 #pragma once
 
-#include "editor/screens/workspace/GameplayBehaviorRequest.h"
-#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequest.h"
+#include "editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.h"
 
 #include <optional>
 #include <string>

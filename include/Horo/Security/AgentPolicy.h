@@ -5,6 +5,7 @@
  * @brief Host-owned, fail-closed agent context and tool authorization policy.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Sha256.h"
 
 #include <chrono>
@@ -130,6 +131,8 @@ namespace Horo::Security {
     public:
         /** @brief Creates a policy with finite limits; invalid limits fail closed. @param limits Host budgets. */
         explicit AgentPolicy(const AgentPolicyLimits &limits = {}) noexcept;
+        /** @brief Retires all observers of the current project policy. */
+        ~AgentPolicy();
         AgentPolicy(const AgentPolicy &) = delete;
         AgentPolicy &operator=(const AgentPolicy &) = delete;
         AgentPolicy(AgentPolicy &&) = delete;
@@ -214,6 +217,11 @@ namespace Horo::Security {
         /** @brief Returns current project/trust revision. @return Zero before first trust assignment. */
         [[nodiscard]] std::uint64_t ProjectRevision() const noexcept;
 
+        /** @brief Captures a revocation token for the current project/trust revision on the policy owner lane.
+         * @return Token safe to observe from other lanes, or no token if a revision could not be observed.
+         * @details Replacing trust or destroying the policy cancels the token. The token conveys no consent or grant. */
+        [[nodiscard]] std::optional<CancellationToken> ObserveProjectRevision() noexcept;
+
     private:
         struct ContextFingerprint {
             std::uint64_t itemId{};
@@ -249,6 +257,7 @@ namespace Horo::Security {
         bool trusted_{};
         std::uint64_t revision_{};
         std::uint64_t sequence_{};
+        std::optional<CancellationSource> revisionLifetime_; /**< Lazily created by the owner when it issues an observer. */
         std::optional<ContextGrant> contextGrant_;
         std::optional<ContextGrant> dispatchGrant_;
         std::optional<ToolGrant> toolGrant_;

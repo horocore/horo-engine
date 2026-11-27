@@ -18,6 +18,7 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
     class EditorSettingsService;
+    class ConfigurationSettingsSession;
     class EditorPageView;
     struct NavigationSettingsDraft;
 
@@ -63,6 +64,11 @@ namespace Horo::Editor {
         int masterVolume = 80;
         int audioOutputDevice = 0;
         bool audioEnabled = true;
+        int microphoneInput{-1};                           /**< Transient input selection for the connection test. */
+        std::string recordingPath{"assets/recording.wav"}; /**< Transient project-relative destination for the next take. */
+        int monitorInput{-1};                               /**< Transient local listening input choice. */
+        int monitorOutput{-1};                              /**< Transient local listening output choice. */
+        bool monitorPrivateListening{};                     /**< One-shot confirmation for the selected output. */
     };
 
     struct SettingsNetworkTab {
@@ -169,6 +175,15 @@ namespace Horo::Editor {
         std::optional<Error> error; /**< Original typed failure retained separately from localized presentation. */
     };
 
+    /** @brief Localized status of the shared settings transaction. */
+    enum class SettingsModalStatus {
+        None,
+        Loaded,
+        Applied,
+        Defaults,
+        Failure
+    };
+
     /** @brief Modal-owned mutable draft for the editor settings workflow. */
     struct SettingsState {  // NOSONAR(cpp:S1820)
         using GeneralTab = SettingsGeneralTab;
@@ -190,12 +205,17 @@ namespace Horo::Editor {
         bool wasOpen = false;
         bool dirty = false;
         EditorSettings committed{};
-        std::string statusMessage;
-        bool statusIsError = false;
+        SettingsModalStatus status = SettingsModalStatus::None;
         int activeTab = 0;
         int pendingUpdateConfirmation = 0;
         int pendingUpdateChannel = -1;
         std::uint64_t settingsRevision = 0;
+        std::uint64_t configurationRevision = 0;
+        std::shared_ptr<ConfigurationSettingsSession> configuration;
+        std::shared_ptr<ConfigurationSettingsSession> projectConfiguration;
+        std::optional<Error> projectConfigurationError;
+        std::optional<Error> configurationFailure;
+        bool configurationPreviewed = false;
 
         SettingsCollisionDraft collision;
         SettingsPrefabDraft prefab;
@@ -235,6 +255,6 @@ namespace Horo::Editor {
 
     [[nodiscard]] EditorSettings CollectDraftSettings(const SettingsState &state);
     void ApplySettingsToDraft(SettingsState &state, const EditorSettings &settings);
-    void LoadSettingsForModal(SettingsState &state, const EditorSettingsService &settings);
+    void LoadSettingsForModal(SettingsState &state, EditorSettingsService &settings);
     [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings);
 }  // namespace Horo::Editor

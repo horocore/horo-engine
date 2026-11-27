@@ -137,6 +137,7 @@ namespace Horo::Vfx {
         ParticleCollisionResponse collisionResponse{
             ParticleCollisionResponse::Bounce};       /**< Optional source field; legacy sources bounce. */
         Render::VfxGpuReadbackDescriptor gpuReadback; /**< Optional authored observation policy; absent sources are canonically disabled. */
+        bool photosensitiveFlash{};                   /**< Authored strobe/flash output that can be hidden while simulation continues. */
         constexpr bool operator==(const ParticleSystemDescriptorData &) const = default;
     };
 

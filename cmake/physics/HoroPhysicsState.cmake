@@ -1,146 +1,146 @@
 # HORO-901 sources remain in their existing module owners and exception partitions.
 target_sources(HoroPhysics PRIVATE
-    physics/PhysicsEventProjectionState.cpp
-    physics/PhysicsStateBodyValidation.cpp
-    physics/PhysicsStateConstructionBodyFields.cpp
-    physics/PhysicsStateConstructionBodyValidation.cpp
-    physics/PhysicsStateConstructionCompound.cpp
-    physics/PhysicsStateConstructionCompoundPlan.cpp
-    physics/PhysicsStateConstructionDecode.cpp
-    physics/PhysicsStateConstructionEncode.cpp
-    physics/PhysicsStateConstructionExport.cpp
-    physics/PhysicsStateConstructionFields.cpp
-    physics/PhysicsStateConstructionFixtureValidation.cpp
-    physics/PhysicsStateConstructionGroupPlan.cpp
-    physics/PhysicsStateConstructionJointFields.cpp
-    physics/PhysicsStateConstructionJointValidation.cpp
-    physics/PhysicsStateConstructionLease.cpp
-    physics/PhysicsStateConstructionManifestAliases.cpp
-    physics/PhysicsStateConstructionManifestDecode.cpp
-    physics/PhysicsStateConstructionManifestEncode.cpp
-    physics/PhysicsStateConstructionManifestOwner.cpp
-    physics/PhysicsStateConstructionManifestRows.cpp
-    physics/PhysicsStateConstructionManifestSeal.cpp
-    physics/PhysicsStateConstructionManifestSizing.cpp
-    physics/PhysicsStateConstructionManifestValidation.cpp
-    physics/PhysicsStateConstructionMotionValidation.cpp
-    physics/PhysicsStateConstructionOwnerFields.cpp
-    physics/PhysicsStateConstructionOwnerValidation.cpp
-    physics/PhysicsStateConstructionPlanAdmission.cpp
-    physics/PhysicsStateConstructionQueryFields.cpp
-    physics/PhysicsStateConstructionQueryPlan.cpp
-    physics/PhysicsStateConstructionRetirement.cpp
-    physics/PhysicsStateConstructionStorage.cpp
-    physics/PhysicsStateConstructionValidation.cpp
-    physics/PhysicsStateContactValidation.cpp
-    physics/PhysicsStateEnvelope.cpp
-    physics/PhysicsStateEnvelopeDecode.cpp
-    physics/PhysicsStateRestartInput.cpp
-    physics/PhysicsStateRestoreCandidate.cpp
-    physics/PhysicsStateRuntimeBinding.cpp
-    physics/PhysicsStateRuntimeInventory.cpp
-    physics/PhysicsStateRuntimeRetirement.cpp
-    physics/PhysicsStateRuntimeStorage.cpp
-    physics/PhysicsStateSchemaAccounting.cpp
-    physics/PhysicsStateSnapshot.cpp
-    physics/PhysicsStateSnapshotLease.cpp
-    physics/PhysicsStateSnapshotPreparation.cpp
-    physics/PhysicsStateSolverDecode.cpp
-    physics/PhysicsStateSolverEncode.cpp
-    physics/PhysicsStateSolverStorage.cpp
-    physics/PhysicsStateValidation.cpp
-    physics/PhysicsWorldSnapshotCapture.cpp
-    physics/PhysicsWorldSnapshotCompatibility.cpp
-    physics/PhysicsWorldSnapshotConfiguration.cpp
-    physics/PhysicsWorldSnapshotDecode.cpp
-    physics/PhysicsWorldSnapshotFence.cpp
-    physics/PhysicsWorldSnapshotPublication.cpp
-    physics/PhysicsWorldSnapshotRestore.cpp
-    physics/PhysicsWorldSnapshotRetirement.cpp
-    physics/PhysicsWorldSnapshotStorage.cpp
-    physics/PhysicsWorldStateConfiguration.cpp
-    physics/PhysicsWorldStateDecodeInput.cpp
-    physics/PhysicsWorldStateEventCapture.cpp
-    physics/PhysicsWorldStateEventPairs.cpp
-    physics/PhysicsWorldStateEventRestore.cpp
-    physics/PhysicsWorldStateOperations.cpp
-    physics/PhysicsWorldStateRestartAccess.cpp
-    physics/PhysicsWorldStateSceneConfiguration.cpp
+    physics/events/PhysicsEventProjectionState.cpp
+    physics/state/validation/PhysicsStateBodyValidation.cpp
+    physics/state/construction/fields/PhysicsStateConstructionBodyFields.cpp
+    physics/state/construction/validation/PhysicsStateConstructionBodyValidation.cpp
+    physics/state/construction/storage/PhysicsStateConstructionCompound.cpp
+    physics/state/construction/plans/PhysicsStateConstructionCompoundPlan.cpp
+    physics/state/construction/codec/PhysicsStateConstructionDecode.cpp
+    physics/state/construction/codec/PhysicsStateConstructionEncode.cpp
+    physics/state/construction/codec/PhysicsStateConstructionExport.cpp
+    physics/state/construction/codec/PhysicsStateConstructionFields.cpp
+    physics/state/construction/validation/PhysicsStateConstructionFixtureValidation.cpp
+    physics/state/construction/plans/PhysicsStateConstructionGroupPlan.cpp
+    physics/state/construction/fields/PhysicsStateConstructionJointFields.cpp
+    physics/state/construction/validation/PhysicsStateConstructionJointValidation.cpp
+    physics/state/construction/storage/PhysicsStateConstructionLease.cpp
+    physics/state/construction/manifest/codec/PhysicsStateConstructionManifestAliases.cpp
+    physics/state/construction/manifest/codec/PhysicsStateConstructionManifestDecode.cpp
+    physics/state/construction/manifest/codec/PhysicsStateConstructionManifestEncode.cpp
+    physics/state/construction/manifest/PhysicsStateConstructionManifestOwner.cpp
+    physics/state/construction/manifest/codec/PhysicsStateConstructionManifestRows.cpp
+    physics/state/construction/manifest/PhysicsStateConstructionManifestSeal.cpp
+    physics/state/construction/manifest/PhysicsStateConstructionManifestSizing.cpp
+    physics/state/construction/manifest/PhysicsStateConstructionManifestValidation.cpp
+    physics/state/construction/validation/PhysicsStateConstructionMotionValidation.cpp
+    physics/state/construction/fields/PhysicsStateConstructionOwnerFields.cpp
+    physics/state/construction/validation/PhysicsStateConstructionOwnerValidation.cpp
+    physics/state/construction/plans/PhysicsStateConstructionPlanAdmission.cpp
+    physics/state/construction/fields/PhysicsStateConstructionQueryFields.cpp
+    physics/state/construction/plans/PhysicsStateConstructionQueryPlan.cpp
+    physics/state/construction/storage/PhysicsStateConstructionRetirement.cpp
+    physics/state/construction/storage/PhysicsStateConstructionStorage.cpp
+    physics/state/construction/validation/PhysicsStateConstructionValidation.cpp
+    physics/state/validation/PhysicsStateContactValidation.cpp
+    physics/state/envelope/PhysicsStateEnvelope.cpp
+    physics/state/envelope/PhysicsStateEnvelopeDecode.cpp
+    physics/state/restart/PhysicsStateRestartInput.cpp
+    physics/state/restart/PhysicsStateRestoreCandidate.cpp
+    physics/state/runtime/PhysicsStateRuntimeBinding.cpp
+    physics/state/runtime/PhysicsStateRuntimeInventory.cpp
+    physics/state/runtime/PhysicsStateRuntimeRetirement.cpp
+    physics/state/runtime/PhysicsStateRuntimeStorage.cpp
+    physics/state/envelope/PhysicsStateSchemaAccounting.cpp
+    physics/state/snapshot/PhysicsStateSnapshot.cpp
+    physics/state/snapshot/PhysicsStateSnapshotLease.cpp
+    physics/state/snapshot/PhysicsStateSnapshotPreparation.cpp
+    physics/state/solver/PhysicsStateSolverDecode.cpp
+    physics/state/solver/PhysicsStateSolverEncode.cpp
+    physics/state/solver/PhysicsStateSolverStorage.cpp
+    physics/state/validation/PhysicsStateValidation.cpp
+    physics/world/snapshot/io/PhysicsWorldSnapshotCapture.cpp
+    physics/world/snapshot/storage/PhysicsWorldSnapshotCompatibility.cpp
+    physics/world/snapshot/storage/PhysicsWorldSnapshotConfiguration.cpp
+    physics/world/snapshot/io/PhysicsWorldSnapshotDecode.cpp
+    physics/world/snapshot/storage/PhysicsWorldSnapshotFence.cpp
+    physics/world/snapshot/io/PhysicsWorldSnapshotPublication.cpp
+    physics/world/snapshot/io/PhysicsWorldSnapshotRestore.cpp
+    physics/world/snapshot/storage/PhysicsWorldSnapshotRetirement.cpp
+    physics/world/snapshot/storage/PhysicsWorldSnapshotStorage.cpp
+    physics/world/state/PhysicsWorldStateConfiguration.cpp
+    physics/world/state/PhysicsWorldStateDecodeInput.cpp
+    physics/events/PhysicsWorldStateEventCapture.cpp
+    physics/events/PhysicsWorldStateEventPairs.cpp
+    physics/events/PhysicsWorldStateEventRestore.cpp
+    physics/world/state/PhysicsWorldStateOperations.cpp
+    physics/world/state/PhysicsWorldStateRestartAccess.cpp
+    physics/world/state/PhysicsWorldStateSceneConfiguration.cpp
 )
 target_sources(HoroPhysicsSceneIntegration PRIVATE
-    physics/CharacterScenePhysicsState.cpp
-    physics/PhysicsSceneStateCapture.cpp
-    physics/PhysicsSceneStateInstall.cpp
-    physics/PhysicsSceneStateProjection.cpp
-    physics/PhysicsSceneStateProjectionKeys.cpp
-    physics/PhysicsSceneStateProjectionOwners.cpp
-    physics/PhysicsSceneStateRebind.cpp
-    physics/PhysicsSceneStateRestore.cpp
-    physics/PhysicsSceneStateTarget.cpp
-    physics/PhysicsStateSaveContract.cpp
+    physics/scene/publication/CharacterScenePhysicsState.cpp
+    physics/scene_state/PhysicsSceneStateCapture.cpp
+    physics/scene_state/PhysicsSceneStateInstall.cpp
+    physics/scene_state/projection/PhysicsSceneStateProjection.cpp
+    physics/scene_state/projection/PhysicsSceneStateProjectionKeys.cpp
+    physics/scene_state/projection/PhysicsSceneStateProjectionOwners.cpp
+    physics/scene_state/PhysicsSceneStateRebind.cpp
+    physics/scene_state/PhysicsSceneStateRestore.cpp
+    physics/scene_state/PhysicsSceneStateTarget.cpp
+    physics/state/snapshot/PhysicsStateSaveContract.cpp
 )
 target_link_libraries(HoroPhysicsSceneIntegration PRIVATE HoroEngine::Runtime HoroEngine::SaveApi)
 target_sources(HoroRuntime PRIVATE runtime/save/RuntimeSaveSessionPreparation.cpp)
 if(HORO_BUILD_PHYSICS_NATIVE)
     set(_horo_state_native_sources
-        physics/CanonicalPhysicsStateAccounting.cpp
-        physics/CanonicalPhysicsStateAllocator.cpp
-        physics/CanonicalPhysicsStateBackend.cpp
-        physics/CanonicalPhysicsStateBinding.cpp
-        physics/CanonicalPhysicsStateBodyBinding.cpp
-        physics/CanonicalPhysicsStateBuild.cpp
-        physics/CanonicalPhysicsStateCapture.cpp
-        physics/CanonicalPhysicsStateClone.cpp
-        physics/CanonicalPhysicsStateCloneBodies.cpp
-        physics/CanonicalPhysicsStateCloneJoints.cpp
-        physics/CanonicalPhysicsStateColdCost.cpp
-        physics/CanonicalPhysicsStateConstraintCreation.cpp
-        physics/CanonicalPhysicsStateConstraintReplay.cpp
-        physics/CanonicalPhysicsStateConstructionAdmission.cpp
-        physics/CanonicalPhysicsStateConstructionBodies.cpp
-        physics/CanonicalPhysicsStateConstructionFixtures.cpp
-        physics/CanonicalPhysicsStateConstructionJoints.cpp
-        physics/CanonicalPhysicsStateConstructionLimits.cpp
-        physics/CanonicalPhysicsStateConstructionManifest.cpp
-        physics/CanonicalPhysicsStateConstructionRoots.cpp
-        physics/CanonicalPhysicsStateConstructionRuntime.cpp
-        physics/CanonicalPhysicsStateContactDecode.cpp
-        physics/CanonicalPhysicsStateContactEncode.cpp
-        physics/CanonicalPhysicsStateDecode.cpp
-        physics/CanonicalPhysicsStateEncode.cpp
-        physics/CanonicalPhysicsStateEventBinding.cpp
-        physics/CanonicalPhysicsStateFilterFingerprint.cpp
-        physics/CanonicalPhysicsStateFixtureEventBinding.cpp
-        physics/CanonicalPhysicsStateFixtureHash.cpp
-        physics/CanonicalPhysicsStateFpControl.cpp
-        physics/CanonicalPhysicsStateGeometry.cpp
-        physics/CanonicalPhysicsStateIntent.cpp
-        physics/CanonicalPhysicsStateJointBinding.cpp
-        physics/CanonicalPhysicsStateJointFields.cpp
-        physics/CanonicalPhysicsStateJointHash.cpp
-        physics/CanonicalPhysicsStateNativeBodyHash.cpp
-        physics/CanonicalPhysicsStateReceivingLimits.cpp
-        physics/CanonicalPhysicsStateRestart.cpp
-        physics/CanonicalPhysicsStateRestartBodies.cpp
-        physics/CanonicalPhysicsStateRestartFixtures.cpp
-        physics/CanonicalPhysicsStateRestartJoints.cpp
-        physics/CanonicalPhysicsStateRestartRoots.cpp
-        physics/CanonicalPhysicsStateRestartShapes.cpp
-        physics/CanonicalPhysicsStateRestore.cpp
-        physics/CanonicalPhysicsStateSceneBodyHash.cpp
-        physics/CanonicalPhysicsStateSceneEventBinding.cpp
-        physics/CanonicalPhysicsStateSceneInventory.cpp
-        physics/CanonicalPhysicsStateScratch.cpp
-        physics/CanonicalPhysicsStateShapeBindings.cpp
-        physics/CanonicalPhysicsStateSurfaceFingerprint.cpp
-        physics/CanonicalPhysicsStateTopologyFingerprint.cpp
-        physics/CanonicalPhysicsStateTopologyMap.cpp
-        physics/CanonicalPhysicsStateTopologyValidation.cpp
-        physics/CanonicalPhysicsStateWorkspaceBuffers.cpp
-        physics/CanonicalPhysicsStateWorkspacePreparation.cpp
-        physics/CanonicalPhysicsStateWorkspaceResources.cpp
-        physics/CanonicalPhysicsStateWorkspaceValidation.cpp
-        physics/PhysicsStateImages.cpp
+        physics/state/canonical/memory/CanonicalPhysicsStateAccounting.cpp
+        physics/state/canonical/memory/CanonicalPhysicsStateAllocator.cpp
+        physics/state/canonical/backend/CanonicalPhysicsStateBackend.cpp
+        physics/state/canonical/binding/CanonicalPhysicsStateBinding.cpp
+        physics/state/canonical/binding/CanonicalPhysicsStateBodyBinding.cpp
+        physics/state/canonical/build/CanonicalPhysicsStateBuild.cpp
+        physics/state/canonical/build/CanonicalPhysicsStateCapture.cpp
+        physics/state/canonical/clone/CanonicalPhysicsStateClone.cpp
+        physics/state/canonical/clone/CanonicalPhysicsStateCloneBodies.cpp
+        physics/state/canonical/clone/CanonicalPhysicsStateCloneJoints.cpp
+        physics/state/canonical/memory/CanonicalPhysicsStateColdCost.cpp
+        physics/state/canonical/clone/CanonicalPhysicsStateConstraintCreation.cpp
+        physics/state/canonical/clone/CanonicalPhysicsStateConstraintReplay.cpp
+        physics/state/canonical/construction/CanonicalPhysicsStateConstructionAdmission.cpp
+        physics/state/canonical/construction/entities/CanonicalPhysicsStateConstructionBodies.cpp
+        physics/state/canonical/construction/entities/CanonicalPhysicsStateConstructionFixtures.cpp
+        physics/state/canonical/construction/entities/CanonicalPhysicsStateConstructionJoints.cpp
+        physics/state/canonical/construction/CanonicalPhysicsStateConstructionLimits.cpp
+        physics/state/canonical/construction/CanonicalPhysicsStateConstructionManifest.cpp
+        physics/state/canonical/construction/CanonicalPhysicsStateConstructionRoots.cpp
+        physics/state/canonical/construction/CanonicalPhysicsStateConstructionRuntime.cpp
+        physics/state/canonical/codec/CanonicalPhysicsStateContactDecode.cpp
+        physics/state/canonical/codec/CanonicalPhysicsStateContactEncode.cpp
+        physics/state/canonical/codec/CanonicalPhysicsStateDecode.cpp
+        physics/state/canonical/codec/CanonicalPhysicsStateEncode.cpp
+        physics/state/canonical/binding/events/CanonicalPhysicsStateEventBinding.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateFilterFingerprint.cpp
+        physics/state/canonical/binding/events/CanonicalPhysicsStateFixtureEventBinding.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateFixtureHash.cpp
+        physics/state/canonical/abi/CanonicalPhysicsStateFpControl.cpp
+        physics/state/canonical/geometry/CanonicalPhysicsStateGeometry.cpp
+        physics/state/canonical/backend/CanonicalPhysicsStateIntent.cpp
+        physics/state/canonical/binding/CanonicalPhysicsStateJointBinding.cpp
+        physics/state/canonical/codec/CanonicalPhysicsStateJointFields.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateJointHash.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateNativeBodyHash.cpp
+        physics/state/canonical/build/CanonicalPhysicsStateReceivingLimits.cpp
+        physics/state/canonical/restart/CanonicalPhysicsStateRestart.cpp
+        physics/state/canonical/restart/CanonicalPhysicsStateRestartBodies.cpp
+        physics/state/canonical/restart/shapes/CanonicalPhysicsStateRestartFixtures.cpp
+        physics/state/canonical/restart/CanonicalPhysicsStateRestartJoints.cpp
+        physics/state/canonical/restart/CanonicalPhysicsStateRestartRoots.cpp
+        physics/state/canonical/restart/shapes/CanonicalPhysicsStateRestartShapes.cpp
+        physics/state/canonical/build/CanonicalPhysicsStateRestore.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateSceneBodyHash.cpp
+        physics/state/canonical/binding/events/CanonicalPhysicsStateSceneEventBinding.cpp
+        physics/state/canonical/topology/CanonicalPhysicsStateSceneInventory.cpp
+        physics/state/canonical/workspace/CanonicalPhysicsStateScratch.cpp
+        physics/state/canonical/binding/CanonicalPhysicsStateShapeBindings.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateSurfaceFingerprint.cpp
+        physics/state/canonical/fingerprints/CanonicalPhysicsStateTopologyFingerprint.cpp
+        physics/state/canonical/topology/CanonicalPhysicsStateTopologyMap.cpp
+        physics/state/canonical/topology/CanonicalPhysicsStateTopologyValidation.cpp
+        physics/state/canonical/workspace/CanonicalPhysicsStateWorkspaceBuffers.cpp
+        physics/state/canonical/workspace/CanonicalPhysicsStateWorkspacePreparation.cpp
+        physics/state/canonical/workspace/CanonicalPhysicsStateWorkspaceResources.cpp
+        physics/state/canonical/workspace/CanonicalPhysicsStateWorkspaceValidation.cpp
+        physics/state/identity/PhysicsStateImages.cpp
         physics/PhysicsStateBuildFacts.cpp
     )
     target_sources(HoroPhysics PRIVATE ${_horo_state_native_sources})
@@ -150,16 +150,24 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     horo_configure_physics_state_build_facts()
 else()
     target_sources(HoroPhysics PRIVATE
-        physics/PhysicsStateBackendOmitted.cpp
-        physics/PhysicsStateConstructionNativeOmitted.cpp
-        physics/PhysicsStateImagesOmitted.cpp
+        physics/state/identity/PhysicsStateBackendOmitted.cpp
+        physics/state/construction/storage/PhysicsStateConstructionNativeOmitted.cpp
+        physics/state/identity/PhysicsStateImagesOmitted.cpp
     )
 endif()
 
 include("${PROJECT_SOURCE_DIR}/cmake/physics/HoroPhysicsStateImages.cmake")
 
 # Application Save adapters receive only the declared non-installed Physics seams.
-foreach(_horo_state_header IN ITEMS PhysicsStateSaveContract.h PhysicsSceneStateStorage.h PhysicsStateHashInternal.h)
-    file(GENERATE OUTPUT "${_horo_physics_scene_host_headers}/${_horo_state_header}"
-        CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/physics/${_horo_state_header}\"\n")
+foreach(_horo_state_header IN ITEMS
+        state/snapshot/PhysicsStateSaveContract.h
+        scene_state/PhysicsSceneStateStorage.h
+        state/envelope/PhysicsStateHashInternal.h)
+    set(_horo_state_header_source "${CMAKE_CURRENT_SOURCE_DIR}/physics/${_horo_state_header}")
+    if(NOT EXISTS "${_horo_state_header_source}")
+        message(FATAL_ERROR "Missing private Physics state header: ${_horo_state_header_source}")
+    endif()
+    get_filename_component(_horo_state_header_name "${_horo_state_header}" NAME)
+    file(GENERATE OUTPUT "${_horo_physics_scene_host_headers}/${_horo_state_header_name}"
+        CONTENT "#pragma once\n#include \"${_horo_state_header_source}\"\n")
 endforeach()

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -27,6 +28,12 @@ namespace Horo::Packages {
 
 namespace Horo::Application {
     using GameplayBuildSessionId = std::uint64_t;
+
+    /** @brief Returns the established project-local gameplay CMake build directory.
+     * @param projectRoot Root of the admitted project.
+     * @return Location shared by gameplay builds and tools that consume their compile metadata.
+     */
+    [[nodiscard]] std::filesystem::path GameplayLocalBuildDirectory(const std::filesystem::path &projectRoot);
 
     /** @brief Observable lifecycle of one project gameplay build request. */
     enum class GameplayBuildState : std::uint8_t {
@@ -68,6 +75,10 @@ namespace Horo::Application {
         GameplayBuildEnvironment environment;
         GameplayBuildTimeoutPolicy timeouts;
         std::shared_ptr<const Packages::GameplaySourceLibrarySet> sourceLibraries; /**< Optional owned immutable source selections. */
+        /** @brief Optional read-only validation for an isolated approved build and its correlated tests.
+         * @details Runs under the build lock on a worker. Capture immutable owned evidence; do not call editor owners from it.
+         */
+        std::function<Result<void>(const CancellationToken &)> validateSources;
     };
 
     /** @brief Owned thread-safe projection of one build session. */
@@ -105,6 +116,13 @@ namespace Horo::Application {
 
         /** @brief Starts, joins, or coalesces a project build. */
         [[nodiscard]] Result<GameplayBuildSessionId> Start(GameplayBuildRequest request) const;
+        /** @brief Starts a build whose cancellation belongs to one explicit caller.
+         * @param request Same trusted inputs used by the editor's ordinary build.
+         * @param stop Synchronous admission check after preparing inputs and before publishing the operation.
+         * @return An isolated session, or a typed refusal if the project already has a live build.
+         * @details Ordinary builds cannot coalesce into this session. Native output and operation stores still observe it.
+         */
+        [[nodiscard]] Result<GameplayBuildSessionId> StartIsolated(GameplayBuildRequest request, const std::function<bool()> &stop) const;
         /** @brief Returns the latest session snapshot. */
         [[nodiscard]] std::optional<GameplayBuildSnapshot> Query(GameplayBuildSessionId id) const;
         /**
@@ -113,6 +131,12 @@ namespace Horo::Application {
          * @return An owned snapshot; terminal sessions are excluded.
          */
         [[nodiscard]] std::optional<GameplayBuildSnapshot> QueryActiveProject(const std::filesystem::path &projectRoot) const;
+        /** @brief Finds the latest terminal build's output operation for exactly one project.
+         * @param projectRoot Project root used when starting the build.
+         * @return Exact operation identity if the terminal build published correlated output.
+         * @details The output store still owns retention and can reject an evicted operation.
+         */
+        [[nodiscard]] std::optional<OperationId> QueryLatestCompletedOutput(const std::filesystem::path &projectRoot) const;
         /** @brief Requests cooperative cancellation for an active session. */
         [[nodiscard]] bool RequestCancel(GameplayBuildSessionId id) const;
         /** @brief Reports whether the last validated build matches current project inputs. */
@@ -121,6 +145,9 @@ namespace Horo::Application {
         void Shutdown() const noexcept;
 
     private:
+        /** @brief Shares project admission, publication, and job submission for both start policies. */
+        [[nodiscard]] Result<GameplayBuildSessionId> StartImpl(GameplayBuildRequest request, bool isolated,
+                                                               const std::function<bool()> &stop) const;
         std::shared_ptr<State> state_;
     };
 }  // namespace Horo::Application

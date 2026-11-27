@@ -1,4 +1,6 @@
+#include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiHudAssociationTestFixture.h"
+#include "support/SequencePlaybackRuntimeTestSupport.h"
 
 namespace Horo::Runtime::Ui::ReloadTests {
     namespace {
@@ -120,7 +122,12 @@ namespace Horo::Runtime::Ui::ReloadTests {
             CHECK(authority->abandons == 1);
         }
 
-        TEST_CASE("Two players share a logical viewport without sharing HUD view input or lifetime", "[runtime_ui][hud][players]") {
+        TEST_CASE("Two players retain independent HUD metrics, input and lifetime", "[runtime_ui][hud][players]") {
+            bool splitViewport{};
+            SECTION("shared viewport") {}
+            SECTION("split views with distinct safe area") {
+                splitViewport = true;
+            }
             Rig rig;
             auto second = Binding();
             second.id.slot += 10;
@@ -128,14 +135,21 @@ namespace Horo::Runtime::Ui::ReloadTests {
             second.context.slot += 10;
             second.view.slot += 10;
             second.providers[0].instance.slot += 10;
+            if (splitViewport) {
+                ++second.viewport.slot;
+                second.viewportEvidence.safeAreaInsets = {12, 7, 9, 5};
+            }
             auto publisher = Publish(HudGeneration(rig.allocator, 1, Authored(), second, {Owner(), 5, 1}));
             auto hud = Take(UiHudAssociation::Create(second, publisher));
             auto firstFrame = rig.Frame();
             auto secondFrame = Take(hud.PrepareFrame(publisher, Revision<UiRenderSnapshotRevision>(1)));
             REQUIRE(rig.hud.ApplyPresentation(rig.publisher, firstFrame, rig.Receipt(firstFrame)).HasValue());
             REQUIRE(hud.ApplyPresentation(publisher, secondFrame, rig.Receipt(secondFrame)).HasValue());
-            CHECK(hud.Descriptor().viewport == rig.hud.Descriptor().viewport);
+            CHECK((hud.Descriptor().viewport != rig.hud.Descriptor().viewport) == splitViewport);
             CHECK(hud.Descriptor().player != rig.hud.Descriptor().player);
+            CHECK(secondFrame.Metrics().safeAreaInsets == second.viewportEvidence.safeAreaInsets);
+            if (splitViewport)
+                CHECK(secondFrame.Metrics().ContentPixelRect() != firstFrame.Metrics().ContentPixelRect());
             CHECK(hud.ApplyPresentation(publisher, firstFrame, rig.Receipt(firstFrame)).HasError());
             REQUIRE(hud.Shutdown(publisher).HasValue());
             CHECK_FALSE(hud.InputEligible(publisher));
@@ -177,6 +191,150 @@ namespace Horo::Runtime::Ui::ReloadTests {
                 REQUIRE(rig.hud.Shutdown(rig.publisher).HasValue());
                 CHECK(frame.Layout().Records().size() == 1);
             }
+        }
+
+        /** @brief Composes the public Runtime UI and cinematic APIs at the real sequence lease boundary. */
+        struct SequenceHudHost final {
+            struct Slot final {
+                Cinematic::SequenceCoordinationLease lease;
+                std::optional<UiHudSuppressionToken> token;
+            };
+
+            Rig &rig;
+            std::array<Slot, 2> slots;
+            std::uint64_t revision{};
+            std::size_t refusedReleases{};
+
+            static Result<Cinematic::SequenceCoordinationLease> Acquire(void *context, const Cinematic::SequencePlayerHandle &player,
+                                                                        const Cinematic::SequenceCoordinationLeaseKind kind) {
+                using Lease = Cinematic::SequenceCoordinationLease;
+                auto &host = *static_cast<SequenceHudHost *>(context);
+                if (kind != Cinematic::SequenceCoordinationLeaseKind::HudSuppression)
+                    return Result<Lease>::Failure(MakeError(UiErrors::InstanceStateInvalid));
+                const auto slot = std::ranges::find_if(host.slots, [](const Slot &entry) {
+                    return !entry.token;
+                });
+                if (slot == host.slots.end())
+                    return Result<Lease>::Failure(MakeError(UiErrors::CapacityExceeded));
+                auto token = host.rig.hud.BeginSuppression(host.rig.publisher);
+                if (token.HasError())
+                    return Result<Lease>::Failure(token.ErrorValue());
+                slot->lease = Lease{player, kind, ++host.revision};
+                slot->token = std::move(token).Value();
+                return Result<Lease>::Success(slot->lease);
+            }
+
+            static void Release(void *context, const Cinematic::SequenceCoordinationLease &lease) noexcept {
+                auto &host = *static_cast<SequenceHudHost *>(context);
+                const auto slot = std::ranges::find_if(host.slots, [&](const Slot &entry) {
+                    return entry.token && entry.lease.player == lease.player && entry.lease.kind == lease.kind &&
+                           entry.lease.ownerRevision == lease.ownerRevision;
+                });
+                if (slot == host.slots.end() || host.rig.hud.EndSuppression(host.rig.publisher, *slot->token).HasError()) {
+                    ++host.refusedReleases;
+                    return;
+                }
+                slot->token.reset();
+            }
+        };
+
+        TEST_CASE("Sequence terminal paths restore only their own HUD suppression across a UI reload",
+                  "[runtime_ui][hud][suppression][cinematic]") {
+            using namespace Cinematic;
+            namespace Playback = Cinematic::PlaybackTestSupport;
+            Rig rig;
+            SequenceHudHost host{rig};
+            auto service = Playback::Service();
+            const auto activate = [&](const std::uint64_t instance) {
+                SequencePlaybackActivation request{{Playback::Handle(instance), 10, 0, {1, 1}}, Playback::Plan()};
+                request.coordination.hideHud = true;
+                request.coordinationHooks = {&host, SequenceHudHost::Acquire, SequenceHudHost::Release};
+                return service.Activate(std::move(request));
+            };
+            auto previous = rig.Frame();
+            REQUIRE(rig.hud.ApplyPresentation(rig.publisher, previous, rig.Receipt(previous)).HasValue());
+            auto capture = rig.Capture();
+            const auto first = Take(activate(40));
+            const auto second = Take(activate(41));
+            CHECK(activate(42).HasError());
+            CHECK_FALSE(capture.IsActive());
+            REQUIRE(service.Play(first).HasValue());
+            REQUIRE(service.Play(second).HasValue());
+            const SequenceFrameScratch scratch{};
+            REQUIRE(service.Evaluate(first, 10, scratch, {}).HasValue());
+            CHECK(rig.hud.PrepareFrame(rig.publisher, previous.Snapshot()).HasError());
+
+            rig.Reload(2);
+            SECTION("skip") {
+                REQUIRE(service.Stop(second).HasValue());
+                REQUIRE(service.FinishStop(second).HasValue());
+            }
+            SECTION("failure") {
+                REQUIRE(service.Fail(second).HasValue());
+            }
+            SECTION("cancel") {
+                REQUIRE(service.Cancel(second).HasValue());
+            }
+            CHECK(host.refusedReleases == 0);
+            CHECK_FALSE(host.slots[0].token);
+            CHECK_FALSE(host.slots[1].token);
+            REQUIRE(rig.hud.Refresh(rig.publisher).HasValue());
+            CHECK_FALSE(rig.hud.InputEligible(rig.publisher));
+            CHECK(rig.hud.ApplyPresentation(rig.publisher, previous, rig.Receipt(previous)).HasError());
+            auto current = rig.Frame(2);
+            REQUIRE(rig.hud.ApplyPresentation(rig.publisher, current, rig.Receipt(current)).HasValue());
+            CHECK(rig.hud.InputEligible(rig.publisher));
+            REQUIRE(service.Release(first).HasValue());
+            REQUIRE(service.Release(second).HasValue());
+        }
+
+        TEST_CASE("Nested HUD suppressions cancel only their context and require a fresh presentation", "[runtime_ui][hud][suppression]") {
+            Rig rig;
+            auto old = rig.Frame();
+            REQUIRE(rig.hud.ApplyPresentation(rig.publisher, old, rig.Receipt(old)).HasValue());
+            auto capture = rig.Capture();
+            auto outer = Take(rig.hud.BeginSuppression(rig.publisher));
+            auto inner = Take(rig.hud.BeginSuppression(rig.publisher));
+            CHECK_FALSE(capture.IsActive());
+            CHECK_FALSE(rig.hud.InputEligible(rig.publisher));
+            CHECK(rig.hud.PrepareFrame(rig.publisher, old.Snapshot()).HasError());
+            CHECK(rig.hud.ApplyPresentation(rig.publisher, old, rig.Receipt(old)).HasError());
+            REQUIRE(rig.hud.EndSuppression(rig.publisher, outer).HasValue());
+            CHECK(rig.hud.EndSuppression(rig.publisher, outer).HasError());
+            CHECK(rig.hud.PrepareFrame(rig.publisher, old.Snapshot()).HasError());
+            REQUIRE(rig.hud.EndSuppression(rig.publisher, inner).HasValue());
+            CHECK_FALSE(rig.hud.InputEligible(rig.publisher));
+            CHECK(rig.hud.ApplyPresentation(rig.publisher, old, rig.Receipt(old)).HasError());
+            auto current = rig.Frame(2);
+            REQUIRE(rig.hud.ApplyPresentation(rig.publisher, current, rig.Receipt(current)).HasValue());
+            CHECK(rig.hud.InputEligible(rig.publisher));
+        }
+
+        TEST_CASE("HUD suppression receipts are bounded and survive only the owning association", "[runtime_ui][hud][suppression]") {
+            Rig rig;
+            Rig foreign;
+            const auto other = Take(foreign.hud.BeginSuppression(foreign.publisher));
+            std::vector<UiHudSuppressionToken> scopes;
+            for (std::size_t index = 0; index < MaximumUiHudSuppressions; ++index)
+                scopes.push_back(Take(rig.hud.BeginSuppression(rig.publisher)));
+            CHECK(rig.hud.BeginSuppression(rig.publisher).HasError());
+            CHECK(rig.hud.EndSuppression(rig.publisher, other).HasError());
+            rig.Reload(2);
+            REQUIRE(rig.hud.EndSuppression(rig.publisher, scopes.front()).HasValue());
+            REQUIRE(rig.hud.Refresh(rig.publisher).HasValue());
+            CHECK(rig.hud.EndSuppression(rig.publisher, scopes.front()).HasError());
+            REQUIRE(rig.hud.SetPolicy(rig.publisher, true, false).HasValue());
+            for (const auto &scope : std::span(scopes).subspan(1))
+                REQUIRE(rig.hud.EndSuppression(rig.publisher, scope).HasValue());
+            const auto snapshot = Revision<UiRenderSnapshotRevision>(2);
+            CHECK(rig.hud.PrepareFrame(rig.publisher, snapshot).HasError());
+            REQUIRE(rig.hud.SetPolicy(rig.publisher, true, true).HasValue());
+            CHECK(rig.hud.PrepareFrame(rig.publisher, snapshot).HasValue());
+            const auto outgoing = Take(rig.hud.BeginSuppression(rig.publisher));
+            REQUIRE(rig.hud.Shutdown(rig.publisher).HasValue());
+            auto replacement = Take(UiHudAssociation::Create(Binding(), rig.publisher));
+            CHECK(replacement.EndSuppression(rig.publisher, outgoing).HasError());
+            CHECK(replacement.PrepareFrame(rig.publisher, snapshot).HasValue());
         }
 
         TEST_CASE("HUD policy attachment and shutdown cancel only the actual admitted context captures", "[runtime_ui][hud][capture]") {

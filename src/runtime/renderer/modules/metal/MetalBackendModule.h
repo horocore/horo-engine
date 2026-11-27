@@ -10,6 +10,8 @@
 #include <memory>
 
 namespace Horo::Render {
+    struct RenderMaterialRegion;
+
     namespace Detail {
         struct MetalEditorGraphicsAccess;
     }
@@ -100,6 +102,11 @@ namespace Horo::Render {
          * @param viewInstance Same frontend/runtime view identity. @return Original lifecycle/identity failure or tracked ownership. */
         [[nodiscard]] Result<void> RetainEditorTextureView(std::uint64_t viewInstance);
 
+        /** @brief Polls the selected runtime's exact completed color crop without exposing native resources. */
+        [[nodiscard]] Result<bool> ReadCompletedColor(std::uint64_t instance, std::span<std::byte> destination);
+        /** @brief Queues a crop of the viewport's just-stored color view on the active legacy command buffer. */
+        [[nodiscard]] Result<void> RecordViewportColor(std::uint64_t view, std::uint64_t staging, RenderMaterialRegion region);
+
         /** @brief Waits for submitted Metal work; restricted to teardown and deterministic tests. */
         void WaitUntilIdle() noexcept;
 
@@ -108,6 +115,8 @@ namespace Horo::Render {
 
         using WaitUntilIdleFunction = void (*)(void *) noexcept;
         using RetainTextureFunction = Result<void> (*)(void *, std::uint64_t, void *);
+        using ReadColorFunction = Result<bool> (*)(void *, std::uint64_t, std::span<std::byte>);
+        using RecordColorFunction = Result<void> (*)(void *, std::uint64_t, std::uint64_t, RenderMaterialRegion);
 
         void *device_{nullptr};
         void *commandQueue_{nullptr};
@@ -117,6 +126,8 @@ namespace Horo::Render {
         void *waitContext_{nullptr};
         WaitUntilIdleFunction waitUntilIdle_{nullptr};
         RetainTextureFunction retainTexture_{nullptr};
+        ReadColorFunction readColor_{nullptr};
+        RecordColorFunction recordColor_{nullptr};
     };
 
     /**

@@ -1,7 +1,10 @@
 #include "Horo/XR/XRFakeRuntime.h"
 
+#include "host/XRFakeRuntimeHostComposition.h"
+
 #include <algorithm>
 #include <cmath>
+#include <new>
 
 namespace Horo::XR {
     namespace {
@@ -87,7 +90,7 @@ namespace Horo::XR {
         plan_ = plan;
         script_.clear();
         cursor_ = 0;
-        previousPrediction_ = {};
+        timeline_ = {};
         return activated;
     }
 
@@ -105,7 +108,7 @@ namespace Horo::XR {
             return XRFrameStatus::InvalidInput;
         if (!step.executeFrame && (!step.event || step.actionCount != 0 || step.viewCount != 0 || step.failure != None))
             return XRFrameStatus::InvalidInput;
-        if (!step.shouldRender && step.failure >= Locate && step.failure <= Release)
+        if (!RuntimeInternal::SupportsXRFakeFrameFailure(step.failure, step.shouldRender))
             return XRFrameStatus::Unsupported;
         if (step.executeFrame && !step.prediction.IsValid())
             return XRFrameStatus::InvalidInput;
@@ -159,6 +162,23 @@ namespace Horo::XR {
         return XRFrameStatus::Ok;
     }
 
+    /** @copydoc XRFakeRuntime::Timeline::Accepts */
+    bool XRFakeRuntime::Timeline::Accepts(const XRFakeStep &step) const noexcept {
+        if (!step.executeFrame)
+            return true;
+        return (!prediction.IsValid() || step.prediction > prediction) &&
+               (!step.actionSampleTime.IsValid() || !sample.IsValid() || step.actionSampleTime >= sample);
+    }
+
+    /** @copydoc XRFakeRuntime::Timeline::Record */
+    void XRFakeRuntime::Timeline::Record(const XRFakeStep &step) noexcept {
+        if (!step.executeFrame)
+            return;
+        prediction = step.prediction;
+        if (step.actionSampleTime.IsValid())
+            sample = step.actionSampleTime;
+    }
+
     /** @copydoc XRFakeRuntime::LoadScript */
     XRFrameStatus XRFakeRuntime::LoadScript(const XRSessionId &session, const std::span<const XRFakeStep> steps) {
         if (shutdown_)
@@ -169,18 +189,20 @@ namespace Horo::XR {
             return XRFrameStatus::StaleSession;
         if (steps.size() > XRFakeLimits::MaximumSteps)
             return XRFrameStatus::CapacityExceeded;
-        XRRenderPredictionTime previous = previousPrediction_;
+        auto preview = timeline_;
         for (const auto &step : steps) {
             if (const auto status = ValidateStep(step, session); status != XRFrameStatus::Ok)
                 return status;
-            if (step.executeFrame) {
-                if (previous.IsValid() && step.prediction <= previous)
-                    return XRFrameStatus::InvalidInput;
-                previous = step.prediction;
-            }
+            if (!preview.Accepts(step))
+                return XRFrameStatus::InvalidInput;
+            preview.Record(step);
         }
-        std::vector<XRFakeStep> copied(steps.begin(), steps.end());
-        script_.swap(copied);
+        try {
+            std::vector<XRFakeStep> copied(steps.begin(), steps.end());
+            script_.swap(copied);
+        } catch (const std::bad_alloc &) {
+            return XRFrameStatus::CapacityExceeded;
+        }
         cursor_ = 0;
         return XRFrameStatus::Ok;
     }
@@ -289,7 +311,7 @@ namespace Horo::XR {
     }
 
     XRFakeOutcome XRFakeRuntime::ConsumeStep(const XRSessionId &session, const XRFakeStep &step, XRFakeOutcome outcome) {
-        if (step.executeFrame && previousPrediction_.IsValid() && step.prediction <= previousPrediction_) {
+        if (!timeline_.Accepts(step)) {
             outcome.status = XRFrameStatus::InvalidInput;
             return outcome;
         }
@@ -299,8 +321,7 @@ namespace Horo::XR {
         }
         outcome.consumed = true;
         outcome.nextStep = ++cursor_;
-        if (step.executeFrame)
-            previousPrediction_ = step.prediction;
+        timeline_.Record(step);
         outcome.session = sessions_.Snapshot();
         outcome.status = step.executeFrame ? RunFrame(step, session, outcome) : XRFrameStatus::Ok;
         if (outcome.status == XRFrameStatus::Ok && step.executeFrame)

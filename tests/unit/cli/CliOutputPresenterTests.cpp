@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <sstream>
 
@@ -13,7 +14,7 @@ namespace Horo::Cli {
         using Json = nlohmann::json;
 
         /** @brief Uses the same application fixture as GUI/MCP, extended with exact CLI-owned errors. */
-        Hosts::ErrorTranslator Translator() {
+        Hosts::ErrorTranslator Translator(const bool discloseFirstError = false) {
             const ModuleDescriptor module{.id = {"horo.cli"}, .version = {1, 0, 0}, .errorDomains = {CliErrors::ErrorDomain()}};
             auto registry = ExtendErrorCodeRegistry(HostErrorFixture::Registry(), std::span{&module, 1});
             REQUIRE(registry.HasValue());
@@ -21,6 +22,7 @@ namespace Horo::Cli {
                     nullptr);
             const auto application = HostErrorFixture::Mappings();
             std::vector<Hosts::ErrorMapping> mappings(application.begin(), application.end());
+            mappings.front().discloseRootDetail = discloseFirstError;
             mappings.push_back({CliErrors::HostFailure.domain, CliErrors::HostFailure.code, Hosts::ExitCategory::Invariant});
             mappings.push_back(
                 {CliErrors::ExecutionContextInvalid.domain, CliErrors::ExecutionContextInvalid.code, Hosts::ExitCategory::Invariant});
@@ -72,6 +74,33 @@ namespace Horo::Cli {
         }
     }  // namespace
 
+    TEST_CASE("CLI discloses diagnostics only for a host-approved root error", "[cli][output]") {
+        const auto &descriptor = HostErrorFixture::Descriptors.front();
+        auto failure = MakeError(descriptor, "Approved root message");
+        failure.diagnostics.emplace_back(DiagnosticCode{descriptor.code.Value()}, DiagnosticSeverity::Error, "Approved detail",
+                                         SourceLocation{"fixture"}, "approved-reference");
+        failure = WithCause(std::move(failure), MakeError(descriptor, "Private cause message"));
+        const auto terminal = CliTerminalResult::Failure({.invocation = {31}}, failure);
+
+        std::ostringstream output, diagnostics;
+        CliOutputPresenter json(Descriptor(), {31}, Translator(true), output, diagnostics, CliProgressOutputMode::Json, false);
+        REQUIRE_FALSE(json.Complete(terminal).rejectedError.has_value());
+        const auto envelope = Json::parse(output.str());
+        INFO(envelope.dump());
+        REQUIRE(envelope["diagnostics"].size() == 1);
+        CHECK(envelope["diagnostics"].front()["path"] == "approved-reference");
+        CHECK(output.str().find("Private cause message") == std::string::npos);
+
+        CliOutputPresenter human(Descriptor(), {31}, Translator(true), output, diagnostics, CliProgressOutputMode::Human, false);
+        CHECK_FALSE(human.Complete(terminal).rejectedError.has_value());
+        CHECK(diagnostics.str() == "Approved root message\nApproved detail\n");
+
+        std::ostringstream publicOutput, publicDiagnostics;
+        CliOutputPresenter other(Descriptor(), {31}, Translator(), publicOutput, publicDiagnostics, CliProgressOutputMode::Json, false);
+        CHECK_FALSE(other.Complete(terminal).rejectedError.has_value());
+        CHECK(publicOutput.str().find("Approved detail") == std::string::npos);
+    }
+
     TEST_CASE("JSON CLI presentation is one document and preserves typed values and correlation") {
         std::ostringstream output, diagnostics;
         CliOutputPresenter presenter(Descriptor(), {31}, Translator(), output, diagnostics, CliProgressOutputMode::Json, true);
@@ -92,13 +121,42 @@ namespace Horo::Cli {
         CHECK(envelope["error"].is_null());
     }
 
+    TEST_CASE("CLI presentation refuses unbound or nonportable asset diagnostics", "[cli][output]") {
+        CliExecutionCorrelation unsafe{.invocation = {31},
+                                       .operation = {{9}},
+                                       .assetSource = CliSafeAssetSource{"00000000-0000-0000-0000-0000000000b1",
+                                                                         ProjectPath::Parse("Assets/model.prefab").Value()}};
+        SECTION("absent operation") {
+            unsafe.operation.reset();
+        }
+        SECTION("zero asset identity") {
+            unsafe.assetSource->assetId = "00000000-0000-0000-0000-000000000000";
+        }
+        SECTION("native drive path") {
+            unsafe.assetSource->projectPath = ProjectPath::Parse("C:/private/project/Assets/model.prefab").Value();
+        }
+        std::ostringstream output, diagnostics;
+        CliOutputPresenter presenter(Descriptor(), {31}, Translator(), output, diagnostics, CliProgressOutputMode::Json, false);
+        const auto outcome = presenter.Complete(CliTerminalResult::Failure(std::move(unsafe), MakeError(CliErrors::ParseFailed)));
+        CHECK(outcome.exitCode == static_cast<int>(Hosts::ExitCategory::Invariant));
+        const auto envelope = Json::parse(output.str());
+        CHECK_FALSE(envelope.at("metadata").contains("assetSource"));
+        CHECK(envelope.at("error").at("code") == CliErrors::ExecutionContextInvalid.code.Value());
+        CHECK(output.str().find("private/project") == std::string::npos);
+    }
+
     TEST_CASE("JSON CLI failures preserve shared GUI and MCP meaning and every stable exit category") {
+        std::ifstream input(HORO_CLI_OUTPUT_FIXTURE);
+        REQUIRE(input.good());
+        const auto fixture = Json::parse(input);
         for (std::size_t index = 0; index < HostErrorFixture::Descriptors.size(); ++index) {
             std::ostringstream output, diagnostics;
             auto translator = Translator();
             const auto error = HostErrorFixture::Failure(index);
             const auto translated = translator.Translate(error);
             REQUIRE(translated);
+            const auto name = HostErrorFixture::Descriptors[index].code.Value().substr(std::string_view{"project.translation."}.size());
+            CHECK(static_cast<int>(HostErrorFixture::Categories[index]) == fixture.at("exitCategories").at(name));
             const auto gui = Hosts::TranslateGuiError(*translated, Hosts::GuiErrorSurface::Inline);
             const auto mcp = Json::parse(Hosts::TranslateMcpError(*translated));
             CliOutputPresenter presenter(Descriptor(), {31}, std::move(translator), output, diagnostics, CliProgressOutputMode::Json,
@@ -107,6 +165,8 @@ namespace Horo::Cli {
                   static_cast<int>(HostErrorFixture::Categories[index]));
             const auto envelope = Json::parse(output.str());
             RequireEnvelope(envelope);
+            for (const auto &field : fixture.at("requiredEnvelopeFields"))
+                CHECK(envelope.contains(field.get<std::string>()));
             CHECK(envelope["error"] == Json::parse(gui.detail.Json()));
             CHECK(envelope["error"] == mcp["data"]);
             CHECK(envelope["result"].is_null());
@@ -143,6 +203,18 @@ namespace Horo::Cli {
         const auto first = output.str();
         CHECK(presenter.Progress({"late", 1, "Late"}).HasError());
         CHECK(output.str() == first);
+    }
+
+    TEST_CASE("A failed diagnostic stream preserves a truthful machine exit on writable stdout", "[cli][output]") {
+        std::ostringstream output, diagnostics;
+        diagnostics.setstate(std::ios::badbit);
+        CliOutputPresenter presenter(Descriptor(), {31}, Translator(), output, diagnostics, CliProgressOutputMode::Json, false);
+        CHECK(presenter.Complete(Success()).exitCode == 1);
+        const auto envelope = Json::parse(output.str());
+        RequireEnvelope(envelope);
+        CHECK(envelope.at("exitCode") == 1);
+        CHECK(envelope.at("status") == "failed");
+        CHECK(envelope.at("error").at("code") == CliErrors::HostFailure.code.Value());
     }
 
     TEST_CASE("Machine CLI schemas do not depend on TTY detection") {

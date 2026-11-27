@@ -26,6 +26,19 @@ namespace Horo::Application::Internal {
         std::chrono::steady_clock::time_point deadline{};
     };
 
+    /** @brief Checks the finite Scene load interval supported by the product host. */
+    [[nodiscard]] constexpr bool IsHeadlessSceneLoadTimeoutValid(std::chrono::milliseconds timeout) noexcept {
+        return timeout > std::chrono::milliseconds::zero() && timeout <= std::chrono::seconds{60};
+    }
+
+    /** @brief Binds a product host to the same load boundary borrowed by all its Scene factories.
+     * @details The boundary outlives the host. Travel opens one fresh budget at the owner's commit safe point.
+     */
+    struct HeadlessSceneTravelLoad final {
+        HeadlessSceneLoadBoundary &boundary;
+        std::chrono::milliseconds timeout;
+    };
+
     /** @brief Prepares one private generation-owned Scene aggregate to readiness during startup or explicit travel loading.
      * @param service Fresh service with participants registered and no prior startup or preparation.
      * @param definition Complete typed definition with actual required asset dependencies.

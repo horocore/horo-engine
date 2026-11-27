@@ -1,10 +1,19 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 
+#include "Horo/Gameplay/BehaviorRegistry.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
+#include "Horo/Gameplay/GameAssetTypeRegistry.h"
+#include "Horo/Gameplay/GameServiceRegistry.h"
+#include "Horo/Gameplay/SystemRegistry.h"
+#include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageContentStaging.h"
 
 #include <algorithm>
+#include <concepts>
+#include <new>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Packages {
     namespace {
@@ -113,12 +122,45 @@ namespace Horo::Packages {
             return {};
         }
 
+        /** @brief Selects only the runtime roles published for this concrete host and generation. */
+        bool IsPublishedRole(const PackageActivationSnapshot &active, const PackageModuleReport &report, std::string_view host) {
+            return report.role == Extensions::ExtensionModuleRole::RuntimeParticipant && report.outcome == PackageModuleOutcome::Active &&
+                   report.host == host && report.generation == active.generation;
+        }
+
+        /** @brief Matches the actual lease rather than relying on a coincidentally equal generation number. */
+        bool OwnsPublishedActivation(const GameplayRoleState &state, const PackageActivationSnapshot &active) {
+            if (state.verified.Install() != active.install)
+                return false;
+            const auto &proof = state.verified.Activation().Activation();
+            return std::ranges::any_of(active.activations, [&proof](const auto &lease) {
+                return lease.IsUsable() && &lease.Activation() == &proof;
+            });
+        }
+
+        /** @brief Retains the exact native member selected by the verified package file manifest. */
+        struct StagedGameplayArtifact final {
+            std::filesystem::path path;
+            Sha256Digest digest;
+        };
+
+        /** @brief Checks signature policy and binds the native member to the locked archive. */
+        Result<void> VerifyGameplayArtifact(const Security::NativeArtifactGate &gate, const StagedGameplayArtifact &artifact) {
+            const auto evidence = gate.Verify(artifact.path);
+            if (evidence.HasError())
+                return Result<void>::Failure(evidence.ErrorValue());
+            if (evidence.Value().ArtifactDigest() != artifact.digest)
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::TrustRequired));
+            return Result<void>::Success();
+        }
+
         /** @brief Stages and verifies an immutable artifact under the host's private owner-only root. */
-        Result<std::filesystem::path> StageGameplayArtifact(GameplayRoleState &state, const GameplayPackageHostConfiguration &configuration,
+        Result<StagedGameplayArtifact> StageGameplayArtifact(GameplayRoleState &state, const GameplayPackageHostConfiguration &configuration,
                                                             const CancellationToken &cancellation) {
+            using Output = Result<StagedGameplayArtifact>;
             auto root = Detail::CreatePrivatePackageRoot(configuration.temporaryRoot, PackageLifecycleErrors::StorageFailed);
             if (root.HasError())
-                return Result<std::filesystem::path>::Failure(root.ErrorValue());
+                return Output::Failure(root.ErrorValue());
             state.root = std::move(root).Value();
             const auto &packages = state.verified.Install()->Graph()->packages;
             const auto selected = std::ranges::find(packages, state.verified.Identity().package, [](const auto &package) {
@@ -131,28 +173,26 @@ namespace Horo::Packages {
                                                            {PackageLifecycleErrors::InvalidCandidate, PackageLifecycleErrors::StorageFailed,
                                                             PackageLifecycleErrors::Cancelled});
                 staged.HasError())
-                return Result<std::filesystem::path>::Failure(staged.ErrorValue());
-            const auto artifact = state.root / state.verified.Artifact().Value();
+                return Output::Failure(staged.ErrorValue());
             const auto files = state.verified.Package().archive->Manifest().Entries();
             const auto expected = std::ranges::find_if(files, [&state](const auto &file) {
                 return file.id.path.Value() == state.verified.Artifact().Value();
             });
             if (expected == files.end())
-                return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-            auto evidence = configuration.artifactGate->Verify(artifact);
-            if (evidence.HasError())
-                return Result<std::filesystem::path>::Failure(evidence.ErrorValue());
-            if (evidence.Value().ArtifactDigest() != expected->digest)
-                return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::TrustRequired));
-            return Result<std::filesystem::path>::Success(artifact);
+                return Output::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+            StagedGameplayArtifact artifact{state.root / state.verified.Artifact().Value(), expected->digest};
+            if (const auto verified = VerifyGameplayArtifact(*configuration.artifactGate, artifact); verified.HasError())
+                return Output::Failure(verified.ErrorValue());
+            return Output::Success(std::move(artifact));
         }
 
         /** @brief Checks SDK identity before binding world authority, then retains any partial native initializer. */
         Result<void> LoadGameplayOwner(GameplayRoleState &state, const GameplayPackageModuleBinding &binding,
-                                       const std::filesystem::path &artifact, const CancellationToken &cancellation) {
+                                       const StagedGameplayArtifact &artifact, const Security::NativeArtifactGate &gate,
+                                       const CancellationToken &cancellation) {
             const Gameplay::GameModuleLoadExpectation expected{binding.module, binding.buildFingerprint, binding.descriptorRevision};
             Gameplay::GameModuleHost validation{binding.capabilities};
-            if (auto compatible = validation.ValidateArtifact(artifact, expected); compatible.HasError())
+            if (auto compatible = validation.ValidateArtifact(artifact.path, expected); compatible.HasError())
                 return compatible;
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
@@ -163,8 +203,14 @@ namespace Horo::Packages {
                     return Result<void>::Failure(resolved.ErrorValue());
                 physics = std::move(resolved).Value();
             }
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
+            if (const auto verified = VerifyGameplayArtifact(gate, artifact); verified.HasError())
+                return verified;
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             state.host = std::make_unique<Gameplay::GameModuleHost>(binding.capabilities, std::move(physics));
-            auto loaded = state.host->Load(artifact, expected);
+            auto loaded = state.host->Load(artifact.path, expected);
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
             auto candidate = std::move(loaded).Value();
@@ -247,7 +293,8 @@ namespace Horo::Packages {
                 state->failure = artifact.ErrorValue();
             else if (cancellation.IsCancellationRequested())
                 state->failure = MakeError(PackageLifecycleErrors::Cancelled);
-            else if (auto activated = LoadGameplayOwner(*state, *binding, artifact.Value(), cancellation); activated.HasError())
+            else if (auto activated = LoadGameplayOwner(*state, *binding, artifact.Value(), *impl_->configuration.artifactGate, cancellation);
+                     activated.HasError())
                 state->failure = activated.ErrorValue();
         } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             state->failure = std::move(activationFailure);
@@ -279,6 +326,175 @@ namespace Horo::Packages {
             {package, locked.version, locked.artifactDigest, generation, std::move(nodes).Value()});
     }
 
+    /** @copydoc GameplayPackageModuleHost::AcquireActiveDecisionNodes */
+    Result<std::vector<PackageDecisionNodeGeneration>> GameplayPackageModuleHost::AcquireActiveDecisionNodes(
+        const PackageLifecycleService &lifecycle) const {
+        using Contributions = Result<std::vector<PackageDecisionNodeGeneration>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        const auto active = lifecycle.Active();
+        std::vector<PackageDecisionNodeGeneration> contributions;
+        if (!active)
+            return Contributions::Success(std::move(contributions));
+        try {
+            for (const auto &report : active->modules) {
+                if (!IsPublishedRole(*active, report, Identity()))
+                    continue;
+                const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
+                if (!state || !OwnsPublishedActivation(*state, *active))
+                    return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                auto nodes = state->selectedModule->AcquireDecisionNodes();
+                if (nodes.HasError())
+                    return Contributions::Failure(nodes.ErrorValue());
+                if (!nodes.Value()->Contracts().empty()) {
+                    const auto &locked = state->verified.Package().lock;
+                    contributions.emplace_back(report.package, locked.version, locked.artifactDigest, report.generation,
+                                               std::move(nodes).Value());
+                }
+            }
+            return Contributions::Success(std::move(contributions));
+        } catch (const std::bad_alloc &) {
+            return Contributions::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+        }
+    }
+
+    namespace {
+        /** @brief Detects registration classes not yet covered by the saved-reference checks. */
+        Result<bool> HasAdditionalReferenceClasses(const Gameplay::LoadedGameModule &module) {
+            if (!module.Components().Descriptors().empty() || !module.AssetTypes().Registrations().empty())
+                return Result<bool>::Success(true);
+            const auto queries = module.AcquireGameplayQueryTests();
+            if (queries.HasError())
+                return Result<bool>::Failure(queries.ErrorValue());
+            const auto persistence = module.PersistenceDeclarations();
+            if (persistence.HasError())
+                return Result<bool>::Failure(persistence.ErrorValue());
+            return Result<bool>::Success(bool{queries.Value().schema} || !persistence.Value().empty());
+        }
+
+        using Inventory = GameplayPackageModuleHost::RegistrationInventory;
+
+        /** @brief Copies declared accesses, excluding behavior resource names outside the component identity namespace. */
+        Result<void> CaptureComponentUses(Inventory &inventory, const auto &resources, const auto &consumer) {
+            for (const auto &resource : resources) {
+                Gameplay::ComponentTypeId component;
+                if constexpr (std::same_as<std::decay_t<decltype(resource)>, std::string>) {
+                    auto parsed = Gameplay::ComponentTypeId::Parse(resource);
+                    if (parsed.HasError())
+                        continue;
+                    component = std::move(parsed).Value();
+                } else {
+                    component = resource;
+                }
+                if (inventory.componentUses.size() == Inventory::MaximumComponentUses)
+                    return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+                inventory.componentUses.push_back({std::move(component), consumer});
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Captures read/write dependencies for one registration without retaining its callbacks. */
+        Result<void> CaptureAccess(Inventory &inventory, const auto &access, const auto &consumer) {
+            if (auto reads = CaptureComponentUses(inventory, access.reads, consumer); reads.HasError())
+                return reads;
+            return CaptureComponentUses(inventory, access.writes, consumer);
+        }
+
+        /** @brief Copies bounded behavior and system metadata from the same frozen owner. */
+        Result<void> CaptureScheduledRegistrations(const Gameplay::LoadedGameModule &loaded, Inventory &inventory) {
+            for (const auto &behavior : loaded.Registry().Registrations()) {
+                const auto &descriptor = behavior.descriptor;
+                inventory.behaviors.push_back(descriptor.typeId);
+                for (const auto &phase : descriptor.phases)
+                    if (auto captured = CaptureAccess(inventory, phase.access, descriptor.typeId); captured.HasError())
+                        return captured;
+            }
+            for (const auto &system : loaded.Systems().Registrations()) {
+                inventory.systems.push_back(system.descriptor);
+                if (auto captured = CaptureAccess(inventory, system.descriptor.access, system.descriptor.id); captured.HasError())
+                    return captured;
+            }
+            std::ranges::sort(inventory.componentUses);
+            const auto duplicates = std::ranges::unique(inventory.componentUses);
+            inventory.componentUses.erase(duplicates.begin(), duplicates.end());
+            return Result<void>::Success();
+        }
+
+        /** @brief Copies inert registration facts from an exact loaded gameplay role without retaining the image or invoking factories. */
+        Result<void> CaptureRegistrationContents(const Gameplay::LoadedGameModule &loaded,
+                                                 GameplayPackageModuleHost::RegistrationInventory &inventory) {
+            if (auto scheduled = CaptureScheduledRegistrations(loaded, inventory); scheduled.HasError())
+                return scheduled;
+            const auto components = loaded.Components().Descriptors();
+            if (components.size() > GameplayPackageModuleHost::RegistrationInventory::MaximumComponentIds)
+                return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+            for (const auto &component : components)
+                inventory.components.push_back(component.typeId);
+            for (const auto &service : loaded.Services().Registrations())
+                inventory.services.push_back(service.descriptor);
+            auto decisionNodes = loaded.AcquireDecisionNodes();
+            if (decisionNodes.HasError())
+                return Result<void>::Failure(decisionNodes.ErrorValue());
+            for (const auto &node : decisionNodes.Value()->Contracts())
+                inventory.decisionNodes.push_back(node.descriptor.type);
+            const auto senses = loaded.AcquirePerceptionSenses();
+            if (senses.HasError())
+                return Result<void>::Failure(senses.ErrorValue());
+            inventory.hasCustomSenses = !senses.Value()->Contracts().empty();
+            const auto additional = HasAdditionalReferenceClasses(loaded);
+            if (additional.HasError())
+                return Result<void>::Failure(additional.ErrorValue());
+            inventory.hasAdditionalReferenceClasses = additional.Value();
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc GameplayPackageModuleHost::CaptureActiveRegistrations */
+    Result<std::vector<GameplayPackageModuleHost::RegistrationInventory>> GameplayPackageModuleHost::CaptureActiveRegistrations(
+        const PackageLifecycleService &lifecycle) const {
+        using Inventory = Result<std::vector<RegistrationInventory>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Inventory::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        const auto active = lifecycle.Active();
+        if (!active)
+            return Inventory::Success({});
+        try {
+            std::vector<RegistrationInventory> registrations;
+            for (const auto &report : active->modules) {
+                if (!IsPublishedRole(*active, report, Identity()))
+                    continue;
+                const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
+                if (!state || !OwnsPublishedActivation(*state, *active))
+                    return Inventory::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                const auto &loaded = *state->selectedModule;
+                const auto &locked = state->verified.Package().lock;
+                auto &inventory =
+                    registrations.emplace_back(locked.package, locked.version, locked.artifactDigest, report.generation, report.module);
+                inventory.descriptorPath = state->verified.Descriptor().Value();
+                if (auto captured = CaptureRegistrationContents(loaded, inventory); captured.HasError())
+                    return Inventory::Failure(captured.ErrorValue());
+            }
+            return Inventory::Success(std::move(registrations));
+        } catch (const std::bad_alloc &) {
+            return Inventory::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+        }
+    }
+
+    /** @copydoc GameplayPackageModuleHost::AcquirePerceptionSenses */
+    Result<PackagePerceptionSenseGeneration> GameplayPackageModuleHost::AcquirePerceptionSenses(const HoroPackageId &package,
+                                                                                                const std::string_view module,
+                                                                                                const std::uint64_t generation) const {
+        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        if (!state)
+            return Result<PackagePerceptionSenseGeneration>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        auto senses = state->selectedModule->AcquirePerceptionSenses();
+        if (senses.HasError())
+            return Result<PackagePerceptionSenseGeneration>::Failure(senses.ErrorValue());
+        const auto &locked = state->verified.Package().lock;
+        return Result<PackagePerceptionSenseGeneration>::Success(
+            {package, locked.version, locked.artifactDigest, generation, std::move(senses).Value()});
+    }
+
     Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>> GameplayPackageModuleHost::CompileDecisionNode(
         const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation, const PackagePath &source,
         AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
@@ -301,5 +517,29 @@ namespace Horo::Packages {
             return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         return Gameplay::LuaDecisionNodeProgram::Compile(std::move(code), type, provider, descriptorVersion, {source.Value(), 0, 0}, limits,
                                                          std::move(parent).Value());
+    }
+
+    /** @copydoc GameplayPackageModuleHost::CompilePerceptionSense */
+    Result<std::unique_ptr<Gameplay::LuaPerceptionSenseProgram>> GameplayPackageModuleHost::CompilePerceptionSense(
+        const HoroPackageId &package, std::string_view module, const std::uint64_t generation, const PackagePath &source,
+        AI::PerceptionSenseContract contract, const Gameplay::LuaBehaviorLimits limits) const {
+        using Output = Result<std::unique_ptr<Gameplay::LuaPerceptionSenseProgram>>;
+        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        if (!state)
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        if (!source.Value().ends_with(".horo_script"))
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        auto parent = state->selectedModule->AcquirePerceptionSenses();
+        if (parent.HasError())
+            return Output::Failure(parent.ErrorValue());
+        auto bytes = state->verified.ReadDeclaredFile(source, 256U * 1024U);
+        if (bytes.HasError())
+            return Output::Failure(bytes.ErrorValue());
+        const auto &owned = bytes.Value();
+        std::string code(reinterpret_cast<const char *>(owned.data()), owned.size());
+        if (!LiveRole(*state))
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        contract.source = {source.Value(), 1, 1};
+        return Gameplay::LuaPerceptionSenseProgram::Compile(code, contract, std::move(parent).Value(), limits);
     }
 }  // namespace Horo::Packages

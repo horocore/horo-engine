@@ -9,6 +9,8 @@
 
 namespace Horo::Audio {
     namespace {
+        constexpr std::uint32_t AdmittedDspLatencyFrames = 0;  // Compensation requires a dedicated graph contract.
+
         /** @brief Preserve a stable graph error with off-callback boundary context. */
         Result<void> Invalid(const char *reason) {
             return Result<void>::Failure(MakeError(AudioErrors::GraphBuildFailed, reason));
@@ -150,7 +152,7 @@ namespace Horo::Audio {
                 return Invalid("Mixer insert requires unsupported ports or same-block control dependencies.");
             if (!CompatiblePorts(d, format, frames))
                 return Invalid("Mixer insert format or frame bound differs from its bus.");
-            if (d.latencyFrames != 0 || !d.supportsReset || (bypassed && !d.supportsBypass))
+            if (d.latencyFrames != AdmittedDspLatencyFrames || !d.supportsReset || (bypassed && !d.supportsBypass))
                 return Invalid("Mixer insert requires unavailable latency compensation, reset or bypass.");
             return Result<void>::Success();
         }
@@ -360,6 +362,11 @@ namespace Horo::Audio {
     /** @copydoc MixerRenderPlan::MaximumFrames */
     std::uint32_t MixerRenderPlan::MaximumFrames() const noexcept {
         return state_->profile.maximumFrames;
+    }
+
+    /** @copydoc MixerRenderPlan::DspLatencyFrames */
+    std::uint32_t MixerRenderPlan::DspLatencyFrames() const noexcept {
+        return AdmittedDspLatencyFrames;
     }
 
     /** @copydoc MixerRenderPlan::Buses */

@@ -12,6 +12,11 @@
 #include <string_view>
 #include <thread>
 
+namespace Horo::Runtime {
+    struct FixedStepContext;
+    class SceneAnimationRuntime;
+}  // namespace Horo::Runtime
+
 namespace Horo::Application::Internal {
     /** @brief Parses explicit application Physics policy without backend discovery or fallback.
      * @param name Exact startup value: null or canonical. @return Selected typed mode, or absence for invalid input.
@@ -44,10 +49,12 @@ namespace Horo::Application::Internal {
     class ScenePhysicsHost final {
         class Candidate;
         class Participant;
+        struct AnimationFixedState;
 
     public:
         /** @brief Binds the synchronous observer to the constructing application owner lane. */
         explicit ScenePhysicsHost(ScenePhysicsIdentityRange identities = {});
+        ~ScenePhysicsHost();
         ScenePhysicsHost(const ScenePhysicsHost &) = delete;
         ScenePhysicsHost &operator=(const ScenePhysicsHost &) = delete;
         ScenePhysicsHost(ScenePhysicsHost &&) = delete;
@@ -79,6 +86,41 @@ namespace Horo::Application::Internal {
          * @pre Do not retain the scope in jobs, callbacks, modules or through Scene lifecycle operations.
          */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneHostScope> Borrow();
+        /** @brief Resolves the exact controller for one enabled actor in the published Scene.
+         * @param scene Current committed Scene view. @param actor Exact entity generation.
+         * @return Controller handle or the original scene, actor or native binding failure.
+         */
+        [[nodiscard]] Result<Character::CharacterControllerHandle> ResolveCharacterController(const Runtime::RuntimeSceneView &scene,
+                                                                                              Runtime::EntityRef actor);
+        /** @brief Reads achieved world-space velocity from the selected controller's latest completed tick.
+         * @param scene Exact published Scene incarnation. @param object Authored actor. @param component Its selected controller.
+         * @return Velocity in metres per second or the original admission/snapshot error.
+         */
+        [[nodiscard]] Result<Math::Vec3> ReadCharacterVelocity(Runtime::SceneRuntimeId scene, Runtime::SceneObjectId object,
+                                                               Runtime::PhysicsComponentId component);
+        /** @brief Resolves a walkable surface through the published Scene's bounded Physics query. */
+        [[nodiscard]] Result<std::optional<Math::Vec3>> QueryTeleportTarget(Runtime::SceneRuntimeId scene,
+                                                                            Character::CharacterControllerHandle controller,
+                                                                            const Math::Ray &ray);
+        /** @brief Reserves one exact owner-supplied teleport for the upcoming paired Scene tick. */
+        [[nodiscard]] Result<void> QueueTeleport(Runtime::SceneRuntimeId scene, const Runtime::FixedStepContext &context,
+                                                 const Character::CharacterTeleportRequest &request, const CancellationToken &lifetime);
+
+        /** @brief Copies the Character-owned collision root in the Scene's local transform convention.
+         * @param scene Exact committed Scene view. @param entity Its bound Character actor.
+         * @param schedulerTick Exact committed tick being published by the caller.
+         * @return Local position and heading with authored scale, or a typed stale/conversion failure.
+         */
+        [[nodiscard]] Result<Math::Transform> ReadCharacterLocalTransform(const Runtime::RuntimeSceneView &scene,
+                                                                          const Runtime::RuntimeEntityView &entity,
+                                                                          std::uint64_t schedulerTick);
+        /** @brief Copies solved Character motion for the current scheduler attempt before replay publication.
+         * @param controller Exact live controller from this Scene's paired Character owner.
+         * @param context Current fixed attempt after the paired native solver succeeds.
+         * @return An owned result, no movement this tick, or a typed stale/lifecycle failure.
+         */
+        [[nodiscard]] Result<std::optional<Character::CharacterMovementResult>> ReadCharacterFixedMovement(
+            Character::CharacterControllerHandle controller, const Runtime::FixedStepContext &context);
         /** @brief Returns only the actual published Physics candidate's issued state target. */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneStateTarget> PublishedStateTarget();
         /** @brief Returns only the exact actual pending candidate for this receiving Scene; no Scene-ID-only authority. */
@@ -91,11 +133,36 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AdvanceFixedTick(Duration delta);
 
+        /** @brief Stages a fixed Character update for a Scene without an Animation owner. */
+        [[nodiscard]] Result<void> StageCharacterFixedTick(const Runtime::RuntimeSceneView &scene,
+                                                           const Runtime::FixedStepContext &context);
+
+        /** @brief Stages authoritative Animation requests through the exact Scene-owned Character solver.
+         * @param scene Current Scene projection of this pair. @param animation Exact Animation owner of that scene.
+         * @param context Actual scheduler attempt, after Animation evaluation. @return Typed staging failure or success.
+         */
+        [[nodiscard]] Result<void> StageAnimationFixedTick(const Runtime::RuntimeSceneView &scene,
+                                                           Runtime::SceneAnimationRuntime &animation,
+                                                           const Runtime::FixedStepContext &context);
+        /** @brief Runs native Physics after the paired Character staging and any Animation preparation.
+         * @param context Same scheduler attempt. @return Typed Physics or lifecycle failure.
+         */
+        [[nodiscard]] Result<void> PrepareAnimationFixedCommit(const Runtime::FixedStepContext &context);
+        /** @brief Publishes the staged Character result after the scheduler commitment fence. */
+        void CommitAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept;
+        /** @brief Discards staged Character movement and fences the Scene if native Physics was already attempted. */
+        void AbortAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept;
+
     private:
+        [[nodiscard]] Result<void> StageSceneFixedTick(const Runtime::RuntimeSceneView &scene, Runtime::SceneAnimationRuntime *animation,
+                                                       const Runtime::FixedStepContext &context);
+
         ScenePhysicsIdentityRange identities_;
         std::thread::id owner_{std::this_thread::get_id()};
         Participant *participant_{};
         Physics::PhysicsSceneActivationCandidate *published_{};
+        Runtime::RuntimeSceneView publishedScene_;
         Physics::PhysicsSceneActivationCandidate *pending_{};
+        std::unique_ptr<AnimationFixedState> fixedAnimation_;
     };
 }  // namespace Horo::Application::Internal

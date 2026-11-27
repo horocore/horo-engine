@@ -59,6 +59,10 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
 
+    namespace Detail {
+        class EditorControlMetadataCapture;
+    }
+
     struct EditorGuiContext;
     class EditorModalHost;
     class EditorSettingsService;
@@ -193,6 +197,12 @@ namespace Horo::Editor {
 
         /** @brief Returns the current project root, or current_path() as fallback. */
         [[nodiscard]] std::filesystem::path CurrentProjectRoot() const noexcept;
+        /** @brief Captures the host catalog and active importers for the requested project.
+         * @param root Exact project root of the operation.
+         * @return Immutable importer catalog for this operation, or a composition error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>> AcquireImporterCatalog(
+            const std::filesystem::path &root) const;
 
         /** @brief Polls the borrowed update session on the owner thread, updates the screen, and checks pending leave dialogs. */
         void OnUpdate(float dt);
@@ -212,6 +222,11 @@ namespace Horo::Editor {
 
         /** @brief Reserves the active screen for one genuine scheduler fixed attempt. */
         [[nodiscard]] Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context);
+
+        /** @brief Forwards an authenticated deferred lifecycle cutoff to the active screen.
+         * @param context Current frame issued by the bound runtime.
+         */
+        void OnRuntimeSceneCutoff(const Runtime::FrameContext &context);
         /** @brief Prepares that same screen while its dispatch is still uncommitted. */
         [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context);
         /** @brief Publishes after the actual scheduler commitment; defers all navigation and destruction. */
@@ -273,6 +288,9 @@ namespace Horo::Editor {
         Result<void> CommitApplicationClose();
         void FlushPendingNavigation();
         void CommitRoute(GuiRoute destination);
+
+        /** @brief Binds project-scoped extension storage and recording to the same workspace root. */
+        void SetWorkspaceProject(const std::filesystem::path &root);
         [[nodiscard]] Result<void> EnterScreen(GuiScreen &screen, const GuiRoute &route);
         void PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target);
         void ExecuteLeaveResolution(LeaveAction action, const LeaveRequirement &requirement, const LeaveTarget &target);
@@ -287,6 +305,7 @@ namespace Horo::Editor {
         void ReleaseFixedAttempt() noexcept;
 
         const EditorGuiContext &context_;
+        std::unique_ptr<Detail::EditorControlMetadataCapture> controlMetadata_;
         EditorModalHost *modalHost_;
         Input::InputRouter *inputRouter_;
         EditorSettingsService *settingsService_;

@@ -3,6 +3,7 @@
 /** @file GameplayNavigationContext.h
  * @brief Host-admitted native and script navigation requests with revocable owner-thread delivery.
  */
+#include "Horo/Gameplay/GameplayFormation.h"
 #include "Horo/Navigation/NavigationMovement.h"
 
 #include <memory>
@@ -48,7 +49,9 @@ namespace Horo::Gameplay {
         bool queryGranted{};
         bool movementGranted{};
     };
+    class BehaviorRuntime;
     class GameModuleHost;
+    struct GameplayNavigationAgentScope;
     struct GameplayNavigationState;
     struct GameplayNavigationRecord;
 
@@ -104,6 +107,16 @@ namespace Horo::Gameplay {
                                                                                        Navigation::NavigationMovementController *movement,
                                                                                        Navigation::NavigationPathSubmission policy,
                                                                                        std::size_t maximumPending = 16);
+        /** @brief Creates a path-only root with behavior grants fenced by the canonical registered entity generation.
+         * @param binding Module/Scene path grant. @param world Exact active Navigation world.
+         * @param coordinator Existing canonical path queue. @param agents Published agent registry for the same Scene.
+         * @param policy Existing module quota and query policy. @param maximumPending Finite module-wide retained records.
+         * @return Root grant or original world/registry admission error. The registry outlives root retirement.
+         */
+        [[nodiscard]] static Result<std::shared_ptr<GameplayNavigationContext>> CreateWithBehaviorAgentPaths(
+            GameplayNavigationBinding binding, Navigation::NavigationWorldLifecycle &world, Navigation::NavigationCoordinator &coordinator,
+            const Navigation::NavigationAgentRegistry &agents, Navigation::NavigationPathSubmission policy, std::size_t maximumPending);
+
         ~GameplayNavigationContext();
         GameplayNavigationContext(const GameplayNavigationContext &) = delete;
         GameplayNavigationContext &operator=(const GameplayNavigationContext &) = delete;
@@ -117,26 +130,48 @@ namespace Horo::Gameplay {
          * @return Opaque handle or typed permission/unavailable/validation error.
          */
         [[nodiscard]] Result<GameplayNavigationHandle> Submit(GameplayNavigationRequest request) const;
-        /** @brief Cancel outstanding work and permanently suppress delivery before module/scene teardown. */
+        /** @brief Starts the assigned MoveTo on this exact member's existing movement grant.
+         * @param resolved Detached formation reachability result.
+         * @param activeGroup Group identity from the current Gameplay owner.
+         * @param activeRevision Group revision from the same owner cutoff.
+         * @param cancellation Optional caller cancellation scope.
+         * @return The ordinary movement handle or typed stale, unavailable or admission error.
+         */
+        [[nodiscard]] Result<GameplayNavigationHandle> SubmitFormationSlot(const GameplayFormationResolution &resolved,
+                                                                           GameplayFormationId activeGroup, std::uint64_t activeRevision,
+                                                                           CancellationToken cancellation = {}) const;
+        /** @brief Relinquishes owned path results, cancels movement and permanently suppresses delivery before teardown. */
         void Revoke() const noexcept;
         /** @brief Report live owner-thread scope admission without accessing a provider. @return False after retirement or on another
          * thread. */
         [[nodiscard]] bool IsUsable() const noexcept;
-        /** @brief Drain retired canonical records after owner publication.
-         * @return True once service references can be released; false while pending.
-         * @pre Owner thread; borrowed services remain alive until this returns true.
+        /** @brief Collects exact retired query fences and observes movement retirement without publishing results.
+         * @return True once this scope can release its service references; false while its work owns them.
+         * @pre Owner thread; borrowed services remain alive until this returns true. The movement owner still advances its fences.
          */
         [[nodiscard]] Result<bool> DrainRetired() const;
         /** @brief Return immutable host principal and scene routing. @return Owned binding reference. */
         [[nodiscard]] const GameplayNavigationBinding &Binding() const noexcept;
 
     private:
+        friend class BehaviorRuntime;
         friend class GameModuleHost;
+        friend class GameplayFormationMovement;
+
+        /** @brief Checks exact formation routing before the group owner dispatches a slot. */
+        [[nodiscard]] bool MatchesFormationAgent(Navigation::CrowdAgentHandle agent) const noexcept;
+
+        /** @brief Derives one exact attachment grant while retaining the module-wide request queue and quota. */
+        [[nodiscard]] Result<std::shared_ptr<const GameplayNavigationContext>> ForBehaviorEntity(
+            Navigation::NavigationAgentOwner owner) const;
+        /** @brief Whether the host explicitly opted into using registered agent generations for behavior paths. */
+        [[nodiscard]] bool HasBehaviorAgentPaths() const noexcept;
         /** @brief Retain host-owned native SDK code through late record and cancellation-state destruction.
          * @param image Independent code image owner with no context/module-instance cycle; host thread before native startup.
          * @return Success or typed rejection of a replacement generation; existing grants are unchanged.
          */
         [[nodiscard]] Result<void> RetainCodeImage(std::shared_ptr<void> image) const;
         std::shared_ptr<GameplayNavigationState> state_;
+        std::shared_ptr<GameplayNavigationAgentScope> agent_;
     };
 }  // namespace Horo::Gameplay

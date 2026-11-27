@@ -262,6 +262,20 @@ namespace Horo::Physics {
         std::unique_ptr<Impl> impl_;
     };
 
+    /** @brief Compatibility of the actual bound solver and installed collision configuration. */
+    struct PhysicsReplayConfiguration final {
+        Sha256Digest build;
+        Sha256Digest solver;
+        Sha256Digest platform;
+        Sha256Digest filters;
+        Sha256Digest surfaces;
+        PhysicsWorldSettingsIdentity settings;
+        PhysicsStateFpControl floatingPoint;
+
+        /** @brief Hashes the complete, fixed-order configuration without native handles or process generations. */
+        [[nodiscard]] Sha256Digest Fingerprint() const noexcept;
+    };
+
     /** @brief Owner-thread reconciliation of retained policy against current native
      * body evidence. */
     struct PhysicsBodyReconciliation final {
@@ -731,6 +745,11 @@ namespace Horo::Physics {
          * @post No world or native storage is retained by the returned snapshot.
          */
         [[nodiscard]] Result<std::shared_ptr<const PhysicsDebugSnapshot>> CaptureDebugSnapshot(const PhysicsDebugBudget &budget) const;
+        /** @brief Reads the exact verified solver identity and current installed collision data for replay.
+         * @return Configuration or a typed affinity, capability or floating-point mismatch failure.
+         * @pre Active canonical world at a quiescent owner-thread boundary.
+         */
+        [[nodiscard]] Result<PhysicsReplayConfiguration> ReadReplayConfiguration() const;
         /** @brief Reads allocation-free cumulative pipeline metrics. @return
          * Owner-thread value snapshot. */
         [[nodiscard]] PhysicsTickStatistics TickStatistics() const noexcept;

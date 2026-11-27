@@ -96,6 +96,8 @@ namespace Horo::Editor {
         Result<void> ValidatePlacement(const PartitionedWorldObject &object, const PartitionedWorldDocument &document) {
             if (object.assignmentLod >= document.settings.grid.LodLevels())
                 return Failure<void>(WorldDocumentErrors::Unsupported);
+            if (object.anchor && object.anchor->cameraTarget == object.anchor->position)
+                return Failure<void>(WorldDocumentErrors::Invalid);
             if (object.spanning) {
                 using enum WS::WorldSpanningObjectPolicy;
                 const auto &directive = *object.spanning;

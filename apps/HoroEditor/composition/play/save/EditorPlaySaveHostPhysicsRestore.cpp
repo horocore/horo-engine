@@ -55,8 +55,15 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc PlaySaveRestoreSource::PhysicsFinalCheck */
-    std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> PlaySaveRestoreSource::PhysicsFinalCheck() const noexcept {
-        return physicsFence_;
+    Result<void> PlaySaveFinalCheck::ValidateAndArm() {
+        if (physics_) {
+            if (const auto armed = physics_->ValidateAndArm(); armed.HasError())
+                return armed;
+        }
+        return supplement_ ? supplement_->ValidateAndArm() : Result<void>::Success();
+    }
+
+    std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> PlaySaveRestoreSource::FinalCheck() const noexcept {
+        return finalCheck_;
     }
 }  // namespace Horo::Application::Internal

@@ -8,6 +8,7 @@
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/PerceptionDescriptorRegistry.h"
 #include "Horo/AI/PerceptionFiltering.h"
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Math/WorldCoordinate64.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -19,11 +20,15 @@
 #include <vector>
 
 namespace Horo::AI {
+    namespace Detail {
+        struct PerceptionGroupPublication;
+    }
+
     /** @brief Fixed hard ceilings for one scene publication and allocation-free candidate query. */
     struct PerceptionSpatialLimits final {
         static constexpr std::size_t Sources = 8192;
         static constexpr std::size_t Listeners = 2048;
-        static constexpr std::size_t SensesPerRecord = 16;
+        static constexpr std::size_t SensesPerRecord = AiControllerPerceptionEndpoints::MaximumSenses;
         static constexpr std::size_t CandidatesPerQuery = 128;
         static constexpr std::uint64_t RadiusMillimeters = 1'000'000;
     };
@@ -39,6 +44,7 @@ namespace Horo::AI {
         PerceptionTeamId team;                                                      /**< Gameplay-owned source team. */
         std::uint64_t listenerMask{~std::uint64_t{}};                               /**< Source disclosure to listener layers. */
         PerceptionGameplayVisibility visibility{PerceptionGameplayVisibility::Everyone};
+        CancellationToken ownerCancellation; /**< Optional exact gameplay-owner lifetime captured at publication. */
     };
 
     /** @brief Owner-supplied listener position and exact generation captured at the same safe point. */
@@ -49,6 +55,7 @@ namespace Horo::AI {
         std::size_t senseCount{};                                                   /**< Active non-empty prefix of senses. */
         PerceptionParticipantFilter filtering;                                      /**< Listener layers, source mask and team. */
         PerceptionListenerFilter admission;                                         /**< Typed affiliation and team admission. */
+        CancellationToken ownerCancellation;                                        /**< Optional exact gameplay-owner lifetime. */
     };
 
     /** @brief Affiliation test applied to a source's host-defined stable affiliation identity. */
@@ -90,6 +97,19 @@ namespace Horo::AI {
     /** @brief Immutable scene-generation snapshot borrowed by workers without any Scene pointer or callback. */
     class PerceptionSpatialSnapshot final {
     public:
+        /** @brief Frozen spatial input facts, borrowed for the lifetime of this snapshot. */
+        struct InputView final {
+            std::span<const PerceptionSpatialSource> sources;
+            std::span<const PerceptionSpatialListener> listeners;
+            const PerceptionFilteringPolicy &filtering;
+        };
+
+        /** @brief Borrows the exact input records and admission policy for diagnostics.
+         * @return Frozen source and listener records and the filtering policy used by this publication.
+         * @details Retain the snapshot while using the view. Inputs do not include provider outputs or mutable Scene data.
+         */
+        [[nodiscard]] InputView Inputs() const & noexcept;
+        InputView Inputs() const && = delete;
         /** @brief Returns the exact source scene incarnation. @return Non-zero runtime scene ID. */
         [[nodiscard]] Runtime::SceneRuntimeId Scene() const noexcept;
         /** @brief Returns the owner's non-zero safe-point publication revision. @return Revision value. */
@@ -98,6 +118,10 @@ namespace Horo::AI {
          * @return Shared permission state, without Scene/publisher ownership. Revoked before replacement or teardown.
          */
         [[nodiscard]] std::shared_ptr<const BlackboardValueAuthorization> ReadAuthorization() const noexcept;
+        /** @brief Returns read permission for detached observations under the current disclosure policy.
+         * @return Permission that survives position-only refreshes for the same live endpoints.
+         */
+        [[nodiscard]] std::shared_ptr<const BlackboardValueAuthorization> ReadPolicyAuthorization() const noexcept;
         /** @brief Returns the admitted source count. @return At most Sources. */
         [[nodiscard]] std::size_t SourceCount() const noexcept;
         /** @brief Returns the admitted listener count. @return At most Listeners. */
@@ -123,6 +147,7 @@ namespace Horo::AI {
 
     private:
         friend class PerceptionSpatialBroadphase;
+        friend struct Detail::PerceptionGroupPublication;
 
         struct Node final {
             std::array<std::int64_t, 3> minimum{};
@@ -141,8 +166,10 @@ namespace Horo::AI {
         std::uint64_t revision_{};
         PerceptionFilteringPolicy filtering_;
         std::shared_ptr<BlackboardValueAuthorization> authorization_{std::make_shared<BlackboardValueAuthorization>()};
+        std::shared_ptr<BlackboardValueAuthorization> policyAuthorization_;
         std::vector<PerceptionSpatialSource> sources_;
         std::vector<PerceptionSpatialListener> listeners_;
+        std::vector<std::size_t> sourceOrder_; /**< BVH partition order, independent of the entity-ordered source records. */
         std::vector<Node> nodes_;
     };
 
@@ -175,7 +202,22 @@ namespace Horo::AI {
         /** @brief Returns the latest successfully published snapshot. @return Shared immutable snapshot or null before publication. */
         [[nodiscard]] std::shared_ptr<const PerceptionSpatialSnapshot> Current() const noexcept;
 
+        /** @brief Borrows current perception only for the exact live Scene instance.
+         * @param scene Fresh owner-thread Scene view. @return Snapshot or null for a retired, foreign, or unpublished Scene.
+         */
+        [[nodiscard]] std::shared_ptr<const PerceptionSpatialSnapshot> CurrentFor(const Runtime::RuntimeSceneView &scene) const noexcept;
+
     private:
+        friend struct Detail::PerceptionGroupPublication;
+        /** @brief Validates and allocates a complete value snapshot, including admitted detached Scene memberships. */
+        [[nodiscard]] Result<std::shared_ptr<const PerceptionSpatialSnapshot>> Prepare(
+            const Runtime::RuntimeSceneView &scene, std::uint64_t revision, std::span<const PerceptionSpatialListener> listeners,
+            std::span<const PerceptionSpatialSource> sources, const PerceptionFilteringPolicy &filtering,
+            std::span<const Runtime::RuntimeEntityView> additions) const;
+        /** @brief Runs only after the owner fence validates the prepared revision. */
+        void PublishPrepared(std::shared_ptr<const PerceptionSpatialSnapshot> prepared,
+                             const Runtime::RuntimeSceneView &scene = {}) noexcept;
+        Runtime::RuntimeSceneView publicationScene_;
         std::shared_ptr<const PerceptionSpatialSnapshot> current_;
     };
 }  // namespace Horo::AI

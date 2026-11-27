@@ -44,9 +44,12 @@ namespace Horo::Render::AndroidVulkan::Testing {
         std::array<VkFence, 256> fences{};
         std::array<Kind, 256> kinds{};
         std::size_t fenceCount{};
-        bool maintenance{true}, acquireReady{true}, renderReady{true}, presentReady{true}, surfaceSupported{true}, failSwapchain{};
+        bool maintenance{true}, acquireReady{true}, renderReady{true}, presentReady{true}, surfaceSupported{true};
         std::size_t instanceCreates{}, deviceCreates{}, surfaceCreates{}, surfaceDestroys{}, chainDestroys{}, submits{}, presents{},
             releases{}, passes{}, acquisitions{}, chainCreates{}, commandBegins{};
+        VkExtent2D currentExtent{UINT32_MAX, UINT32_MAX};
+        VkExtent2D maximumExtent{2048, 2048};
+        VkResult capabilitiesResult{VK_SUCCESS}, swapchainResult{VK_SUCCESS};
         VkCompositeAlphaFlagsKHR supportedAlpha{VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR};
         VkCompositeAlphaFlagBitsKHR chosenAlpha{};
         float recordedClearAlpha{};
@@ -172,11 +175,13 @@ namespace Horo::Render::AndroidVulkan::Testing {
 
         /** @brief Supplies finite closed fake native capabilities. */
         static VkResult VKAPI_CALL Capabilities(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR *out) {
+            if (current->capabilitiesResult != VK_SUCCESS)
+                return current->capabilitiesResult;
             *out = {.minImageCount = 2,
                     .maxImageCount = 4,
-                    .currentExtent = {UINT32_MAX, UINT32_MAX},
+                    .currentExtent = current->currentExtent,
                     .minImageExtent = {1, 1},
-                    .maxImageExtent = {2048, 2048},
+                    .maxImageExtent = current->maximumExtent,
                     .maxImageArrayLayers = 1,
                     .currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
                     .supportedCompositeAlpha = current->supportedAlpha,
@@ -205,8 +210,8 @@ namespace Horo::Render::AndroidVulkan::Testing {
                                                VkSwapchainKHR *out) {
             ++current->chainCreates;
             current->chosenAlpha = info->compositeAlpha;
-            if (current->failSwapchain)
-                return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            if (current->swapchainResult != VK_SUCCESS)
+                return current->swapchainResult;
             *out = Issue<VkSwapchainKHR>();
             return VK_SUCCESS;
         }

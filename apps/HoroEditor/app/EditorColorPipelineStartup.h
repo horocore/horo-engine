@@ -12,6 +12,10 @@ namespace Horo::Editor {
      * @return Absolute known package root, absent when no installed feature exists, or original typed malformed-path failure. */
     [[nodiscard]] Result<std::optional<std::filesystem::path>> ResolveEditorColorPipelineRoot(
         const std::optional<std::filesystem::path> &explicitRoot, const std::filesystem::path &packagedAssets);
+    /** @brief Loads the explicit Vulkan manual package from its exact color/ directory. @param root Resolved package root.
+     * @return Owned verified manual output inputs or original typed decode error. */
+    [[nodiscard]] Result<EditorViewportColorInputs> LoadEditorVulkanManualColorInputs(const std::filesystem::path &root);
+
     /** @brief Loads exact read-only product generations before native frame admission. @param viewport Existing selected renderer.
      * @param root Explicit root containing color/ and exposure/. @param settings Exact authored exposure settings.
      * @return Success only after actual native programs/resources are admitted; unsupported backend remains explicit. */

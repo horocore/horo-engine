@@ -1,8 +1,8 @@
 #pragma once
 
 #include "Horo/Editor/Localization/LocalizedGui.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.h"
-#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserCards.h"
+#include "editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.h"
 
 struct ImVec2;
 
@@ -29,6 +29,8 @@ namespace Horo::Editor {
 
         /** @brief Releases every renderer-owned preview texture. */
         void Detach() noexcept;
+        /** @brief Selects a canonical path and clears filters that might hide the result. */
+        void Reveal(std::string_view absolutePath);
 
         /** @brief Draws the complete Assets tab content. */
         void Draw(const ImVec2 &contentOrigin, float contentWidth, const EditorWorkspaceViewModel &viewModel,

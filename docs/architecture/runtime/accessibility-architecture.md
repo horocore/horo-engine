@@ -188,6 +188,10 @@ struct ClosedCaptionSettings {
   not promise lossless captions under overload. UI layout is bounded per frame.
 - `captionEventCount` identifies the populated prefix and cannot exceed capacity.
   Captions respect display safe areas and remain eligible when audio is muted.
+- Speaker-following captions retain their horizontal anchors inside the safe
+  area and select the nearest unoccupied vertical gap. Cues without a speaker
+  position prefer the bottom center. A cue is unplaced when its text cannot
+  fit at that horizontal position at its measured size.
 
 ---
 
@@ -217,6 +221,18 @@ Main, UI and worker consumers can read their captured view concurrently without
 cross-thread dispatch or waits; acquisition/replacement happens at each consumer's
 owned frame/tick boundary. Render independently captures the settings for its pass.
 The query reports desired preferences, not whether a GPU pass has completed.
+
+Editor Play retains the last valid color projection from the process configuration
+and passes it to native behaviors through `BehaviorContext::ColorAccessibility()`
+during fixed and presentation dispatch. The borrowed query expires with the
+callback. A Lua behavior that sets `uses_color_accessibility = true` receives a
+detached `ctx.color_accessibility` table when its host supplies a view. Its
+`mode` is the numeric `ColorblindMode` value, `severity` is normalized, and
+`high_contrast` is a boolean. Callbacks outside those dispatches and callbacks
+with no supplied view have no table.
+Reading these preferences grants no simulation or rendering authority.
+The new callback query changes the native adapter vtable. Rebuild native modules
+against gameplay SDK 34 before loading them in this host.
 
 ```cpp
 enum class ColorblindMode : uint8_t {
@@ -268,6 +284,10 @@ struct VisualAccessibilitySettings {
   selected using the snapshot-backed `IColorAccessibilityQuery`.
 - Motion and flash suppression settings provide explicit hooks in camera and particle
   systems to clamp or skip strobe effects.
+- The Camera owner samples a cosmetic world-space translation at frame commit.
+  The host projects the scale from its committed visual-safety snapshot. Translation
+  affects only the copied render camera and look target, including both cross-fade
+  views, while preserving scene transforms, the chosen camera and the cut timeline.
 
 ---
 
@@ -486,8 +506,20 @@ cross-domain notification rather than state storage.
   compares its revision to the retained one, and captures updated values when
   needed. Notifications only hint that a revision changed; coalescing, loss, late
   subscription or stale/out-of-order notifications cannot prevent refresh.
+- The Editor composition root registers the gameplay-owned preference descriptors
+  in the process configuration schema. Numeric settings use the same bounds at
+  configuration ingress and at tick capture. The Editor frame owner samples the
+  committed configuration before queued bus dispatch, so a prepared but
+  unpublished setting cannot emit a hint.
 - One snapshot governs the entire tick. No settings callback mutates gameplay
   mid-tick. All local consumers share the tick's captured revision.
+- Editor Play captures the committed revision before Decision or gameplay
+  callbacks run. Native behavior callbacks can copy desired settings via
+  `BehaviorContext::AssistPreferences()` during fixed dispatch. Presentation
+  callbacks and hosts without the configuration authority receive an empty value.
+  Lua exposes the same values as a detached third argument to
+  `on_fixed_update(ctx, delta, assists)` when the host supplies them and the
+  behavior declares `uses_assist_preferences = true`.
 - Desired preferences persist in user settings. Applying an assist still respects
   game/server authority and supported capabilities; accessibility labeling cannot
   bypass configuration or ADR-018 command authorization.
@@ -615,6 +647,21 @@ migrates them once before validation (an explicitly supplied new key wins).
 2. Updates commit a new monotonic `ConfigurationSnapshot`.
 3. Subsystems capture snapshots at frame boundaries (`BeginFrame` / tick start), ensuring
    atomic, tear-free application.
+
+The desktop editor applies high contrast and reduced motion before beginning its
+GUI frame. It composes the captured global UI scale with the editor appearance
+percentage and logical display scale. The editor theme derives both its native
+ImGui colours and its design tokens from one contrast palette. Applying or
+reloading a theme retains the user preferences. Turning contrast off restores the
+selected theme's authored colours.
+The extension theme frame carries the same contrast, effective motion and
+flash-suppression preferences as the host.
+
+The Runtime UI owner captures the same flash preference before frame work.
+An explicitly tagged visual-flash timeline keeps its clock, semantic marker
+order and completion. With suppression active, its style tracks are omitted
+and the ordinary cascade supplies the display values. Flash tracks must use
+paint-only properties, so suppression leaves layout and targeting intact.
 
 ---
 

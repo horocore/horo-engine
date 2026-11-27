@@ -2,10 +2,13 @@
 #include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
+#include <limits>
+#include <new>
+
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreatePipeline */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreatePipeline(Render::RenderFrontend &frontend, ShaderResources &program,
-                                                                                const std::uint32_t frames) {
+                                                                                const std::uint32_t frames, bool displayLinearOverlay) {
         using namespace Render;
         const auto encoded = EncodeReflectedShaderArtifact(program.metadata);
         if (encoded.HasError())
@@ -22,6 +25,8 @@ namespace Horo::Editor {
         program.pipeline = pipeline.Value();
         auto overlayState = state;
         overlayState.depthWrite = false;
+        if (displayLinearOverlay)
+            overlayState.colorFormat = RenderTextureFormat::Rgba16Float;
         const auto overlay = CreatePipelineState(frontend, program, EditorVulkanViewportShaderManifest(), overlayState);
         if (overlay.HasError())
             return Result<void>::Failure(overlay.ErrorValue());
@@ -33,9 +38,125 @@ namespace Horo::Editor {
         return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateSceneLinearPipeline */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateSceneLinearPipeline(Render::RenderFrontend &frontend,
+                                                                                           ShaderResources &program,
+                                                                                           const std::uint32_t frames) {
+        using namespace Render;
+        const auto metadata = EncodeReflectedShaderArtifact(program.metadata);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        const auto checked = LoadEditorVulkanSceneLinearCook(program.payload, metadata.Value());
+        if (checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        if (const auto stages = CreateProgramStages(frontend, program, "PSSceneLinear"); stages.HasError())
+            return stages;
+        const auto pipeline =
+            CreatePipelineState(frontend, program, EditorVulkanSceneLinearShaderManifest(), EditorVulkanSceneLinearPipelineState());
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        program.pipeline = pipeline.Value();
+        const auto sampler = frontend.CreateSampler({});
+        if (sampler.HasError())
+            return Result<void>::Failure(sampler.ErrorValue());
+        program.shadowSampler = sampler.Value().handle;
+        return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareDraws */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareDraws(const std::size_t count) {
+        const auto previous = draws.front().size();
+        if (count <= previous)
+            return Result<void>::Success();
+        if (count > Render::RenderMaterialPass::MaximumDraws)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene, "Temporal guide draw capacity exceeded."));
+        try {
+            for (std::uint32_t slot = 0; slot < owner.device_.frames; ++slot) {
+                if (const auto grown = GrowFrame(slot, count); grown.HasError()) {
+                    RetireDrawsAfter(previous);
+                    return grown;
+                }
+            }
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            RetireDrawsAfter(previous);
+            return Result<void>::Failure(
+                MakeError(RendererErrors::ViewportGeometryCreationFailed, "Unable to allocate viewport temporal guide draw slots."));
+        }
+    }
+
+    /** @brief Creates both material bindings for each new draw in one buffered frame. */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::GrowFrame(const std::uint32_t slot, const std::size_t count) {
+        auto &frame = draws[slot];
+        const auto start = frame.size();
+        frame.resize(count);
+        for (auto index = start; index < count; ++index) {
+            const auto identity = slot * Render::RenderMaterialPass::MaximumDraws + index + 1;
+            auto &draw = frame[index];
+            if (const auto depth =
+                    ProgramResources::CreateUniformSlot(owner.frontend_, linearDepth, draw.linearDepth, identity, linearDepth.pipeline);
+                depth.HasError())
+                return depth;
+            if (const auto vectors = ProgramResources::CreateUniformSlot(owner.frontend_, motion, draw.motion, identity, motion.pipeline);
+                vectors.HasError())
+                return vectors;
+            if (prepareDisplayDepth) {
+                const auto displayIdentity = identity + owner.device_.frames * Render::RenderMaterialPass::MaximumDraws;
+                const auto overlay = ProgramResources::CreateUniformSlot(owner.frontend_, linearDepth, draw.displayDepth, displayIdentity,
+                                                                         linearDepth.pipeline);
+                if (overlay.HasError())
+                    return overlay;
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @brief Retires only the incomplete suffix when a draw-capacity increase fails. */
+    void EditorViewportRendererVulkan::TemporalGuidePrograms::RetireDrawsAfter(const std::size_t keep) noexcept {
+        const auto retire = [this](const ShaderResources &program, DrawSlot &draw) {
+            if (draw.material)
+                static_cast<void>(program.materials->Release(draw.material->Id()));
+            owner.RetireDraw(draw);
+        };
+        for (auto &frame : draws)
+            while (frame.size() > keep) {
+                retire(motion, frame.back().motion);
+                retire(linearDepth, frame.back().linearDepth);
+                retire(linearDepth, frame.back().displayDepth);
+                frame.pop_back();
+            }
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateTemporalGuidePipeline */
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateTemporalGuidePipeline(Render::RenderFrontend &frontend,
+                                                                                             ShaderResources &program,
+                                                                                             const EditorVulkanTemporalInput input,
+                                                                                             const TemporalGuideCook &cook,
+                                                                                             const std::uint32_t frames) {
+        auto metadata = ValidateEditorVulkanTemporalInputCook(input, cook.payload, cook.reflection);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        const auto state = EditorVulkanTemporalInputPipelineState(input);
+        if (state.HasError())
+            return Result<void>::Failure(state.ErrorValue());
+        const auto manifest = EditorVulkanTemporalInputShaderManifest(input);
+        program.payload.assign(cook.payload.begin(), cook.payload.end());
+        program.metadata = std::move(metadata).Value();
+        if (const auto stages =
+                CreateProgramStages(frontend, program, manifest.entryPoints[1].name.c_str(), manifest.entryPoints[0].name.c_str());
+            stages.HasError())
+            return stages;
+        const auto pipeline = CreatePipelineState(frontend, program, manifest, state.Value());
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        program.pipeline = pipeline.Value();
+        return CreateMaterialLayout(frontend, program, program.metadata.reflection, frames);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateProgramStages */
     Result<void> EditorViewportRendererVulkan::ProgramResources::CreateProgramStages(Render::RenderFrontend &frontend,
-                                                                                     ShaderResources &program) {
+                                                                                     ShaderResources &program, const char *fragmentEntry,
+                                                                                     const char *vertexEntry) {
         using namespace Render;
         const auto target = EditorVulkanViewportShaderTarget();
         const auto &reflection = program.metadata.reflection;
@@ -43,11 +164,11 @@ namespace Horo::Editor {
             return frontend.CreateShaderModule({target, kind, entry, program.metadata.cookedArtifactKey, reflection.interfaceCompatibility},
                                                program.payload);
         };
-        const auto vertex = stage(ShaderStage::Vertex, "VSMain");
+        const auto vertex = stage(ShaderStage::Vertex, vertexEntry);
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());
         program.vertex = vertex.Value().handle;
-        const auto fragment = stage(ShaderStage::Fragment, "PSMain");
+        const auto fragment = stage(ShaderStage::Fragment, fragmentEntry);
         if (fragment.HasError())
             return Result<void>::Failure(fragment.ErrorValue());
         program.fragment = fragment.Value().handle;
@@ -137,11 +258,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot */
-    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot(Render::RenderFrontend &frontend,
-                                                                                   const ShaderResources &program, DrawSlot &draw,
-                                                                                   const std::uint64_t material,
-                                                                                   const Render::RenderPipelineHandle pipeline,
-                                                                                   const Render::RenderTextureViewHandle atlas) {
+    Result<void> EditorViewportRendererVulkan::ProgramResources::CreateUniformSlot(
+        Render::RenderFrontend &frontend, const ShaderResources &program, DrawSlot &draw, const std::uint64_t material,
+        const Render::RenderPipelineHandle pipeline, const Render::RenderTextureViewHandle atlas,
+        std::span<const Render::MaterialResourceBinding> sampled) {
         using namespace Render;
         const std::array<std::byte, MaximumUniformBytes> zero{};
         const auto buffer = frontend.CreateBuffer(RenderMemoryScopes::ViewportResources,
@@ -161,18 +281,20 @@ namespace Horo::Editor {
         draw.materialIdentity = material;
         if (program.shadowSampler.IsValid() && !atlas.IsValid())
             return Result<void>::Success();
-        return BindUniformSlot(program, draw, pipeline, atlas);
+        return BindUniformSlot(program, draw, pipeline, atlas, sampled);
     }
 
     Result<void> EditorViewportRendererVulkan::ProgramResources::BindUniformSlot(const ShaderResources &program, DrawSlot &draw,
                                                                                  Render::RenderPipelineHandle pipeline,
-                                                                                 Render::RenderTextureViewHandle atlas) {
+                                                                                 Render::RenderTextureViewHandle atlas,
+                                                                                 std::span<const Render::MaterialResourceBinding> sampled) {
         using namespace Render;
         std::vector<MaterialResourceBinding> resources{{{1}, 0, MaterialBufferBinding{draw.buffer, 0, program.uniformBytes}}};
         if (program.shadowSampler.IsValid()) {
             resources.push_back({{2}, 0, atlas});
             resources.push_back({{3}, 0, program.shadowSampler});
         }
+        resources.insert(resources.end(), sampled.begin(), sampled.end());
         const auto published = program.materials->Publish({.material = {draw.materialIdentity},
                                                            .revision = ++draw.materialRevision,
                                                            .pipeline = pipeline,
@@ -189,22 +311,289 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc IEditorViewportRenderer::EnableCameraCrossFade */
+    Result<void> EditorViewportRendererVulkan::EnableCameraCrossFade() {
+        if (crossFadeSourceSlots_)
+            return Result<void>::Success();
+        const auto &profile = resources_.RequestedDirectionalShadowProfile();
+        const auto shadows = profile.enabled ? profile.cascadeCount : 0;
+        if (!initialized_ || !crossFadeCook_ || color_ || recordedEver_ || !frontend_.Capabilities().supportsMaterialRasterGraph ||
+            shadows > CrossFadeShadowPasses || crossFadeGeneration_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        if (const auto boundary = Render::Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); boundary.HasError())
+            return Result<void>::Failure(boundary.ErrorValue());
+        CameraCrossFadeProgram program;
+        program.shader.payload = crossFadeCook_->payload;
+        program.shader.metadata = crossFadeCook_->metadata;
+        auto slots = std::make_unique<FrameSlots>();
+        if (const auto prepared = PrepareCameraCrossFadeProgram(program); prepared.HasError()) {
+            RetireCameraCrossFadeProgram(program);
+            return prepared;
+        }
+        if (const auto enabled = resources_.EnableCameraCrossFade(EditorViewportResources::CameraCrossFadeOutput::CopySource);
+            enabled.HasError()) {
+            RetireCameraCrossFadeProgram(program);
+            return enabled;
+        }
+        crossFadeProgram_ = std::move(program);
+        crossFadeSourceSlots_ = std::move(slots);
+        crossFadeShadowBudget_ = shadows;
+        ++crossFadeGeneration_;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeProgram */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeProgram(CameraCrossFadeProgram &program) {
+        using namespace Render;
+        auto &shader = program.shader;
+        const auto encoded = EncodeReflectedShaderArtifact(shader.metadata);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        if (const auto checked = LoadEditorVulkanCameraCrossFadeCook(shader.payload, encoded.Value()); checked.HasError())
+            return Result<void>::Failure(checked.ErrorValue());
+        if (const auto stages = ProgramResources::CreateProgramStages(frontend_, shader); stages.HasError())
+            return stages;
+        const RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                                .blend = RenderBlendMode::Alpha,
+                                                .depthTest = false,
+                                                .depthWrite = false,
+                                                .depthFormat = std::nullopt};
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, shader, EditorVulkanCameraCrossFadeShaderManifest(), state);
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        shader.pipeline = pipeline.Value();
+        if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, shader, shader.metadata.reflection, device_.frames);
+            layout.HasError())
+            return layout;
+        return CreateFullscreenTriangle(program.triangle);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::CreateFullscreenTriangle */
+    Result<void> EditorViewportRendererVulkan::CreateFullscreenTriangle(FullscreenTriangle &triangle) {
+        using namespace Render;
+        using enum RenderBufferUsage;
+        constexpr std::array<MeshVertex, 3> vertices{MeshVertex{{-1, -1, 0}}, MeshVertex{{3, -1, 0}}, MeshVertex{{-1, 3, 0}}};
+        constexpr std::array<std::uint32_t, 3> indices{0, 1, 2};
+        const auto vertex =
+            frontend_.CreateBuffer({sizeof(vertices), Vertex, RenderBufferAccess::HostVisible}, std::as_bytes(std::span{vertices}));
+        if (vertex.HasError())
+            return Result<void>::Failure(vertex.ErrorValue());
+        triangle.vertices = vertex.Value().handle;
+        const auto index =
+            frontend_.CreateBuffer({sizeof(indices), Index, RenderBufferAccess::HostVisible}, std::as_bytes(std::span{indices}));
+        if (index.HasError())
+            return Result<void>::Failure(index.ErrorValue());
+        triangle.indices = index.Value().handle;
+        if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
+            return Result<void>::Failure(processed.ErrorValue());
+        const auto mesh = frontend_.CreateMesh({.vertexBuffer = triangle.vertices,
+                                                .indexBuffer = triangle.indices,
+                                                .vertexStride = sizeof(MeshVertex),
+                                                .vertexCount = 3,
+                                                .indexCount = 3,
+                                                .localBounds = {{-1, -1, 0}, {3, 3, 0}}});
+        if (mesh.HasError())
+            return Result<void>::Failure(mesh.ErrorValue());
+        triangle.mesh = mesh.Value().handle;
+        if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
+            return Result<void>::Failure(processed.ErrorValue());
+        return frontend_.ResourceOperationResult(mesh.Value().operation);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireFullscreenTriangle */
+    void EditorViewportRendererVulkan::RetireFullscreenTriangle(FullscreenTriangle &triangle) noexcept {
+        if (triangle.mesh.IsValid())
+            static_cast<void>(frontend_.ReleaseMesh(triangle.mesh));
+        for (const auto buffer : {triangle.vertices, triangle.indices})
+            if (buffer.IsValid())
+                static_cast<void>(frontend_.ReleaseBuffer(buffer));
+        triangle = {};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrComfortProgram */
+    Result<void> EditorViewportRendererVulkan::PrepareXrComfortProgram(EditorVulkanXrComfortCook cooked) {
+        if (owner_ != std::this_thread::get_id() || !initialized_ || !xrShader_.pipeline.IsValid() || xrGraph_ || recordedEver_ ||
+            xrComfort_.shader.pipeline.IsValid() || !frontend_.Capabilities().supportsMaterialRasterGraph)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        const auto encoded = Render::EncodeReflectedShaderArtifact(cooked.metadata);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        auto validated = LoadEditorVulkanXrComfortCook(cooked.payload, encoded.Value());
+        if (validated.HasError())
+            return Result<void>::Failure(validated.ErrorValue());
+        auto program = std::move(validated).Value();
+        XrComfortProgram candidate;
+        candidate.shader.payload = std::move(program.payload);
+        candidate.shader.metadata = std::move(program.metadata);
+        const auto ready = CreateXrComfortResources(candidate);
+        if (ready.HasError()) {
+            RetireXrComfortProgram(candidate);
+            return ready;
+        }
+        xrComfort_ = std::move(candidate);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::CreateXrComfortResources */
+    Result<void> EditorViewportRendererVulkan::CreateXrComfortResources(XrComfortProgram &program) {
+        using namespace Render;
+        auto &shader = program.shader;
+        if (const auto stages = ProgramResources::CreateProgramStages(frontend_, shader); stages.HasError())
+            return stages;
+        constexpr RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                                    .blend = RenderBlendMode::Alpha,
+                                                    .depthTest = false,
+                                                    .depthWrite = false,
+                                                    .depthFormat = std::nullopt};
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, shader, EditorVulkanXrComfortShaderManifest(), state);
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        shader.pipeline = pipeline.Value();
+        if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, shader, shader.metadata.reflection, device_.frames);
+            layout.HasError())
+            return layout;
+        if (const auto triangle = CreateFullscreenTriangle(program.triangle); triangle.HasError())
+            return triangle;
+        for (std::size_t index = 0; index < program.eyes.size(); ++index) {
+            if (const auto slot = ProgramResources::CreateUniformSlot(frontend_, shader, program.eyes[index], index + 1, shader.pipeline);
+                slot.HasError())
+                return slot;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireXrComfortProgram */
+    void EditorViewportRendererVulkan::RetireXrComfortProgram(XrComfortProgram &program) noexcept {
+        for (auto &eye : program.eyes)
+            RetireDraw(eye);
+        RetireFullscreenTriangle(program.triangle);
+        RetireProgram(program.shader, {});
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::BindCameraCrossFadeSource */
+    Result<void> EditorViewportRendererVulkan::BindCameraCrossFadeSource() {
+        const auto view = resources_.CameraCrossFadeColorView();
+        if (!crossFadeSourceSlots_ || !view.IsValid() || crossFadeProgram_.boundSource == view)
+            return Result<void>::Success();
+        const auto &shader = crossFadeProgram_.shader;
+        const std::array sampled{Render::MaterialResourceBinding{{2}, 0, view}};
+        for (std::uint32_t slot = 0; slot < device_.frames; ++slot) {
+            auto &draw = crossFadeProgram_.draws[slot];
+            const auto bound = draw.buffer.IsValid()
+                                   ? ProgramResources::BindUniformSlot(shader, draw, shader.pipeline, {}, sampled)
+                                   : ProgramResources::CreateUniformSlot(frontend_, shader, draw, slot + 1, shader.pipeline, {}, sampled);
+            if (bound.HasError())
+                return bound;
+        }
+        crossFadeProgram_.boundSource = view;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeScene */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeScene(const std::size_t draws) {
+        if (!crossFadeSourceSlots_ || !crossFadeProgram_.boundSource.IsValid())
+            return Result<void>::Success();
+        crossFadeSceneReady_ = draws <= crossFadeDrawCount_;
+        if (crossFadeSceneReady_) {
+            declinedCrossFadeDrawCount_.reset();
+            return Result<void>::Success();
+        }
+        if (declinedCrossFadeDrawCount_ == draws || draws > Render::RenderMaterialPass::MaximumDraws)
+            return Result<void>::Success();
+        const auto growth = draws - crossFadeDrawCount_;
+        auto &slots = *crossFadeSourceSlots_;
+        if (const auto prepared = PrepareCameraCrossFadeSlots(slots, shader_, shadowShader_, crossFadeDrawCount_, growth);
+            prepared.HasError()) {
+            RetireCameraCrossFadeSlots(slots, crossFadeDrawCount_, growth, &shader_, &shadowShader_);
+            if (EditorViewportResources::IsSubmissionPinCapacityFailure(prepared.ErrorValue())) {
+                declinedCrossFadeDrawCount_ = draws;
+                return Result<void>::Success();
+            }
+            return prepared;
+        }
+        crossFadeDrawCount_ = draws;
+        declinedCrossFadeDrawCount_.reset();
+        crossFadeSceneReady_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireCameraCrossFadeProgram */
+    void EditorViewportRendererVulkan::RetireCameraCrossFadeProgram(CameraCrossFadeProgram &program) noexcept {
+        for (auto &draw : program.draws)
+            RetireDraw(draw);
+        RetireFullscreenTriangle(program.triangle);
+        RetireProgram(program.shader, {});
+        program = {};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareCameraCrossFadeSlots */
+    Result<void> EditorViewportRendererVulkan::PrepareCameraCrossFadeSlots(std::span<FrameSlot> slots, const ShaderResources &scene,
+                                                                           const ShaderResources &shadow, const std::size_t first,
+                                                                           const std::size_t count) {
+        using Render::MaximumDirectionalShadowCascades;
+        constexpr auto draws = Render::RenderMaterialPass::MaximumDraws;
+        const auto atlas = resources_.ShadowTextureView();
+        for (std::uint32_t frame = 0; frame < device_.frames; ++frame)
+            for (std::size_t index = first; index < first + count; ++index) {
+                auto &slot = slots[frame];
+                const auto forward = (device_.frames + frame) * (draws + 1) + index + 1;
+                if (const auto source =
+                        ProgramResources::CreateUniformSlot(frontend_, scene, slot.draws[index], forward, scene.pipeline, atlas);
+                    source.HasError())
+                    return source;
+                for (std::uint32_t cascade = 0; cascade < crossFadeShadowBudget_; ++cascade) {
+                    const auto depth = ((device_.frames + frame) * MaximumDirectionalShadowCascades + cascade) * draws + index + 1;
+                    if (const auto source =
+                            ProgramResources::CreateUniformSlot(frontend_, shadow, slot.shadows[cascade][index], depth, shadow.pipeline);
+                        source.HasError())
+                        return source;
+                }
+            }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireCameraCrossFadeSlots */
+    void EditorViewportRendererVulkan::RetireCameraCrossFadeSlots(std::span<FrameSlot> slots, const std::size_t first,
+                                                                  const std::size_t count, const ShaderResources *scene,
+                                                                  const ShaderResources *shadow) noexcept {
+        const auto release = [&](DrawSlot &draw, const ShaderResources *owner) {
+            if (owner && owner->materials && draw.material)
+                static_cast<void>(owner->materials->Release(draw.material->Id()));
+            RetireDraw(draw);
+        };
+        for (auto &slot : slots) {
+            for (auto &draw : std::span{slot.draws}.subspan(first, count))
+                release(draw, scene);
+            for (auto &cascade : slot.shadows)
+                for (auto &draw : std::span{cascade}.subspan(first, count))
+                    release(draw, shadow);
+        }
+    }
+
     /** @copydoc EditorViewportRendererVulkan::PrepareXrProgram */
-    Result<void> EditorViewportRendererVulkan::PrepareXrProgram(EditorVulkanMultiviewCook cooked) {
+    Result<void> EditorViewportRendererVulkan::PrepareXrProgram(EditorVulkanMultiviewCook cooked,
+                                                                const EditorVulkanMultiviewProgram program) {
         using namespace Render;
         if (owner_ != std::this_thread::get_id() || !initialized_ || recordedEver_ || xrShader_.vertex.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         const auto encoded = EncodeReflectedShaderArtifact(cooked.metadata);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
-        if (const auto admitted = LoadEditorVulkanMultiviewCook(cooked.payload, encoded.Value()); admitted.HasError())
+        using enum EditorVulkanMultiviewProgram;
+        if (program != Projection && program != EnvironmentLighting)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        const bool environment = program == EnvironmentLighting;
+        const auto admitted = environment ? LoadEditorVulkanMultiviewEnvironmentCook(cooked.payload, encoded.Value())
+                                          : LoadEditorVulkanMultiviewCook(cooked.payload, encoded.Value());
+        if (admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         xrShader_.payload = std::move(cooked.payload);
         xrShader_.metadata = std::move(cooked.metadata);
         if (auto stages = ProgramResources::CreateProgramStages(frontend_, xrShader_); stages.HasError())
             return stages;
         const RenderGraphicsPipelineState state{.cull = RenderCullMode::None, .depthFormat = RenderTextureFormat::Depth32Float};
-        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, xrShader_, EditorVulkanMultiviewShaderManifest(), state);
+        const auto manifest = environment ? EditorVulkanMultiviewEnvironmentShaderManifest() : EditorVulkanMultiviewShaderManifest();
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, xrShader_, manifest, state);
         if (pipeline.HasError())
             return Result<void>::Failure(pipeline.ErrorValue());
         xrShader_.pipeline = pipeline.Value();
@@ -218,6 +607,109 @@ namespace Horo::Editor {
                                                             slot * RenderMaterialPass::MaximumDraws + index + 1, xrShader_.pipeline);
                     prepared.HasError())
                     return prepared;
+        xrEnvironmentLighting_ = environment;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::StageXrMotionProgram */
+    void EditorViewportRendererVulkan::StageXrMotionProgram(EditorVulkanMultiviewCook cooked) noexcept {
+        if (owner_ == std::this_thread::get_id() && initialized_ && !recordedEver_ && !xrMotionCook_)
+            xrMotionCook_.emplace(std::move(cooked));
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::StageXrCoverageProgram */
+    void EditorViewportRendererVulkan::StageXrCoverageProgram(EditorVulkanMultiviewCook cooked) noexcept {
+        if (owner_ == std::this_thread::get_id() && initialized_ && !recordedEver_ && !xrCoverageCook_)
+            xrCoverageCook_.emplace(std::move(cooked));
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrCoveragePipeline */
+    Result<void> EditorViewportRendererVulkan::PrepareXrCoveragePipeline() {
+        using namespace Render;
+        if (xrCoverageShader_.pipeline.IsValid())
+            return Result<void>::Success();
+        const auto metadata = EncodeReflectedShaderArtifact(xrCoverageCook_->metadata);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        auto admitted = LoadEditorVulkanMultiviewCoverageCook(xrCoverageCook_->payload, metadata.Value());
+        if (admitted.HasError())
+            return Result<void>::Failure(admitted.ErrorValue());
+        auto cooked = std::move(admitted).Value();
+        ShaderResources candidate{.payload = std::move(cooked.payload), .metadata = std::move(cooked.metadata)};
+        const auto realize = [&]() -> Result<void> {
+            if (auto stages = ProgramResources::CreateProgramStages(frontend_, candidate, "PSCoverage", "VSCoverage"); stages.HasError())
+                return stages;
+            const RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                                    .colorFormat = RenderTextureFormat::R32Float,
+                                                    .depthFormat = RenderTextureFormat::Depth32Float};
+            const auto pipeline =
+                ProgramResources::CreatePipelineState(frontend_, candidate, EditorVulkanMultiviewCoverageShaderManifest(), state);
+            if (pipeline.HasError())
+                return Result<void>::Failure(pipeline.ErrorValue());
+            candidate.pipeline = pipeline.Value();
+            return ProgramResources::CreateMaterialLayout(frontend_, candidate, candidate.metadata.reflection, device_.frames);
+        };
+        if (auto prepared = realize(); prepared.HasError()) {
+            RetireProgram(candidate, {});
+            return prepared;
+        }
+        xrCoverageShader_ = std::move(candidate);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrMotionPipeline */
+    Result<bool> EditorViewportRendererVulkan::PrepareXrMotionPipeline(const Render::RenderTextureFormat motion,
+                                                                       const Render::RenderTextureFormat depth) {
+        using namespace Render;
+        using Outcome = Result<bool>;
+        if (!xrMotionCook_)
+            return Outcome::Success(false);
+        if (const auto device = BorrowXrDevice(); device.HasError())
+            return Outcome::Failure(device.ErrorValue());
+        using enum RenderTextureFormat;
+        if (xrGraph_ || (motion != Rgba16Float && motion != Rgba32Float) || (depth != Depth16Unorm && depth != Depth32Float))
+            return Outcome::Failure(MakeError(RendererErrors::ViewportShaderContractInvalid));
+        const auto formats = std::pair{motion, depth};
+        if (xrMotionFormats_ == formats && xrMotionShader_.pipeline.IsValid() && xrMotionShader_.materials)
+            return Outcome::Success(true);
+
+        const auto metadata = EncodeReflectedShaderArtifact(xrMotionCook_->metadata);
+        if (metadata.HasError())
+            return Outcome::Failure(metadata.ErrorValue());
+        const auto admitted = LoadEditorVulkanMultiviewMotionCook(xrMotionCook_->payload, metadata.Value());
+        if (admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        ShaderResources candidate{.payload = std::move(admitted).Value().payload, .metadata = xrMotionCook_->metadata};
+        std::array<DrawSlot, RenderMaterialPass::MaximumDraws> slots;
+        const auto retireSlots = [&] {
+            for (auto &draw : slots)
+                RetireDraw(draw);
+        };
+        const auto retireFailure = [&](const Error &error) {
+            retireSlots();
+            RetireProgram(candidate, {});
+            return Outcome::Failure(error);
+        };
+        if (auto stages = ProgramResources::CreateProgramStages(frontend_, candidate); stages.HasError())
+            return retireFailure(stages.ErrorValue());
+        const RenderGraphicsPipelineState state{.cull = RenderCullMode::None, .colorFormat = motion, .depthFormat = depth};
+        const auto pipeline =
+            ProgramResources::CreatePipelineState(frontend_, candidate, EditorVulkanMultiviewMotionShaderManifest(), state);
+        if (pipeline.HasError())
+            return retireFailure(pipeline.ErrorValue());
+        candidate.pipeline = pipeline.Value();
+        if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, candidate, candidate.metadata.reflection, device_.frames);
+            layout.HasError())
+            return retireFailure(layout.ErrorValue());
+        for (std::size_t index = 0; index < slots.size(); ++index)
+            if (auto allocated = ProgramResources::CreateUniformSlot(frontend_, candidate, slots[index], index + 1, candidate.pipeline);
+                allocated.HasError())
+                return retireFailure(allocated.ErrorValue());
+        std::swap(xrMotionShader_, candidate);
+        xrMotionDrawSlots_.swap(slots);
+        xrMotionFormats_ = formats;
+        retireSlots();
+        RetireProgram(candidate, {});
+        return Outcome::Success(true);
     }
 }  // namespace Horo::Editor

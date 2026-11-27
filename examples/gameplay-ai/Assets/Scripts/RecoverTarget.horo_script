@@ -1,0 +1,38 @@
+local running = 1
+local succeeded = 2
+local failed = 3
+
+local function outcome(self, context)
+    if context.blackboard["1"] then
+        return failed
+    end
+    if self.remaining == 0 then
+        return succeeded
+    end
+    return running
+end
+
+local function reset(self)
+    self.remaining = nil
+end
+
+return {
+    role = "task",
+    requirements = {{key = "1", kind = 0}},
+    properties = {{id = "1", kind = 1, value = 3}},
+
+    start = function(self, context)
+        local ticks = context.properties["1"]
+        assert(ticks >= 1 and ticks <= 600, "Recovery ticks must be between 1 and 600")
+        self.remaining = ticks
+        return outcome(self, context)
+    end,
+
+    resume = function(self, context)
+        self.remaining = self.remaining - 1
+        return outcome(self, context)
+    end,
+
+    abort = reset,
+    cleanup = reset,
+}

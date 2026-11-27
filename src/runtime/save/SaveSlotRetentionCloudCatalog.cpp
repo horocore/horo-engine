@@ -46,41 +46,78 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
                 object.revision = DecodeBytes(value.at(1));
             return object;
         }
+
+        /** @brief Encodes one generation identically in selected and retired cloud evidence. */
+        Json EncodeGeneration(const SaveCloudGenerationRecord &record) {
+            Json object = nullptr;
+            if (record.object)
+                object = Json::array(
+                    {EncodeBytes(record.object->key), record.object->revision ? EncodeBytes(*record.object->revision) : Json(nullptr)});
+            return Json::array({record.slot.ToString(), record.generation.ToString(), FormatSha256(record.archive.value),
+                                static_cast<std::uint8_t>(record.state), std::move(object),
+                                record.lastConfirmed ? Json(record.lastConfirmed->ToString()) : Json(nullptr)});
+        }
+
+        /** @brief Decodes one bounded generation tuple, optionally preceded by an outer scope. */
+        SaveCloudGenerationRecord DecodeGeneration(const Json &value, const std::size_t offset) {
+            if (!value.is_array() || value.size() != offset + 6 || !value.at(offset + 3).is_number_unsigned() ||
+                value.at(offset + 3).get<std::uint64_t>() > static_cast<std::uint8_t>(SaveCloudGenerationState::Failed))
+                throw std::invalid_argument("Invalid cloud generation tuple");
+            SaveCloudGenerationRecord record{.slot = Checked(SaveGameSlotId::Parse(value.at(offset).get<std::string>())),
+                                             .generation = Checked(SlotGenerationId::Parse(value.at(offset + 1).get<std::string>())),
+                                             .archive = {Checked(ParseSha256(value.at(offset + 2).get<std::string>()))},
+                                             .state = static_cast<SaveCloudGenerationState>(value.at(offset + 3).get<std::uint8_t>()),
+                                             .object = DecodeObject(value.at(offset + 4))};
+            if (!value.at(offset + 5).is_null())
+                record.lastConfirmed = Checked(SaveCloudMutationId::Parse(value.at(offset + 5).get<std::string>()));
+            return record;
+        }
     }  // namespace
 
     /** @copydoc EncodeRetentionCloud */
     nlohmann::json EncodeRetentionCloud(const std::optional<SaveSlotRetentionCloudDeletion> &cloud) {
         if (!cloud)
             return nullptr;
-        const auto &record = cloud->generation;
-        Json object = nullptr;
-        if (record.object)
-            object = Json::array(
-                {EncodeBytes(record.object->key), record.object->revision ? EncodeBytes(*record.object->revision) : Json(nullptr)});
-        return Json::array({cloud->scope.provider.ToString(), cloud->scope.account.ToString(), record.slot.ToString(),
-                            record.generation.ToString(), FormatSha256(record.archive.value), static_cast<std::uint8_t>(record.state),
-                            std::move(object), record.lastConfirmed ? Json(record.lastConfirmed->ToString()) : Json(nullptr)});
+        auto value = EncodeGeneration(cloud->generation);
+        value.insert(value.begin(), {cloud->scope.provider.ToString(), cloud->scope.account.ToString()});
+        return value;
     }
 
     /** @copydoc DecodeRetentionCloud */
     std::optional<SaveSlotRetentionCloudDeletion> DecodeRetentionCloud(const nlohmann::json &value, const SaveNamespaceId &name) {
         if (value.is_null())
             return {};
-        if (!value.is_array() || value.size() != 8 || !value.at(5).is_number_unsigned() ||
-            value.at(5).get<std::uint64_t>() > static_cast<std::uint8_t>(SaveCloudGenerationState::Failed))
-            throw std::invalid_argument("Invalid cloud retention tuple");
-        SaveSlotRetentionCloudDeletion cloud{.scope = {name, Checked(SaveCloudProviderId::Parse(value.at(0).get<std::string>())),
-                                                       Checked(SaveCloudAccountId::Parse(value.at(1).get<std::string>()))},
-                                             .generation = {.slot = Checked(SaveGameSlotId::Parse(value.at(2).get<std::string>())),
-                                                            .generation = Checked(SlotGenerationId::Parse(value.at(3).get<std::string>())),
-                                                            .archive = {Checked(ParseSha256(value.at(4).get<std::string>()))},
-                                                            .state = static_cast<SaveCloudGenerationState>(value.at(5).get<std::uint8_t>()),
-                                                            .object = DecodeObject(value.at(6))}};
-        if (!value.at(7).is_null())
-            cloud.generation.lastConfirmed = Checked(SaveCloudMutationId::Parse(value.at(7).get<std::string>()));
-        return cloud;
+        auto generation = DecodeGeneration(value, 2);
+        return SaveSlotRetentionCloudDeletion{.scope = {name, Checked(SaveCloudProviderId::Parse(value.at(0).get<std::string>())),
+                                                        Checked(SaveCloudAccountId::Parse(value.at(1).get<std::string>()))},
+                                              .generation = std::move(generation)};
     }
 
+    /** @copydoc EncodeCatalogCloud */
+    nlohmann::json EncodeCatalogCloud(const SaveCloudRevisionMetadata &cloud) {
+        Json records = Json::array();
+        for (const auto &record : cloud.records)
+            records.push_back(EncodeGeneration(record));
+        return Json::array({cloud.schemaVersion, cloud.revision, cloud.indexRevision, cloud.scope.provider.ToString(),
+                            cloud.scope.account.ToString(), std::move(records)});
+    }
+
+    /** @copydoc DecodeCatalogCloud */
+    SaveCloudRevisionMetadata DecodeCatalogCloud(const nlohmann::json &value, const SaveNamespaceId &name,
+                                                  const std::size_t maximumRecords) {
+        if (!value.is_array() || value.size() != 6 || !value.at(0).is_number_unsigned() ||
+            value.at(0) != SaveCloudRevisionMetadataSchemaVersion || !value.at(1).is_number_unsigned() ||
+            !value.at(2).is_number_unsigned() || !value.at(5).is_array() || value.at(5).size() > maximumRecords)
+            throw std::invalid_argument("Invalid selected cloud sidecar");
+        SaveCloudRevisionMetadata cloud{.revision = value.at(1).get<std::uint64_t>(),
+                                        .indexRevision = value.at(2).get<std::uint64_t>(),
+                                        .scope = {name, Checked(SaveCloudProviderId::Parse(value.at(3).get<std::string>())),
+                                                  Checked(SaveCloudAccountId::Parse(value.at(4).get<std::string>()))}};
+        cloud.records.reserve(value.at(5).size());
+        for (const auto &item : value.at(5))
+            cloud.records.push_back(DecodeGeneration(item, 0));
+        return cloud;
+    }
     /** @copydoc ValidRetentionCloud */
     bool ValidRetentionCloud(const Retired &record, const SaveNamespaceId &name) {
         if (!record.cloud)

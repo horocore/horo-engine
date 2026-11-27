@@ -3,6 +3,7 @@
 #include "PackageRestoreInternal.h"
 
 #include <exception>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -23,10 +24,12 @@ namespace Horo::Packages {
         const JobSnapshot job = *completedJob;
 
         std::optional<PackageRestoreGraph> candidate;
+        std::optional<Sha256Digest> stagedLockDigest;
         std::optional<Error> error;
         {
             std::lock_guard completionLock(operation.completion->Mutex());
             candidate = std::move(operation.completion->candidate);
+            stagedLockDigest = operation.completion->stagedLockDigest;
             error = operation.completion->error;
         }
 
@@ -35,13 +38,18 @@ namespace Horo::Packages {
             state_->FinalizeCancelled(operation);
             return;
         }
-        if (!candidate.has_value()) {
+        if (!candidate || (operation.staging && !stagedLockDigest)) {
             state_->FinalizeFailure(operation, job, std::move(error));
             return;
         }
 
         try {
-            state_->activeGraph = std::make_shared<const PackageRestoreGraph>(std::move(*candidate));
+            auto verified = std::make_shared<const PackageRestoreGraph>(std::move(*candidate));
+            if (operation.staging)
+                operation.staged =
+                    StagedPackageRestoreRecord{std::move(verified), *stagedLockDigest, std::move(operation.request.projectRoot)};
+            else
+                state_->activeGraph = std::move(verified);
         } catch (const std::bad_alloc &) {
             state_->FinalizeFailure(operation, job,
                                     MakeError(PackageRestoreErrors::ResourceLimit,
@@ -79,6 +87,19 @@ namespace Horo::Packages {
 
     /** @copydoc PackageRestoreService::Start */
     Result<PackageRestoreOperationHandle> PackageRestoreService::Start(const PackageRestoreRequest &request) {
+        return StartImpl(request, false);
+    }
+
+    /** @copydoc PackageRestoreService::StartStaged */
+    Result<PackageRestoreOperationHandle> PackageRestoreService::StartStaged(const PackageRestoreRequest &request) {
+        if (request.projectRoot.empty() || request.lockfileJson.empty())
+            return Result<PackageRestoreOperationHandle>::Failure(
+                MakeError(PackageRestoreErrors::InvalidInput, "Staging requires a project root and an explicit candidate lock."));
+        return StartImpl(request, true);
+    }
+
+    /** @copydoc PackageRestoreService::StartImpl */
+    Result<PackageRestoreOperationHandle> PackageRestoreService::StartImpl(const PackageRestoreRequest &request, const bool staging) {
         std::lock_guard lock(state_->Mutex());
         if (state_->shutdown)
             return Result<PackageRestoreOperationHandle>::Failure(MakeError(PackageRestoreErrors::LifecycleClosed));
@@ -86,6 +107,8 @@ namespace Horo::Packages {
             return Result<PackageRestoreOperationHandle>::Failure(MakeError(PackageRestoreErrors::Busy));
         if (auto valid = RestoreInternal::ValidateStartRequest(request, state_->limits); valid.HasError())
             return Result<PackageRestoreOperationHandle>::Failure(valid.ErrorValue());
+        if (state_->nextOperation == std::numeric_limits<std::uint64_t>::max())
+            return Result<PackageRestoreOperationHandle>::Failure(MakeError(PackageRestoreErrors::ResourceLimit));
 
         state_->operation.reset();
         const PackageRestoreOperationId id{state_->nextOperation++};
@@ -99,7 +122,8 @@ namespace Horo::Packages {
         Impl::Operation operation{.snapshot = std::move(snapshot),
                                   .request = request,
                                   .cancellation = CancellationSource{request.cancellation},
-                                  .completion = completion};
+                                  .completion = completion,
+                                  .staging = staging};
         auto submitted = state_->SubmitRestoreJob(operation, id);
         if (submitted.HasError())
             return Result<PackageRestoreOperationHandle>::Failure(submitted.ErrorValue());
@@ -119,6 +143,15 @@ namespace Horo::Packages {
             return std::nullopt;
         RefreshLocked();
         return state_->operation->snapshot;
+    }
+
+    /** @copydoc PackageRestoreService::Staged */
+    std::optional<StagedPackageRestoreRecord> PackageRestoreService::Staged(const PackageRestoreOperationId operation) const {
+        std::lock_guard lock(state_->Mutex());
+        if (!state_->operation || state_->operation->snapshot.operationId != operation || !state_->operation->staging)
+            return std::nullopt;
+        RefreshLocked();
+        return state_->operation->staged;
     }
 
     /** @copydoc PackageRestoreService::RequestCancel */

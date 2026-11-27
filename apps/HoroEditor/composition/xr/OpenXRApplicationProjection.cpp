@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenXRApplicationSession.h"
+#include "OpenXRVulkanSwapchain.h"
 
 #include <algorithm>
 #include <format>
@@ -46,13 +47,24 @@ namespace Horo::Application::Internal {
             bool exactImages{};
         };
 
-        /** @brief Validates the actual bounded view census and same-device sampled-eye allocation intent. */
-        Result<ProjectionTargets> PrepareProjectionTargets(const Render::RenderFrontend &frontend, const NativeSystemCensus &observed,
-                                                           const NativeSessionCensus &session) {
-            if (observed.primaryViewCount != 2 || observed.configurationCount > observed.configurations.size() ||
+        /** @brief Common stereo target and required format support observed on the native runtime. */
+        struct NativeProjectionTargets final {
+            Render::RenderTextureDescriptor color;
+            bool stereo{};
+            bool colorAvailable{};
+        };
+
+        /** @brief Resolves the common native stereo target used by both the packaged probe and live Play. */
+        Result<NativeProjectionTargets> ObserveNativeProjectionTargets(const NativeSystemCensus &observed,
+                                                                       const NativeSessionCensus &session) {
+            using Outcome = Result<NativeProjectionTargets>;
+            if (observed.configurationCount > observed.configurations.size() ||
                 observed.primaryBlendModeCount > observed.primaryBlendModes.size() || session.spaceCount > session.spaces.size() ||
                 session.formatCount > session.formats.size())
-                return Result<ProjectionTargets>::Failure(MakeError(XRErrors::OperationUnsupported));
+                return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
+            if (observed.primaryViewCount != 2)
+                return Outcome::Failure(
+                    MakeError(XRErrors::OperationUnsupported, "The selected projection requires exactly two stereo views."));
             const auto configurations = std::span{observed.configurations}.first(observed.configurationCount);
             const auto blends = std::span{observed.primaryBlendModes}.first(observed.primaryBlendModeCount);
             const auto formats = std::span{session.formats}.first(session.formatCount);
@@ -66,32 +78,152 @@ namespace Horo::Application::Internal {
             for (std::uint32_t view = 0; view < observed.primaryViewCount; ++view)
                 if (!extent.IsValid() || extent.width > observed.primaryViews[view].maxImageRectWidth ||
                     extent.height > observed.primaryViews[view].maxImageRectHeight || !observed.primaryViews[view].maxSwapchainSampleCount)
-                    return Result<ProjectionTargets>::Failure(MakeError(XRErrors::OperationUnsupported));
+                    return Outcome::Failure(
+                        MakeError(XRErrors::OperationUnsupported, "Stereo view or system limits reject the shared swapchain extent."));
             if (extent.width > observed.system.graphicsProperties.maxSwapchainImageWidth ||
                 extent.height > observed.system.graphicsProperties.maxSwapchainImageHeight ||
                 !observed.system.graphicsProperties.maxLayerCount)
-                return Result<ProjectionTargets>::Failure(MakeError(XRErrors::OperationUnsupported));
+                return Outcome::Failure(
+                    MakeError(XRErrors::OperationUnsupported, "Stereo view or system limits reject the shared swapchain extent."));
             const Render::RenderTextureDescriptor color{.extent = extent,
                                                         .format = Render::RenderTextureFormat::Rgba8Unorm,
                                                         .layerCount = 2,
                                                         .usage = Render::RenderTextureUsage::RenderAttachment |
                                                                  Render::RenderTextureUsage::Sampled};
-            const Render::RenderTextureDescriptor depth{.extent = extent,
-                                                        .format = Render::RenderTextureFormat::Depth32Float,
-                                                        .layerCount = 2,
-                                                        .usage = Render::RenderTextureUsage::RenderAttachment};
-            const auto &support = frontend.Capabilities().support;
-            const auto multiview = Render::ResolveMultiviewCapabilities(support);
-            const bool exactImages = support.Supports(color) && support.Supports(depth) && multiview.multipass &&
-                                     multiview.indexedShaders && multiview.maximumViews >= 2 &&
-                                     std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) != formats.end();
-            return Result<ProjectionTargets>::Success({color, hasStereo, exactImages});
+            const auto colorAvailable = std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) != formats.end();
+            return Outcome::Success({color, hasStereo, colorAvailable});
         }
 
+        /** @brief Checks the exact owned depth and imported color allocation on the selected renderer. */
+        bool SupportsProjectionTargets(const Render::RenderCapabilitySnapshot &support, const Render::RenderTextureDescriptor &color) {
+            const Render::RenderTextureDescriptor depth{.extent = color.extent,
+                                                        .format = Render::RenderTextureFormat::Depth32Float,
+                                                        .layerCount = color.layerCount,
+                                                        .usage = Render::RenderTextureUsage::RenderAttachment};
+            const auto multiview = Render::ResolveMultiviewCapabilities(support);
+            return support.Supports(color) && support.Supports(depth) && multiview.multipass && multiview.indexedShaders &&
+                   multiview.maximumViews >= color.layerCount;
+        }
+
+        /** @brief Checks the selected render device's baseline raster requirements against the same native target. */
+        Result<ProjectionTargets> PrepareProjectionTargets(const Render::RenderFrontend &frontend, const NativeSystemCensus &observed,
+                                                           const NativeSessionCensus &session) {
+            const auto native = ObserveNativeProjectionTargets(observed, session);
+            if (native.HasError())
+                return Result<ProjectionTargets>::Failure(native.ErrorValue());
+            const auto &[color, stereo, colorAvailable] = native.Value();
+            return Result<ProjectionTargets>::Success(
+                {color, stereo, colorAvailable && SupportsProjectionTargets(frontend.Capabilities().support, color)});
+        }
+
+        /** @brief Resolves the common optional native quad allocation for the exact published view set. */
+        std::optional<Render::RenderTextureDescriptor> ObserveQuadColor(const NativeQuadViewCensus &quad,
+                                                                        const NativeSessionCensus &session) {
+            if (quad.state != XRCapabilityState::Available || quad.blendModeCount > quad.blendModes.size() ||
+                session.formatCount > session.formats.size())
+                return std::nullopt;
+            const auto blends = std::span{quad.blendModes}.first(quad.blendModeCount);
+            const auto formats = std::span{session.formats}.first(session.formatCount);
+            if (std::ranges::find(blends, XR_ENVIRONMENT_BLEND_MODE_OPAQUE) == blends.end() ||
+                std::ranges::find(formats, static_cast<std::int64_t>(VK_FORMAT_R8G8B8A8_UNORM)) == formats.end())
+                return std::nullopt;
+
+            Render::RenderTextureDescriptor color{.format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                  .layerCount = MaximumProjectionViews,
+                                                  .usage =
+                                                      Render::RenderTextureUsage::RenderAttachment | Render::RenderTextureUsage::Sampled};
+            for (const auto &view : quad.views) {
+                color.extent.width = std::max(color.extent.width, view.recommendedExtent.width);
+                color.extent.height = std::max(color.extent.height, view.recommendedExtent.height);
+            }
+            const auto fits = [&color](const NativeQuadView &view) {
+                return color.extent.width <= view.maximumExtent.width && color.extent.height <= view.maximumExtent.height;
+            };
+            return std::ranges::all_of(quad.views, fits) ? std::optional{color} : std::nullopt;
+        }
+
+        /** @brief Publishes quad capability only after the selected renderer and runtime agree on its allocation. */
+        XRCapabilityState PrepareQuadTargets(OpenXRProjectionDraft &draft, const Render::RenderCapabilitySnapshot &renderer,
+                                             const NativeQuadViewCensus &quad, const NativeSessionCensus &session) {
+            using enum XRCapabilityState;
+            if (quad.state != Available)
+                return quad.state;
+            const auto color = ObserveQuadColor(quad, session);
+            if (!color)
+                return Incompatible;
+            if (!SupportsProjectionTargets(renderer, *color))
+                return DependencyMissing;
+
+            draft.color = *color;
+            draft.capabilities.limits.maximumViews = MaximumProjectionViews;
+            draft.capabilities.states[static_cast<std::size_t>(XRCapability::Projection)] = Available;
+            draft.capabilities.states[static_cast<std::size_t>(XRCapability::ExternalColorTargets)] = Available;
+            std::ranges::transform(quad.views, draft.recommended.begin(), &NativeQuadView::recommendedExtent);
+            std::ranges::transform(quad.views, draft.maximum.begin(), &NativeQuadView::maximumExtent);
+            return Available;
+        }
+
+        struct ReprojectionEvidence final {
+            XRCapabilityState observed{XRCapabilityState::Unsupported};
+            std::optional<OpenXRProjectionWriter> writer;
+        };
+
+        /** @brief Admits exact selected-device writer allocations after validating the cooked motion pipeline. */
+        std::optional<OpenXRProjectionWriter> PrepareOptionalWriter(const NativeReprojectionOffer &offer,
+                                                                    const XRLoaderPreflightAttempt attempt,
+                                                                    const Render::RenderFrontend &frontend,
+                                                                    Editor::EditorViewportRendererVulkan &viewport,
+                                                                    const NativeSessionCensus &session) {
+            using namespace Render;
+            const auto &[left, right] = offer.extents;
+            if (offer.availabilityWithoutProducer != XRCapabilityState::DependencyMissing || !left.IsValid() || !right.IsValid())
+                return std::nullopt;
+            const FramebufferExtent extent{std::max(left.width, right.width), std::max(left.height, right.height)};
+            const auto formats = SelectOpenXRVulkanReprojectionFormats(frontend.Capabilities().support,
+                                                                       std::span{session.formats}.first(session.formatCount), extent);
+            if (!formats)
+                return std::nullopt;
+            const auto pipeline = Editor::EditorVulkanXrViewportAccess::PrepareMotionPipeline(viewport, formats->motion, formats->depth);
+            if (pipeline.HasError() || !pipeline.Value())
+                return std::nullopt;
+            constexpr auto usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled;
+            const RenderTextureDescriptor motion{.extent = extent, .format = formats->motion, .layerCount = 2, .usage = usage};
+            auto depth = motion;
+            depth.format = formats->depth;
+            return OpenXRProjectionWriter{{attempt, offer.route, offer.extents}, motion, depth};
+        }
+
+        /** @brief Observes compositor availability independently of the selected writer's preparation. */
+        Result<ReprojectionEvidence> PrepareOptionalReprojection(const OpenXRNativeSession &native, XRLoaderPreflightAttempt attempt,
+                                                                 std::span<const XRFeatureRequest> features,
+                                                                 const Render::RenderFrontend &frontend,
+                                                                 Editor::EditorViewportRendererVulkan &viewport,
+                                                                 const NativeSessionCensus &session) {
+            using Evidence = Result<ReprojectionEvidence>;
+            const bool requested = std::ranges::any_of(features, [](const XRFeatureRequest &feature) {
+                return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
+            });
+            if (!requested)
+                return Evidence::Success({});
+            const auto result = native.DiscoverReprojection(attempt);
+            if (result.HasError())
+                return Evidence::Failure(result.ErrorValue());
+            const auto &offer = result.Value();
+            return Evidence::Success(
+                {offer.availabilityWithoutProducer, PrepareOptionalWriter(offer, attempt, frontend, viewport, session)});
+        }
+
+        struct OptionalProjectionEvidence final {
+            XRCapabilityState hands;
+            XRCapabilityState stage;
+            XRCapabilityState reprojection;
+            XRCapabilityState eyeGaze;
+        };
+
         /** @brief Forms immutable capability evidence from validated native census and exact target support. */
-        Result<XRCapabilitySnapshot> ProjectionCapabilities(const NativeSystemCensus &observed, const NativeSessionCensus &session,
-                                                            const ProjectionTargets &targets, XRSystemId system,
-                                                            XRCapabilityRevision revision, const XRSystemLimits &budget) {
+        XRCapabilityDescriptor ProjectionCapabilities(const NativeSystemCensus &observed, const NativeSessionCensus &session,
+                                                      const ProjectionTargets &targets, XRSystemId system, XRCapabilityRevision revision,
+                                                      const XRSystemLimits &budget, OptionalProjectionEvidence optional) {
             const auto spaces = std::span{session.spaces}.first(session.spaceCount);
             const auto hasSpace = [&](XrReferenceSpaceType space) {
                 return std::ranges::find(spaces, space) != spaces.end();
@@ -110,7 +242,7 @@ namespace Horo::Application::Internal {
             fact(XRCapability::PositionTracking, observed.system.trackingProperties.positionTracking == XR_TRUE);
             fact(XRCapability::ViewSpace, hasSpace(XR_REFERENCE_SPACE_TYPE_VIEW));
             fact(XRCapability::LocalSpace, hasSpace(XR_REFERENCE_SPACE_TYPE_LOCAL));
-            fact(XRCapability::StageSpace, hasSpace(XR_REFERENCE_SPACE_TYPE_STAGE));
+            descriptor.states[static_cast<std::size_t>(XRCapability::StageSpace)] = optional.stage;
             // Action/Input paths were actually prepared; frame/event/swapchain protocol dispatch was resolved above.
             // Native creation and execution still belong to the subsequent resource stages and real event/frame loop.
             for (auto capability :
@@ -118,17 +250,83 @@ namespace Horo::Application::Internal {
                   XRCapability::CanonicalInputProjection, XRCapability::PredictedFrames, XRCapability::SessionLossLifecycle})
                 fact(capability, true);
             fact(XRCapability::ExternalColorTargets, targets.exactImages);
-            return XRCapabilitySnapshot::Create(descriptor);
+            descriptor.states[static_cast<std::size_t>(XRCapability::HandTracking)] = optional.hands;
+            descriptor.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = optional.reprojection;
+            descriptor.states[static_cast<std::size_t>(XRCapability::EyeGaze)] = optional.eyeGaze;
+            return descriptor;
         }
     }  // namespace
+
+    /** @copydoc OpenXRApplicationSession::ValidateProjectionDispatch */
+    Result<void> OpenXRApplicationSession::ValidateProjectionDispatch(XrInstance instance) const {
+        return ValidateProjectionProtocol(getProc_, instance);
+    }
+
+    /** @copydoc OpenXRApplicationSession::CollectPackagedDisplay */
+    Result<Editor::EditorXrDisplayObservation> OpenXRApplicationSession::CollectPackagedDisplay(
+        const NativeSystemCensus &system, const NativeSessionCensus &session, const Render::RenderCapabilitySnapshot &renderer) const {
+        using Display = Editor::EditorXrDisplayObservation;
+        using Outcome = Result<Display>;
+        const auto targets = ObserveNativeProjectionTargets(system, session);
+        if (targets.HasError())
+            return Outcome::Failure(targets.ErrorValue());
+        Display display{.refreshRateState = session.displayRates.state,
+                        .refreshMilliHertz = session.displayRates.milliHertz,
+                        .refreshRateCount = session.displayRates.count};
+        if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection) {
+            const auto quad = native_->DiscoverQuadViews(selection_.attempt, system);
+            if (quad.HasError())
+                return Outcome::Failure(quad.ErrorValue());
+            const auto color = ObserveQuadColor(quad.Value(), session);
+            if (!color)
+                return Outcome::Failure(
+                    MakeError(XRErrors::OperationUnsupported, "The selected runtime cannot provide an opaque four-view target."));
+            if (!SupportsProjectionTargets(renderer, *color))
+                return Outcome::Failure(
+                    MakeError(XRErrors::OperationIncompatible, "The selected renderer cannot render the four-view projection target."));
+            display.viewCount = static_cast<std::uint32_t>(quad.Value().views.size());
+            std::ranges::transform(quad.Value().views, display.viewExtents.begin(), [](const NativeQuadView &view) {
+                return Display::ViewExtent{view.recommendedExtent.width, view.recommendedExtent.height};
+            });
+            return Outcome::Success(display);
+        }
+        if (!targets.Value().stereo)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported, "The packaged projection profile needs opaque stereo."));
+        if (!targets.Value().colorAvailable)
+            return Outcome::Failure(
+                MakeError(XRErrors::OperationUnsupported, "The installed runtime does not offer RGBA8 UNORM stereo swapchains for Play."));
+        display.viewCount = system.primaryViewCount;
+        std::ranges::transform(std::span{system.primaryViews}.first(display.viewCount), display.viewExtents.begin(),
+                               [](const XrViewConfigurationView &view) {
+                                   return Display::ViewExtent{view.recommendedImageRectWidth, view.recommendedImageRectHeight};
+                               });
+        return Outcome::Success(display);
+    }
+
+    /** @copydoc OpenXRApplicationSession::ValidateProjectionPolicy */
+    Result<void> OpenXRApplicationSession::ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const {
+        const auto profile = settings_.Profile();
+        if (profile != XRFeatureProfile::Projection1_0 && profile != XRFeatureProfile::FoveatedInsetProjection)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Editor Play cannot execute the selected XR profile."));
+        const auto &budget = settings_.Limits();
+        if (bindings.locomotion && std::holds_alternative<OpenXRArmSwingBinding>(bindings.locomotion->translation) &&
+            budget.maximumDevices < 3)
+            return Result<void>::Failure(
+                MakeError(XRErrors::CapacityExceeded, "Arm swing requires device capacity for the head and both controllers."));
+        if (const auto preparedActions = bindings.PreparedActionCount();
+            preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
+            budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 5 ||
+            budget.maximumSpaces > XRHardLimits::MaximumSpaces)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        return Result<void>::Success();
+    }
 
     /** @copydoc OpenXRApplicationSession::ValidateProjectionPreparation */
     Result<XRSystemId> OpenXRApplicationSession::ValidateProjectionPreparation(const Editor::EditorViewportRendererVulkan &viewport) const {
         using Outcome = Result<XRSystemId>;
         if (auto current = Current(); current.HasError())
             return Outcome::Failure(current.ErrorValue());
-        if (!native_ || !preflight_ || !system_ || !sessionCensus_ || !input_.native || !input_.projection || !input_.bindings ||
-            settings_.Profile() != XRFeatureProfile::Projection1_0)
+        if (!native_ || !preflight_ || !system_ || !sessionCensus_ || !input_.native || !input_.projection || !input_.bindings)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (lastCapabilityRevision_ == std::numeric_limits<std::uint64_t>::max())
             return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
@@ -142,7 +340,7 @@ namespace Horo::Application::Internal {
         const auto nativeSession = native_->BorrowPreparedSession({*preflight_, selection_.attempt});
         if (nativeSession.HasError())
             return Outcome::Failure(nativeSession.ErrorValue());
-        if (auto protocol = ValidateProjectionProtocol(getProc_, nativeSession.Value().instance); protocol.HasError())
+        if (auto protocol = ValidateProjectionDispatch(nativeSession.Value().instance); protocol.HasError())
             return Outcome::Failure(protocol.ErrorValue());
         const auto stillPrepared = native_->BorrowPreparedSession({*preflight_, selection_.attempt});
         if (stillPrepared.HasError())
@@ -154,10 +352,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::PrepareProjection */
-    Result<OpenXRApplicationProjection> OpenXRApplicationSession::PrepareProjection(const Render::RenderFrontend &frontend,
-                                                                                    const Editor::EditorViewportRendererVulkan &viewport,
-                                                                                    const OpenXRApplicationBindings &bindings) {
-        using Outcome = Result<OpenXRApplicationProjection>;
+    Result<OpenXRProjectionDraft> OpenXRApplicationSession::PrepareProjection(const Render::RenderFrontend &frontend,
+                                                                              Editor::EditorViewportRendererVulkan &viewport,
+                                                                              const OpenXRApplicationBindings &bindings) {
+        using Outcome = Result<OpenXRProjectionDraft>;
         const auto observedSystem = ValidateProjectionPreparation(viewport);
         if (observedSystem.HasError())
             return Outcome::Failure(observedSystem.ErrorValue());
@@ -166,32 +364,70 @@ namespace Horo::Application::Internal {
         const auto targets = PrepareProjectionTargets(frontend, observed, session);
         if (targets.HasError())
             return Outcome::Failure(targets.ErrorValue());
+        if (auto admitted = ValidateProjectionPolicy(bindings); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
         const auto &budget = settings_.Limits();
-        if (const auto preparedActions = bindings.schema.actions.size() + bindings.poses.size();
-            preparedActions > budget.maximumActions || budget.maximumSpaces < 5 + bindings.poses.size() ||
-            budget.maximumActions > XRActionBindingLimits::MaximumActions || budget.maximumDevices > 3 ||
-            budget.maximumSpaces > XRHardLimits::MaximumSpaces)
-            return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
         auto revision = XRCapabilityRevision::Create(lastCapabilityRevision_ + 1);
         if (revision.HasError())
             return Outcome::Failure(revision.ErrorValue());
-        auto capabilities = ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(), budget);
-        if (capabilities.HasError())
-            return Outcome::Failure(capabilities.ErrorValue());
-        auto plan = AdmitXRProjectSettings(settings_, {authorities_.configuration.Snapshot().Revision(), *preflight_, selection_,
-                                                       XRRendererCompatibility::Compatible, capabilities.Value(), observedSystem.Value(),
-                                                       revision.Value()});
-        if (plan.HasError())
-            return Outcome::Failure(plan.ErrorValue());
-        if (auto current = Current(); current.HasError())
-            return Outcome::Failure(current.ErrorValue());
-        ++lastCapabilityRevision_;
-        OpenXRApplicationProjection output{std::move(capabilities).Value(), std::move(plan).Value(), targets.Value().color};
-        for (std::size_t eye = 0; eye < output.recommended.size(); ++eye) {
+        OptionalProjectionEvidence optional{input_.handAvailability, input_.stageAvailability, XRCapabilityState::Unsupported,
+                                            EyeGazeAvailability()};
+        const auto reprojection =
+            PrepareOptionalReprojection(*native_, selection_.attempt, settings_.Features(), frontend, viewport, session);
+        if (reprojection.HasError())
+            return Outcome::Failure(reprojection.ErrorValue());
+        optional.reprojection = reprojection.Value().observed;
+        OpenXRProjectionDraft output{ProjectionCapabilities(observed, session, targets.Value(), observedSystem.Value(), revision.Value(),
+                                                            budget, optional),
+                                     targets.Value().color,
+                                     {},
+                                     {},
+                                     reprojection.Value().writer};
+        const auto quad = native_->DiscoverQuadViews(selection_.attempt, observed);
+        if (quad.HasError())
+            return Outcome::Failure(quad.ErrorValue());
+        const auto quadState = quad.Value().state;
+        auto &quadCapability = output.capabilities.states[static_cast<std::size_t>(XRCapability::QuadViews)];
+        if (settings_.Profile() == XRFeatureProfile::FoveatedInsetProjection) {
+            quadCapability = PrepareQuadTargets(output, frontend.Capabilities().support, quad.Value(), session);
+            return Outcome::Success(std::move(output));
+        }
+        quadCapability = quadState == XRCapabilityState::Available ? XRCapabilityState::DependencyMissing : quadState;
+        const auto foveation = native_->ReadExtensionAdmission(selection_.attempt, XR_HTC_FOVEATION_EXTENSION_NAME);
+        if (foveation.HasError())
+            return Outcome::Failure(foveation.ErrorValue());
+        if (targets.Value().stereo && targets.Value().exactImages && foveation.Value().state == NativeExtensionState::Enabled)
+            output.capabilities.states[static_cast<std::size_t>(XRCapability::FixedFoveation)] = XRCapabilityState::DependencyMissing;
+        for (std::size_t eye = 0; eye < observed.primaryViewCount; ++eye) {
             output.recommended[eye] = {observed.primaryViews[eye].recommendedImageRectWidth,
                                        observed.primaryViews[eye].recommendedImageRectHeight};
             output.maximum[eye] = {observed.primaryViews[eye].maxImageRectWidth, observed.primaryViews[eye].maxImageRectHeight};
         }
         return Outcome::Success(std::move(output));
+    }
+
+    /** @copydoc OpenXRApplicationSession::FinalizeProjection */
+    Result<OpenXRApplicationProjection> OpenXRApplicationSession::FinalizeProjection(OpenXRProjectionDraft draft,
+                                                                                     const NativePreparedReprojectionProvider *provider) {
+        using Outcome = Result<OpenXRApplicationProjection>;
+        if (const auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!preflight_ || draft.capabilities.revision.Value() != lastCapabilityRevision_ + 1)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (provider && draft.writer)
+            draft.capabilities.states[static_cast<std::size_t>(XRCapability::SpaceWarp)] = XRCapabilityState::Available;
+        auto capabilities = XRCapabilitySnapshot::Create(draft.capabilities);
+        if (capabilities.HasError())
+            return Outcome::Failure(capabilities.ErrorValue());
+        auto plan = AdmitXRProjectSettings(settings_, {authorities_.configuration.Snapshot().Revision(), *preflight_, selection_,
+                                                       XRRendererCompatibility::Compatible, capabilities.Value(), draft.capabilities.system,
+                                                       draft.capabilities.revision});
+        if (plan.HasError())
+            return Outcome::Failure(plan.ErrorValue());
+        if (auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        ++lastCapabilityRevision_;
+        return Outcome::Success({std::move(capabilities).Value(), std::move(plan).Value(), draft.color, draft.recommended, draft.maximum,
+                                 std::move(draft.writer), settings_.WorldCanvasMinimumSpanPixels()});
     }
 }  // namespace Horo::Application::Internal

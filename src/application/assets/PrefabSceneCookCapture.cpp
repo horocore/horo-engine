@@ -1,4 +1,5 @@
 #include "Horo/Application/PrefabProjectSettings.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Packages/PackageLockfile.h"
 #include "Horo/Packages/PackageRequest.h"
@@ -194,6 +195,8 @@ namespace Horo::Application {
                 auto document = DecodeProjectSourceDocument(*raw.Value());
                 if (document.HasError())
                     return Outcome::Failure(document.ErrorValue());
+                if (const auto ai = ResolveProjectAiSettings(document.Value()); ai.HasError())
+                    return Outcome::Failure(ai.ErrorValue());
                 if (const auto &metadata = document.Value().metadata;
                     metadata.horoVersion != classified.metadata->horoVersion ||
                     metadata.persistentContract != classified.metadata->persistentContract)
@@ -243,7 +246,7 @@ namespace Horo::Application {
             auto packages = PackageIdentity(rawPackages.Value(), rawIntent.Value(), request.restoredPackages);
             if (packages.HasError())
                 return Result<HostCapture>::Failure(packages.ErrorValue());
-            std::string semantic{"horo.prefab-scene.host.v1"};
+            std::string semantic{"horo.prefab-scene.host.v2"};
             Append(semantic, FormatHoroVersion(metadata.horoVersion.value));
             Append(semantic, FormatPersistentContractHash(metadata.persistentContract));
             Append(semantic, packages.Value());
@@ -251,8 +254,9 @@ namespace Horo::Application {
             Append(semantic, settings.Value().settings->Configuration().ToJson());
             if (auto released = AppendRelease(semantic, rawPackages.Value(), releasePlan); released.HasError())
                 return Result<HostCapture>::Failure(released.ErrorValue());
-            Append(semantic, FormatSha256(OverrideSchemaIdentity(request)));
             const auto cacheDigest = ComputeSha256(std::as_bytes(std::span{semantic}));
+            // Whole-schema authority guards publication. The dependency key selects it only for authored typed layers.
+            Append(semantic, FormatSha256(OverrideSchemaIdentity(request)));
             Append(semantic, request.schemas ? FormatSha256(request.schemas->Digest()) : "no-project-schema-context");
             return Result<HostCapture>::Success({metadata, ComputeSha256(std::as_bytes(std::span{semantic})), cacheDigest,
                                                  ComputeSha256(std::as_bytes(std::span{project.Value().second})),

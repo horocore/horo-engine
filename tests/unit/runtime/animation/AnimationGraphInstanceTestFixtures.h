@@ -7,6 +7,24 @@
 #include <string_view>
 
 namespace Horo::Animation::Test::Instance {
+    /** @brief Creates a socket on a scaled child whose stable ID sorts before its parent. */
+    inline std::shared_ptr<const SkeletonAsset> SocketSkeleton() {
+        auto data = Graph::GraphTestDependencies::MakeSkeleton().Data();
+        data.joints.push_back({.id = Id<JointId>(8), .parent = Id<JointId>(1), .name = "pivot"});
+        const Math::Transform child{.translation = {0.0F, 3.0F, 0.0F}, .scale = {2.0F, 1.0F, 1.0F}};
+        const auto inverse = Math::TryInverseAffine(child.ToMatrix());
+        REQUIRE(inverse.HasValue());
+        data.joints.push_back({.id = Id<JointId>(2),
+                               .parent = Id<JointId>(8),
+                               .name = "grip",
+                               .referenceLocalTransform = child,
+                               .inverseBindMatrix = inverse.Value()});
+        data.sockets.push_back({Id<SkeletonSocketId>(21), Id<JointId>(2), "grip", {.translation = {4.0F, 0.0F, 0.0F}}});
+        auto skeleton = SkeletonAsset::Create(std::move(data));
+        REQUIRE(skeleton.HasValue());
+        return std::make_shared<const SkeletonAsset>(std::move(skeleton).Value());
+    }
+
     /** @brief Discovers actual direct and state-branch clip dependencies without fabricating an executable plan. */
     inline bool ReferencesClip(const GraphNodePayload &payload, const AnimationClipId wanted) {
         if (const auto *clip = std::get_if<GraphClipNode>(&payload))
@@ -26,8 +44,10 @@ namespace Horo::Animation::Test::Instance {
         std::shared_ptr<const AnimationGraphProgram> program;
         GraphInstanceCreateContext context;
 
-        explicit Prepared(AnimationGraphData graph = Graph::Simple(), std::uint64_t clipGeneration = 6) {
-            skeleton = std::make_shared<const SkeletonAsset>(Graph::GraphTestDependencies::MakeSkeleton());
+        explicit Prepared(const AnimationGraphData &graph = Graph::Simple(), std::uint64_t clipGeneration = 6, bool rootMotion = false,
+                          std::shared_ptr<const SkeletonAsset> authoredSkeleton = {})
+            : skeleton(authoredSkeleton ? std::move(authoredSkeleton)
+                                        : std::make_shared<const SkeletonAsset>(Graph::GraphTestDependencies::MakeSkeleton())) {
             for (std::uint8_t id = 3; id <= 4; ++id) {
                 AnimationClipData data;
                 data.descriptor = {.id = Asset<AnimationClipId>(id),
@@ -39,7 +59,8 @@ namespace Horo::Animation::Test::Instance {
                 Math::Transform first;
                 first.translation.x = id == 3 ? 0.0F : 100.0F;
                 auto last = first;
-                last.translation.x += 100.0F;
+                last.translation.x += rootMotion ? 100.0F * static_cast<float>(id - 2) : 100.0F;
+                data.descriptor.hasRootMotion = rootMotion;
                 data.tracks = {{Id<JointId>(1), {{{0}, first}, {{100}, last}}}};
                 auto clip = AnimationClipAsset::Create(std::move(data), *skeleton);
                 REQUIRE(clip.HasValue());
@@ -61,6 +82,10 @@ namespace Horo::Animation::Test::Instance {
             REQUIRE(compiled.HasValue());
             program = std::make_shared<const AnimationGraphProgram>(std::move(compiled).Value());
             context.instance = {Id<AnimationRuntimeId>(1), Id<AnimationComponentId>(2), {0, 1}};
+            if (rootMotion) {
+                context.evaluationDomain = AnimationEvaluationDomain::AuthoritativeSimulation;
+                context.extractRootMotion = true;
+            }
         }
 
         [[nodiscard]] GraphInstanceAssets Assets() const {

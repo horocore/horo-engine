@@ -73,6 +73,10 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor ShapeMotionUnsupported;
     /** @brief A cooked Physics shape artifact is malformed or fails integrity validation. */
     extern const ErrorCodeDescriptor ShapeArtifactInvalid;
+    /** @brief A tile already has a pending update or an active submission. */
+    extern const ErrorCodeDescriptor StaticTileDuplicate;
+    /** @brief A different live producer owns the exact tile. */
+    extern const ErrorCodeDescriptor StaticTileOwnerConflict;
     /** @brief A reusable physical-material asset descriptor is malformed or outside CanonicalV1 bounds. */
     extern const ErrorCodeDescriptor MaterialDescriptorInvalid;
     /** @brief A physical-material combine mode is not part of the qualified backend-neutral vocabulary. */

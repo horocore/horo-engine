@@ -15,13 +15,14 @@ namespace Horo::Tests::OpenXRApplication {
         std::array<std::string, 1> instanceExtensions{"VK_KHR_get_physical_device_properties2"};
         std::array<std::string, 1> deviceExtensions{"VK_KHR_external_memory"};
         bool available{true};
+        std::uintptr_t deviceIdentity{3};
 
         Result<RenderNative::VulkanEditorDevice> QueryDevice() const override {
             if (!available)
                 return Result<RenderNative::VulkanEditorDevice>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
             return Result<RenderNative::VulkanEditorDevice>::Success({.instance = OpenXR::NativeHandle<VkInstance>(2),
                                                                       .physical = OpenXR::NativeHandle<VkPhysicalDevice>(7),
-                                                                      .device = OpenXR::NativeHandle<VkDevice>(3),
+                                                                      .device = OpenXR::NativeHandle<VkDevice>(deviceIdentity),
                                                                       .graphicsQueue = OpenXR::NativeHandle<VkQueue>(4),
                                                                       .graphicsFamily = 0,
                                                                       .frames = 2,
@@ -47,6 +48,18 @@ namespace Horo::Tests::OpenXRApplication {
 
         Result<void> WriteFrameBuffer(Render::FrameToken, std::uint64_t, std::span<const std::byte>) override {
             return Unavailable();
+        }
+
+        Result<bool> ObservePreparationBuffer(std::uint64_t) override {
+            return Result<bool>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        }
+
+        Result<void> WritePreparationUniform(std::uint64_t, std::span<const std::byte>) override {
+            return Unavailable();
+        }
+
+        Result<bool> WasSubmissionAccepted(Render::RenderTimelinePoint, std::uint64_t) const override {
+            return Result<bool>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         }
 
         Result<void> AttachDeviceChild(RenderNative::IVulkanEditorDeviceChild &) override {

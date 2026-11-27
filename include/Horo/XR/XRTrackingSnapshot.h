@@ -152,7 +152,9 @@ namespace Horo::XR {
         static constexpr std::uint32_t MaximumActions = 256;
     };
 
-    /** @brief Caller-owned candidate data validated before any immutable snapshot is published. */
+    /** @brief Caller-owned candidate data validated before any immutable snapshot is published.
+     * Device records are sorted by slot index and contain at most one generation per slot.
+     */
     struct XRTrackingSnapshotDescriptor final {
         XRContractVersion contractVersion{CurrentXRContractVersion};             /**< Horo XRApi schema version. */
         XRSessionId session;                                                     /**< Exact publication owner. */

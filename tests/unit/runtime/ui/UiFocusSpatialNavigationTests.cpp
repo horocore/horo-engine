@@ -20,6 +20,7 @@ namespace Horo::Runtime::Ui {
         class SpatialEvaluator final : public UiLayoutEvaluator {
         public:
             std::array<UiLogicalRect, 8> boxes{};
+            std::array<UiLayoutHorizontalPlacement, 8> placements{};
 
             Result<void> ResolveChildConstraints(const UiLayoutChildConstraintRequest &request,
                                                  const std::span<UiLayoutConstraints> output) const override {
@@ -36,7 +37,8 @@ namespace Horo::Runtime::Ui {
                 for (std::size_t index = 0; index < request.children.size(); ++index)
                     childContent[index] = boxes[request.children[index].element.slot - 1];
                 const auto box = boxes[request.element.slot - 1];
-                return Result<UiLayoutArrangement>::Success({box, box, box, box, box, box, NoUiBaseline});
+                return Result<UiLayoutArrangement>::Success(
+                    {box, box, box, box, box, box, NoUiBaseline, placements[request.element.slot - 1]});
             }
         };
 
@@ -87,13 +89,16 @@ namespace Horo::Runtime::Ui {
                 return std::move(result).Value();
             }
 
-            Result<UiLayoutSnapshot> Publish(const std::uint64_t content = 1) {
+            Result<UiLayoutSnapshot> Publish(const std::uint64_t content = 1,
+                                             const UiLayoutInlineDirection direction = UiLayoutInlineDirection::LeftToRight) {
                 return layout.Update(tree, {{owner.documentRevision, owner.treeRevision, Revision<UiLayoutContentRevision>(content),
                                              Revision<UiLayoutStyleRevision>(), Revision<UiLayoutIntrinsicRevision>(),
                                              Revision<UiLayoutCanvasRevision>(), Revision<UiLayoutPolicyRevision>()},
                                             {{0, 0}, {1000, 1000}},
                                             {{0, 0}, {1000, 1000}},
-                                            &evaluator});
+                                            &evaluator,
+                                            {},
+                                            direction});
             }
 
             void Apply(UiFocusGraph &graph, const std::uint64_t content = 1) {
@@ -117,6 +122,31 @@ namespace Horo::Runtime::Ui {
                 CHECK(moved.Value().IsValid());
             }
         };
+
+        TEST_CASE("Focus reveal binds a live policy to a newer layout and rejects superseded evidence",
+                  "[runtime_ui][focus][accessibility]") {
+            Fixture f;
+            f.nodes[1].bringIntoView = UiFocusBringIntoViewPolicy::Center;
+            f.nodes[2].bringIntoView = UiFocusBringIntoViewPolicy::None;
+            auto graph = f.Graph();
+            const auto original = f.Publish(1);
+            const auto reflow = f.Publish(2);
+            REQUIRE(original.HasValue());
+            REQUIRE(reflow.HasValue());
+            const auto reveal = graph.RevealInLayout(reflow.Value());
+            REQUIRE(reveal.HasValue());
+            REQUIRE(reveal.Value());
+            CHECK(reveal.Value()->owner.interaction == reflow.Value().Descriptor().interaction);
+            CHECK(reveal.Value()->target.element == f.nodes[1].element);
+            CHECK(reveal.Value()->policy == UiFocusBringIntoViewPolicy::Center);
+            CHECK(graph.Owner().interaction != reveal.Value()->owner.interaction);
+            REQUIRE(graph.UpdateLayout(reflow.Value()).HasValue());
+            REQUIRE(graph.RevealInLayout(original.Value()).HasError());
+            REQUIRE(graph.SetFocus(f.nodes[2].element).HasValue());
+            CHECK_FALSE(graph.RevealInLayout(reflow.Value()).Value());
+            graph.Shutdown();
+            CHECK(graph.RevealInLayout(reflow.Value()).HasError());
+        }
 
         TEST_CASE("Spatial focus ranks actual layout beams and stable identities", "[runtime_ui][focus][spatial]") {
             Fixture f;
@@ -179,6 +209,50 @@ namespace Horo::Runtime::Ui {
             CHECK(graph.Move(Left).HasValue());
             f.descriptor.wrap = UiFocusWrapPolicy::Count;
             CHECK_FALSE(f.descriptor.IsValid());
+        }
+
+        TEST_CASE("Focus mirrors authored horizontal links from the current layout and preserves physical links",
+                  "[runtime_ui][focus][spatial][direction]") {
+            Fixture f;
+            f.nodes[1].links.targets[4] = f.nodes[4].id;
+            f.nodes[1].links.targets[5] = f.nodes[5].id;
+            f.nodes[2].links.targets[5] = f.nodes[1].id;
+            f.evaluator.placements[f.nodes[2].element.slot - 1] = UiLayoutHorizontalPlacement::Physical;
+            auto graph = f.Graph();
+            auto left = f.Publish();
+            REQUIRE(left.HasValue());
+            REQUIRE(graph.UpdateLayout(left.Value()).HasValue());
+            f.MovesTo(graph, Right, 5);
+            REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
+
+            auto right = f.Publish(1, UiLayoutInlineDirection::RightToLeft);
+            REQUIRE(right.HasValue());
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto updated = graph.UpdateLayout(right.Value());
+            CHECK(::Horo::Tests::AllocationProbe::Count() == before);
+            REQUIRE(updated.HasValue());
+            REQUIRE(graph.UpdateLayout(left.Value()).HasError());
+            const auto preview = graph.PreviewMove(Right);
+            REQUIRE(preview.HasValue());
+            REQUIRE(preview.Value().target.has_value());
+            CHECK(preview.Value().target->element == f.nodes[4].element);
+            f.MovesTo(graph, Right, 4);
+            REQUIRE(graph.SetFocus(f.nodes[2].element).HasValue());
+            f.MovesTo(graph, Right, 1);
+            f.MovesTo(graph, Left, 5);
+
+            f.descriptor.owner.interaction = Revision<UiInteractionRevision>(3);
+            REQUIRE(graph.Reload(f.descriptor, f.nodes).HasValue());
+            REQUIRE(graph.UpdateLayout(right.Value()).HasError());
+            REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
+            f.MovesTo(graph, Right, 5);
+            auto reloaded = f.Publish(2, UiLayoutInlineDirection::RightToLeft);
+            REQUIRE(reloaded.HasValue());
+            REQUIRE(graph.UpdateLayout(reloaded.Value()).HasValue());
+            REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
+            f.MovesTo(graph, Right, 4);
+            graph.Shutdown();
+            REQUIRE(graph.UpdateLayout(reloaded.Value()).HasError());
         }
 
         TEST_CASE("Spatial focus excludes hidden disabled empty and recycled geometry", "[runtime_ui][focus][spatial]") {

@@ -78,6 +78,17 @@ namespace Horo::Release {
             return std::ranges::adjacent_find(folded) == folded.end();
         }
 
+        /** @brief Reserves final metadata independently from directory case sensitivity. */
+        [[nodiscard]] bool ReservedReleaseMetadata(std::string_view path) {
+            const auto first = path.substr(0, path.find('/'));
+            const auto matches = [first](std::string_view reserved) {
+                return std::ranges::equal(first, reserved, [](char actual, char expected) {
+                    return LowerAscii(actual) == expected;
+                });
+            };
+            return matches(ReleaseManifestFilename) || matches(ReleaseManifestSignatureFilename);
+        }
+
         [[nodiscard]] bool SafeRelativePath(const std::string_view path) {
             if (path.empty() || path.size() > 512U || path.front() == '/' || path.back() == '/' ||
                 path.find('\\') != std::string_view::npos)
@@ -92,7 +103,7 @@ namespace Horo::Release {
                     break;
                 start = end + 1U;
             }
-            return path != "manifest.json";
+            return !ReservedReleaseMetadata(path);
         }
 
         /** @brief Applies one bounded portable file contract to unsigned and final inventories. */

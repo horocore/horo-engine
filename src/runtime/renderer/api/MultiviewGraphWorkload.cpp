@@ -57,14 +57,21 @@ namespace Horo::Render {
             return Result<void>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));
         }
 
+        /** @brief Matches one frontend-resolved view from the graph retention request. */
+        [[nodiscard]] bool HasView(const RenderGraphExecutionRequest &request, const RenderTextureViewHandle view) {
+            const auto found = std::ranges::find(request.views, view, &RenderGraphTextureViewInstance::view);
+            return view.IsValid() && found != request.views.end() && found->instance != 0;
+        }
+
         /** @brief Requires one complete ordered target set with no aliased view subresources. */
         [[nodiscard]] bool AddTargets(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload, Uses &uses) {
+            const bool coverage = workload.output == MultiviewOutput::ReprojectionCoverage;
             for (std::size_t index = 0; index < workload.targets.size(); ++index) {
                 const auto &target = workload.targets[index];
-                if (!target.depth.IsValid() && target.depth != RenderGraphResourceId{})
+                if (!target.depth.IsValid() &&
+                    (target.depth != RenderGraphResourceId{} || workload.output != MultiviewOutput::ProjectionColor))
                     return false;
-                if (const auto colorView = std::ranges::find(request.views, target.colorView, &RenderGraphTextureViewInstance::view);
-                    !target.colorView.IsValid() || colorView == request.views.end() || colorView->instance == 0 ||
+                if (!HasView(request, target.colorView) ||
                     !uses.Add(target.color, RenderGraphResourceKind::Texture, RenderGraphUsageKind::ColorAttachment) ||
                     target.rectangle.width == 0 || target.rectangle.height == 0)
                     return false;
@@ -72,33 +79,68 @@ namespace Horo::Render {
                     !uses.Add(target.depth, RenderGraphResourceKind::Texture, RenderGraphUsageKind::DepthStencilAttachment))
                     return false;
                 if (target.depth.IsValid()) {
-                    const auto depthView = std::ranges::find(request.views, target.depthView, &RenderGraphTextureViewInstance::view);
-                    if (!target.depthView.IsValid() || depthView == request.views.end() || depthView->instance == 0)
+                    if (!HasView(request, target.depthView))
                         return false;
                 } else if (target.depthView.IsValid()) {
                     return false;
                 }
+                if (coverage) {
+                    if (target.predecessorDepth != workload.targets.front().predecessorDepth || target.predecessorDepthLayer != index ||
+                        !HasView(request, target.predecessorDepthView) ||
+                        !uses.Add(target.predecessorDepth, RenderGraphResourceKind::Texture, RenderGraphUsageKind::Sampled))
+                        return false;
+                } else if (target.predecessorDepth != RenderGraphResourceId{} || target.predecessorDepthView != RenderTextureViewHandle{} ||
+                           target.predecessorDepthLayer != 0) {
+                    return false;
+                }
                 for (const auto &prior : workload.targets.first(index))
                     if ((prior.color == target.color && prior.arrayLayer == target.arrayLayer) ||
-                        (target.depth.IsValid() && prior.depth == target.depth && prior.depthArrayLayer == target.depthArrayLayer))
+                        (target.depth.IsValid() && prior.depth == target.depth && prior.depthArrayLayer == target.depthArrayLayer) ||
+                        (coverage && prior.predecessorDepthView == target.predecessorDepthView))
                         return false;
             }
             return true;
         }
 
+        /** @brief Selects the exact uniform ABI from the output kind and the reflected projection layout. */
+        [[nodiscard]] Result<std::size_t> ParameterBytes(const MaterialBindingLayout &layout, const MultiviewOutput output,
+                                                         const std::size_t viewCount) {
+            if (output != MultiviewOutput::ProjectionColor)
+                return MultiviewMotionParameterBytes(layout, viewCount);
+            const auto normal =
+                std::ranges::find(layout.parameters, MultiviewShaderParameterIds::NormalToWorld, &ShaderReflectedParameter::id);
+            return normal == layout.parameters.end() ? MultiviewShaderParameterBytes(layout, viewCount)
+                                                     : MultiviewEnvironmentParameterBytes(layout, viewCount);
+        }
+
         /** @brief Matches the explicit uniform dependency to the material's actual logical buffer generation. */
         [[nodiscard]] bool ParameterBindingMatches(const CompiledRenderGraphExecution &graph, const MultiviewGraphGeometry &geometry,
-                                                   const std::size_t viewCount) {
+                                                   const RenderGraphMultiview &workload) {
+            using namespace MultiviewShaderParameterIds;
             const auto &descriptor = geometry.material->Descriptor();
-            if (descriptor.resources.size() != 1 || MultiviewShaderParameterBytes(descriptor.layout, viewCount).HasError())
+            const auto viewCount = workload.targets.size();
+            const auto size = ParameterBytes(descriptor.layout, workload.output, viewCount);
+            const bool coverage = workload.output == MultiviewOutput::ReprojectionCoverage;
+            if (descriptor.resources.size() != (coverage ? 1 + viewCount : 1) || size.HasError())
                 return false;
-            const auto &resource = descriptor.resources.front();
-            const auto *uniform = std::get_if<MaterialBufferBinding>(&resource.value);
-            if (!uniform || resource.binding != MultiviewShaderParameterIds::Buffer || resource.arrayElement != 0)
+            const auto resource = std::ranges::find(descriptor.resources, Buffer, &MaterialResourceBinding::binding);
+            if (resource == descriptor.resources.end() || resource->arrayElement != 0)
                 return false;
+            const auto *uniform = std::get_if<MaterialBufferBinding>(&resource->value);
             const auto &binding = graph.Resources()[geometry.parameters.value - 1].binding;
             const auto *handle = std::get_if<RenderBufferHandle>(&binding);
-            return handle && *handle == uniform->buffer;
+            if (!uniform || !handle || *handle != uniform->buffer)
+                return false;
+            if (coverage)
+                for (std::size_t eye = 0; eye < viewCount; ++eye) {
+                    const auto sampled =
+                        std::ranges::find(descriptor.resources, PreviousEyeDepthBindings[eye], &MaterialResourceBinding::binding);
+                    const auto *view =
+                        sampled == descriptor.resources.end() ? nullptr : std::get_if<RenderTextureViewHandle>(&sampled->value);
+                    if (!view || sampled->arrayElement != 0 || *view != workload.targets[eye].predecessorDepthView)
+                        return false;
+                }
+            return true;
         }
 
         /** @brief Resolves each visible source exactly once, preserving canonical draw order and exact resident generations. */
@@ -112,8 +154,7 @@ namespace Horo::Render {
                     !uses.Add(geometry.parameters, Buffer, UniformBuffer))
                     return false;
                 const auto &source = workload.scene->Instances()[geometry.instanceIndex];
-                if (geometry.material->Id() != source.material ||
-                    !ParameterBindingMatches(request.graph, geometry, workload.targets.size()))
+                if (geometry.material->Id() != source.material || !ParameterBindingMatches(request.graph, geometry, workload))
                     return false;
                 const auto resolved = std::ranges::find(request.meshes, source.mesh, &RenderGraphMeshInstance::mesh);
                 if (resolved == request.meshes.end() || resolved->instance == 0)
@@ -136,8 +177,19 @@ namespace Horo::Render {
             !std::isfinite(workload.depthClear) || workload.depthClear < 0.0F || workload.depthClear > 1.0F ||
             workload.targets.size() != workload.scene->Views().size() || workload.geometry.size() != workload.scene->Draws().size() ||
             request.graph.Resources().size() > RenderGraphLimits::HardMaxResources ||
-            request.meshes.size() > MultiviewExtractionLimits::HardMaximumInstances ||
-            request.views.size() > MultiviewExtractionLimits::HardMaximumViews * 2 || !workload.limits.IsValid())
+            request.meshes.size() > RenderGraphMultiview::MaximumMeshInstances ||
+            request.views.size() > RenderGraphMultiview::MaximumAttachmentViews || !workload.limits.IsValid())
+            return Invalid();
+        if (workload.output >= MultiviewOutput::Count ||
+            (workload.output != MultiviewOutput::ProjectionColor &&
+             (workload.scene->Mode() != MultiviewExecutionMode::Multipass || workload.depthClear != 1.0F ||
+              workload.clearColor.red != 0.0F || workload.clearColor.green != 0.0F || workload.clearColor.blue != 0.0F ||
+              workload.clearColor.alpha != 0.0F)))
+            return Invalid();
+        if (workload.clearArea > MultiviewClearArea::AttachmentLayer)
+            return Invalid();
+        if (workload.output == MultiviewOutput::ReprojectionCoverage &&
+            (workload.targets.size() != MultiviewShaderParameterIds::PreviousEyeDepthBindings.size() || workload.geometry.empty()))
             return Invalid();
         if (const auto live = workload.scene->Validate(workload.active); live.HasError())
             return live;

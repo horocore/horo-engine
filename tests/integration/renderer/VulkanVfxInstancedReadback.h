@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <thread>
 #include <vector>
@@ -34,6 +35,7 @@ namespace Horo::Render::Test::VfxInstanced {
             VkImage image{};
             VkFormat format{};
             VkImageUsageFlags usage{};
+            VkExtent3D extent{};
         };
 
         struct View final {
@@ -74,6 +76,16 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @copydoc IVulkanLoaderPort::RequiredPresentationExtensions */
         Result<std::vector<std::string>> RequiredPresentationExtensions() override {
             return delegate_.RequiredPresentationExtensions();
+        }
+
+        /** @copydoc IVulkanLoaderPort::CreatePresentationSurface */
+        Result<VkSurfaceKHR> CreatePresentationSurface(VkInstance instance) override {
+            return delegate_.CreatePresentationSurface(instance);
+        }
+
+        /** @copydoc IVulkanLoaderPort::DestroyPresentationSurface */
+        void DestroyPresentationSurface(VkInstance instance, VkSurfaceKHR surface) noexcept override {
+            delegate_.DestroyPresentationSurface(instance, surface);
         }
 
         /** @copydoc IVulkanLoaderPort::SupportsPresentation */
@@ -120,6 +132,38 @@ namespace Horo::Render::Test::VfxInstanced {
             return rendered_;
         }
 
+        /** @brief Borrows the actual viewport GUI sample through its live native view. */
+        Image ViewportColor(VkImageView sampledView) const {
+            REQUIRE_FALSE(invalid_);
+            REQUIRE(sampledView);
+            const auto image = Attachment(sampledView);
+            REQUIRE(image.image);
+            REQUIRE(image.format == VK_FORMAT_R8G8B8A8_UNORM);
+            REQUIRE((image.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
+            return image;
+        }
+
+        /** @brief Resolves the only live RGBA8 copy-source image in a fixture that creates exactly one such output. */
+        Image OnlyRgba8CopySource() const {
+            REQUIRE_FALSE(invalid_);
+            const auto candidate = [](const Image &image) {
+                return image.image && image.format == VK_FORMAT_R8G8B8A8_UNORM && (image.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+            };
+            REQUIRE(std::ranges::count_if(images_, candidate) == 1);
+            return *std::ranges::find_if(images_, candidate);
+        }
+
+        /** @brief Returns the only captured reconstruction storage output of the exact format marked for transfer. */
+        Image ReconstructedImage(VkFormat format) const {
+            REQUIRE_FALSE(invalid_);
+            const auto candidate = [format](const Image &image) {
+                constexpr auto required = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                return image.image && image.format == format && (image.usage & required) == required;
+            };
+            REQUIRE(std::ranges::count_if(images_, candidate) == 1);
+            return *std::ranges::find_if(images_, candidate);
+        }
+
         /** @brief Returns actual successfully created device and retrieved graphics queue identities. */
         VkDevice Device() const noexcept {
             return device_;
@@ -133,14 +177,27 @@ namespace Horo::Render::Test::VfxInstanced {
             return family_;
         }
 
+        /** @brief Reports the mode of the last successful native swapchain creation. */
+        [[nodiscard]] std::optional<VkPresentModeKHR> CreatedPresentationMode() const noexcept {
+            return presentationMode_;
+        }
+
         /** @brief Starts a bounded observation window without changing any driver command or resource state. */
         void ResetDraws() noexcept {
             drawCount_ = 0;
+            drawCountOverflow_ = false;
+            dispatchCount_ = 0;
+        }
+
+        /** @brief Counts actual direct native compute commands in the current observation window. */
+        std::size_t DispatchCount() const noexcept {
+            return dispatchCount_;
         }
 
         /** @brief Returns actual forwarded indexed command counts, checked outside every native callback. */
         std::array<std::uint32_t, 3> DrawCounts() const {
             REQUIRE_FALSE(invalid_);
+            REQUIRE_FALSE(drawCountOverflow_);
             std::array<std::uint32_t, 3> counts{0, static_cast<std::uint32_t>(drawCount_), 0};
             for (const auto &draw : std::span{draws_}.first(drawCount_)) {
                 REQUIRE(draw.indices == 6);
@@ -185,6 +242,10 @@ namespace Horo::Render::Test::VfxInstanced {
                 self.createImage_ = std::bit_cast<PFN_vkCreateImage>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&CreateImage);
             }
+            if (std::strcmp(name, "vkCreateSwapchainKHR") == 0) {
+                self.createSwapchain_ = std::bit_cast<PFN_vkCreateSwapchainKHR>(actual);
+                return std::bit_cast<PFN_vkVoidFunction>(&CreateSwapchain);
+            }
             if (std::strcmp(name, "vkDestroyImage") == 0) {
                 self.destroyImage_ = std::bit_cast<PFN_vkDestroyImage>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DestroyImage);
@@ -197,15 +258,41 @@ namespace Horo::Render::Test::VfxInstanced {
                 self.destroyView_ = std::bit_cast<PFN_vkDestroyImageView>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DestroyView);
             }
+            return self.ObserveCommandProc(name, actual);
+        }
+
+        /** @brief Wraps command-recording entry points that the fixture observes. */
+        PFN_vkVoidFunction ObserveCommandProc(const char *name, const PFN_vkVoidFunction actual) noexcept {
             if (std::strcmp(name, "vkCmdBeginRendering") == 0) {
-                self.beginRendering_ = std::bit_cast<PFN_vkCmdBeginRendering>(actual);
+                beginRendering_ = std::bit_cast<PFN_vkCmdBeginRendering>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&BeginRendering);
             }
             if (std::strcmp(name, "vkCmdDrawIndexed") == 0) {
-                self.drawIndexed_ = std::bit_cast<PFN_vkCmdDrawIndexed>(actual);
+                drawIndexed_ = std::bit_cast<PFN_vkCmdDrawIndexed>(actual);
                 return std::bit_cast<PFN_vkVoidFunction>(&DrawIndexed);
             }
+            if (std::strcmp(name, "vkCmdDispatch") == 0) {
+                dispatch_ = std::bit_cast<PFN_vkCmdDispatch>(actual);
+                return std::bit_cast<PFN_vkVoidFunction>(&Dispatch);
+            }
             return actual;
+        }
+
+        /** @brief Retains the exact mode admitted by the actual driver without changing the request. */
+        static VKAPI_ATTR VkResult VKAPI_CALL CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR *info,
+                                                              const VkAllocationCallbacks *allocator, VkSwapchainKHR *chain) noexcept {
+            auto &self = *active_;
+            const auto result = self.createSwapchain_(device, info, allocator, chain);
+            if (result == VK_SUCCESS)
+                self.presentationMode_ = info->presentMode;
+            return result;
+        }
+
+        /** @brief Observes a forwarded compute dispatch on the actual selected device. */
+        static VKAPI_ATTR void VKAPI_CALL Dispatch(VkCommandBuffer command, std::uint32_t x, std::uint32_t y, std::uint32_t z) noexcept {
+            auto &self = *active_;
+            self.dispatch_(command, x, y, z);
+            ++self.dispatchCount_;
         }
 
         /** @brief Forwards real indexed draws unchanged and records only bounded arguments, never a GPU verdict. */
@@ -215,7 +302,7 @@ namespace Horo::Render::Test::VfxInstanced {
             auto &self = *active_;
             self.drawIndexed_(command, indices, instances, firstIndex, vertexOffset, firstInstance);
             if (self.drawCount_ == self.draws_.size()) {
-                self.invalid_ = true;
+                self.drawCountOverflow_ = true;
                 return;
             }
             self.draws_[self.drawCount_++] = {indices, instances};
@@ -247,14 +334,16 @@ namespace Horo::Render::Test::VfxInstanced {
         void RecordImage(VkImage image, const VkImageCreateInfo &info) noexcept {
             if (info.extent.width != 64 || info.extent.height != 32 || info.samples != VK_SAMPLE_COUNT_1_BIT)
                 return;
-            if (info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT)
+            const bool viewportColor = info.format == VK_FORMAT_R8G8B8A8_UNORM && (info.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+            if (!viewportColor && info.format != VK_FORMAT_R16G16B16A16_SFLOAT && info.format != VK_FORMAT_D32_SFLOAT &&
+                info.format != VK_FORMAT_R32G32B32A32_SFLOAT && info.format != VK_FORMAT_R32_SFLOAT)
                 return;
             const auto free = std::ranges::find(images_, VkImage{}, &Image::image);
             if (free == images_.end()) {
                 invalid_ = true;
                 return;
             }
-            *free = {image, info.format, info.usage};
+            *free = {image, info.format, info.usage, info.extent};
         }
 
         /** @brief Forwards creation first and records only a genuine successful result. */
@@ -332,6 +421,8 @@ namespace Horo::Render::Test::VfxInstanced {
         inline static thread_local ObservedLoader *active_{};
         PFN_vkGetInstanceProcAddr instanceResolver_{};
         PFN_vkGetDeviceProcAddr deviceResolver_{};
+        PFN_vkCreateSwapchainKHR createSwapchain_{};
+        std::optional<VkPresentModeKHR> presentationMode_;
         PFN_vkCreateDevice createDevice_{};
         PFN_vkGetDeviceQueue getQueue_{};
         PFN_vkCreateImage createImage_{};
@@ -340,6 +431,8 @@ namespace Horo::Render::Test::VfxInstanced {
         PFN_vkDestroyImageView destroyView_{};
         PFN_vkCmdBeginRendering beginRendering_{};
         PFN_vkCmdDrawIndexed drawIndexed_{};
+        PFN_vkCmdDispatch dispatch_{};
+        std::size_t dispatchCount_{};
         VkInstance instance_{};
         VkPhysicalDevice physical_{};
         VkDevice device_{};
@@ -350,6 +443,7 @@ namespace Horo::Render::Test::VfxInstanced {
         Attachments rendered_;
         std::array<Draw, 32> draws_;
         std::size_t drawCount_{};
+        bool drawCountOverflow_{};
         bool invalid_{};
     };
 
@@ -357,7 +451,15 @@ namespace Horo::Render::Test::VfxInstanced {
     class NativeReadback final {
     public:
         /** @brief Borrows the actual live backend observer after ordinary frontend completion has been proved. */
-        explicit NativeReadback(const ObservedLoader &loader) noexcept : loader_(loader) {}
+        enum class Capture {
+            VfxAttachments,
+            ReconstructionColor,
+            ReconstructionDepth,
+            ViewportColor
+        };
+
+        explicit NativeReadback(const ObservedLoader &loader, Capture capture = Capture::VfxAttachments) noexcept
+            : loader_(loader), capture_(capture), byteCount_(ByteCount(capture)) {}
 
         /** @brief Contains every native wait to five seconds and destroys partial children before the frontend/device parent. */
         ~NativeReadback() {
@@ -377,7 +479,7 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Allocates a real coherent staging destination and a one-use same-queue diagnostic command. */
         void Prepare() {
             const VkBufferCreateInfo buffer{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                                            .size = TotalBytes,
+                                            .size = byteCount_,
                                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                             .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
             REQUIRE(loader_.DeviceFunction<PFN_vkCreateBuffer>("vkCreateBuffer")(loader_.Device(), &buffer, nullptr, &buffer_) ==
@@ -408,14 +510,78 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Transitions actual completed attachments, copies their contents, and restores the canonical graph's final layouts. */
         Pixels Read() {
             const auto images = loader_.Rendered();
-            const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                                 .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-            REQUIRE(loader_.DeviceFunction<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(commands_, &begin) == VK_SUCCESS);
+            Begin();
             Copy(images.color.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
             Copy(images.depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, ColorBytes,
                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+            Submit();
+            return Mapped();
+        }
+
+        /** @brief Reads native color or depth floats after canonical graph completion and restores General layout. */
+        std::vector<float> ReadReconstructed() {
+            REQUIRE((capture_ == Capture::ReconstructionColor || capture_ == Capture::ReconstructionDepth));
+            const auto format = capture_ == Capture::ReconstructionColor ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R32_SFLOAT;
+            const auto image = loader_.ReconstructedImage(format);
+            Begin();
+            Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, 0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_SHADER_WRITE_BIT);
+            Submit();
+            std::vector<float> result(byteCount_ / sizeof(float));
+            void *mapped{};
+            REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
+                    VK_SUCCESS);
+            std::memcpy(result.data(), mapped, byteCount_);
+            loader_.DeviceFunction<PFN_vkUnmapMemory>("vkUnmapMemory")(loader_.Device(), memory_);
+            return result;
+        }
+
+        /** @brief Observes the real RGBA8 image after its GUI sampled queue use and restores that layout. */
+        std::vector<std::uint8_t> ReadViewportColor(VkImageView sampledView) {
+            return ReadRgba8Color(loader_.ViewportColor(sampledView), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        }
+
+        /** @brief Observes the last completed native attachment without introducing a fake sampled graph workload. */
+        std::vector<std::uint8_t> ReadRgba8Attachment(const ObservedLoader::Image &image) {
+            return ReadRgba8Color(image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        }
+
+    private:
+        /** @brief Copies exact RGBA8 bytes from their observed native layout and restores that layout. */
+        std::vector<std::uint8_t> ReadRgba8Color(const ObservedLoader::Image &image, VkImageLayout layout, VkPipelineStageFlags stage,
+                                                 VkAccessFlags access) {
+            REQUIRE(capture_ == Capture::ViewportColor);
+            REQUIRE(image.image);
+            REQUIRE(image.format == VK_FORMAT_R8G8B8A8_UNORM);
+            REQUIRE((image.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
+            REQUIRE(image.extent.width == Extent.width);
+            REQUIRE(image.extent.height == Extent.height);
+            REQUIRE(image.extent.depth == Extent.depth);
+            Begin();
+            Copy(image.image, VK_IMAGE_ASPECT_COLOR_BIT, layout, 0, stage, access);
+            Submit();
+            std::vector<std::uint8_t> result(byteCount_);
+            void *mapped{};
+            REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
+                    VK_SUCCESS);
+            std::memcpy(result.data(), mapped, byteCount_);
+            loader_.DeviceFunction<PFN_vkUnmapMemory>("vkUnmapMemory")(loader_.Device(), memory_);
+            return result;
+        }
+
+        /** @brief Opens the test-only diagnostic recorder after preparation. */
+        void Begin() {
+            const VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                                 .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+            REQUIRE(loader_.DeviceFunction<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(commands_, &begin) == VK_SUCCESS);
+        }
+
+        /** @brief Observes actual diagnostic completion before the staging buffer can be mapped. */
+        void Submit() {
             const VkBufferMemoryBarrier host{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                                              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
                                              .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
@@ -423,7 +589,7 @@ namespace Horo::Render::Test::VfxInstanced {
                                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                              .buffer = buffer_,
                                              .offset = 0,
-                                             .size = TotalBytes};
+                                             .size = byteCount_};
             loader_.DeviceFunction<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(commands_, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                                                                      VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host, 0,
                                                                                      nullptr);
@@ -434,11 +600,25 @@ namespace Horo::Render::Test::VfxInstanced {
             REQUIRE(loader_.DeviceFunction<PFN_vkQueueSubmit>("vkQueueSubmit")(loader_.Queue(), 1, &submit, fence_) == VK_SUCCESS);
             submitted_ = true;
             REQUIRE(Wait() == VK_SUCCESS);
-            return Mapped();
         }
 
-    private:
-        static constexpr VkDeviceSize ColorBytes = 64 * 32 * 8, TotalBytes = ColorBytes + 64 * 32 * 4;
+        static constexpr VkExtent3D Extent{64, 32, 1};
+        static constexpr VkDeviceSize PixelCount = Extent.width * Extent.height;
+        static constexpr VkDeviceSize ColorBytes = PixelCount * 8, TotalBytes = ColorBytes + PixelCount * 4;
+
+        static constexpr VkDeviceSize ByteCount(Capture capture) noexcept {
+            switch (capture) {
+                case Capture::VfxAttachments:
+                    return TotalBytes;
+                case Capture::ReconstructionColor:
+                    return PixelCount * 4 * sizeof(float);
+                case Capture::ReconstructionDepth:
+                    return PixelCount * sizeof(float);
+                case Capture::ViewportColor:
+                    return PixelCount * 4;
+            }
+            return 0;
+        }
 
         /** @brief Chooses only a real host-visible/coherent memory type allowed by this exact native allocation. */
         std::uint32_t MemoryType(std::uint32_t bits) const {
@@ -470,7 +650,7 @@ namespace Horo::Render::Test::VfxInstanced {
                                          .subresourceRange = {aspect, 0, 1, 0, 1}};
             const auto transition = loader_.DeviceFunction<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier");
             transition(commands_, stage, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-            const VkBufferImageCopy copy{.bufferOffset = offset, .imageSubresource = {aspect, 0, 0, 1}, .imageExtent = {64, 32, 1}};
+            const VkBufferImageCopy copy{.bufferOffset = offset, .imageSubresource = {aspect, 0, 0, 1}, .imageExtent = Extent};
             loader_.DeviceFunction<PFN_vkCmdCopyImageToBuffer>(
                 "vkCmdCopyImageToBuffer")(commands_, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer_, 1, &copy);
             std::swap(barrier.oldLayout, barrier.newLayout);
@@ -482,8 +662,8 @@ namespace Horo::Render::Test::VfxInstanced {
         /** @brief Copies only after actual coherent staging completion; bytes remain owned by the test result. */
         Pixels Mapped() {
             Pixels result;
-            result.color.resize(64 * 32 * 4);
-            result.depth.resize(64 * 32);
+            result.color.resize(PixelCount * 4);
+            result.depth.resize(PixelCount);
             void *mapped{};
             REQUIRE(loader_.DeviceFunction<PFN_vkMapMemory>("vkMapMemory")(loader_.Device(), memory_, 0, VK_WHOLE_SIZE, 0, &mapped) ==
                     VK_SUCCESS);
@@ -494,6 +674,8 @@ namespace Horo::Render::Test::VfxInstanced {
         }
 
         const ObservedLoader &loader_;
+        const Capture capture_;
+        const VkDeviceSize byteCount_;
         VkBuffer buffer_{};
         VkDeviceMemory memory_{};
         VkCommandPool pool_{};

@@ -13,14 +13,19 @@ namespace Horo::Application::Internal::Detail {
     struct RuntimeUiPaintFrame final {
         Runtime::Ui::UiAnimationFrameLease animation;
         std::optional<Runtime::Ui::UiRenderSnapshot> snapshot;
+        std::optional<Runtime::Ui::UiHitTestSnapshot> worldHit;
         std::optional<Runtime::Ui::UiRenderGeometryPlan> geometry;
         std::optional<Render::UiPaintPreparedFrame> prepared;
         std::array<Render::UiRenderImageBinding, Render::MaximumUiSubmissionImages> images;
         std::array<Render::UiRenderFontBinding, Render::MaximumUiSubmissionFonts> fonts;
         Render::UiRenderSubmission submission;
         std::optional<Runtime::Ui::UiPresentationReceipt> encoded;
+        std::optional<Runtime::Ui::UiWorldCanvasProjection> encodedPlane;
+        std::optional<std::uint64_t> extractedFrame;
         std::uint64_t encodedFrame{};
         std::uint32_t slot{};
+        bool sceneSubmissionTaken{};
+        bool sceneEncoded{};
     };
 
     /** @brief Actual immutable source policy plus latest native evidence; observation never authors a second canvas. */
@@ -43,6 +48,12 @@ namespace Horo::Application::Internal::Detail {
 
     /** @brief One actual derived source and its renderer preparations; teardown never owns the canonical source service. */
     struct RuntimeUiPaintSource final {
+        /** @brief One read-only view with its own snapshot pool and exact layout admission. */
+        struct SnapshotView final {
+            Runtime::Ui::UiPresentationAttachmentId attachment;
+            std::unique_ptr<RuntimeUiPaintProjection> projection;
+        };
+
         Runtime::Ui::RuntimeUiInstanceId instance;
         std::shared_ptr<Runtime::Ui::UiElementSlotAllocator> allocatorLifetime;
         std::unique_ptr<Runtime::UiAnimationRuntimeParticipant> animation;
@@ -52,6 +63,7 @@ namespace Horo::Application::Internal::Detail {
         Runtime::Ui::UiRenderExtractorDescriptor extraction;
         Runtime::Ui::UiRenderGeometryArena arena;
         Runtime::Ui::UiRenderGeometryArenaDescriptor geometryPolicy;
+        std::array<SnapshotView, Runtime::Ui::MaximumUiAnimationAttachments - 1> snapshotViews;
 
         /** @brief One preparation policy and its active/retiring native generations, destroyed in reverse ownership order. */
         struct NativePrograms final {
@@ -67,6 +79,11 @@ namespace Horo::Application::Internal::Detail {
         bool refresh{true};
         RuntimeUiPaintOutput output;
         std::optional<Runtime::SceneRuntimeId> scene;
+        std::optional<RuntimeUiPaintWorldCanvas> worldCanvas;
+        std::optional<Runtime::Ui::UiEventDispatcher> worldDispatcher; /**< Reserved once before the World source publishes. */
+        std::optional<Runtime::Ui::UiFeedbackQueue> worldFeedback;
+        std::optional<RuntimeUiPaintPresentedWorldCanvas> presentedWorld;
+        bool sceneCanvas{};
         bool retiring{};
         bool started{};
         std::uint32_t retirementSlot{Runtime::Ui::NoUiRenderIndex};
@@ -82,15 +99,19 @@ namespace Horo::Application::Internal::Detail {
 
         /** @brief Resolves coalesced native evidence through canonical canvas policy before the next derived update. */
         [[nodiscard]] Result<void> ApplyOutput();
+        /** @brief Resolves an exact admitted render-only attachment without borrowing another view's pool. */
+        [[nodiscard]] SnapshotView *FindSnapshot(Runtime::Ui::UiPresentationAttachmentId attachment) noexcept;
         /** @brief Validates/preserves the complete pre-admitted native texture inventory outside frame work. */
         [[nodiscard]] Result<void> AdmitResources();
         /** @brief Prepares a complete structural replacement only at the explicit application owner safe point. */
         [[nodiscard]] Result<void> Refresh(Render::RenderFrontend &frontend, const CancellationToken &cancellation);
         /** @brief Builds allocation-free current image/font/atlas evidence for the exact selected native slot. */
-        [[nodiscard]] Result<void> BindResources();
+        [[nodiscard]] Result<Render::UiRenderSubmission> BindResources(const Render::UiPaintProgram &program, std::uint32_t slot);
         /** @brief Extracts current canonical source/derived data before the editor opens its native frame. */
         [[nodiscard]] Result<void> Extract(const Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
                                            const CancellationToken &cancellation);
+        /** @brief Applies one World draw completion or explicit suppression using the extracted snapshot's exact revisions. */
+        [[nodiscard]] Result<void> FinishSceneCanvas(std::uint64_t frameNumber, bool nativePresentSucceeded);
         /** @brief Releases local CPU pins before the existing derived/source drain fence is queried. */
         void ReleaseFrame() noexcept;
         /** @brief Closes this exact derived producer while preserving pending native and immutable leases for collection. */
@@ -115,8 +136,10 @@ namespace Horo::Application::Internal::Detail {
         bool sceneSealed{};
         bool scenePreparing{};
         std::optional<Runtime::Ui::UiCanvasViewportEvidence> output;
+        std::optional<Runtime::Ui::UiCanvasViewportEvidence> cameraOutput;
         CancellationSource cancellation;
         RuntimeUiPaintHostPhase phase{RuntimeUiPaintHostPhase::NoSource};
+        Runtime::Ui::UiVisualPresentationPolicy accessibility;
         bool started{};
         bool revoked{};
         bool dispatching{};
@@ -130,10 +153,15 @@ namespace Horo::Application::Internal::Detail {
             return owner == std::this_thread::get_id() && !revoked && !sceneSealed && !scenePreparing;
         }
 
+        /** @brief Validates every requested viewport before queuing either output or invalidating any source frame. */
+        [[nodiscard]] Result<void> QueueOutputs(const std::optional<Runtime::Ui::UiCanvasViewportEvidence> &main,
+                                                const std::optional<Runtime::Ui::UiCanvasViewportEvidence> &camera);
         /** @brief Stops admission, releases CPU observations and retains the actual stopped child for explicit drain. */
         [[nodiscard]] Result<void> Retire();
         /** @brief Copies a bounded borrow inventory; normal work excludes stopped and retired children. */
         [[nodiscard]] std::array<RuntimeUiPaintSource *, 1 + MaximumSceneUiSources + MaximumRetiredSceneUiSources> Sources(
             bool includeRetired = false) noexcept;
+        /** @brief Finds the exact active source without consulting retired generations. */
+        [[nodiscard]] RuntimeUiPaintSource *ActiveSource(Runtime::Ui::RuntimeUiInstanceId instance) noexcept;
     };
 }  // namespace Horo::Application::Internal::Detail

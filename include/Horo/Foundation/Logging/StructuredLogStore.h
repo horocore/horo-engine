@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Logging/LogLevel.h"
+#include "Horo/Foundation/Telemetry/Telemetry.h"
 
 #include <chrono>
 #include <cstddef>
@@ -26,6 +27,7 @@ namespace Horo::Log {
         std::string category;
         std::string message;
         std::string context;
+        std::vector<Telemetry::Field> fields; /**< Record-local metadata redacted by the producer before dispatch. */
     };
 
     /** @brief Owned bounded snapshot returned to slow presentation consumers. */

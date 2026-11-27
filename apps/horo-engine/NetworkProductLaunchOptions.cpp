@@ -97,14 +97,11 @@ namespace Horo::Application::Internal {
             CookTarget,
             Physics,
             Timeout,
+            Navigation,
             Count
         };
-        constexpr std::array<std::string_view, static_cast<std::size_t>(SceneOption::Count)> SceneOptionNames{"--project",
-                                                                                                              "--scene",
-                                                                                                              "--cooked-root",
-                                                                                                              "--cook-target",
-                                                                                                              "--physics",
-                                                                                                              "--load-timeout-ms"};
+        constexpr std::array<std::string_view, static_cast<std::size_t>(SceneOption::Count)>
+            SceneOptionNames{"--project", "--scene", "--cooked-root", "--cook-target", "--physics", "--load-timeout-ms", "--navigation"};
         using SeenSceneOptions = std::array<bool, static_cast<std::size_t>(SceneOption::Count)>;
 
         /** @brief Applies one admitted unique option; paths retain the canonical native UTF-8 conversion. */
@@ -136,11 +133,18 @@ namespace Horo::Application::Internal {
                 case Timeout: {
                     std::uint32_t milliseconds{};
                     if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), milliseconds);
-                        parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || milliseconds == 0 || milliseconds > 60'000)
+                        parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                        !IsHeadlessSceneLoadTimeoutValid(std::chrono::milliseconds{milliseconds}))
                         return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
                     input.loadTimeout = std::chrono::milliseconds{milliseconds};
                     break;
                 }
+                case Navigation:
+                    if (value != "recast-detour")
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "Navigation mode must be recast-detour."));
+                    input.navigationMode = HeadlessNavigationMode::RecastDetour;
+                    break;
                 case Count:
                     return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
             }
@@ -162,6 +166,9 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
                               "Use an absolute project/cook root and source:<project path> or cooked:<Scene AssetId>."));
+            if (has(SceneOption::Navigation) && (!input.scene.starts_with("cooked:") || !has(SceneOption::CookRoot)))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Navigation requires a durable cooked Scene and committed cook generation."));
             return Result<void>::Success();
         }
 
@@ -221,10 +228,265 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Decodes one exact controller and stable project asset without loading either. */
+        Result<void> ReadCookedDecision(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch,
+                                        const bool fromPrefab) {
+            const std::size_t count = fromPrefab ? 4 : 3;
+            if (arguments.size() - index < count)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       fromPrefab
+                                                           ? "Use --ai-prefab-decision <controller id> <Decision AssetId> <Prefab AssetId>."
+                                                           : "Use --ai-decision <controller id> <Decision AssetId>."));
+            const std::string_view identity{arguments[index + 1]};
+            std::uint64_t value{};
+            const auto parsed = std::from_chars(identity.data(), identity.data() + identity.size(), value);
+            auto controller = AI::ControllerTypeId::Create(value);
+            if (parsed.ec != std::errc{} || parsed.ptr != identity.data() + identity.size() || controller.HasError())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid AI controller identity."));
+            auto asset = Assets::AssetId::Parse(arguments[index + 2]);
+            if (asset.HasError())
+                return Result<void>::Failure(asset.ErrorValue());
+            HeadlessCookedDecisionBinding binding{controller.Value(), std::move(asset).Value()};
+            if (fromPrefab) {
+                auto prefab = Assets::AssetId::Parse(arguments[index + 3]);
+                if (prefab.HasError())
+                    return Result<void>::Failure(prefab.ErrorValue());
+                binding.prefab.emplace(std::move(prefab).Value());
+            }
+            launch.cookedDecisionBindings.push_back(std::move(binding));
+            index += count;
+            return Result<void>::Success();
+        }
+
+        /** @brief Reads the native module's explicit bounded path-only grant. */
+        Result<void> ReadNavigationPathPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch,
+                                              const Navigation::NavigationPathExecution execution) {
+            if (launch.navigationPath || arguments.size() - index < 3)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Select one Navigation path mode with <filter id> <deadline ticks>."));
+            const auto number = [](const std::string_view text, auto &value) {
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+                return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+            };
+            std::uint64_t filterValue{};
+            std::uint32_t deadline{};
+            if (!number(arguments[index + 1], filterValue) || !number(arguments[index + 2], deadline) || deadline == 0 ||
+                deadline > HeadlessNavigationPathPolicy::MaximumDeadlineTicks)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Navigation path filter and deadline must be positive bounded integers."));
+            auto filter = Navigation::NavigationFilterId::Create(filterValue);
+            if (filter.HasError())
+                return Result<void>::Failure(filter.ErrorValue());
+            launch.navigationPath.emplace(HeadlessNavigationPathPolicy{filter.Value(), deadline, execution});
+            index += 3;
+            return Result<void>::Success();
+        }
+
+        /** @brief Identifies product modes with a single locally authoritative AI world. */
+        bool HasHeadlessAiAuthority(const Net::NetworkProjectRole role) noexcept {
+            return role == Net::NetworkProjectRole::Standalone || role == Net::NetworkProjectRole::DedicatedServer;
+        }
+
+        /** @brief Validates the explicit path authority before project IO. */
+        Result<void> ValidateNavigationPathPolicy(const ProductLaunch &launch) {
+            if (launch.navigationPath &&
+                (!HasHeadlessAiAuthority(launch.role) || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
+                 launch.sceneInput.navigationMode != HeadlessNavigationMode::RecastDetour))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "A Navigation path grant requires authoritative cooked Navigation and native gameplay."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Reads one explicit committed World selection from this launch's option list. */
+        Result<void> ReadWorldMount(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (launch.sceneInput.world || arguments.size() - index <= CommittedWorldSelectionArgumentCount)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Use --world-mount <root> <target> <manifest SHA-256> <index "
+                                                       "AssetId> <dependency AssetId> <x-mm> <y-mm> <z-mm> once."));
+            auto selected = ParseCommittedWorldSelection(arguments.subspan(index + 1, CommittedWorldSelectionArgumentCount));
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            launch.sceneInput.world.emplace(std::move(selected).Value());
+            index += CommittedWorldSelectionArgumentCount + 1;
+            return Result<void>::Success();
+        }
+
+        /** @brief Reads one exact cell selection without admitting a mounted world or Scene. */
+        Result<CommittedWorldInitialCell> ReadWorldInitialCell(const std::span<char *> arguments, std::size_t &index) {
+            if (arguments.size() - index <= CommittedWorldCellArgumentCount)
+                return Result<CommittedWorldInitialCell>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "Use --world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>."));
+            auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
+            if (selected.HasValue())
+                index += CommittedWorldCellArgumentCount + 1;
+            return selected;
+        }
+
+        /** @brief Parses one exact numeric argument without accepting suffixes or overflow. */
+        bool ReadNumber(const std::string_view text, auto &value) {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+        }
+
+        struct LiveAssetBudget final {
+            std::size_t count{};
+            std::size_t bytes{};
+        };
+
+        /** @brief Parses exact external resource limits for the selected live cell. */
+        Result<LiveAssetBudget> ReadWorldLiveAssets(const std::span<char *> arguments, std::size_t &index) {
+            using Output = Result<LiveAssetBudget>;
+            LiveAssetBudget budget;
+            if (arguments.size() - index <= 2 || !ReadNumber(arguments[index + 1], budget.count) ||
+                !ReadNumber(arguments[index + 2], budget.bytes) || budget.count == 0 || budget.bytes == 0)
+                return Output::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --world-live-assets <maximum-assets> <maximum-encoded-bytes>."));
+            index += 3;
+            return Output::Success(budget);
+        }
+
+        /** @brief Parses an exact first live demand and explicit owner limits without admitting a cook or Scene. */
+        Result<CommittedWorldLiveSelection> ReadWorldLiveCell(const std::span<char *> arguments, std::size_t &index) {
+            using Output = Result<CommittedWorldLiveSelection>;
+            constexpr auto count = CommittedWorldCellArgumentCount + 3;
+            if (arguments.size() - index <= count)
+                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                 "Use --world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision> "
+                                                 "<frame-ns> <unit-ns> <maximum-entities>."));
+            auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
+            if (selected.HasError())
+                return Output::Failure(selected.ErrorValue());
+            const auto limits = ParseMountedWorldLiveLimits(arguments.subspan(index + 1 + CommittedWorldCellArgumentCount, 3));
+            if (limits.HasError())
+                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World frame or entity limits."));
+            index += 1 + count;
+            return Output::Success({limits.Value(), std::move(selected).Value()});
+        }
+
+        /** @brief Reads the one project-relative policy path without resolving an executable or source file. */
+        Result<void> ReadPerceptionPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (!launch.sceneInput.perceptionPolicyPath.empty() || arguments.size() - index < 2)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --game-perception-policy <project-relative path> once."));
+            const std::string_view path{arguments[index + 1]};
+            if (path.empty() || path.starts_with("--"))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Native Perception requires an explicit project policy path."));
+            launch.sceneInput.perceptionPolicyPath = path;
+            index += 2;
+            return Result<void>::Success();
+        }
+
+        /** @brief Decodes the Scene's missing-controller policy independently of explicit asset selection. */
+        Result<void> ReadMissingControllerPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            if (launch.aiMissingController || arguments.size() - index < 2)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Duplicate or missing AI controller policy."));
+            const std::string_view value{arguments[index + 1]};
+            if (value != "reject" && value != "degrade")
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-missing-controller <reject|degrade>."));
+            launch.aiMissingController =
+                value == "degrade" ? AI::AiMissingControllerPolicy::PreserveInactive : AI::AiMissingControllerPolicy::Reject;
+            index += 2;
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires the authoritative terminal path and the matching native/cooked authority. */
+        Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
+            if (launch.decisionReplayOutput && !launch.decisionReplay)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay output requires --ai-replay or --ai-replay-window."));
+            if (launch.decisionReplay && (launch.role != Net::NetworkProjectRole::Standalone || launch.cookedDecisionBindings.empty()))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "AI replay requires standalone mode and explicit cooked controllers."));
+            if (launch.aiSimulationAnchor.IsValid() && (launch.cookedDecisionBindings.empty() || launch.decisionReplay))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "An AI simulation anchor requires live cooked controllers."));
+            if (launch.reducedPopulation.IsValid() && !launch.aiSimulationAnchor.IsValid())
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "A reduced population requires --ai-simulation-anchor."));
+            if (!launch.sceneInput.perceptionPolicyPath.empty() && launch.cookedDecisionBindings.empty())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Native Perception requires explicit native cooked controller selection."));
+            if (launch.aiMissingController && (!HasHeadlessAiAuthority(launch.role) || launch.sceneInput.scene.empty()))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI controller policy requires a configured authoritative Scene."));
+            if (!launch.cookedDecisionBindings.empty() &&
+                (!HasHeadlessAiAuthority(launch.role) || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
+                 !launch.sceneInput.scene.starts_with("cooked:") || launch.sceneInput.cookedRoot.empty()))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "AI decisions require standalone or dedicated mode, a native gameplay module, a "
+                                                       "cooked Scene and its committed generation."));
+            if (launch.gameplay && launch.gameplay->prefabPermission != GameplayPrefabPermission::Granted &&
+                std::ranges::any_of(launch.cookedDecisionBindings, [](const auto &binding) {
+                return binding.prefab.has_value();
+            }))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires explicit --prefab grant."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Parses a positive decimal authored identity or fixed tick. */
+        [[nodiscard]] bool ReadPositiveNumber(const std::string_view text, std::uint64_t &value) noexcept {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && value != 0;
+        }
+
+        /** @brief Selects one committed affiliate Scene and an ordinary Scene group limit. */
+        Result<void> ReadReducedPopulation(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            constexpr auto usage = "Use --ai-reduced-population <cooked-scene-uuid> <promotions per frame, 1..256> once.";
+            constexpr auto maximum = Runtime::SceneRestoreStructuralLimits{}.maximumEntities;
+            std::uint64_t count{};
+            if (launch.reducedPopulation.IsValid() || arguments.size() - index < 3 ||
+                !ReadPositiveNumber(arguments[index + 2], count) || count > maximum)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, usage));
+            const auto asset = Assets::AssetId::Parse(arguments[index + 1]);
+            if (asset.HasError())
+                return Result<void>::Failure(asset.ErrorValue());
+            launch.reducedPopulation = asset.Value();
+            launch.maximumReducedPromotions = static_cast<std::size_t>(count);
+            index += 3;
+            return Result<void>::Success();
+        }
+
+        /** @brief Selects one stable agent and a bounded contiguous fixed-tick window. */
+        Result<void> ReadDecisionReplay(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch, const bool window) {
+            const std::size_t width = window ? 4 : 3;
+            constexpr auto Usage = "Use --ai-replay <agent> <tick> or --ai-replay-window <agent> <first-tick> <tick-count> once.";
+            std::uint64_t agent{}, tick{}, count{1};
+            if (launch.decisionReplay || arguments.size() - index < width || !ReadPositiveNumber(arguments[index + 1], agent) ||
+                !ReadPositiveNumber(arguments[index + 2], tick) || (window && !ReadPositiveNumber(arguments[index + 3], count)) ||
+                count > MaximumHeadlessReplayTicks)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, Usage));
+            const HeadlessDecisionReplaySelection selection{AI::AgentId::Create(agent).Value(), tick, static_cast<std::size_t>(count)};
+            if (!selection.IsValid())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, Usage));
+            launch.decisionReplay = std::make_shared<HeadlessDecisionReplay>(selection);
+            index += width;
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits one explicit artifact destination without creating anything. */
+        Result<void> ReadDecisionReplayOutput(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            const bool available = !launch.decisionReplayOutput && arguments.size() - index >= 2;
+            auto output = HeadlessReplayOutput::Parse(available ? std::string_view{arguments[index + 1]} : std::string_view{});
+            if (output.HasError())
+                return Result<void>::Failure(std::move(output).ErrorValue());
+            launch.decisionReplayOutput.emplace(std::move(output).Value());
+            index += 2;
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps legacy gameplay suffix parsing separate from paired explicit Scene options. */
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
             std::optional<bool> prefabGrant;
+            std::optional<CommittedWorldInitialCell> initialCell;
+            std::optional<CommittedWorldLiveSelection> liveCell;
+            std::optional<LiveAssetBudget> liveAssets;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
                 if (key == "--transport-qualification") {
@@ -244,6 +506,88 @@ namespace Horo::Application::Internal {
                         return selected;
                     continue;
                 }
+                if (key == "--game-navigation-path" || key == "--game-navigation-path-fixed-owner") {
+                    using enum Navigation::NavigationPathExecution;
+                    const auto execution = key == "--game-navigation-path-fixed-owner" ? FixedOwner : BestEffortJobs;
+                    if (auto policy = ReadNavigationPathPolicy(arguments, index, launch, execution); policy.HasError())
+                        return policy;
+                    continue;
+                }
+                if (key == "--world-start-cell") {
+                    if (initialCell)
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "The startup World cell may be selected once."));
+                    auto selected = ReadWorldInitialCell(arguments, index);
+                    if (selected.HasError())
+                        return Result<void>::Failure(selected.ErrorValue());
+                    initialCell = selected.Value();
+                    continue;
+                }
+                if (key == "--world-live-cell") {
+                    if (liveCell)
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "The first live World demand may be selected once."));
+                    auto selected = ReadWorldLiveCell(arguments, index);
+                    if (selected.HasError())
+                        return Result<void>::Failure(selected.ErrorValue());
+                    liveCell.emplace(std::move(selected).Value());
+                    continue;
+                }
+                if (key == "--world-live-assets") {
+                    if (liveAssets)
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "The live World asset budget may be selected once."));
+                    auto budget = ReadWorldLiveAssets(arguments, index);
+                    if (budget.HasError())
+                        return Result<void>::Failure(budget.ErrorValue());
+                    liveAssets = budget.Value();
+                    continue;
+                }
+                if (key == "--world-mount") {
+                    if (auto world = ReadWorldMount(arguments, index, launch); world.HasError())
+                        return world;
+                    continue;
+                }
+                if (key == "--game-perception-policy") {
+                    if (auto policy = ReadPerceptionPolicy(arguments, index, launch); policy.HasError())
+                        return policy;
+                    continue;
+                }
+                if (key == "--ai-missing-controller") {
+                    if (auto policy = ReadMissingControllerPolicy(arguments, index, launch); policy.HasError())
+                        return policy;
+                    continue;
+                }
+                if (key == "--ai-simulation-anchor") {
+                    std::uint64_t object{};
+                    if (launch.aiSimulationAnchor.IsValid() || arguments.size() - index < 2 ||
+                        !ReadPositiveNumber(arguments[index + 1], object))
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-simulation-anchor <scene-object-id> once."));
+                    launch.aiSimulationAnchor = Runtime::SceneObjectId{object};
+                    index += 2;
+                    continue;
+                }
+                if (key == "--ai-decision" || key == "--ai-prefab-decision") {
+                    if (auto selected = ReadCookedDecision(arguments, index, launch, key == "--ai-prefab-decision"); selected.HasError())
+                        return selected;
+                    continue;
+                }
+                if (key == "--ai-reduced-population") {
+                    if (auto selected = ReadReducedPopulation(arguments, index, launch); selected.HasError())
+                        return selected;
+                    continue;
+                }
+                if (key == "--ai-replay" || key == "--ai-replay-window") {
+                    if (auto selected = ReadDecisionReplay(arguments, index, launch, key == "--ai-replay-window"); selected.HasError())
+                        return selected;
+                    continue;
+                }
+                if (key == "--ai-replay-output") {
+                    if (auto output = ReadDecisionReplayOutput(arguments, index, launch); output.HasError())
+                        return output;
+                    continue;
+                }
                 if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())
                     return applied;
             }
@@ -252,7 +596,40 @@ namespace Horo::Application::Internal {
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Transport qualification cannot request a gameplay module."));
             if (auto permission = ApplyPrefabPermission(launch, prefabGrant); permission.HasError())
                 return permission;
-            return ValidateSceneOptions(seen, launch.sceneInput);
+            if (auto valid = ValidateSceneOptions(seen, launch.sceneInput); valid.HasError())
+                return valid;
+            if (launch.sceneInput.world && (launch.role != Net::NetworkProjectRole::Standalone || launch.sceneInput.scene.empty() ||
+                                            launch.purpose != Net::NetworkWorldCompositionPurpose::Gameplay))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Committed World mounting requires a standalone project Scene."));
+            if (initialCell) {
+                if (!launch.sceneInput.world)
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "The startup World cell requires a committed World mount."));
+                launch.sceneInput.world->initialCell = initialCell;
+            }
+            if (liveAssets) {
+                if (!liveCell)
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Live World asset budgets require a selected live cell."));
+                liveCell->limits.maximumCellAssets = liveAssets->count;
+                liveCell->limits.maximumCellAssetBytes = liveAssets->bytes;
+            }
+            if (liveCell) {
+                if (!launch.sceneInput.world || initialCell)
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                  "Live World demand requires a standalone mount without a startup cell."));
+                if (launch.gameplay && launch.gameplay->nativeArtifact.empty())
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Live World demand supports only native gameplay modules."));
+                if (!liveCell->limits.IsValid())
+                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World asset limits."));
+                launch.sceneInput.world->liveCell = std::move(liveCell);
+            }
+            if (auto ai = ValidateCookedDecisions(launch); ai.HasError())
+                return ai;
+            return ValidateNavigationPathPolicy(launch);
         }
 
     }  // namespace

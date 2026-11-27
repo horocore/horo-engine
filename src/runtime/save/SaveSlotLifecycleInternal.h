@@ -1,10 +1,22 @@
 #pragma once
 
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "Horo/Runtime/Save/SaveSlotLifecycle.h"
 
 #include <mutex>
+#include <utility>
 
 namespace Horo::Runtime::SaveSlotLifecycleDetail {
+    /** @brief Prevents Save provider diagnostics from publishing private archive or profile content. */
+    template <typename Callback> [[nodiscard]] auto InvokeSaveSlotHost(Callback &&callback) {
+        const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
+        auto result = std::forward<Callback>(callback)();
+        if (result.HasError())
+            return decltype(result)::Failure(RedactSaveDiagnosticError(result.ErrorValue()));
+        return result;
+    }
+
     /** @brief One selected generation; deletion is explicit catalog state, never inferred from missing bytes. */
     struct Record final {
         SaveSlotCatalogEntry entry;
@@ -31,6 +43,7 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
         std::uint64_t clock{};
         std::vector<Record> records;
         std::vector<Retired> retired;
+        std::optional<SaveCloudRevisionMetadata> cloud;
     };
 
     /** @brief Exact unpublished artifact ownership; an identity collision alone never authorizes deletion. */
@@ -56,6 +69,8 @@ namespace Horo::Runtime::SaveSlotLifecycleDetail {
     [[nodiscard]] Result<std::vector<std::byte>> EncodeCatalog(const Catalog &catalog, const SaveSlotLifecyclePolicy &policy);
     /** @brief Decodes canonical bounded selection evidence; malformed evidence is never treated as an empty catalog. */
     [[nodiscard]] Result<Catalog> DecodeCatalog(std::span<const std::byte> bytes, const SaveSlotLifecyclePolicy &policy);
+    /** @brief Projects one exact catalog revision into the selected or deleted slot index. */
+    [[nodiscard]] SaveSlotIndex CatalogIndex(const Catalog &catalog, bool deleted = false);
     /** @brief Verifies every untrusted input under fixed host signature, scope, compatibility and semantic policy. */
     [[nodiscard]] Result<ValidatedSaveArchive> Admit(std::vector<std::byte> bytes, const SaveSlotArchiveScope &scope,
                                                      const SaveSlotLifecyclePolicy &policy, ISaveSlotLifecycleHost &host);

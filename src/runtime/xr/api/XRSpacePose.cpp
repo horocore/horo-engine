@@ -254,6 +254,36 @@ namespace Horo::XR {
         return components_;
     }
 
+    /** @copydoc PlaceXRWorldPose */
+    Result<XRPoseSample> PlaceXRWorldPose(const XRPoseDescriptor &pose, const Math::Transform &placement) {
+        if (pose.target.kind != XRSpaceKind::World)
+            return Reject<XRPoseSample>(XRErrors::CoordinateSpaceIncompatible);
+        const auto origin = pose.target.worldOriginRevision;
+        const auto validated = XRPoseSample::Create(pose, pose.session, origin);
+        if (validated.HasError())
+            return validated;
+        if (placement.scale != Math::Vec3{1.0F, 1.0F, 1.0F} || !Math::IsFinite(placement.translation))
+            return Reject<XRPoseSample>(XRErrors::PoseInvalid);
+        const auto rotation = placement.rotation.TryNormalized();
+        if (rotation.HasError())
+            return Reject<XRPoseSample>(XRErrors::PoseInvalid);
+
+        auto result = pose;
+        auto &components = result.components;
+        const auto rotate = [&](auto &vector) {
+            if (vector.value)
+                vector.value = rotation.Value().Rotate(*vector.value);
+        };
+        rotate(components.positionMeters);
+        rotate(components.linearVelocityMetersPerSecond);
+        rotate(components.angularVelocityRadiansPerSecond);
+        if (auto &position = components.positionMeters.value)
+            position = *position + placement.translation;
+        if (auto &orientation = components.orientation.value)
+            orientation = rotation.Value() * *orientation;
+        return XRPoseSample::Create(result, result.session, origin);
+    }
+
     /** @copydoc ComposeXRSpaceTransforms */
     Result<XRPoseSample> ComposeXRSpaceTransforms(const std::span<const XRPoseSample> transforms, const XRSessionId &activeSession,
                                                   const XRWorldOriginRevision activeOriginRevision) {

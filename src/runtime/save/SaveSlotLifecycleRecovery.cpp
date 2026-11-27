@@ -23,7 +23,8 @@ namespace Horo::Runtime {
         if (auto selected = VerifySelected(operation); selected.HasError())
             return Result<bool>::Failure(selected.ErrorValue());
         // Establish selection durability before any journal or last-known-good retirement.
-        if (operation.catalog.revision != 1 || !operation.catalog.records.empty() || !operation.catalog.retired.empty()) {
+        if (operation.catalog.revision != 1 || !operation.catalog.records.empty() || !operation.catalog.retired.empty() ||
+            operation.catalog.cloud) {
             if (auto durable = state_->storage.SynchronizeLifecycleCatalog(); durable.HasError())
                 return Result<bool>::Failure(std::move(durable).ErrorValue());
         }
@@ -122,9 +123,11 @@ namespace Horo::Runtime {
                     return Result<bool>::Failure(archive.ErrorValue());
                 if (auto matched = Matches(retired.entry, archive.Value()); matched.HasError())
                     return Result<bool>::Failure(matched.ErrorValue());
-                if (auto recycled =
-                        state_->host->Recycle(retired.entry, {std::make_shared<const std::vector<std::byte>>(std::move(bytes).Value())});
-                    recycled.HasError())
+                const auto recycled = [this, &retired, &bytes] {
+                    const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
+                    return state_->host->Recycle(retired.entry, {std::make_shared<const std::vector<std::byte>>(std::move(bytes).Value())});
+                }();
+                if (recycled.HasError())
                     return Result<bool>::Success(true);
                 retired.recycle = false;
                 recycledAny = true;

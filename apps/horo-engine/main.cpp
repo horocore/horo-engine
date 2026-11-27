@@ -1,5 +1,7 @@
 #include "AnimationRuntimeIdentitySource.h"
+#include "HeadlessReplayArtifact.h"
 #include "NetworkProductLaunch.h"
+#include "OpenXRPackageProbe.h"
 #include "cli_host/CliHost.h"
 
 #include <iostream>
@@ -21,6 +23,12 @@
 namespace {
     /** @brief Borrows invocation storage only for the synchronous CLI or existing network host call. */
     int RunProcess(const std::span<char *> argv, std::optional<Horo::Error> admissionFailure = {}) {
+        if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--compare-ai-replay")
+            return Horo::Application::Internal::RunHeadlessReplayComparison(argv.subspan(2), std::cout, std::cerr);
+        if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--ai-replay-timeline")
+            return Horo::Application::Internal::RunHeadlessReplayTimeline(argv.subspan(2), std::cout, std::cerr);
+        if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--probe-xr-package")
+            return Horo::Application::Internal::RunOpenXRPackageProbe(argv.subspan(2), std::cout, std::cerr);
         if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--run-network-product") {
             std::unique_ptr<Horo::Application::HostObservabilitySession> observability;
             try {
@@ -28,7 +36,8 @@ namespace {
                     Horo::Application::HostObservabilitySession::Start({.logging = {.logDirectory = "~/.horo/logs",
                                                                                     .baseName = "horo-engine",
                                                                                     .hostName = "horo-engine",
-                                                                                    .hostVersion = HORO_ENGINE_VERSION_STRING},
+                                                                                    .hostVersion = HORO_ENGINE_VERSION_STRING,
+                                                                                    .captureProcessFaults = true},
                                                                         .identity = {.processRole = "network-product",
                                                                                      .engineVersion = HORO_ENGINE_VERSION_STRING,
                                                                                      .buildConfiguration = HORO_BUILD_CONFIGURATION,

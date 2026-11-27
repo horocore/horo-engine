@@ -150,6 +150,15 @@ selection. Initial load and compatible reload use the same validator. A reload
 candidate must preserve the persistent `SkeletonId`; cancellation and shutdown fail
 closed without publishing partial state or replacing the last good snapshot.
 
+Owner-lane gameplay queries resolve stable joint and socket IDs against the
+exact current or previous committed pose. They return model-space matrices by
+composing the validated joint ancestry and authored socket offset. Gameplay can
+compose the result with the animated entity's world transform. A Scene socket
+binding carries the exact entity and animation incarnation across ticks. Reload
+or actor retirement invalidates the binding, and Scene cancellation or shutdown
+rejects further queries. Queries allocate no storage on success and expose
+neither mutable pose data nor an attachment entity's transform authority.
+
 ## Pose
 
 `Horo/Animation/PoseStorage.h` is the ANI-001.5 owner of bounded local/model
@@ -223,6 +232,19 @@ Gameplay animation-parameter commands targeting an exclusive cinematic claim ret
 parameters are owner-composed. Suppressed commands are not reported as success or
 queued until release. Stop, scene/actor generation loss and authority change close
 contribution admission before owner-safe-point handoff/lease retirement.
+
+### Scene gameplay observations
+
+The Scene animation owner exposes committed graph parameters, state lifecycle
+events, and clip occurrences for an exact active entity and resident pose handle.
+Each read copies a complete block into caller-owned storage. An action query
+returns the copied fact for an exact request handle at the owner control boundary.
+The Scene owner checks admission before consulting the graph. These reads preserve
+stable occurrence identities, allocate no storage, and leave graph publication
+and consumption unchanged. Reload and entity replacement retire old instance
+identities. Shutdown and cancellation close Scene admission.
+The host's Scene limits bound the per-graph clip occurrence storage reserved
+during activation. The graph accounts for that storage in its instance budget.
 
 ## Animation Clip
 
@@ -537,6 +559,23 @@ to fixed scheduling and is not multiplied here. Exact signed sub-tick residuals
 are retained with each occurrence's independent clip cursor, including across
 rate changes. Intermediate arithmetic and complete traversal budgets are checked.
 
+The Scene owner captures all playing actors' parameters, rates and curve times
+before any graph evaluates. Each actor owns a typed parameter buffer sized from
+its admitted graph, charged to the same instance storage limit. Capture copies a
+source's borrowed span immediately, so a source may reuse scratch storage for the
+next actor. An oversized snapshot rejects the attempt before graph work begins.
+
+Dedicated headless authority can select the process CPU job owner and a finite
+join deadline. The fixed step partitions playing actors into stable contiguous
+slot ranges, bounded by the CPU worker count. Each range exclusively stages its
+graphs and their already allocated pose buffers. Workers consume frozen input
+and job cancellation, with no Scene callbacks. The Scene retains its own
+publication cancellation token, joins all submitted ranges, and publishes in
+slot order after the scheduler fence. Failed submission or a missed deadline
+cancels and drains accepted work before rollback can touch the same buffers.
+Foundation job records allocate on this selected path. Serial evaluation keeps
+its allocation-free contract. Rebuild users of the appended Scene runtime policy.
+
 `Evaluate` stages privately. The enclosing tick owner calls `Commit` only after
 all tick preflight succeeds, or `Abort` on failure. Pending cursors, residuals,
 parameters and the final local pose publish together. Failed attempts publish no
@@ -550,8 +589,13 @@ linearization boundary: a later cancellation does not undo a committed tick.
 IDs identify float, boolean, integer and trigger values. Each invocation copies its
 admitted inputs before instruction execution; missing declarations, duplicate IDs,
 non-finite values and variant/type mismatches return finite binding/malformed/type
-diagnostics. Omitted scalar inputs retain compiled-default behavior. There is no
-second mutable gameplay parameter store.
+diagnostics. Omitted scalar inputs retain compiled-default behavior. The graph
+owns one preallocated command slot per declaration. `QueueParameter` replaces
+the pending scalar value for that identity. Admitted gameplay scalar commands
+take precedence over the fixed invocation input for the next committed tick.
+Abort, cancellation at commit and failed evaluation retain the pending value
+for retry. A successful commit consumes it. Scene admission uses the same
+graph command path.
 
 The owner calls `QueueTrigger` before evaluation. Repeated events coalesce within the
 pending fixed tick. False invocation input cannot erase an accepted queued event.
@@ -770,12 +814,47 @@ any other pose query.
 Root motion produces a transform delta for one authoritative fixed-tick player
 interval from the animation clip's root joint.
 
-```cpp
-struct RootMotionDelta {
-    Vec3 translation;
-    Quat rotation;
-};
-```
+`AnimationClipAsset::ExtractRootMotionPrepared` resolves one tracked skeleton
+root for a flagged absolute clip. It reuses the directed clip traversal and
+composes translation and rotation in the starting root's frame. Each directed
+segment contributes its own endpoint displacement. Loop seams insert no jump
+from the last key to the first, and PingPong turns compose the reverse segment.
+The result includes the traversal cursor. Extraction uses caller-owned scratch
+storage and does not commit the cursor or produce a movement request.
+
+An authoritative graph instance can explicitly opt in to extraction for its
+single skeleton root. The instance reserves storage for clip traversal, motion per
+pose writer, and action travel when it is created. Normalized layers, blend trees,
+and state transitions blend the directed deltas with their admitted weights.
+Layer masks and coverage participate at the exact root joint. Synchronization
+alignment and frozen poses contribute no travel. Action sections accumulate
+weighted deltas in traversal order.
+
+The fixed commit publishes the output delta beside its exact pose generation.
+`CopyRootMotion` reads either resident publication without consuming it. An
+aborted attempt leaves the last committed delta and cursor intact. The read
+provides data for the movement owner and carries no movement authority.
+
+An authoritative Scene host can opt into movement requests for components that
+declare `RequestCharacterMovement`. The Scene adapter reads each fully staged
+graph once and addresses the request to its exact entity, Animation instance,
+simulation tick, and scheduler attempt. The movement owner may claim it once
+before preparation and either report applied motion or reject it. An unclaimed
+request reports an unavailable consumer. A claimed request without a response
+fails preparation. The remainder runs from the applied pose to the requested
+endpoint. Feedback joins the pose at the same commit fence, and
+abort discards the request and every staged response.
+
+When public Scene replication selects a root-motion Character, the authority
+reads its committed collision-root position and heading through the same
+scheduler tick used to capture the network snapshot. It expresses that pose in
+the Scene parent's coordinate frame and keeps the authored local scale. The
+replication field schema still determines which axes may be sent.
+The receiving Scene publishes the replicated Character pose in its presentation
+view during the existing replica commit. The Character collision root remains
+local simulation state. A partial field update uses the last received
+presentation pose as its base, and visual hierarchy traversal includes that pose
+when rendering descendants.
 
 Rules:
 

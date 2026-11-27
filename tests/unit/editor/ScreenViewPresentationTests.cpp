@@ -1,7 +1,9 @@
 #include "../../support/OwnedTestDirectory.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/GuiScreenHost.h"
+#include "editor/accessibility/EditorControlMetadata.h"
 #include "editor/screens/LeaveConfirmationView.h"
 #include "editor/screens/project_loading/ProjectLoadingView.h"
 #include "editor/screens/welcome/WelcomeView.h"
@@ -341,6 +343,40 @@ TEST_CASE("Workspace document strip retains long source identities and exposes n
     CheckSourceSaveAndUnavailable(fixture, view, model, source.Value(), width);
 }
 
+namespace {
+    struct LoadingRecoveryBounds {
+        float buttonTop{FLT_MAX};
+        float progressBottom{-FLT_MAX};
+        float buttonRight{-FLT_MAX};
+        float buttonBottom{-FLT_MAX};
+        float textRight{-FLT_MAX};
+        int errorVertices{};
+    };
+
+    LoadingRecoveryBounds MeasureLoadingRecoveryBounds(const ImGuiWindow &modal, const float footerTop) {
+        using namespace Horo::Editor;
+        LoadingRecoveryBounds bounds;
+        const auto whitePixel = ImGui::GetDrawListSharedData()->TexUvWhitePixel;
+        for (const auto &vertex : modal.DrawList->VtxBuffer) {
+            if (vertex.col == ImGui::GetColorU32(Theme::Err()))
+                ++bounds.errorVertices;
+            // Include the antialiased fringe when recovering fill bounds; its alpha varies with tessellation.
+            constexpr ImU32 rgbMask = ~IM_COL32_A_MASK;
+            if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Err()) & rgbMask) && vertex.uv.x == whitePixel.x &&
+                vertex.uv.y == whitePixel.y)
+                bounds.progressBottom = std::max(bounds.progressBottom, vertex.pos.y);
+            if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Bg3()) & rgbMask)) {
+                bounds.buttonTop = std::min(bounds.buttonTop, vertex.pos.y);
+                bounds.buttonRight = std::max(bounds.buttonRight, vertex.pos.x);
+                bounds.buttonBottom = std::max(bounds.buttonBottom, vertex.pos.y);
+            }
+            if (vertex.col == ImGui::GetColorU32(Theme::Text()) && vertex.pos.y >= footerTop)
+                bounds.textRight = std::max(bounds.textRight, vertex.pos.x);
+        }
+        return bounds;
+    }
+}  // namespace
+
 TEST_CASE("Loading recovery actions keep padding and failures use error colors", "[unit][editor][gui][project-loading-layout]") {
     using namespace Horo::Editor;
     const auto locale = GENERATE("en-US", "tr-TR");
@@ -380,42 +416,88 @@ TEST_CASE("Loading recovery actions keep padding and failures use error colors",
     const auto &tokens = Theme::GetActiveTokens();
     const auto &metrics = DesignSystem::MetricsFor(tokens, DesignSystem::ComponentSize::Medium);
     const float inset = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Large);
-    float buttonTop = FLT_MAX;
-    float progressBottom = -FLT_MAX;
-    const auto whitePixel = ImGui::GetDrawListSharedData()->TexUvWhitePixel;
-    float buttonRight = -FLT_MAX;
-    float buttonBottom = -FLT_MAX;
-    float textRight = -FLT_MAX;
-    int errorVertices{};
     const float footerTop = modal->Pos.y + modal->Size.y - inset - metrics.minimumHeight;
-    for (const auto &vertex : modal->DrawList->VtxBuffer) {
-        if (vertex.col == ImGui::GetColorU32(Theme::Err()))
-            ++errorVertices;
-        // Include the antialiased fringe when recovering fill bounds; its alpha varies with tessellation.
-        constexpr ImU32 rgbMask = ~IM_COL32_A_MASK;
-        if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Err()) & rgbMask) && vertex.uv.x == whitePixel.x &&
-            vertex.uv.y == whitePixel.y)
-            progressBottom = std::max(progressBottom, vertex.pos.y);
-        if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Bg3()) & rgbMask)) {
-            buttonTop = std::min(buttonTop, vertex.pos.y);
-            buttonRight = std::max(buttonRight, vertex.pos.x);
-            buttonBottom = std::max(buttonBottom, vertex.pos.y);
-        }
-        if (vertex.col == ImGui::GetColorU32(Theme::Text()) && vertex.pos.y >= footerTop)
-            textRight = std::max(textRight, vertex.pos.x);
-    }
+    const auto bounds = MeasureLoadingRecoveryBounds(*modal, footerTop);
     INFO(locale << ", scale=" << scale << ", width=" << viewportWidth);
-    CHECK(errorVertices > 12);  // Status text, percentage, and filled progress bar all carry error color.
-    CHECK(buttonTop - progressBottom == Catch::Approx(DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Medium)).margin(2.0F));
-    CHECK(buttonRight == Catch::Approx(modal->Pos.x + modal->Size.x - inset).margin(1.5F));
-    CHECK(buttonBottom == Catch::Approx(modal->Pos.y + modal->Size.y - inset).margin(1.5F));
-    CHECK(textRight > modal->Pos.x);
-    CHECK(buttonRight - textRight >= metrics.paddingX - 2.0F);
+    CHECK(bounds.errorVertices > 12);  // Status text, percentage, and filled progress bar all carry error color.
+    CHECK(bounds.buttonTop - bounds.progressBottom ==
+          Catch::Approx(DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Medium)).margin(2.0F));
+    CHECK(bounds.buttonRight == Catch::Approx(modal->Pos.x + modal->Size.x - inset).margin(1.5F));
+    CHECK(bounds.buttonBottom == Catch::Approx(modal->Pos.y + modal->Size.y - inset).margin(1.5F));
+    CHECK(bounds.textRight > modal->Pos.x);
+    CHECK(bounds.buttonRight - bounds.textRight >= metrics.paddingX - 2.0F);
     CHECK(modal->Pos.y + modal->Size.y <= 1000.0F);
-    ImGui::ActivateItemByID(modal->GetID(fixture.localization.Get("editor", "project_loading.action.retry").c_str()));
+    ImGui::ActivateItemByID(modal->GetID("###action.retry"));
     CHECK(draw() == ProjectLoadingViewCommand::Retry);
-    ImGui::ActivateItemByID(modal->GetID(fixture.localization.Get("editor", "project_loading.action.back").c_str()));
+    ImGui::ActivateItemByID(modal->GetID("###action.back"));
     CHECK(draw() == ProjectLoadingViewCommand::Back);
+}
+
+TEST_CASE("Environment Query channel picker exposes its name and preserves a retired channel", "[editor][gui][workspace][eqs]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
+    REQUIRE(fixture.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/en-US.json"));
+    REQUIRE(fixture.localization.Prepare(LocaleTag{"en-US"}));
+    REQUIRE(fixture.localization.ActivatePrepared());
+    WorkspacePanelRegistry panels;
+    auto input = fixture.input.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+    EditorWorkspaceView view{fixture.context, panels, 0, fixture.input, input};
+    EditorWorkspaceViewModel model;
+    const auto asset = Assets::AssetId::FromBytes({1});
+    const auto source = SourceDocumentId::Parse("assets/line_of_sight.horo_eqs");
+    REQUIRE(source.HasValue());
+    const auto opened = model.workspacePanelHost.OpenDocument({DocumentKind::EnvironmentQuery, source.Value()});
+    REQUIRE(opened.HasValue());
+    const auto retired = Physics::PhysicsQueryChannelId::FromBytes({2});
+    const auto available = Physics::PhysicsQueryChannelId::FromBytes({3});
+    model.physicsQueryChannels.emplace_back(available, "Line of sight");
+    const AI::QueryPointLattice lattice{.stepMillimeters = 750, .outerSteps = 2};
+    const auto visibility = AI::QueryStageId::Create(12).Value();
+    const auto query = AI::EnvironmentQueryAsset::Capture({.id = AI::QueryId::Create(9).Value(),
+                                                           .displayName = "Local points",
+                                                           .result = {.id = AI::QueryResultSchemaId::Create(11).Value(),
+                                                                      .itemType = AI::QueryItemTypeId::Create(4).Value()},
+                                                           .stages = {{.id = visibility,
+                                                                       .kind = AI::QueryStageKind::Unknown,
+                                                                       .displayName = "Visibility",
+                                                                       .unknownTypeId = 13}}});
+    REQUIRE(query.HasValue());
+    AI::BuiltinPointQuerySettings settings{.lattice = lattice, .maximumResults = 25};
+    settings.visibility.emplace(visibility, retired.Bytes());
+    model.environmentQueryDocuments.push_back({.identity = opened.Value().identity,
+                                               .asset = asset,
+                                               .query = std::make_shared<const AI::EnvironmentQueryAsset>(query.Value()),
+                                               .settings = settings});
+    Horo::Editor::Detail::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(ImGui::GetCurrentContext()));
+    const auto draw = [&] {
+        EditorWorkspaceViewCommandData command;
+        fixture.imgui.BeginFrame();
+        view.Draw(model, command, GuiContentRegion{0, 0, 1280, 800});
+        fixture.imgui.EndFrame();
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+    };
+    const auto control = [&](const std::string_view name) {
+        const auto frame = capture.Frame();
+        REQUIRE(frame.status == Horo::Editor::Detail::EditorControlMetadataStatus::Complete);
+        const auto item = std::ranges::find_if(frame.controls, [&](const auto &entry) { return frame.Text(entry.name) == name; });
+        REQUIRE(item != frame.controls.end());
+        return *item;
+    };
+    draw();
+    const auto picker = control("Collision Query Channel");
+    CHECK(picker.role == Runtime::Ui::UiAccessibilityRole::List);
+    CHECK(picker.value.kind == Runtime::Ui::UiAccessibilityValueKind::Integer);
+    CHECK(picker.value.integer == 1);
+    ImGui::ActivateItemByID(picker.item);
+    draw();
+    draw();
+    const auto candidate = control("Line of sight");
+    CHECK(control(retired.ToString()).state.Has(Runtime::Ui::UiAccessibilityStateFlag::Disabled));
+    model.physicsQueryChannels.insert(model.physicsQueryChannels.begin(), {Physics::PhysicsQueryChannelId::FromBytes({4}), "New channel"});
+    draw();
+    CHECK(control("Line of sight").item == candidate.item);
 }
 
 TEST_CASE("Workspace transport buttons dispatch only canonical lifecycle actions from stable slots", "[editor][gui][workspace][toolbar]") {

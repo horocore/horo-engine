@@ -111,8 +111,8 @@ namespace Horo::Runtime::Ui {
                     .limits = Limits()};
         }
 
-        UiRenderExtractor Extractor(const std::uint32_t concurrentSnapshots = 2) {
-            auto result = UiRenderExtractor::Create({{Owner(), 9, 1}, Limits(), concurrentSnapshots});
+        UiRenderExtractor Extractor(const std::uint32_t concurrentSnapshots = 2, const bool measureCpuWork = false) {
+            auto result = UiRenderExtractor::Create({{Owner(), 9, 1}, Limits(), concurrentSnapshots, measureCpuWork});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
@@ -428,7 +428,12 @@ namespace Horo::Runtime::Ui {
         TEST_CASE("UI render extractor performs no steady-state allocation", "[runtime_ui][render_snapshot][realtime]") {
             auto tree = Tree();
             const auto projection = CompleteProjection(tree);
-            auto extractor = Extractor(1);
+            bool measureCpuWork{};
+            SECTION("timing disabled") {}
+            SECTION("timing enabled") {
+                measureCpuWork = true;
+            }
+            auto extractor = Extractor(1, measureCpuWork);
             auto descriptor = Descriptor(tree);
             for (std::uint64_t revision = 2; revision < 34; ++revision) {
                 descriptor.snapshotRevision = SnapshotRevision(revision);
@@ -439,6 +444,10 @@ namespace Horo::Runtime::Ui {
                 REQUIRE(extracted.HasValue());
                 REQUIRE(extracted.Value().Commands().size() == projection.commands.size());
             }
+            const auto timing = extractor.CpuWorkStatistics();
+            CHECK(timing.enabled == measureCpuWork);
+            CHECK(timing.attempts == (measureCpuWork ? 32 : 0));
+            CHECK(timing.succeeded == timing.attempts);
         }
 
         static_assert(std::is_copy_constructible_v<UiRenderSnapshot>);

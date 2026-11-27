@@ -2,9 +2,12 @@
 /** @file XRHandTracking.h @brief Canonical bounded articulated-hand evidence; no native joint or gesture authority. */
 #include "Horo/XR/XRSpacePose.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <utility>
 
 namespace Horo::XR {
     /** @brief Anatomical side independent of any controller role. */
@@ -71,4 +74,66 @@ namespace Horo::XR {
      */
     [[nodiscard]] Result<void> ValidateXRHandJointRecord(const XRHandJointRecord &record, const XRSessionId &session,
                                                          XRRuntimeTime sampledAt, XRWorldOriginRevision origin);
+    class XRTrackingSnapshot;
+    class IXRHandGesturePolicy;
+    struct XRTrackingSnapshotRevisionTag;
+
+    /** @brief Derived observation only; the policy assigns no gameplay or input meaning. */
+    enum class XRHandGestureKind : std::uint8_t {
+        Pinch,
+        Count
+    };
+
+    /** @brief Exact classified hand and source revision. */
+    struct XRHandGestureCandidate final {
+        XRDeviceId device;
+        XRHandedness hand{XRHandedness::Count};
+        XRHandGestureKind kind{XRHandGestureKind::Count};
+        XRTrackingConfidence confidence{XRTrackingConfidence::None};
+    };
+
+    /** @brief Bounded classifications for one immutable tracking revision. */
+    class XRHandGestureCandidates final {
+    public:
+        /** @brief Borrows the candidates in canonical hand order. @return At most one per hand. */
+        [[nodiscard]] std::span<const XRHandGestureCandidate> Candidates() const noexcept {
+            return std::span{values_}.first(count_);
+        }
+
+    private:
+        friend Result<XRHandGestureCandidates> DeriveXRHandGestures(const XRTrackingSnapshot &, const XRSessionId &,
+                                                                    XRGeneration<XRTrackingSnapshotRevisionTag>, XRWorldOriginRevision,
+                                                                    const IXRHandGesturePolicy &);
+        std::array<XRHandGestureCandidate, XRHandTrackingHardLimits::MaximumHands> values_{};
+        std::size_t count_{};
+    };
+
+    /** @brief Replaceable owner-lane classification policy; never writes tracking or routing state. */
+    class IXRHandGesturePolicy {
+    public:
+        virtual ~IXRHandGesturePolicy() = default;
+        /** @brief Classifies an immutable, canonical hand at one simulation cutoff.
+         * @param joints Detached records for one active hand, borrowed only through this call.
+         * @return A confidence-tagged candidate or absence. Policy execution must avoid allocation and blocking work.
+         */
+        [[nodiscard]] virtual std::optional<std::pair<XRHandGestureKind, XRTrackingConfidence>> Classify(
+            std::span<const XRHandJointRecord> joints) const noexcept = 0;
+    };
+
+    /** @brief Uses thumb/index joint contact and tracked-tip confidence to classify a pinch. */
+    class XRContactPinchGesturePolicy final : public IXRHandGesturePolicy {
+    public:
+        /** @copydoc IXRHandGesturePolicy::Classify */
+        [[nodiscard]] std::optional<std::pair<XRHandGestureKind, XRTrackingConfidence>> Classify(
+            std::span<const XRHandJointRecord> joints) const noexcept override;
+    };
+
+    /** @brief Evaluates a typed policy through the exact focused snapshot fence.
+     * @param snapshot Immutable joint evidence. @param session Current active owner.
+     * @param revision Current tracking revision. @param origin Current origin revision. @param policy Composed classifier.
+     * @return Bounded candidates, empty when unfocused, or typed stale/invalid evidence failure.
+     */
+    [[nodiscard]] Result<XRHandGestureCandidates> DeriveXRHandGestures(const XRTrackingSnapshot &snapshot, const XRSessionId &session,
+                                                                       XRGeneration<XRTrackingSnapshotRevisionTag> revision,
+                                                                       XRWorldOriginRevision origin, const IXRHandGesturePolicy &policy);
 }  // namespace Horo::XR

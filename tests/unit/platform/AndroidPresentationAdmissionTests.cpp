@@ -2,6 +2,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <thread>
 
 namespace Horo::AndroidQualification::Tests {
@@ -188,5 +189,165 @@ namespace Horo::AndroidQualification::Tests {
         CHECK(fixture.State().presentationGeneration == first);
         Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
         CHECK(fixture.State().presentationGeneration == first);
+    }
+
+    TEST_CASE("Android frame pacing bounds rapid wakeups and recovers without a frame backlog",
+              "[platform][android][presentation][pacing]") {
+        using namespace std::chrono_literals;
+        Fixture fixture;
+        FramePacing pacing{16ms};
+        const FramePacing::Clock::time_point start{};
+        Accepted(fixture.adapter.OnActivityStarted(fixture.activity));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start));
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+
+        const auto ready = fixture.State();
+        REQUIRE(pacing.TryAdmit(ready, start));
+        CHECK_FALSE(pacing.TryAdmit(ready, start - 1ms));
+        CHECK_FALSE(pacing.TryAdmit(ready, start + 15ms));
+        std::size_t attempts = 1;
+        for (auto elapsed = 16ms; elapsed < 10s; elapsed += 1ms)
+            attempts += pacing.TryAdmit(ready, start + elapsed);
+        CHECK(attempts == 625);
+
+        Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 10s));
+        fixture.Commit();
+        const auto paused = fixture.State();
+        REQUIRE(paused.activity == AndroidActivityState::Paused);
+        CHECK_FALSE(pacing.TryAdmit(paused, start + 1min));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto resumed = fixture.State();
+        REQUIRE(pacing.TryAdmit(resumed, start + 1min));
+        CHECK_FALSE(pacing.TryAdmit(resumed, start + 1min));
+
+        fixture.Replace();
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min + 15ms));
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto replacement = fixture.State();
+        REQUIRE(replacement.presentationGeneration > resumed.presentationGeneration);
+        CHECK_FALSE(pacing.TryAdmit(replacement, start + 1min + 15ms));
+        CHECK(pacing.TryAdmit(replacement, start + 1min + 16ms));
+    }
+
+    TEST_CASE("Android resource conservation changes only the next admitted presentation attempt",
+              "[platform][android][presentation][pacing]") {
+        using namespace std::chrono_literals;
+        using enum FramePacing::Mode;
+        Fixture fixture;
+        FramePacing pacing{16ms, 32ms};
+        const FramePacing::Clock::time_point start{};
+        Accepted(fixture.adapter.OnActivityStarted(fixture.activity));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto foreground = fixture.State();
+        REQUIRE(pacing.TryAdmit(foreground, start));
+        CHECK_FALSE(pacing.TryAdmit(foreground, start + 16ms, PowerConservation));
+        REQUIRE(pacing.TryAdmit(foreground, start + 32ms, ThermalConservation));
+        CHECK_FALSE(pacing.TryAdmit(foreground, start + 47ms));
+        REQUIRE(pacing.TryAdmit(foreground, start + 48ms));
+
+        CHECK(pacing.AttemptInterval(Baseline) == 16ms);
+        for (const auto mode : {ThermalConservation, MemoryConservation, PowerConservation}) {
+            FramePacing sustained{16ms, 32ms};
+            REQUIRE(sustained.TryAdmit(foreground, start, mode));
+            CHECK(sustained.AttemptInterval(mode) == 32ms);
+            std::size_t attempts{};
+            for (auto elapsed = 1ms; elapsed <= 10s; elapsed += 1ms)
+                attempts += sustained.TryAdmit(foreground, start + elapsed, mode);
+            CHECK(attempts == 312);
+        }
+
+        Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, MemoryConservation));
+        fixture.Commit();
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        REQUIRE(pacing.TryAdmit(fixture.State(), start + 1min));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, ThermalConservation));
+        CHECK(pacing.TryAdmit(fixture.State(), start + 1min + 16ms));
+    }
+
+    TEST_CASE("Android pacing publication ignores a withdrawn token after replacement", "[platform][android][presentation][pacing]") {
+        using enum FramePacing::Mode;
+        FramePacingMailbox mailbox;
+        const auto first = mailbox.Acquire();
+        REQUIRE(first != 0);
+        CHECK(mailbox.Acquire() == 0);
+        mailbox.Publish(first, MemoryConservation);
+        CHECK(mailbox.Read(first) == MemoryConservation);
+        mailbox.Revoke(first);
+        const auto replacement = mailbox.Acquire();
+        REQUIRE(replacement > first);
+        std::thread late{[&] {
+            mailbox.Publish(first, MemoryConservation);
+            mailbox.Publish(0, ThermalConservation);
+        }};
+        late.join();
+        CHECK(mailbox.Read(first) == Baseline);
+        CHECK(mailbox.Read(replacement) == Baseline);
+        mailbox.Publish(replacement, PowerConservation);
+        mailbox.Publish(replacement, static_cast<FramePacing::Mode>(4));
+        CHECK(mailbox.Read(replacement) == PowerConservation);
+        mailbox.Publish(replacement, ThermalConservation);
+        mailbox.Revoke(first);
+        CHECK(mailbox.Read(replacement) == ThermalConservation);
+        mailbox.Publish(replacement, Baseline);
+        CHECK(mailbox.Read(replacement) == Baseline);
+        mailbox.Revoke(replacement);
+        mailbox.Publish(replacement, PowerConservation);
+        CHECK(mailbox.Read(replacement) == Baseline);
+        CHECK(mailbox.Acquire() > replacement);
+    }
+
+    TEST_CASE("Android pacing recovers without debt across one simulated hour of pressure and backgrounding",
+              "[platform][android][presentation][pacing]") {
+        using namespace std::chrono_literals;
+        using enum FramePacing::Mode;
+        Fixture fixture;
+        FramePacing pacing{16ms, 32ms};
+        FramePacingMailbox mailbox;
+        const auto token = mailbox.Acquire();
+        REQUIRE(token != 0);
+        Accepted(fixture.adapter.OnActivityStarted(fixture.activity));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto countAttempts = [&fixture, &mailbox, &pacing, token](const FramePacing::Clock::time_point start) {
+            const auto state = fixture.State();
+            std::size_t attempts{};
+            for (auto elapsed = 0ms; elapsed < 16s; elapsed += 1ms)
+                attempts += static_cast<std::size_t>(pacing.TryAdmit(state, start + elapsed, mailbox.Read(token)));
+            return attempts;
+        };
+        const std::array modes{Baseline, ThermalConservation, MemoryConservation, PowerConservation};
+        for (auto elapsed = 0min; elapsed < 60min; elapsed += 2min) {
+            const FramePacing::Clock::time_point start{elapsed};
+            for (std::size_t phase = 0; phase < modes.size(); ++phase) {
+                mailbox.Publish(token, modes[phase]);
+                CHECK(mailbox.Read(token) == modes[phase]);
+                CHECK(countAttempts(start + 20s * phase) == (phase == 0 ? 1000 : 500));
+            }
+            Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
+            fixture.Commit();
+            mailbox.Publish(token, Baseline);
+            CHECK(countAttempts(start + 80s) == 0);
+
+            Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+            fixture.Commit();
+            Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+            const auto recovery = start + 110s;
+            REQUIRE(pacing.TryAdmit(fixture.State(), recovery, mailbox.Read(token)));
+            CHECK_FALSE(pacing.TryAdmit(fixture.State(), recovery, mailbox.Read(token)));
+            CHECK_FALSE(pacing.TryAdmit(fixture.State(), recovery + 15ms, mailbox.Read(token)));
+            CHECK(pacing.TryAdmit(fixture.State(), recovery + 16ms, mailbox.Read(token)));
+        }
     }
 }  // namespace Horo::AndroidQualification::Tests

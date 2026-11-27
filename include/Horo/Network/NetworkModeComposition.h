@@ -5,6 +5,7 @@
  * @brief Host-owned, generation-fenced composition of the four runtime network modes.
  */
 
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkTargetCapabilities.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/PeerSessionLifecycle.h"
@@ -20,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 
 namespace Horo::Network {
     class NetworkWorldBindingController;
@@ -91,6 +93,77 @@ namespace Horo::Network {
                                                                  std::span<const NetworkModeWorld> worlds,
                                                                  NetworkModePresentation presentation = {});
 
+    /** @brief Weak, Scene-scoped host grant for dynamic object publication through the canonical authority world. */
+    class NetworkAuthorityObjectPublication final {
+    public:
+        NetworkAuthorityObjectPublication() = default;
+
+        /** @brief Checks whether this factory received a binding. @return True while the issuing composition still exists. */
+        [[nodiscard]] bool IsBound() const noexcept {
+            return !binding_.expired();
+        }
+
+        /**
+         * @brief Prepares one dynamic mapping change at the Scene structural safe point.
+         * @param added Newly reserved members and their admitted schema versions.
+         * @param retired Exact Scene members whose existing dynamic mappings should retire.
+         * @param cancellation Owning Scene's cancellation token.
+         * @return A detached Scene candidate or the typed role, lifecycle or mapping failure.
+         * @pre Called by the Scene structural owner on the composition owner lane.
+         */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
+            std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+            const CancellationToken &cancellation) const;
+        /** @brief Resolves an admitted existing entity to its authority identity without copying the mapping. */
+        [[nodiscard]] Result<NetworkObjectId> Find(Runtime::EntityRef entity) const;
+
+    private:
+        friend class NetworkModeComposition;
+
+        NetworkAuthorityObjectPublication(std::weak_ptr<NetworkWorldBindingController> binding, Runtime::SceneRuntimeId scene) noexcept
+            : binding_(std::move(binding)), scene_(scene) {}
+
+        std::weak_ptr<NetworkWorldBindingController> binding_;
+        Runtime::SceneRuntimeId scene_;
+    };
+
+    /** @brief Weak transfer grant for the exact client Scene that receives authenticated Prefab messages. */
+    class NetworkClientPrefabInbox final {
+    public:
+        NetworkClientPrefabInbox() = default;
+
+        /** @brief Checks for a configured grant. @return True while the issuing composition exists. */
+        [[nodiscard]] bool IsBound() const noexcept {
+            return !binding_.expired();
+        }
+
+        /**
+         * @brief Transfers the current Scene's admitted messages at its structural safe point.
+         * @param phase The actual host lifecycle phase.
+         * @return Ordered owned messages, or the typed stale, unavailable or wrong-phase error.
+         */
+        [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> Take(Runtime::RuntimePhase phase) const;
+        /**
+         * @brief Binds a received spawn to the exact client Scene group publication.
+         * @param spawn Spawn taken from this Scene inbox and retained through later despawn.
+         * @param cancellation Owner cancellation for this occurrence.
+         * @return Group publication or a typed malformed or unavailable error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(NetworkPrefabLifecycleRecord spawn,
+                                                                                         const CancellationToken &cancellation) const;
+        /** @brief Resolves an exact object in the current client world for reconstruction of a relationship. */
+        [[nodiscard]] Result<Runtime::EntityRef> Resolve(NetworkSessionGeneration session, NetworkObjectId object) const;
+
+    private:
+        friend class NetworkModeComposition;
+
+        NetworkClientPrefabInbox(std::weak_ptr<NetworkWorldBindingController> binding, Runtime::SceneRuntimeId scene) noexcept
+            : binding_(std::move(binding)), scene_(scene) {}
+
+        std::weak_ptr<NetworkWorldBindingController> binding_;
+        Runtime::SceneRuntimeId scene_;
+    };
+
     /** @brief Factory request, with Count world kind for process-scoped services. */
     struct NetworkModeServiceRequest final {
         NetworkModeServiceKind service{NetworkModeServiceKind::Count};
@@ -98,6 +171,14 @@ namespace Horo::Network {
         NetworkTransportProviderId provider{};
         NetworkModeWorldKind world{NetworkModeWorldKind::Count};
         Runtime::SceneRuntimeId scene{};
+        NetworkAuthorityObjectPublication authorityObjects; /**< Grant for the exact authority Gameplay owner only. */
+        NetworkClientPrefabInbox prefabInbox;               /**< Grant for the exact configured client Scene owner only. */
+    };
+
+    /** @brief Copy of the declared authored mappings from a committed authority Scene. */
+    struct NetworkAuthoredSceneProjection final {
+        std::vector<ReplicationAuthoredSceneObject> objects;
+        CancellationToken cancellation;
     };
 
     /** @brief A borrowed host service facade; concrete backend and gameplay types stay at the host boundary. */
@@ -108,6 +189,17 @@ namespace Horo::Network {
         [[nodiscard]] virtual Result<void> Prepare() = 0;
         /** @brief Activate after all services prepared; world publication remains host-controlled. */
         [[nodiscard]] virtual Result<void> Activate() = 0;
+
+        /**
+         * @brief Copies authored mappings after the selected Scene and all dependent owners activate.
+         * @return Exact committed Scene projection, or the error that prevents world publication.
+         * @details Called on the owner lane only for the authority Scene service during startup or travel.
+         * The default supplies an empty declaration set for existing products.
+         */
+        [[nodiscard]] virtual Result<NetworkAuthoredSceneProjection> CaptureAuthoredScene() const {
+            return Result<NetworkAuthoredSceneProjection>::Success({});
+        }
+
         /** @brief Participate in a canonical non-fixed runtime phase without defining an alternate schedule. */
         [[nodiscard]] virtual Result<void> RunPhase(Runtime::RuntimePhase phase) = 0;
         /** @brief Advance one exact host-issued fixed tick. */
@@ -155,7 +247,8 @@ namespace Horo::Network {
         /** @brief Construct, prepare and activate exactly the selected service set, or unwind it. */
         [[nodiscard]] Result<void> Start();
         /** @brief Dispatch the canonical runtime phase to currently active participants. */
-        [[nodiscard]] Result<void> RunPhase(Runtime::RuntimePhase phase);
+        [[nodiscard]] Result<void> RunPhase(Runtime::RuntimePhase phase, std::uint64_t completedSimulationTick = 0,
+                                            const CancellationToken &cancellation = {});
         /** @brief Dispatch one exact canonical fixed tick to active participants. */
         [[nodiscard]] Result<void> RunFixedTick(const Runtime::FixedStepContext &context);
         /** @brief Publish a client session only after the peer lifecycle admits exact active evidence. */
@@ -189,6 +282,14 @@ namespace Horo::Network {
         [[nodiscard]] bool ServicesStarted() const noexcept;
         /** @brief Whether this host has published all selected worlds. */
         [[nodiscard]] bool Active() const noexcept;
+        /** @brief Reads a live client object's initial ownership fact after its complete baseline has published.
+         * @param scene Exact active client Scene.
+         * @param session Exact bound world occurrence.
+         * @param object Exact mapped object.
+         * @return Initial ownership or a typed pending/stale error. This immutable fact does not grant current ownership. */
+        [[nodiscard]] Result<ReplicationInitialOwnership> InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                 NetworkSessionGeneration session,
+                                                                                 NetworkObjectId object) const;
 
     private:
         friend struct NetworkModeHostAccess;
@@ -201,9 +302,14 @@ namespace Horo::Network {
         NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories, NetworkWorldCompositionPurpose purpose,
                                std::shared_ptr<NetworkWorldBindingController> binding) noexcept;
         [[nodiscard]] static bool WorldShapeMatches(NetworkProjectRole mode, std::span<const NetworkModeWorld> worlds) noexcept;
-        [[nodiscard]] static NetworkModeServiceRequest Request(const NetworkModePlan &plan, NetworkModeServiceKind service,
-                                                               const NetworkModeWorld *world = nullptr) noexcept;
+        [[nodiscard]] NetworkModeServiceRequest Request(const NetworkModePlan &plan, NetworkModeServiceKind service,
+                                                        const NetworkModeWorld *world = nullptr) const noexcept;
         [[nodiscard]] Result<void> BuildEntries();
+        /** @brief Selects the exact authority Scene service from a complete, activated set. */
+        [[nodiscard]] static Result<NetworkAuthoredSceneProjection> CaptureAuthoredScene(std::span<const Entry> entries,
+                                                                                         NetworkModeWorldKind kind);
+        /** @brief Captures both admitted projections before staging the associated local world or travel candidates. */
+        [[nodiscard]] Result<void> StageBoundWorlds(std::span<const Entry> entries, std::span<const NetworkModeWorld> replacements = {});
         void ReleaseEntries() noexcept;
         [[nodiscard]] std::size_t WorldIndex(NetworkModeWorldKind kind) const noexcept;
         [[nodiscard]] Result<void> AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count,
@@ -214,7 +320,8 @@ namespace Horo::Network {
         void CommitTravelEntries(std::span<const NetworkModeWorld> replacements, std::array<Entry, 5> &prepared,
                                  std::size_t count) noexcept;
 
-        [[nodiscard]] Result<void> AdvanceTravel(Runtime::RuntimePhase phase);
+        [[nodiscard]] Result<void> AdvanceTravel(Runtime::RuntimePhase phase, std::uint64_t localSimulationTick,
+                                                 const CancellationToken &cancellation);
         NetworkModePlan plan_;
         NetworkModeFactories factories_;
         NetworkWorldCompositionPurpose purpose_;

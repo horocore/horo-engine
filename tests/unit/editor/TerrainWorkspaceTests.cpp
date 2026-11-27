@@ -3,11 +3,11 @@
 #include "EditorWorkspaceControllerFilesystemTestSupport.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "OwnedTestDirectory.h"
-#include "terrain/FoliagePaletteTab.h"
-#include "terrain/TerrainAssetCreationModal.h"
-#include "terrain/TerrainDocumentHost.h"
+#include "terrain/foliage/FoliagePaletteTab.h"
+#include "terrain/assets/TerrainAssetCreationModal.h"
+#include "terrain/document/TerrainDocumentHost.h"
 #include "terrain/TerrainToolSelection.h"
-#include "terrain/TerrainViewportTool.h"
+#include "terrain/viewport/TerrainViewportTool.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>

@@ -157,6 +157,9 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     Horo::Log::LogContextSnapshot forwarded;
     {
         const Horo::Log::LogContext request("correlation.id", "request-42", "asset.id", "mesh-7");
+        const Horo::Log::LogContext credentials("request.X-API-Key", "private-context-value");
+        const Horo::Log::LogContext gaze("xr.gaze_origin", "private-gaze-origin");
+        const Horo::Log::LogContext save("save.slot_id", "private-slot-id");
         forwarded = Horo::Log::CaptureLogContext();
     }
     std::thread worker([forwarded] {
@@ -167,6 +170,11 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
             Horo::Telemetry::Field{.key = "duration_ms", .value = 12.5},
             Horo::Telemetry::Field{.key = "detail", .value = std::string{"quote=\" newline=\n"}},
             Horo::Telemetry::Field{.key = "auth.token", .value = std::string{"must-not-persist"}},
+            Horo::Telemetry::Field{.key = "auth.privateKey", .value = std::string{"private-field-value"}},
+            Horo::Telemetry::Field{.key = "xr.camera-frame", .value = std::string{"private-camera-frame"}},
+            Horo::Telemetry::Field{.key = "xr.headsetSerial", .value = std::string{"private-headset"}},
+            Horo::Telemetry::Field{.key = "Save.Display_Name", .value = std::string{"private-display"}},
+            Horo::Telemetry::Field{.key = "xr.frame_count", .value = std::uint64_t{3}},
             Horo::Telemetry::Field{.key = "internal.pointer",
                                    .value = std::string{"forbidden"},
                                    .privacy = Horo::Telemetry::FieldPrivacy::Forbidden},
@@ -193,6 +201,21 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     REQUIRE(log.find(R"("duration_ms":12.5)") != std::string::npos);
     REQUIRE(log.find("\"detail\":\"quote=\\\" newline=\\n\"") != std::string::npos);
     REQUIRE(log.find(R"("auth.token":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("request.X-API-Key":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("auth.privateKey":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.gaze_origin":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.camera-frame":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.headsetSerial":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("Save.Display_Name":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("save.slot_id":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.frame_count":3)") != std::string::npos);
+    CHECK(log.find("private-gaze-origin") == std::string::npos);
+    CHECK(log.find("private-camera-frame") == std::string::npos);
+    CHECK(log.find("private-headset") == std::string::npos);
+    CHECK(log.find("private-display") == std::string::npos);
+    CHECK(log.find("private-slot-id") == std::string::npos);
+    CHECK(log.find("private-context-value") == std::string::npos);
+    CHECK(log.find("private-field-value") == std::string::npos);
     REQUIRE(log.find("must-not-persist") == std::string::npos);
     REQUIRE(log.find("internal.pointer") == std::string::npos);
 }
@@ -1176,11 +1199,55 @@ TEST_CASE("Terminal operations forward persistent job history through structured
     REQUIRE(snapshot->records.front()->context.find("operation.id=") != std::string::npos);
 }
 
+TEST_CASE("Diagnostic destination admission creates no files and rejects occupied paths", "[foundation][observability][bundle][security]") {
+    TemporaryDirectory temporary;
+    const auto destination = temporary.path / "new directory" / "support.zip";
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(destination).HasValue());
+    REQUIRE_FALSE(std::filesystem::exists(destination.parent_path()));
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination("relative.zip").HasError());
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(temporary.path / "absent" / "..").HasError());
+    REQUIRE_FALSE(std::filesystem::exists(temporary.path / "absent"));
+    auto nulPath = destination.native();
+    nulPath.push_back(std::filesystem::path::value_type{});
+    nulPath += destination.filename().native();
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(std::filesystem::path{nulPath}).HasError());
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(temporary.path).HasError());
+    const auto occupied = temporary.path / "occupied";
+    std::ofstream(occupied) << "preserve";
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(occupied).HasError());
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(occupied / "support.zip").HasError());
+    const auto output = temporary.path / "support.zip";
+    std::ofstream(temporary.path / "support.zip.tmp") << "preserve temporary";
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(output).HasError());
+    REQUIRE(ReadText(occupied) == "preserve");
+    REQUIRE(ReadText(temporary.path / "support.zip.tmp") == "preserve temporary");
+}
+
+TEST_CASE("Diagnostic destination admission resolves parents and rejects dangling output links",
+          "[foundation][observability][bundle][security]") {
+    TemporaryDirectory temporary;
+    const auto link = temporary.path / "link";
+    std::error_code error;
+    std::filesystem::create_directory_symlink(temporary.path, link, error);
+    if (error) {
+        SKIP("Directory symlink fixture unavailable: " << error.message());
+    }
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(link / "support.zip").HasValue());
+    const auto dangling = temporary.path / "dangling.zip";
+    std::filesystem::create_symlink(temporary.path / "absent", dangling, error);
+    REQUIRE_FALSE(error);
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(dangling).HasError());
+    const auto output = temporary.path / "support.zip";
+    std::filesystem::create_symlink(temporary.path / "absent", temporary.path / "support.zip.tmp", error);
+    REQUIRE_FALSE(error);
+    REQUIRE(Horo::Diagnostics::ValidateDiagnosticBundleDestination(output).HasError());
+}
+
 TEST_CASE("Diagnostic bundle contains only allowlisted files and a checksum manifest", "[foundation][observability][bundle]") {
     TemporaryDirectory temporary;
     const std::filesystem::path logPath = temporary.path / "engine.jsonl";
     std::ofstream(logPath) << R"({"level":"error","message":"failure"})";
-    const std::filesystem::path bundlePath = temporary.path / "diagnostics.zip";
+    const std::filesystem::path bundlePath = temporary.path / "new directory" / "diagnostics.zip";
     const auto result = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = bundlePath,
         .entries = {{.sourcePath = logPath, .archivePath = "logs/engine.jsonl"}},
@@ -1214,20 +1281,22 @@ TEST_CASE("Diagnostic bundle rejects path escapes and oversized allowlists", "[f
     const std::filesystem::path logPath = temporary.path / "engine.jsonl";
     std::ofstream(logPath) << "diagnostic-data";
     const auto escaped = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "escaped.zip",
+        .outputPath = temporary.path / "escaped destination" / "escaped.zip",
         .entries = {{.sourcePath = logPath, .archivePath = "../engine.jsonl"}},
         .maxInputBytes = 1024,
     });
     REQUIRE(escaped.HasError());
     REQUIRE(escaped.ErrorValue().code.Value() == "observability.bundle.invalid_request");
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "escaped destination"));
 
     const auto oversized = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "oversized.zip",
+        .outputPath = temporary.path / "oversized destination" / "oversized.zip",
         .entries = {{.sourcePath = logPath, .archivePath = "logs/engine.jsonl"}},
         .maxInputBytes = 2,
     });
     REQUIRE(oversized.HasError());
     REQUIRE(oversized.ErrorValue().code.Value() == "observability.bundle.size_exceeded");
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "oversized destination"));
 }
 
 TEST_CASE("Diagnostic bundles are deterministic and report missing optional inputs", "[foundation][observability][bundle][determinism]") {
@@ -1270,12 +1339,16 @@ TEST_CASE("Diagnostic bundle privacy rejects symlinks secrets absolute paths and
     });
     REQUIRE(unrelated.HasError());
 
-    const auto secret = Horo::Diagnostics::GenerateDiagnosticBundle({
-        .outputPath = temporary.path / "secret.zip",
-        .entries = {{.sourcePath = log, .archivePath = "logs/engine.jsonl"}},
-        .metadata = {{"api_token", "do-not-export"}},
-    });
-    REQUIRE(secret.HasError());
+    for (const auto key : {"api_token", "apiKey", "X-API-Key", "private.key"}) {
+        CAPTURE(key);
+        const auto secret = Horo::Diagnostics::GenerateDiagnosticBundle({
+            .outputPath = temporary.path / "private metadata destination" / "secret.zip",
+            .entries = {{.sourcePath = log, .archivePath = "logs/engine.jsonl"}},
+            .metadata = {{key, "do-not-export"}},
+        });
+        REQUIRE(secret.HasError());
+    }
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "private metadata destination"));
 
     const auto absolutePath = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = temporary.path / "path.zip",
@@ -1311,7 +1384,13 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     const auto recoveredLog = temporary.path / "recovered.jsonl";
     std::string partialRecord = R"({"message":"interrupted"})";
     partialRecord.resize(partialRecord.size() - 2);
-    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret"})" << '\n' << partialRecord;
+    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret",)"
+                                << R"("headers":{"X-API-Key":"private-header","keyName":"public-name"},)"
+                                << R"("config":{"apiKey":"private-option","private_key":"private-material"},)"
+                                << R"("cause":{"xr.environment_geometry":[{"vertex":"room-point"}],"speechTranscript":"spoken-private",)"
+                                << R"("runtime.save.payload":{"bytes":"private-state"},"XR.Raw_Pose_Samples":["private-pose"],)"
+                                << R"("save.slot_count":4}})" << '\n'
+                                << partialRecord;
 
     const auto recovered = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = temporary.path / "recovered.zip",
@@ -1332,6 +1411,19 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     REQUIRE(extracted.find("[REDACTED]") != std::string::npos);
     REQUIRE(extracted.find("/Users/example/project") == std::string::npos);
     REQUIRE(extracted.find("secret") == std::string::npos);
+    CHECK(extracted.find(R"("X-API-Key":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("apiKey":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("private_key":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("xr.environment_geometry":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("speechTranscript":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("runtime.save.payload":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("XR.Raw_Pose_Samples":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("save.slot_count":4)") != std::string::npos);
+    CHECK(extracted.find("room-point") == std::string::npos);
+    CHECK(extracted.find("spoken-private") == std::string::npos);
+    CHECK(extracted.find("private-state") == std::string::npos);
+    CHECK(extracted.find("private-pose") == std::string::npos);
+    CHECK(extracted.find("public-name") != std::string::npos);
     REQUIRE(extracted.find("interrupted") == std::string::npos);
 
     const auto corruptLog = temporary.path / "corrupt.jsonl";

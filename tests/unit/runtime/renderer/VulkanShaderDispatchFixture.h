@@ -38,6 +38,7 @@ namespace {
         bool depthTestEnabled{}, depthWriteEnabled{};
         VkCompareOp depthCompare{};
         std::uint32_t colorAttachments{}, blendAttachments{};
+        VkFormat colorFormat{}, depthFormat{};
         VkImageLayout sampledImageLayout{VK_IMAGE_LAYOUT_UNDEFINED};
         VkFilter samplerMinFilter{VK_FILTER_LINEAR};
         bool samplerCompareEnabled{true};
@@ -109,7 +110,10 @@ namespace {
             CHECK(spec->pMapEntries[0].constantID == 7);
             driver->specialization = *static_cast<const std::uint32_t *>(spec->pData);
         }
-        driver->colorAttachments = static_cast<const VkPipelineRenderingCreateInfo *>(info->pNext)->colorAttachmentCount;
+        const auto *rendering = static_cast<const VkPipelineRenderingCreateInfo *>(info->pNext);
+        driver->colorAttachments = rendering->colorAttachmentCount;
+        driver->colorFormat = rendering->colorAttachmentCount ? rendering->pColorAttachmentFormats[0] : VK_FORMAT_UNDEFINED;
+        driver->depthFormat = rendering->depthAttachmentFormat;
         driver->blendAttachments = info->pColorBlendState->attachmentCount;
         driver->depthTestEnabled = info->pDepthStencilState->depthTestEnable;
         driver->depthWriteEnabled = info->pDepthStencilState->depthWriteEnable;

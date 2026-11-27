@@ -16,11 +16,22 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace Horo::AI {
+    class DecisionBlackboardProviderMetadata;
+    class DecisionNodeGeneration;
+    class PerceptionSenseGeneration;
+}  // namespace Horo::AI
+
+namespace Horo::Gameplay {
+    class LuaDecisionNodeProgram;
+}
 
 namespace Horo::Editor {
     /** @brief One gameplay source diagnostic that blocks starting a play session. */
@@ -64,10 +75,33 @@ namespace Horo::Editor {
         std::uintmax_t metadataSize{};
     };
 
+    /** @brief Watcher observation for one source and its metadata sidecar. */
+    struct ProjectLuaSourceObservation final {
+        std::filesystem::file_time_type sourceWriteTime;
+        std::filesystem::file_time_type metadataWriteTime;
+        std::uintmax_t sourceSize{};
+        std::uintmax_t metadataSize{};
+
+        [[nodiscard]] auto operator<=>(const ProjectLuaSourceObservation &) const = default;
+    };
+
+    /** @brief One admitted Decision script and the observation used to replace it transactionally. */
+    struct ProjectLuaDecisionProgramSnapshot final {
+        std::filesystem::path source;
+        std::shared_ptr<Gameplay::LuaDecisionNodeProgram> program;
+        ProjectLuaSourceObservation observation;
+    };
+
     /** @brief Exact last-good Lua generation retained across one native reload transaction. */
     struct ProjectLuaGenerationSnapshot {
         std::vector<ProjectLuaProgramSnapshot> programs;
+        std::vector<ProjectLuaDecisionProgramSnapshot> decisions;
     };
+
+    /** @brief Reacquires only the published package role's exact revocable Decision leaves on the Project owner lane.
+     * The composition callback borrows the package owner. It must not retain any executable generation between reads.
+     */
+    using ProjectPackageDecisionNodeSource = std::function<Result<std::vector<std::shared_ptr<const AI::DecisionNodeGeneration>>>()>;
 
     /** @brief Owns discovered project behavior programs and their frozen registry snapshot. */
     class ProjectGameplayRegistry final {
@@ -109,6 +143,27 @@ namespace Horo::Editor {
         [[nodiscard]] const Gameplay::GameAssetTypeRegistry &AssetTypes() const noexcept;
         /** @brief Returns current game-owned component metadata or an empty frozen missing-code registry. */
         [[nodiscard]] const Gameplay::ComponentRegistry &Components() const noexcept;
+        /** @brief Borrows detached Decision descriptors from the admitted Project catalog.
+         * @return Exact immutable metadata, or null when no authoring catalog was admitted. No executable lease escapes.
+         */
+        [[nodiscard]] const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &DecisionUsageMetadata() const noexcept;
+
+        /** @brief Temporarily acquires the current native and script Decision declarations for source compilation.
+         * @return The admitted generation or a typed unavailable result. Callers release it before returning to the workspace. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionAuthoringGeneration() const;
+        /** @brief Pins the selected current native module's independently admitted sense providers for Play. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> AcquirePlayPerceptionGeneration() const;
+        /** @brief Pins the active project module's native query schema and callbacks for cooked Play. */
+        [[nodiscard]] Result<Gameplay::GameplayQueryTests> AcquirePlayQueryTests() const;
+
+        /** @brief Atomically updates package contributions to the detached authoring catalog at the owner's safe point.
+         * @param source Read-only source bound to the exact live package activation. An empty source withdraws all package contributions.
+         * @return Success or a typed admission/duplicate/storage failure preserving the prior catalog.
+         * @details The application calls this on package publication, retirement and Project rebind. The catalog retains no executable
+         * lease.
+         */
+        [[nodiscard]] Result<void> ReplacePackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source);
+
         /** @brief Returns source-addressed compile and registration failures. */
         [[nodiscard]] const std::vector<ProjectGameplayDiagnostic> &Diagnostics() const noexcept;
         /** @brief Reports whether source failures prevent a coherent registry snapshot. */
@@ -155,14 +210,7 @@ namespace Horo::Editor {
         [[nodiscard]] const Error *ReplicationMetadataError() const noexcept;
 
     private:
-        struct LuaSourceStat {
-            std::filesystem::file_time_type sourceWriteTime;
-            std::filesystem::file_time_type metadataWriteTime;
-            std::uintmax_t sourceSize{};
-            std::uintmax_t metadataSize{};
-
-            [[nodiscard]] auto operator<=>(const LuaSourceStat &) const = default;
-        };
+        using LuaSourceStat = ProjectLuaSourceObservation;
 
         [[nodiscard]] static LuaSourceStat ReadLuaSourceStat(const std::filesystem::path &source, std::error_code &error);
 
@@ -175,6 +223,13 @@ namespace Horo::Editor {
 
         void DiscoverLuaPrograms(const std::filesystem::path &projectRoot);
         void InstallLuaGeneration(const ProjectLuaGenerationSnapshot &snapshot);
+        /** @brief Rebuilds detached metadata after initial discovery or coherent source replacement. */
+        [[nodiscard]] Result<void> RefreshDecisionAuthoringCatalog(const std::shared_ptr<const ProjectPackageDecisionNodeSource> &packages);
+        /** @brief Acquires and composes real leaf owners without altering the admitted catalog. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> BuildDecisionAuthoringGeneration(
+            const std::shared_ptr<const ProjectPackageDecisionNodeSource> &packages) const;
+        /** @brief Replaces changed Decision scripts only after catalog validation succeeds. */
+        void ReloadChangedDecisionSources(std::vector<ProjectGameplayDiagnostic> &diagnostics);
         void CaptureReplicationMetadata(const std::filesystem::path &projectRoot);
         [[nodiscard]] Result<Network::ReplicationMetadataCapturePtr> BuildReplicationMetadata(
             const std::filesystem::path &projectRoot, const Gameplay::LuaBehaviorProgram *replacement = nullptr,
@@ -185,11 +240,16 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LoadedGameModule> nativeModule_;
+        std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> decisionUsageMetadata_;
+        mutable std::weak_ptr<const AI::DecisionNodeGeneration> decisionAuthoringGeneration_;
+        std::shared_ptr<const ProjectPackageDecisionNodeSource> packageDecisionNodes_;
+        bool nativeDecisionAvailable_{};
         Gameplay::GameAssetTypeRegistry missingAssetTypes_{"game.missing"};
         Gameplay::ComponentRegistry missingComponents_;
         std::vector<std::unique_ptr<Gameplay::LuaBehaviorProgram>> luaPrograms_;
         std::vector<std::filesystem::path> luaSources_;
         std::vector<LuaSourceStat> luaSourceStats_;
+        std::vector<ProjectLuaDecisionProgramSnapshot> luaDecisionPrograms_;
         std::filesystem::path nativeManifestPath_;
         std::string nativeModuleId_;
         std::uint64_t nativeDescriptorRevision_{};

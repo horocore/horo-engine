@@ -7,23 +7,38 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/NetworkProductSession.cpp
     horo-engine/composition/network/NetworkProductTransport.cpp
     horo-engine/composition/network/HeadlessNetworkServices.cpp
+    horo-engine/composition/network/HeadlessReplayArtifact.cpp
+    horo-engine/composition/network/HeadlessReplayArtifactComparison.cpp
+    horo-engine/composition/network/HeadlessReplayTimeline.cpp
+    horo-engine/composition/network/HeadlessNetworkReplication.cpp
+    horo-engine/composition/network/HeadlessReplicaAnimationInputs.cpp
+    horo-engine/composition/network/HeadlessPrefabIntent.cpp
+    horo-engine/composition/network/HeadlessPrefabReplica.cpp
+    horo-engine/composition/network/HeadlessNavigationPathScope.cpp
     horo-engine/composition/network/HeadlessAnimationFixed.h
     horo-engine/composition/network/NetworkProductComposition.h
     horo-engine/composition/network/HeadlessSceneLoadBoundary.cpp
     horo-engine/composition/network/HeadlessProjectScene.cpp
+    horo-engine/composition/network/HeadlessSimulationAssets.cpp
     horo-engine/composition/network/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
-target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroNetworkModeHostInternal nlohmann_json::nlohmann_json)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayVfxSceneIntegration)
-target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PlatformProjectIo)
-target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayAnimationScene)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::Platform HoroEngine::PlatformProjectIo)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroAnimationCookedAssets)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroProjectSceneNavigationHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroSceneAiNavigationMotionInternal)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/horo-engine/composition/network)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
-    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
+    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayNavigationIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
-target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost HoroEngine::WorldStreaming HoroMountedWorldHostInternal)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroSceneDecisionQueriesInternal)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroProjectScenePerceptionInternal HoroEngine::GameplayPerceptionIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)
 if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkProductHost PRIVATE horo-engine/composition/network/NetworkProductGnsSelection.cpp)
@@ -46,14 +61,25 @@ add_executable(HoroXRSimulatorSample horo-engine/tools/XRSimulatorSample.cpp)
 target_compile_features(HoroXRSimulatorSample PRIVATE cxx_std_20)
 target_link_libraries(HoroXRSimulatorSample PRIVATE HoroXRSimulatorProjectWorkflow)
 
+add_library(HoroNativePrefabCookHost STATIC shared/prefab/NativePrefabCookComposition.cpp)
+target_include_directories(HoroNativePrefabCookHost PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/shared/prefab")
+target_compile_features(HoroNativePrefabCookHost PUBLIC cxx_std_20)
+target_link_libraries(HoroNativePrefabCookHost PUBLIC HoroEngine::Assets
+    PRIVATE HoroEngine::PrefabCookHost HoroEngine::ProjectAssetRegistrySource HoroEngine::PlatformProjectIo
+        HoroEngine::ProjectMutationGuard HoroBuiltinAssetCookerHostInternal HoroEngine::DecisionCookHost HoroEngine::ProjectSettings)
+
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
     horo-engine/main.cpp
+    horo-engine/OpenXRPackageProbe.cpp
     horo-engine/cli_host/CliHost.cpp
+    horo-engine/cli_host/CliHostProgressPump.cpp
     horo-engine/cli_host/CliHostErrorTranslation.cpp
     horo-engine/cli_host/CliHostInterrupts.cpp
     horo-engine/cli_host/PackageCliHost.cpp
     horo-engine/cli_host/NavigationCliHost.cpp
+    horo-engine/cli_host/PlatformServicesCliHost.cpp
+    horo-engine/cli_host/PrefabCliHost.cpp
     horo-engine/cli_host/CliHostCommands.cpp
     horo-engine/cli_host/McpServe.cpp
     horo-engine/cli_host/McpStdio.cpp
@@ -71,12 +97,29 @@ target_link_libraries(horo-engine PRIVATE HoroEngine::AnimationCookedAssets)
 target_sources(horo-engine PRIVATE horo-engine/cli_host/ModuleScriptCliExecution.cpp)
 target_link_libraries(horo-engine PRIVATE HoroScriptModuleHostInternal HoroModuleScriptPackageInternal)
 target_compile_features(horo-engine PRIVATE cxx_std_20)
+target_include_directories(horo-engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared/xr")
+
+set(HORO_NETWORK_PRODUCT_PROFILE "Development" CACHE STRING "Runtime profile of the headless network product executable")
+set_property(CACHE HORO_NETWORK_PRODUCT_PROFILE PROPERTY STRINGS Development Packaged)
+if(NOT HORO_NETWORK_PRODUCT_PROFILE MATCHES "^(Development|Packaged)$")
+    message(FATAL_ERROR "Unsupported HORO_NETWORK_PRODUCT_PROFILE: ${HORO_NETWORK_PRODUCT_PROFILE}")
+endif()
+set(_horo_network_product_packaged 0)
+if(HORO_NETWORK_PRODUCT_PROFILE STREQUAL "Packaged")
+    set(_horo_network_product_packaged 1)
+endif()
+set_property(TARGET horo-engine PROPERTY HORO_NETWORK_PRODUCT_PACKAGED ${_horo_network_product_packaged})
+set_property(SOURCE horo-engine/NetworkProductLaunch.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    "HORO_NETWORK_PRODUCT_PACKAGED=${_horo_network_product_packaged}")
+
 # Only identity consumers depend on the changing Git revision. Keep unrelated
 # application units reusable by compiler and analysis caches across commits.
 set_property(SOURCE horo-engine/main.cpp horo-engine/NetworkProductLaunch.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
 
-target_link_libraries(horo-engine PRIVATE HoroNativeNavigationBakeHost)
+target_link_libraries(horo-engine PRIVATE HoroNativeNavigationBakeHost HoroNativePrefabCookHost HoroEngine::PrefabCookHost)
+target_link_libraries(horo-engine PRIVATE HoroEngine::PlatformServicesAuthoring)
+target_link_libraries(horo-engine PRIVATE HoroEngine::ProjectMutationGuard)
 
 if(MINGW)
     target_link_options(horo-engine PRIVATE -municode)
@@ -89,7 +132,7 @@ target_compile_definitions(horo-engine PRIVATE
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::PlatformProjectIo HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage
     HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
-    HoroNetworkProductHost HoroPackageProjectHost HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
+    HoroNetworkProductHost HoroPackageProjectHost HoroEngine::ProjectAssetRegistrySource HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
     HoroEngine::CliNavigationAdapters HoroEngine::McpNavigationAdapters HoroEngine::NavigationRecastDetour
     HoroEngine::Runtime
     HoroEngine::CliHost

@@ -308,6 +308,9 @@ def _cleanup(process: subprocess.Popen, known: dict[int, _Identity]) -> None:
 class _WindowsJob:
     """Contain descendants before user code runs; verify an empty kernel-owned job before release."""
 
+    KILL_ON_CLOSE = 0x2000
+    ACTIVE_PROCESS_LIMIT = 0x8
+
     def __init__(self) -> None:
         from ctypes import wintypes as w
 
@@ -330,7 +333,8 @@ class _WindowsJob:
                         ("period_user", ctypes.c_int64), ("period_kernel", ctypes.c_int64),
                         ("faults", w.DWORD), ("total", w.DWORD), ("active", w.DWORD), ("terminated", w.DWORD)]
 
-        self._thread_entry, self._accounting = ThreadEntry, Accounting
+        self._thread_entry, self._accounting, self._limits = ThreadEntry, Accounting, Limits
+        self._windows_types = w
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         signatures = {
             "CreateJobObjectW": ([ctypes.c_void_p, w.LPCWSTR], w.HANDLE),
@@ -339,6 +343,8 @@ class _WindowsJob:
             "TerminateJobObject": ([w.HANDLE, w.UINT], w.BOOL),
             "QueryInformationJobObject": ([w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.c_void_p], w.BOOL),
             "CloseHandle": ([w.HANDLE], w.BOOL),
+            "OpenProcess": ([w.DWORD, w.BOOL, w.DWORD], w.HANDLE),
+            "IsProcessInJob": ([w.HANDLE, w.HANDLE, ctypes.POINTER(w.BOOL)], w.BOOL),
             "CreateToolhelp32Snapshot": ([w.DWORD, w.DWORD], w.HANDLE),
             "Thread32First": ([w.HANDLE, ctypes.POINTER(ThreadEntry)], w.BOOL),
             "Thread32Next": ([w.HANDLE, ctypes.POINTER(ThreadEntry)], w.BOOL),
@@ -352,12 +358,20 @@ class _WindowsJob:
             function.argtypes, function.restype = arguments, result
         self.handle = self.check(self.kernel.CreateJobObjectW(None, None))
         try:
-            limits = Limits()
-            limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway permission.
-            self.check(self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+            self._set_limits(self.KILL_ON_CLOSE)
         except BaseException:
             self.close()
             raise
+
+    def _set_limits(self, flags: int, active: int = 0) -> None:
+        limits = self._limits()
+        limits.basic.flags = flags
+        limits.basic.active = active
+        self.check(self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+
+    def release_children(self) -> None:
+        """Allow a service retained after an explicitly admitted successful command to keep running."""
+        self._set_limits(0)
 
     @staticmethod
     def check(value):
@@ -397,9 +411,35 @@ class _WindowsJob:
         finally:
             self.check(self.kernel.CloseHandle(snapshot))
 
-    def stop(self) -> None:
-        self.check(self.kernel.TerminateJobObject(self.handle, 130))
-        deadline = time.monotonic() + 5
+    def _process_ids(self, deadline: float) -> tuple[int, ...]:
+        """Read the job's own process list, retrying if the buffer filled."""
+        w = self._windows_types
+        capacity = 16
+        while time.monotonic() < deadline:
+            class ProcessIds(ctypes.Structure):
+                _fields_ = [("assigned", w.DWORD), ("count", w.DWORD), ("ids", ctypes.c_size_t * capacity)]
+
+            members = ProcessIds()
+            if self.kernel.QueryInformationJobObject(self.handle, 3, ctypes.byref(members), ctypes.sizeof(members), None):
+                return tuple(members.ids[:members.count])
+            error = ctypes.get_last_error()
+            if error != 234:  # ERROR_MORE_DATA
+                raise ctypes.WinError(error)
+            capacity = max(2 * capacity, members.assigned)
+        raise OSError("Timed out reading owned Windows developer processes")
+
+    def _pin_process(self, pid: int, stack: contextlib.ExitStack) -> int | None:
+        """Open a waitable handle and recheck membership to rule out a reused PID."""
+        handle = self.kernel.OpenProcess(0x101000, False, pid)  # QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+        if not handle and ctypes.get_last_error() == 87:  # ERROR_INVALID_PARAMETER: process already gone
+            return None
+        self.check(handle)
+        stack.callback(lambda: self.check(self.kernel.CloseHandle(handle)))
+        belongs = self._windows_types.BOOL()
+        self.check(self.kernel.IsProcessInJob(handle, self.handle, ctypes.byref(belongs)))
+        return handle if belongs.value else None
+
+    def _wait_until_empty(self, deadline: float) -> None:
         while True:
             accounting = self._accounting()
             self.check(self.kernel.QueryInformationJobObject(
@@ -410,30 +450,61 @@ class _WindowsJob:
                 raise OSError("Timed out waiting for owned Windows developer process tree")
             time.sleep(0.01)
 
+    def stop(self) -> None:
+        deadline = time.monotonic() + 5
+        with contextlib.ExitStack() as handles:
+            try:
+                # Every live creator already occupies a slot. This prevents descendants from
+                # joining the job between discovery and termination, without changing launch policy.
+                self._set_limits(self.KILL_ON_CLOSE | self.ACTIVE_PROCESS_LIMIT, active=1)
+                members = [self._pin_process(pid, handles) for pid in self._process_ids(deadline)]
+            finally:
+                self.check(self.kernel.TerminateJobObject(self.handle, 130))
+            # Job accounting can reach zero before a terminating process handle is signaled.
+            for handle in filter(None, members):
+                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                if self.kernel.WaitForSingleObject(handle, remaining_ms) != 0:  # WAIT_OBJECT_0
+                    raise OSError("Could not confirm an owned Windows developer process terminated")
+        self._wait_until_empty(deadline)
+
     def close(self) -> None:
         self.check(self.kernel.CloseHandle(self.handle))
 
 
-def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
-    """Start suspended, contain the complete tree, and return 130 only after verified cancellation."""
+def _stop_windows_process(job: _WindowsJob, process: subprocess.Popen | None, resumed: bool) -> None:
+    """Reap a suspended launch failure even if it never entered the job."""
+    if process is not None and not resumed and process.poll() is None:
+        process.terminate()
+    job.stop()
+    if process is not None:
+        process.wait(timeout=5)
+
+
+@contextlib.contextmanager
+def owned_windows_process(
+    command: Sequence[str], *, cwd: Path | None = None, env: Mapping[str, str] | None = None,
+    capture_output: bool = False, retain_children_on_success: bool = False,
+) -> Iterator[subprocess.Popen]:
+    """Contain the suspended launch before yielding it. Verify tree retirement unless success explicitly retains a service."""
     job = _WindowsJob()
     process = None
+    resumed = False
+    retain_children = False
     try:
         # CREATE_SUSPENDED prevents child creation before containment, including during attach failures.
-        process = subprocess.Popen(command, cwd=cwd, env=env, shell=False,
+        pipes = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL} if capture_output else {}
+        process = subprocess.Popen(command, cwd=cwd, env=env, shell=False, **pipes,
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x4)
         job.attach_and_resume(process)
-        try:
-            return process.wait()
-        except KeyboardInterrupt:
-            return 130
+        resumed = True
+        yield process
+        retain_children = retain_children_on_success and process.returncode == 0
     finally:
         try:
-            job.stop()
-            if process is not None:
-                if process.poll() is None:  # Attach may have failed with the root still suspended outside the job.
-                    process.terminate()
-                process.wait(timeout=5)
+            if retain_children:
+                job.release_children()
+            else:
+                _stop_windows_process(job, process, resumed)
         except (KeyboardInterrupt, SystemExit) as cleanup_error:
             raise cleanup_error from CleanupError("Windows developer process cleanup was not confirmed")
         except Exception as cleanup_error:
@@ -444,6 +515,15 @@ def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | Non
                     process._handle.Close()
             finally:
                 job.close()
+
+
+def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
+    """Return the exit status or 130 after verified cancellation."""
+    with owned_windows_process(command, cwd=cwd, env=env) as process:
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            return 130
 
 
 def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> int:
@@ -675,11 +755,11 @@ def _initialize(root: Path, repo: Path) -> None:
 
 
 @contextlib.contextmanager
-def heavy_build_lock(repo: Path) -> Iterator[None]:
-    """Serialize dev.py configure/compilation across all repository worktrees."""
+def heavy_build_lock(repo: Path, *, blocking: bool = True) -> Iterator[None]:
+    """Serialize heavy work; nonblocking admission raises BlockingIOError when busy."""
     root = cache_directory(repo)
     _initialize(root, repo)
-    with _FileLock(root / "heavy-build.lock"):
+    with _FileLock(root / "heavy-build.lock", blocking=blocking):
         if (root / _CLEANUP_MARKER).exists():
             raise CacheError(f"An earlier build has unverified descendants; inspect {root / _CLEANUP_MARKER} before further builds")
         yield

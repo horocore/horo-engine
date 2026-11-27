@@ -63,6 +63,28 @@ TEST_CASE("Canonical style source and cooked payload preserve full sidecar ident
     CHECK(DecodeCookedUiStyleAsset(cooked.Value(), Asset(), changed).HasError());
 }
 
+TEST_CASE("High-contrast focus alternatives survive the ordinary style asset cook and load", "[runtime_ui][style][asset][accessibility]") {
+    auto document = Document();
+    const auto mask = UiVisualState::HighContrast | UiVisualState::Focused;
+    document.style.states.push_back(
+        {mask,
+         {},
+         UiStateLayer::Focus,
+         {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{1, 1, 1, 1}), false}}});
+    const auto source = SerializeUiStyleAsset(document);
+    REQUIRE(source.HasValue());
+    const auto authored = DeserializeUiStyleAsset(source.Value());
+    REQUIRE(authored.HasValue());
+    const auto schema = CreateCoreUiStyleSchema({}).Value();
+    const auto cooked = CookUiStyleAsset(authored.Value(), schema);
+    REQUIRE(cooked.HasValue());
+    const auto decoded = DecodeCookedUiStyleAsset(cooked.Value(), Asset(), schema);
+    REQUIRE(decoded.HasValue());
+    REQUIRE(decoded.Value().style.states.size() == 1);
+    CHECK(decoded.Value().style.states.front().required == mask);
+    CHECK(decoded.Value().style.states.front().assignments == document.style.states.front().assignments);
+}
+
 TEST_CASE("Style encoding preserves authored assignment order and rejects repeated property identities", "[runtime_ui][style][asset]") {
     auto document = Document();
     auto *assignments = &document.style.assignments;

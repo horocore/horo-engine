@@ -130,6 +130,12 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
         }
 
+        /** @brief Rejects native reconstruction when this backend has no corresponding encoder. */
+        [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &, const OpenGLGraphResources &,
+                                                    const RenderGraphNativeReconstruction &) {
+            return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        }
+
         /** @brief Validates one workload against resolved native resources before submission. */
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,
@@ -139,7 +145,7 @@ namespace Horo::Render::Detail {
             } else if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment>) {
                 if (!ValidDepth(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
-            } else if constexpr (std::is_same_v<Workload, RenderGraphMultiview>) {
+            } else if constexpr (std::is_same_v<Workload, RenderGraphMultiview> || std::is_same_v<Workload, RenderGraphColorReadback>) {
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
             } else if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
                 return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));

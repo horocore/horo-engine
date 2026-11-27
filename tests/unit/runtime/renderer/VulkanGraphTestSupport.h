@@ -17,6 +17,7 @@ namespace Horo::Render::VulkanGraphTest {
 
     struct EncodedGraph {
         std::vector<EncodedCopy> copies;
+        std::vector<VkBufferImageCopy2> coverageCopies;
         std::vector<VkBufferMemoryBarrier2> barriers;
         std::vector<VkImageMemoryBarrier2> imageBarriers;
         std::vector<std::string> operations;
@@ -32,6 +33,11 @@ namespace Horo::Render::VulkanGraphTest {
             bool depth{};
             VkAttachmentLoadOp load{};
             VkExtent2D extent{};
+            VkImageView colorView{};
+            VkAttachmentLoadOp colorLoad{};
+            VkAttachmentStoreOp colorStore{};
+            VkClearValue colorClear{};
+            VkImageView depthView{};
         };
 
         std::vector<RenderingCall> renderingCalls;
@@ -39,6 +45,7 @@ namespace Horo::Render::VulkanGraphTest {
         std::vector<VkRect2D> scissors;
         std::vector<DrawCall> drawCalls;
         std::uint32_t expectedIndexCount{3};
+        std::uint32_t alternateIndexCount{};
         int renderingBegins{};
         int renderingEnds{};
         int pipelineBinds{}, descriptorBinds{}, vertexBinds{}, indexBinds{}, draws{};
@@ -67,13 +74,28 @@ namespace Horo::Render::VulkanGraphTest {
         encodedGraph->operations.emplace_back("upload-image");
     }
 
+    inline VKAPI_ATTR void VKAPI_CALL CaptureCoverageCopy(VkCommandBuffer, const VkCopyImageToBufferInfo2 *info) {
+        CHECK(info->srcImageLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        encodedGraph->coverageCopies.insert(encodedGraph->coverageCopies.end(), info->pRegions, info->pRegions + info->regionCount);
+    }
+
     inline VKAPI_ATTR void VKAPI_CALL CaptureBeginRendering(VkCommandBuffer, const VkRenderingInfo *info) {
         encodedGraph->operations.emplace_back("begin-rendering");
         encodedGraph->layers = info->layerCount;
         encodedGraph->depthAttachment = info->pDepthAttachment != nullptr;
-        encodedGraph->renderingCalls.push_back({info->colorAttachmentCount, info->pDepthAttachment != nullptr,
-                                                info->pDepthAttachment ? info->pDepthAttachment->loadOp : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                                                info->renderArea.extent});
+        auto &call = encodedGraph->renderingCalls.emplace_back(info->colorAttachmentCount, info->pDepthAttachment != nullptr,
+                                                               info->pDepthAttachment ? info->pDepthAttachment->loadOp
+                                                                                      : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                                               info->renderArea.extent);
+        if (info->colorAttachmentCount != 0) {
+            const auto &color = info->pColorAttachments[0];
+            call.colorView = color.imageView;
+            call.colorLoad = color.loadOp;
+            call.colorStore = color.storeOp;
+            call.colorClear = color.clearValue;
+        }
+        if (info->pDepthAttachment)
+            call.depthView = info->pDepthAttachment->imageView;
         ++encodedGraph->renderingBegins;
     }
 
@@ -110,7 +132,7 @@ namespace Horo::Render::VulkanGraphTest {
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureDraw(VkCommandBuffer, std::uint32_t count, std::uint32_t instances, std::uint32_t,
                                                   std::int32_t, std::uint32_t firstView) {
-        CHECK(count == encodedGraph->expectedIndexCount);
+        CHECK((count == encodedGraph->expectedIndexCount || (count != 0 && count == encodedGraph->alternateIndexCount)));
         CHECK(instances > 0);
         CHECK(instances <= MultiviewExtractionLimits::HardMaximumViews);
         encodedGraph->drawCalls.push_back({count, instances, firstView});
@@ -129,6 +151,8 @@ namespace Horo::Render::VulkanGraphTest {
             return EraseFunction(PFN_vkCmdCopyBuffer2{CaptureCopy});
         if (symbol == "vkCmdCopyBufferToImage2")
             return EraseFunction(PFN_vkCmdCopyBufferToImage2{CaptureImageCopy});
+        if (symbol == "vkCmdCopyImageToBuffer2")
+            return EraseFunction(PFN_vkCmdCopyImageToBuffer2{CaptureCoverageCopy});
         if (symbol == "vkCmdBeginRendering")
             return EraseFunction(PFN_vkCmdBeginRendering{CaptureBeginRendering});
         if (symbol == "vkCmdEndRendering")
@@ -159,12 +183,17 @@ namespace Horo::Render::VulkanGraphTest {
         EncodedGraph encoded;
         Detail::VulkanGraphRuntime graph;
 
-        explicit NativeGraphFixture(const bool vertexLayers = false) {
+        explicit NativeGraphFixture(const bool vertexLayers = false, const bool timestamp = false) {
             encodedGraph = &encoded;
             InitializeNativeResourceRuntime(resources);
+            auto queues = commandState.queues;
+            if (timestamp) {
+                queues.front().timestampValidBits = 64;
+                queues.front().timestampPeriodNs = 1.0F;
+            }
             REQUIRE(graph
                         .Initialize({.device = NativeHandle<VkDevice>(1),
-                                     .queues = commandState.queues,
+                                     .queues = queues,
                                      .frames = 2,
                                      .timelineDifference = 1024,
                                      .deviceIncarnation = 11,

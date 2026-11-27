@@ -14,6 +14,7 @@ namespace Horo::Log {
     namespace {
         struct MdcStack;
         thread_local MdcStack *activeMdcState{};
+        thread_local bool diagnosticsSuppressed{};
 
         /**
          * @brief Per-thread MDC frame stack.
@@ -106,6 +107,11 @@ namespace Horo::Log {
         return isolated_;
     }
 
+    /** @copydoc LogContextSnapshot::SuppressesDiagnostics */
+    bool LogContextSnapshot::SuppressesDiagnostics() const noexcept {
+        return diagnosticsSuppressed_;
+    }
+
     /** @copydoc LogContextSnapshot::Fields */
     std::span<const MdcField> LogContextSnapshot::Fields() const noexcept {
         return fields_ ? std::span<const MdcField>{*fields_} : std::span<const MdcField>{};
@@ -119,7 +125,22 @@ namespace Horo::Log {
             derived.emplace_back(std::move(key), std::move(value));
         else
             existing->second = std::move(value);
-        return isolated_ ? Isolated(std::move(derived)) : LogContextSnapshot{std::move(derived)};
+        auto snapshot = isolated_ ? Isolated(std::move(derived)) : LogContextSnapshot{std::move(derived)};
+        snapshot.diagnosticsSuppressed_ = diagnosticsSuppressed_;
+        return snapshot;
+    }
+
+    /** @copydoc ScopedDiagnosticSuppression::ScopedDiagnosticSuppression */
+    ScopedDiagnosticSuppression::ScopedDiagnosticSuppression() noexcept : previous_(std::exchange(diagnosticsSuppressed, true)) {}
+
+    /** @copydoc ScopedDiagnosticSuppression::~ScopedDiagnosticSuppression */
+    ScopedDiagnosticSuppression::~ScopedDiagnosticSuppression() {
+        diagnosticsSuppressed = previous_;
+    }
+
+    /** @copydoc DiagnosticsSuppressed */
+    bool DiagnosticsSuppressed() noexcept {
+        return diagnosticsSuppressed;
     }
 
     std::size_t LogContext::PushFrame(std::vector<MdcField> fields) {
@@ -132,11 +153,15 @@ namespace Horo::Log {
 
     /** @copydoc ScopedLogContext::ScopedLogContext */
     ScopedLogContext::ScopedLogContext(const LogContextSnapshot &snapshot)
-        : frameIndex_(PushContextFrame({snapshot.Fields().begin(), snapshot.Fields().end()}, snapshot.IsIsolationBoundary())) {}
+        : frameIndex_(PushContextFrame({snapshot.Fields().begin(), snapshot.Fields().end()}, snapshot.IsIsolationBoundary())),
+          previousSuppression_(diagnosticsSuppressed) {
+        diagnosticsSuppressed |= snapshot.SuppressesDiagnostics();
+    }
 
     /** @copydoc ScopedLogContext::~ScopedLogContext */
     ScopedLogContext::~ScopedLogContext() {
         PopContextFrame(frameIndex_);
+        diagnosticsSuppressed = previousSuppression_;
     }
 
     std::vector<MdcField> GetMdcFields() {
@@ -152,11 +177,12 @@ namespace Horo::Log {
 
     /** @copydoc CaptureLogContext */
     LogContextSnapshot CaptureLogContext() {
+        LogContextSnapshot snapshot;
+        snapshot.diagnosticsSuppressed_ = diagnosticsSuppressed;
         if (!activeMdcState || activeMdcState->frames.empty())
-            return {};
+            return snapshot;
         auto fields = std::make_shared<std::vector<MdcField>>(std::size_t{0});
         MergeFrames(*activeMdcState, *fields);
-        LogContextSnapshot snapshot;
         if (!fields->empty())
             snapshot.fields_ = std::move(fields);
         snapshot.isolated_ = std::ranges::any_of(activeMdcState->frames, [](const auto &frame) {

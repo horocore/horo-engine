@@ -38,6 +38,7 @@ namespace Horo::Navigation {
         REQUIRE(cooked.Value().links.front().end == fixture.link.end.position);
         REQUIRE(cooked.Value().links.front().startPolygon == 0);
         REQUIRE(cooked.Value().links.front().endPolygon == 1);
+        CHECK(cooked.Value().links.front().authoredLink == fixture.link.id);
         REQUIRE_FALSE(cooked.Value().links.front().bidirectional);
     }
 
@@ -194,6 +195,31 @@ namespace Horo::Navigation {
         const auto result = fixture.Validate(backend, std::array{fixture.link});
         REQUIRE(result.HasValue());
         RequireRule(result.Value(), NavigationLinkValidationRule::Clearance, fixture.link);
+    }
+
+    TEST_CASE("Cooked link radius stays inside the clearance of every admitted direction", "[unit][navigation][links][clearance]") {
+        LinkFixture fixture;
+        const ProjectionBackend backend;
+        fixture.link.start.connectionRadiusMeters = 1.0F;
+        fixture.link.end.connectionRadiusMeters = 2.0F;
+        fixture.Observe(fixture.link, 1.5F);
+        fixture.clearance[1].radiusMeters = 0.75F;
+        float expected = 1.0F;
+        SECTION("A one-way link uses the authored cap and its forward measurement") {
+            fixture.clearance.resize(1);
+        }
+        SECTION("A bidirectional link must fit the weaker measured direction") {
+            fixture.link.direction = NavigationLinkDirection::Bidirectional;
+            expected = 0.75F;
+        }
+        const auto result = fixture.Validate(backend, std::array{fixture.link});
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().Authored().size() == 1);
+        CHECK(result.Value().Authored().front().radiusMeters == expected);
+        const auto cooked = fixture.Cook(result.Value(), NavigationGeneratedLinkCookPolicy::AuthoredOnly);
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().links.size() == 1);
+        CHECK(cooked.Value().links.front().radiusMeters == expected);
     }
 
     TEST_CASE("Descriptor and collision capture reject malformed ambiguous or stale input transactionally",

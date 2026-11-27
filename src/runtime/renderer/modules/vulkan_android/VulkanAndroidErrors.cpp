@@ -34,4 +34,9 @@ namespace Horo::Render::AndroidVulkan {
     Error NativeError(std::string_view operation, VkResult result) {
         return MakeError(Errors::NativeFailure, std::format("{} failed with VkResult {}.", operation, static_cast<int>(result)));
     }
+
+    /** @copydoc IsPending */
+    bool IsPending(const Error &error) noexcept {
+        return error.domain.Value() == Errors::Pending.domain.Value() && error.code.Value() == Errors::Pending.code.Value();
+    }
 }  // namespace Horo::Render::AndroidVulkan

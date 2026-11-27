@@ -48,41 +48,57 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportColorPipeline::WriteEncodeParameters */
+    Result<void> EditorViewportColorPipeline::WriteEncodeParameters(std::span<std::byte> bytes) const {
+        const auto &layout = programs_[1].layout;
+        if (const auto control = Parameter(bytes, layout, 1, {float(extent_.width), float(extent_.height), 1, 255}); control.HasError())
+            return control;
+        if (!accessibilityEncoder_)
+            return Result<void>::Success();
+        const auto &matrix = candidateAccessibility_.values;
+        for (std::uint32_t row = 0; row < 3; ++row) {
+            const auto offset = 3 * row;
+            const std::array<float, 4> values{matrix[offset], matrix[offset + 1], matrix[offset + 2], 0};
+            if (const auto packed = Parameter(bytes, layout, row + 2, values); packed.HasError())
+                return packed;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportColorPipeline::WriteSceneParameters */
+    Result<void> EditorViewportColorPipeline::WriteSceneParameters(std::span<std::byte> bytes) {
+        const bool automatic = settings_.mode == ExposureMode::AutomaticHistogram && PreviousSlot() != SlotCount;
+        const float ev = settings_.mode == ExposureMode::Manual ? settings_.manualEv : settings_.initialEv;
+        const float scale = std::exp2(ev + settings_.compensationEv);
+        const auto &prior = Previous();
+        const std::array<std::array<float, 4>, 3> values{
+            {{float(extent_.width), float(extent_.height), 0, 0},
+             {automatic ? 1.0F : 0.0F, scale, 0, 0},
+             {std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation)),
+              std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation >> 32)),
+              std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission)),
+              std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission >> 32))}}};
+        const auto parameterCount = manualOnly_ ? values.size() - 1 : values.size();
+        for (std::uint32_t i = 0; i < parameterCount; ++i)
+            if (const auto packed = Parameter(bytes, programs_[0].layout, i + 1, values[i]); packed.HasError())
+                return packed;
+        return WriteLookParameters(bytes);
+    }
+
     /** @copydoc EditorViewportColorPipeline::WriteParameters */
     Result<void> EditorViewportColorPipeline::WriteParameters(std::size_t role) {
         std::array<std::byte, 4096> bytes{};
-        const auto size = std::span{bytes}.first(programs_[role].uniformBytes);
-        if (role == 1) {
-            const auto packed = Parameter(size, programs_[role].layout, 1, {float(extent_.width), float(extent_.height), 1, 255});
-            if (packed.HasError())
-                return packed;
-        } else {
-            const bool automatic = settings_.mode == ExposureMode::AutomaticHistogram && PreviousSlot() != SlotCount;
-            const float ev = settings_.mode == ExposureMode::Manual ? settings_.manualEv : settings_.initialEv;
-            const float scale = std::exp2(ev + settings_.compensationEv);
-            const auto &prior = Previous();
-            const std::array<std::array<float, 4>, 3> values{
-                {{float(extent_.width), float(extent_.height), 0, 0},
-                 {automatic ? 1.0F : 0.0F, scale, 0, 0},
-                 {std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation)),
-                  std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation >> 32)),
-                  std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission)),
-                  std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission >> 32))}}};
-            for (std::uint32_t i = 0; i < values.size(); ++i)
-                if (const auto packed = Parameter(size, programs_[role].layout, i + 1, values[i]); packed.HasError())
-                    return packed;
-        }
-        if (role == 0)
-            if (const auto look = WriteLookParameters(size); look.HasError())
-                return look;
-        return port_.writeUniform(port_.context, slots_[candidateSlot_].uniform[role], size);
+        const auto uniform = std::span{bytes}.first(programs_[role].uniformBytes);
+        if (const auto packed = role == 0 ? WriteSceneParameters(uniform) : WriteEncodeParameters(uniform); packed.HasError())
+            return packed;
+        return port_.writeUniform(port_.context, slots_[candidateSlot_].uniform[role], uniform);
     }
 
     /** @copydoc EditorViewportColorPipeline::Bind */
     Result<void> EditorViewportColorPipeline::Bind(std::size_t role, RenderTextureViewHandle scene, RenderTextureViewHandle display,
                                                    std::size_t slotIndex, std::size_t previous) {
         auto &slot = slots_[slotIndex];
-        auto &binding = slot.bindings[role][previous];
+        auto &binding = slot.bindings[activeSceneBinding_][role][previous];
         if (binding)
             return Result<void>::Success();
         auto &program = programs_[role];
@@ -94,14 +110,15 @@ namespace Horo::Editor {
         if (role == 1)
             descriptor.resources.push_back({{2}, 0, display});
         else {
-            const auto exposure = previous == SlotCount ? slot.seed : slots_[previous].output;
-            descriptor.resources.insert(descriptor.resources.end(),
-                                        {{{2}, 0, scene},
-                                         {{3}, 0, tableViews_[0]},
-                                         {{4}, 0, tableViews_[1]},
-                                         {{5}, 0, samplers_[0]},
-                                         {{6}, 0, samplers_[1]},
-                                         {{7}, 0, MaterialBufferBinding{exposure, 0, sizeof(ExposureGpuState)}}});
+            descriptor.resources.insert(descriptor.resources.end(), {{{2}, 0, scene},
+                                                                     {{3}, 0, tableViews_[0]},
+                                                                     {{4}, 0, tableViews_[1]},
+                                                                     {{5}, 0, samplers_[0]},
+                                                                     {{6}, 0, samplers_[1]}});
+            if (!manualOnly_) {
+                const auto exposure = previous == SlotCount ? slot.seed : slots_[previous].output;
+                descriptor.resources.push_back({{7}, 0, MaterialBufferBinding{exposure, 0, sizeof(ExposureGpuState)}});
+            }
         }
         if (role == 0 && selection_->Mode() == ColorLookMode::Enabled)
             descriptor.resources.push_back({{8}, 0, lookView_});
@@ -118,21 +135,22 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportColorPipeline::ClearBindings */
     Result<void> EditorViewportColorPipeline::ClearBindings() {
         for (auto &slot : slots_)
-            for (std::size_t role = 0; role < 2; ++role)
-                for (auto &binding : slot.bindings[role]) {
-                    if (!binding)
-                        continue;
-                    if (const auto released = programs_[role].materials->Release(binding->Id()); released.HasError())
-                        return released;
-                    binding.reset();
-                }
+            for (auto &source : slot.bindings)
+                for (std::size_t role = 0; role < source.size(); ++role)
+                    for (auto &binding : source[role]) {
+                        if (!binding)
+                            continue;
+                        if (const auto released = programs_[role].materials->Release(binding->Id()); released.HasError())
+                            return released;
+                        binding.reset();
+                    }
         return Result<void>::Success();
     }
 
     /** @copydoc EditorViewportColorPipeline::PrepareAllBindings */
     Result<void> EditorViewportColorPipeline::PrepareAllBindings(RenderTextureViewHandle scene, RenderTextureViewHandle display) {
         for (std::size_t slot = 0; slot < activeSlots_; ++slot)
-            for (std::size_t previous = 0; previous <= SlotCount; ++previous)
+            for (std::size_t previous = manualOnly_ ? SlotCount : 0; previous <= SlotCount; ++previous)
                 for (std::size_t role = 0; role < 2; ++role)
                     if (const auto bound = Bind(role, scene, display, slot, previous); bound.HasError())
                         return bound;
@@ -143,13 +161,23 @@ namespace Horo::Editor {
     Result<void> EditorViewportColorPipeline::PrepareBindings(RenderTextureViewHandle scene, RenderTextureViewHandle display) {
         if (!candidate_ || !scene.IsValid() || !display.IsValid())
             return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
-        if (scene != boundScene_ || display != boundDisplay_) {
+        if (display != boundDisplay_) {
             if (const auto cleared = ClearBindings(); cleared.HasError())
                 return cleared;
+            sceneBindings_ = {};
+            boundDisplay_ = display;
+        }
+        auto source = std::ranges::find(sceneBindings_, scene, &SceneBinding::view);
+        if (source == sceneBindings_.end())
+            source = std::ranges::find(sceneBindings_, RenderTextureViewHandle{}, &SceneBinding::view);
+        if (source == sceneBindings_.end())
+            return Result<void>::Failure(MakeError(ExposureGpuErrors::InvalidInput));
+        activeSceneBinding_ = static_cast<std::size_t>(source - sceneBindings_.begin());
+        if (!source->ready) {
+            source->view = scene;
             if (const auto prepared = PrepareAllBindings(scene, display); prepared.HasError())
                 return prepared;
-            boundScene_ = scene;
-            boundDisplay_ = display;
+            source->ready = true;
         }
         for (std::size_t role = 0; role < 2; ++role) {
             if (const auto written = WriteParameters(role); written.HasError())
@@ -160,7 +188,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportColorPipeline::Material */
     const std::shared_ptr<const ResidentMaterialBinding> &EditorViewportColorPipeline::Material(std::size_t role) const noexcept {
-        return slots_[candidateSlot_].bindings[role][PreviousSlot()];
+        return slots_[candidateSlot_].bindings[activeSceneBinding_][role][PreviousSlot()];
     }
 
     /** @copydoc EditorViewportColorPipeline::Mesh */

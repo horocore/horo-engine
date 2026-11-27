@@ -100,6 +100,9 @@ namespace Horo::Extensions {
         std::vector<std::weak_ptr<NativeServiceModule>> modules;
         std::uint64_t nextGeneration{1};
         std::atomic_bool closed{};
+        // Native publication and builtin installation advance it on the owner lane.
+        // Revocation can also advance it during off-lane retirement. Readers acquire it before using authoring results.
+        std::atomic_uint64_t authoringApiRevision{1};
     };
 
     struct NativeExtensionServiceHostAccess final {

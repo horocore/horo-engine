@@ -5,10 +5,13 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
+#include <algorithm>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <set>
 #include <thread>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -46,6 +49,20 @@ namespace {
         const auto copy = std::bit_cast<CopyOperations>(symbol);
         copy(&escaped.spawn, &escaped.despawn, &escaped.instance);
         return escaped;
+    }
+
+    /** @brief Observes the capability granted by the normal native module activation and fixed-tick paths. */
+    std::shared_ptr<const Gameplay::GameplayPrefabContext> CapturePrefabCapability() {
+        auto loaded = Platform::LoadDynamicLibrary(HORO_TEST_GAME_MODULE_PATH);
+        REQUIRE(loaded.HasValue());
+        void *symbol = loaded.Value()->GetSymbol("HoroTestCopyPrefabCapability");
+        REQUIRE(symbol != nullptr);
+        using CopyCapability = void (*)(std::shared_ptr<const Gameplay::GameplayPrefabContext> *);
+        static_assert(sizeof(CopyCapability) == sizeof(symbol));
+        std::shared_ptr<const Gameplay::GameplayPrefabContext> capability;
+        std::bit_cast<CopyCapability>(symbol)(&capability);
+        REQUIRE(capability);
+        return capability;
     }
 
     /** @brief Observes host-owned completion storage after its originating module code has been unloaded. */
@@ -96,16 +113,28 @@ namespace {
         return artifactDigest;
     }
 
-    /** @brief Builds the one native spawner with explicit artifact digest and exact runtime identity. */
-    Runtime::RuntimeSceneDefinition MakeSpawnerScene(const Assets::AssetId asset, const Sha256Digest &artifactDigest) {
+    /** @brief Selects the native behavior and cooked artifact for the host under test. */
+    enum class PrefabHostScenario {
+        NativeSpawner,
+        NativeComponentSpawner,
+        CapabilityProbe
+    };
+
+    /** @brief Builds the authored native spawner or the probe that observes its equivalent grant. */
+    Runtime::RuntimeSceneDefinition MakePrefabScene(const Assets::AssetId asset, const Sha256Digest &artifactDigest,
+                                                    const PrefabHostScenario scenario) {
         Runtime::SceneDefinitionBuilder builder{{7}, {1}};
         Runtime::RuntimeEntityDefinition spawner;
         spawner.object = {1};
-        spawner.components.behaviors.push_back({{1},
-                                                Gameplay::BehaviorTypeId::Parse("game.tests.prefab_spawner").Value(),
-                                                1,
-                                                true,
-                                                {{"asset", asset.ToString()}, {"digest", FormatSha256(artifactDigest)}}});
+        if (scenario == PrefabHostScenario::CapabilityProbe) {
+            spawner.components.behaviors.push_back({{1}, Gameplay::BehaviorTypeId::Parse("game.tests.prefab_capability_probe").Value()});
+        } else {
+            spawner.components.behaviors.push_back({{1},
+                                                    Gameplay::BehaviorTypeId::Parse("game.tests.prefab_spawner").Value(),
+                                                    1,
+                                                    true,
+                                                    {{"asset", asset.ToString()}, {"digest", FormatSha256(artifactDigest)}}});
+        }
         builder.Add(std::move(spawner));
         return std::move(builder).Build().Value();
     }
@@ -151,9 +180,8 @@ namespace {
         const Assets::AssetId asset{Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value()};
         const Assets::AssetTypeId type{Assets::AssetTypeId::Parse("core.prefab").Value()};
         const AssetCookTargetId target{AssetCookTargetId::Parse("linux-x64").Value()};
-        bool nativeComponents{};
         Assets::MemoryAssetProvider bytes;
-        const Sha256Digest artifactDigest{PublishSpawnArtifact(bytes, asset, type, target, nativeComponents)};
+        const Sha256Digest artifactDigest;
         JobSystem jobs{{1, 16}};
         Assets::AssetLoadService loads{jobs, bytes};
         Assets::AssetRegistry registry;
@@ -165,14 +193,15 @@ namespace {
         std::unique_ptr<Prefab::PrefabTemplateProvider> templates;
         std::unique_ptr<GameplayWorldComposition> gameplay;
 
-        explicit HostFixture(const bool includeNativeComponents = false) : nativeComponents(includeNativeComponents) {
+        explicit HostFixture(const PrefabHostScenario scenario = PrefabHostScenario::NativeSpawner)
+            : artifactDigest(PublishSpawnArtifact(bytes, asset, type, target, scenario == PrefabHostScenario::NativeComponentSpawner)) {
             REQUIRE(registry
                         .Publish({{asset, type, ProjectPath::Parse("assets/spawn.prefab").Value(),
                                    ProjectPath::Parse("assets/spawn.prefab.horo").Value()}})
                         .status == Assets::AssetRegistryBuildStatus::Complete);
             REQUIRE(scenes.AddStructuralParticipant(MakeGameplayStructuralParticipant(activeGameplay)).HasValue());
             REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
-            REQUIRE(scenes.QueuePreparation(MakeSpawnerScene(asset, artifactDigest)).HasValue());
+            REQUIRE(scenes.QueuePreparation(MakePrefabScene(asset, artifactDigest, scenario)).HasValue());
             REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
         }
 
@@ -252,6 +281,125 @@ TEST_CASE("Production Gameplay composition routes a native module through cooked
     }
 }
 
+TEST_CASE("Owned headless prefab composition isolates a full same-tick request batch and recovers exact Scene identities",
+          "[prefab][gameplay][host][qualification]") {
+    using enum Prefab::PrefabSpawnState;
+    // The public runtime contract admits at most 32 outstanding operations per Scene.
+    constexpr std::size_t capacity = 32;
+    HostFixture host{PrefabHostScenario::CapabilityProbe};
+    host.Activate(true);
+    FixedTick(*host.gameplay, 1, host.cancellation.Token());
+    const auto capability = CapturePrefabCapability();
+    const auto tick = capability->CurrentTick();
+    REQUIRE(tick.HasValue());
+    REQUIRE(tick.Value() == 1);
+    Prefab::PrefabSpawnRequest request{.source = {host.asset, host.artifactDigest, host.target}, .notBeforeTick = tick.Value()};
+
+    std::vector<Prefab::PrefabOperation> healthy;
+    for (std::size_t queued = 0; queued < capacity - 2; ++queued) {
+        auto operation = capability->Spawn(request);
+        REQUIRE(operation.HasValue());
+        CHECK(operation.Value().State() == Pending);
+        healthy.push_back(std::move(operation).Value());
+    }
+    auto corruptRequest = request;
+    corruptRequest.source.artifactDigest.bytes.front() ^= 1;
+    auto corrupt = capability->Spawn(corruptRequest);
+    REQUIRE(corrupt.HasValue());
+    auto cancelled = capability->Spawn(request);
+    REQUIRE(cancelled.HasValue());
+    CHECK(corrupt.Value().State() == Pending);
+    CHECK(cancelled.Value().State() == Pending);
+    const auto overflow = capability->Spawn(request);
+    REQUIRE(overflow.HasError());
+    CHECK(overflow.ErrorValue().code.Value() == Prefab::PrefabErrors::AdmissionRejected.code.Value());
+    CHECK(Count(host.scenes) == 1);
+
+    cancelled.Value().Cancel();
+    const auto settle = [&host](const auto &settled) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (!settled() && std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(host.gameplay->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, host.frame).HasValue());
+            if (!settled())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(settled());
+    };
+    settle([&] {
+        return corrupt.Value().State() != Pending && cancelled.Value().State() != Pending &&
+               std::ranges::none_of(healthy, [](const auto &operation) {
+            return operation.State() == Pending;
+        });
+    });
+
+    CHECK(corrupt.Value().State() == Failed);
+    REQUIRE(corrupt.Value().Failure());
+    CHECK(corrupt.Value().Failure()->code.Value() == Prefab::PrefabErrors::CorruptedPayload.code.Value());
+    CHECK(cancelled.Value().State() == Cancelled);
+    CHECK(Count(host.scenes) == 1 + healthy.size() * 2);
+    REQUIRE_FALSE(host.scenes.TakeOperationError());
+    const auto scene = host.scenes.ActiveScene();
+    REQUIRE(scene);
+    const auto childAddress = Prefab::PrefabObjectAddress::Create({}, {7}).Value();
+    std::set<Runtime::EntityRef> entities;
+    for (const auto &operation : healthy) {
+        REQUIRE(operation.State() == Committed);
+        const auto instance = operation.Spawned();
+        REQUIRE(instance.HasValue());
+        const auto root = instance.Value().ResolveMember({}, *scene);
+        const auto child = instance.Value().ResolveMember(childAddress, *scene);
+        REQUIRE(root.HasValue());
+        REQUIRE(child.HasValue());
+        CHECK(root.Value().entity == instance.Value().Root());
+        CHECK(entities.insert(root.Value().entity).second);
+        CHECK(entities.insert(child.Value().entity).second);
+        const auto liveChild = scene->Get(child.Value().entity);
+        REQUIRE(liveChild.HasValue());
+        CHECK(liveChild.Value().parent == root.Value().entity);
+    }
+    const auto retired = healthy.front().Spawned().Value();
+    const auto retiredRoot = retired.Root();
+    auto removal = capability->Despawn(retired, tick.Value());
+    REQUIRE(removal.HasValue());
+    settle([&] {
+        return removal.Value().State() != Pending;
+    });
+    REQUIRE(removal.Value().State() == Committed);
+    CHECK(Count(host.scenes) == healthy.size() * 2 - 1);
+    const auto afterRemoval = host.scenes.ActiveScene();
+    REQUIRE(afterRemoval);
+    CHECK(retired.ResolveMember({}, *afterRemoval).HasError());
+
+    auto recovered = capability->Spawn(request);
+    REQUIRE(recovered.HasValue());
+    settle([&] {
+        return recovered.Value().State() != Pending;
+    });
+    REQUIRE(recovered.Value().State() == Committed);
+    const auto replacement = recovered.Value().Spawned().Value();
+    CHECK(replacement.Root().entity.index == retiredRoot.entity.index);
+    CHECK(replacement.Root().entity.generation != retiredRoot.entity.generation);
+    const auto afterRecovery = host.scenes.ActiveScene();
+    REQUIRE(afterRecovery);
+    const auto recoveredChild = replacement.ResolveMember(childAddress, *afterRecovery);
+    REQUIRE(recoveredChild.HasValue());
+    const auto liveChild = afterRecovery->Get(recoveredChild.Value().entity);
+    REQUIRE(liveChild.HasValue());
+    CHECK(liveChild.Value().parent == replacement.Root());
+    CHECK(retired.ResolveMember(childAddress, *afterRecovery).HasError());
+    CHECK(Count(host.scenes) == 1 + healthy.size() * 2);
+
+    host.gameplay->Shutdown();
+    host.activeGameplay = nullptr;
+    host.gameplay.reset();
+    CHECK(capability->Spawn(request).HasError());
+    REQUIRE(host.scenes.QueueUnload().HasValue());
+    REQUIRE(host.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, host.frame).HasValue());
+    CHECK_FALSE(host.scenes.ActiveScene());
+    CHECK(recovered.Value().State() == Committed);
+    CHECK(replacement.ResolveMember({}, *afterRecovery).HasError());
+}
+
 TEST_CASE("Owned cooked prefab composition rejects invalid asset admission before module activation", "[prefab][gameplay][host]") {
     Assets::MemoryAssetProvider bytes;
     JobSystem jobs{{1, 16}};
@@ -284,7 +432,7 @@ TEST_CASE("Owned cooked prefab composition rejects invalid asset admission befor
 
 TEST_CASE("Production cooked prefab composition retains opaque components from its actual native module registry",
           "[prefab][gameplay][host][components]") {
-    HostFixture host{true};
+    HostFixture host{PrefabHostScenario::NativeComponentSpawner};
     bool owned{};
     SECTION("borrowed provider") {
         // Keep the default borrowed provider ownership.

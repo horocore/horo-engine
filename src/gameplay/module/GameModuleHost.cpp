@@ -1,7 +1,9 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 
 #include "GameModuleHostDetail.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -25,6 +27,72 @@ namespace Horo::Gameplay {
     }  // namespace
 
     namespace {
+        struct NativeQueryDeclarations final {
+            std::shared_ptr<const AI::QuerySchemaRegistry> schema;
+            std::vector<AI::GameplayQueryPointBinding> bindings;
+            std::vector<AI::QueryTestId> deterministic;
+        };
+
+        [[nodiscard]] Result<std::span<const AI::QueryTestId>> ReadDeterministicQueryTests(const Platform::DynamicLibrary &library,
+                                                                                           const std::filesystem::path &path) {
+            using Output = Result<std::span<const AI::QueryTestId>>;
+            const auto symbol = library.GetSymbol(AI::GetDeterministicGameplayQueryTestsSymbol);
+            if (!symbol)
+                return Output::Success({});
+            if (!library.OwnsSymbolAtPath(symbol, path))
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            const auto get = Resolve<AI::GetDeterministicGameplayQueryTests>(library, AI::GetDeterministicGameplayQueryTestsSymbol);
+            std::size_t count{};
+            const auto *tests = get(count);
+            if (!tests || count == 0 || count > AI::EnvironmentQuerySchemaLimits::Tests)
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            return Output::Success({tests, count});
+        }
+
+        [[nodiscard]] Result<NativeQueryDeclarations> ReadNativeQueryTests(const Platform::DynamicLibrary &library,
+                                                                           const std::filesystem::path &path) {
+            using Output = Result<NativeQueryDeclarations>;
+            const auto qualified = ReadDeterministicQueryTests(library, path);
+            if (qualified.HasError())
+                return Output::Failure(qualified.ErrorValue());
+            const auto symbol = library.GetSymbol(AI::GetNativeGameplayQueryTestsSymbol);
+            if (!symbol) {
+                if (!qualified.Value().empty())
+                    return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+                return Output::Success({});
+            }
+            if (!library.OwnsSymbolAtPath(symbol, path))
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            const auto getTests = Resolve<AI::GetNativeGameplayQueryTests>(library, AI::GetNativeGameplayQueryTestsSymbol);
+            std::size_t count{};
+            const auto *tests = getTests(count);
+            if (!tests || count == 0 || count > AI::EnvironmentQuerySchemaLimits::Tests)
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+
+            std::vector<AI::QueryTestDescriptor> descriptors;
+            std::vector<AI::GameplayQueryPointBinding> bindings;
+            descriptors.reserve(count);
+            bindings.reserve(count);
+            for (const auto &test : std::span{tests, count}) {
+                if (test.descriptor.id != test.binding.test || test.descriptor.origin.kind != AI::QueryDescriptorSourceKind::Native ||
+                    test.descriptor.properties.size() > AI::EnvironmentQuerySchemaLimits::DescriptorProperties ||
+                    test.descriptor.contexts.size() > AI::EnvironmentQuerySchemaLimits::DescriptorContexts ||
+                    (test.descriptor.contextChoice &&
+                     test.descriptor.contextChoice->options.size() > AI::EnvironmentQuerySchemaLimits::DescriptorContexts))
+                    return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+                descriptors.push_back(test.descriptor);
+                bindings.push_back(test.binding);
+            }
+            auto schema = AI::CaptureBuiltinQuerySchema({}, descriptors);
+            if (schema.HasError())
+                return Output::Failure(schema.ErrorValue());
+            auto owned = std::make_shared<const AI::QuerySchemaRegistry>(std::move(schema).Value());
+            if (const auto validation = AI::GameplayQueryTestRegistry::Capture(*owned, bindings, owned, {}, {}, qualified.Value());
+                validation.HasError())
+                return Output::Failure(validation.ErrorValue());
+            return Output::Success({std::move(owned), std::move(bindings), {qualified.Value().begin(), qualified.Value().end()}});
+        }
+
         struct ValidatedModuleExports {
             const GameModuleDescriptor *descriptor{};
             const GeneratedGameplayDescriptorBundle *bundle{};
@@ -118,6 +186,8 @@ namespace Horo::Gameplay {
         registries.registry = std::move(registry).Value();
         if (bundle.decisionNodeCount != 0)
             decisionNodes.assign(bundle.decisionNodes, bundle.decisionNodes + bundle.decisionNodeCount);
+        if (bundle.perceptionSenseCount != 0)
+            perceptionSenses.assign(bundle.perceptionSenses, bundle.perceptionSenses + bundle.perceptionSenseCount);
         return Result<void>::Success();
     }
 
@@ -131,6 +201,8 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(image.ErrorValue());
         if (auto validated = ReadValidatedExports(*image.Value(), expectation); validated.HasError())
             return Result<void>::Failure(validated.ErrorValue());
+        if (auto tests = ReadNativeQueryTests(*image.Value(), libraryPath); tests.HasError())
+            return Result<void>::Failure(tests.ErrorValue());
         return Result<void>::Success();
     }
 
@@ -144,48 +216,133 @@ namespace Horo::Gameplay {
     Result<GameModuleLoadCandidate> GameModuleHost::LoadArtifact(const std::filesystem::path &libraryPath,
                                                                  const GameModuleLoadExpectation &expectation,
                                                                  const bool ownedShadow) const {
+        auto prepared = PrepareArtifactImage(libraryPath, expectation, ownedShadow, {});
+        if (prepared.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(prepared.ErrorValue());
+        auto owner = std::move(prepared).Value();
+        return ActivatePreparedImage(owner, {});
+    }
+
+    /** @copydoc GameModuleHost::PrepareImage */
+    Result<std::unique_ptr<PreparedGameModuleImage>> GameModuleHost::PrepareImage(const std::filesystem::path &libraryPath,
+                                                                                  const GameModuleLoadExpectation &expectation,
+                                                                                  const CancellationToken &cancellation) {
+        using Output = Result<std::unique_ptr<PreparedGameModuleImage>>;
+        auto owner = PrepareArtifactImage(libraryPath, expectation, false, cancellation);
+        if (owner.HasError())
+            return Output::Failure(owner.ErrorValue());
+        return Output::Success(std::unique_ptr<PreparedGameModuleImage>(new PreparedGameModuleImage(std::move(owner).Value())));
+    }
+
+    /** @copydoc GameModuleHost::PrepareArtifactImage */
+    Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::PrepareArtifactImage(const std::filesystem::path &libraryPath,
+                                                                                   const GameModuleLoadExpectation &expectation,
+                                                                                   const bool ownedShadow,
+                                                                                   const CancellationToken &cancellation,
+                                                                                   const std::optional<Sha256Digest> recorded) {
+        using Output = Result<std::unique_ptr<LoadedGameModule>>;
+        if (cancellation.IsCancellationRequested())
+            return Output::Failure(JobCancelled().ErrorValue());
         if (!libraryPath.is_absolute())
-            return Result<GameModuleLoadCandidate>::Failure(
-                MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module path must be absolute."));
+            return Output::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module path must be absolute."));
 
         auto image = OpenCodeImage(libraryPath, ownedShadow);
         if (image.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(image.ErrorValue());
+            return Output::Failure(image.ErrorValue());
         auto impl = std::make_shared<LoadedGameModule::Impl>();
         impl->codeImage = std::move(image).Value();
         impl->loadedArtifactPath = libraryPath;
-
-        auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
+        if (recorded) {
+            const auto &library = *impl->codeImage->library;
+            if (!library.OwnsSymbolAtPath(library.GetSymbol(GetGameModuleDescriptorSymbol), libraryPath) ||
+                !library.OwnsSymbolAtPath(library.GetSymbol(GetGameplayDescriptorBundleSymbol), libraryPath))
+                return Output::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor,
+                                                 "The loaded native exports do not belong to the recorded gameplay artifact."));
+            const auto bytes =
+                NativeDurableFileSystem{}.ReadFileBounded(libraryPath, Detail::MaximumRecordedNativeArtifactBytes, cancellation);
+            if (bytes.HasError())
+                return Output::Failure(bytes.ErrorValue());
+            if (ComputeSha256(std::as_bytes(std::span{bytes.Value()})) != *recorded)
+                return Output::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor,
+                                                 "The loaded gameplay artifact no longer matches its recorded bytes."));
+            impl->codeImage->recordedArtifact = recorded;
+        }
+        const auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
         if (exports.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(exports.ErrorValue());
-        const ValidatedModuleExports validated = exports.Value();
+            return Output::Failure(exports.ErrorValue());
+        auto tests = ReadNativeQueryTests(*impl->codeImage->library, libraryPath);
+        if (tests.HasError())
+            return Output::Failure(tests.ErrorValue());
+        impl->querySchema = std::move(tests.Value().schema);
+        impl->queryBindings = std::move(tests.Value().bindings);
+        impl->deterministicQueryTests = std::move(tests.Value().deterministic);
+        const auto &validated = exports.Value();
         impl->moduleId = validated.descriptor->moduleId;
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
+        impl->create = validated.bundle->lifecycle.create;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        if (const auto bound = BindRuntimeServices(*impl); bound.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(bound.ErrorValue());
-
         if (auto captured = impl->CaptureGeneratedContributions(*validated.bundle); captured.HasError())
-            return Result<GameModuleLoadCandidate>::Failure(captured.ErrorValue());
+            return Output::Failure(captured.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Output::Failure(JobCancelled().ErrorValue());
+        // This wrapper already owns rollback before platform services or module factories can publish work.
+        return Output::Success(std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, std::move(impl)));
+    }
 
-        // Allocate the exported RAII wrapper before any module factory can publish work.
-        auto owner = std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, impl);
+    /** @copydoc GameModuleHost::ActivatePrepared */
+    Result<GameModuleLoadCandidate> GameModuleHost::ActivatePrepared(PreparedGameModuleImage &prepared,
+                                                                     const CancellationToken &cancellation) const {
+        if (cancellation.IsCancellationRequested())
+            return ActivatePreparedImage(prepared.owner_, cancellation);
+        if (!runtimeServices_.physics || !runtimeServices_.character)
+            return Result<GameModuleLoadCandidate>::Failure(
+                MakeError(GameplayErrors::PhysicsUnavailable, "Prepared gameplay activation requires paired Scene service scopes."));
+        const auto &physics = runtimeServices_.physics->Binding();
+        const auto &character = runtimeServices_.character->Binding();
+        if (physics.scene == 0 || physics.sceneGeneration == 0 || character.scene != physics.scene ||
+            character.sceneGeneration != physics.sceneGeneration)
+            return Result<GameModuleLoadCandidate>::Failure(
+                MakeError(GameplayErrors::PhysicsUnavailable, "Prepared gameplay scopes must belong to the same live Scene."));
+        return ActivatePreparedImage(prepared.owner_, cancellation);
+    }
+
+    /** @copydoc GameModuleHost::ActivatePreparedImage */
+    Result<GameModuleLoadCandidate> GameModuleHost::ActivatePreparedImage(std::unique_ptr<LoadedGameModule> &prepared,
+                                                                          const CancellationToken &cancellation) const {
+        using Output = Result<GameModuleLoadCandidate>;
+        if (!prepared || std::this_thread::get_id() != prepared->impl_->ownerThread)
+            return Output::Failure(
+                MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Prepared module is consumed or on a foreign lane."));
+        auto owner = std::move(prepared);
+        if (cancellation.IsCancellationRequested())
+            return Output::Failure(JobCancelled().ErrorValue());
+        auto &impl = *owner->impl_;
+        if (const auto bound = BindRuntimeServices(impl); bound.HasError()) {
+            owner->RequestRetirement();
+            return Output::Failure(bound.ErrorValue());
+        }
+
         std::optional<Error> diagnostic;
         auto initializationFailure =
             MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay host initialization failed after factory admission.");
         try {
-            impl->gameplayModule = validated.bundle->lifecycle.create();
-            if (impl->gameplayModule == nullptr)
+            impl.gameplayModule = impl.create();
+            if (impl.gameplayModule == nullptr)
                 diagnostic = MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
-            else if (auto activated = impl->RegisterAndStart(hostCapabilities_, replicationAdmission_); activated.HasError())
+            else if (auto activated = impl.RegisterAndStart(hostCapabilities_, replicationAdmission_, runtimeServices_.animation);
+                     activated.HasError())
                 diagnostic = activated.ErrorValue();
+            else if (cancellation.IsCancellationRequested())
+                diagnostic = JobCancelled().ErrorValue();
         } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             diagnostic = std::move(initializationFailure);
         }
         if (diagnostic)
             owner->RequestRetirement();
-        return Result<GameModuleLoadCandidate>::Success({std::move(owner), std::move(diagnostic)});
+        else
+            impl.decisionFactoryAdmission.store(true, std::memory_order_release);
+        return Output::Success({std::move(owner), std::move(diagnostic)});
     }
 
     /** @copydoc GameModuleHost::BindRuntimeServices */

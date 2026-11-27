@@ -312,4 +312,11 @@ namespace Horo::Packages::Detail {
     std::shared_ptr<const PackageActivationSnapshot> PackageModuleComposition::Snapshot() const noexcept {
         return snapshot_;
     }
+
+    /** @copydoc PackageComposition::AppendRetainedPackages */
+    void PackageModuleComposition::AppendRetainedPackages(std::vector<HoroPackageId> &packages) const {
+        for (const auto &entry : entries_)
+            if (entry.owner)
+                packages.push_back(entry.request.package);
+    }
 }  // namespace Horo::Packages::Detail

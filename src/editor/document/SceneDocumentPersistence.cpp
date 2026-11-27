@@ -68,6 +68,55 @@ namespace Horo::Editor {
             });
         }
 
+        /** @brief Binds the redacted receipt to the exact committed scene and its authored revision. */
+        [[nodiscard]] bool ValidApprovalReceipt(const SceneApprovalRecoveryReceipt &approval, const DocumentRevision revision,
+                                                const DocumentStateId state, const std::size_t objects) {
+            return approval.reviewId != 0 && approval.Matches(revision, state) && approval.affectedObjects != 0 &&
+                   approval.affectedObjects <= objects;
+        }
+
+        /** @brief Binds the receipt to the canonical destination, saved baseline, and recovered payload. */
+        [[nodiscard]] Json EncodeApprovalReceipt(const SceneApprovalRecoveryReceipt &approval, const Json &recovery) {
+            Json receipt{{"reviewId", approval.reviewId},
+                         {"baseRevision", approval.baseRevision.value},
+                         {"committedState", approval.committedState.value},
+                         {"affectedObjects", approval.affectedObjects},
+                         {"spatialImpactConfirmed", approval.spatialImpactConfirmed}};
+            auto bound = receipt;
+            for (const auto field : {"canonicalPath", "savedRevision", "savedState", "sceneChecksum"})
+                bound[field] = recovery[field];
+            receipt["checksum"] = SceneChecksum(bound);
+            return receipt;
+        }
+
+        /** @brief Reads informational evidence independently of the recoverable scene payload. */
+        [[nodiscard]] std::optional<SceneApprovalRecoveryReceipt> ReadApprovalReceipt(const Json &record,
+                                                                                     const ProjectSceneRecoveryRecord &scene) {
+            const auto receipt = record.find("approval");
+            if (receipt == record.end() || !receipt->is_object() || receipt->size() != 6)
+                return std::nullopt;
+            for (const auto key : {"reviewId", "baseRevision", "committedState", "affectedObjects"}) {
+                const auto field = receipt->find(key);
+                if (field == receipt->end() || !field->is_number_unsigned())
+                    return std::nullopt;
+            }
+            const auto spatial = receipt->find("spatialImpactConfirmed");
+            const auto count = (*receipt)["affectedObjects"].get<std::uint64_t>();
+            if (spatial == receipt->end() || !spatial->is_boolean() || count > scene.objects.size())
+                return std::nullopt;
+            const SceneApprovalRecoveryReceipt approval{
+                .reviewId = (*receipt)["reviewId"].get<std::uint64_t>(),
+                .baseRevision = {(*receipt)["baseRevision"].get<std::uint64_t>()},
+                .committedState = {(*receipt)["committedState"].get<std::uint64_t>()},
+                .affectedObjects = static_cast<std::size_t>(count),
+                .spatialImpactConfirmed = spatial->get<bool>(),
+            };
+            if (!ValidApprovalReceipt(approval, scene.recoveredRevision, scene.recoveredState, scene.objects.size()) ||
+                EncodeApprovalReceipt(approval, record) != *receipt)
+                return std::nullopt;
+            return approval;
+        }
+
         /** @brief Validates the metadata and payload of one parsed recovery record. */
         [[nodiscard]] Result<ProjectSceneRecoveryRecord> ParseRecoveryRecord(const std::filesystem::path &absoluteScenePath,
                                                                              const Json &record) {
@@ -87,7 +136,7 @@ namespace Horo::Editor {
                 return Result<ProjectSceneRecoveryRecord>::Failure(
                     PersistenceError(SceneInvalid, "Recovery scene checksum does not match its payload."));
 
-            auto scene = SceneSource::DecodeSceneSource(record["scene"].dump());
+            auto scene = SceneSource::DecodeSceneSourceWithChildReferences(record["scene"].dump());
             if (scene.HasError())
                 return Result<ProjectSceneRecoveryRecord>::Failure(scene.ErrorValue());
             ParsedScene parsed = std::move(scene).Value();
@@ -99,10 +148,12 @@ namespace Horo::Editor {
                 .recoveredState = DocumentStateId{record["recoveredState"].get<std::uint64_t>()},
                 .objects = std::move(parsed.objects),
                 .prefabInstances = std::move(parsed.prefabInstances),
+                .childScenes = std::move(parsed.childScenes),
             };
             if (!result.savedState.IsValid() || !result.recoveredState.IsValid() || result.recoveredRevision < result.savedRevision)
                 return Result<ProjectSceneRecoveryRecord>::Failure(
                     PersistenceError(SceneInvalid, "Recovery revision metadata is invalid."));
+            result.approval = ReadApprovalReceipt(record, result);
             return Result<ProjectSceneRecoveryRecord>::Success(std::move(result));
         }
 
@@ -129,9 +180,10 @@ namespace Horo::Editor {
 
         [[nodiscard]] std::string SerializeRecoveryRecord(const std::filesystem::path &absoluteScenePath,
                                                           const SceneDocumentSnapshot &snapshot, const DocumentRevision savedRevision,
-                                                          const DocumentStateId savedState) {
+                                                          const DocumentStateId savedState,
+                                                          const std::optional<SceneApprovalRecoveryReceipt> &approval) {
             Json scene = SceneJson(snapshot);
-            const Json record{
+            Json record{
                 {"recordVersion", 1},
                 {"canonicalPath", absoluteScenePath.string()},
                 {"savedRevision", savedRevision.value},
@@ -143,6 +195,8 @@ namespace Horo::Editor {
                 {"sceneChecksum", SceneChecksum(scene)},
                 {"scene", std::move(scene)},
             };
+            if (approval)
+                record["approval"] = EncodeApprovalReceipt(*approval, record);
             return record.dump(2) + '\n';
         }
 
@@ -230,14 +284,14 @@ namespace Horo::Editor {
         if (sceneBytes.HasError()) {
             return Result<LoadedProjectScene>::Failure(sceneBytes.ErrorValue());
         }
-        auto scene = SceneSource::DecodeSceneSource(sceneBytes.Value());
+        auto scene = SceneSource::DecodeSceneSourceWithChildReferences(sceneBytes.Value());
         if (scene.HasError()) {
             return Result<LoadedProjectScene>::Failure(scene.ErrorValue());
         }
         ParsedScene parsed = std::move(scene).Value();
         return Result<LoadedProjectScene>::Success(LoadedProjectScene{absoluteScenePath, std::move(parsed.objects),
                                                                       std::move(parsed.prefabInstances), true,
-                                                                      Fingerprint(sceneBytes.Value())});
+                                                                      Fingerprint(sceneBytes.Value()), std::move(parsed.childScenes)});
     }
 
     /** @copydoc InspectProjectSceneFingerprint */
@@ -294,6 +348,8 @@ namespace Horo::Editor {
             });
         }
 
+        if (const auto children = SceneSource::ValidateSceneChildReferences(snapshot.childScenes); children.HasError())
+            return Result<ProjectSceneSaveResult>::Failure(children.ErrorValue());
         const std::string serialized = SceneJson(snapshot).dump(2) + '\n';
         return ReplaceSerializedScene(absoluteProjectRoot, absoluteScenePath, serialized, expectedFingerprint, overwriteConflict, files);
     }
@@ -389,6 +445,15 @@ namespace Horo::Editor {
                                            const SceneDocumentSnapshot &snapshot, const DocumentRevision savedRevision,
                                            const DocumentStateId savedState, const ProjectMutationCoordinator &mutations,
                                            DurableFileSystem &files) {
+        return WriteProjectSceneRecovery(absoluteProjectRoot, absoluteScenePath, snapshot, savedRevision, savedState, mutations, files,
+                                         std::nullopt);
+    }
+
+    /** @copydoc WriteProjectSceneRecovery */
+    Result<void> WriteProjectSceneRecovery(const std::filesystem::path &absoluteProjectRoot, const std::filesystem::path &absoluteScenePath,
+                                           const SceneDocumentSnapshot &snapshot, const DocumentRevision savedRevision,
+                                           const DocumentStateId savedState, const ProjectMutationCoordinator &mutations,
+                                           DurableFileSystem &files, const std::optional<SceneApprovalRecoveryReceipt> &approval) {
         if (!absoluteProjectRoot.is_absolute() || !absoluteScenePath.is_absolute() ||
             !IsContainedBy(absoluteProjectRoot, absoluteScenePath) || !savedState.IsValid()) {
             return Result<void>::Failure(
@@ -405,7 +470,11 @@ namespace Horo::Editor {
         }
         const auto heldLease = std::move(lease).Value();
 
-        const std::string serialized = SerializeRecoveryRecord(absoluteScenePath, snapshot, savedRevision, savedState);
+        if (const auto children = SceneSource::ValidateSceneChildReferences(snapshot.childScenes); children.HasError())
+            return children;
+        if (approval && !ValidApprovalReceipt(*approval, snapshot.revision, snapshot.state, snapshot.objects.size()))
+            return Result<void>::Failure(PersistenceError(SceneInvalid, "Recovery approval does not match the captured scene."));
+        const std::string serialized = SerializeRecoveryRecord(absoluteScenePath, snapshot, savedRevision, savedState, approval);
         if (serialized.size() > kMaximumRecoveryBytes) {
             return Result<void>::Failure(PersistenceError(SceneInvalid, "Recovery record exceeds the supported size limit."));
         }

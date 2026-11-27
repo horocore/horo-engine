@@ -1,11 +1,14 @@
 #pragma once
-#include "EditorWorkspaceHostServices.h"
+
+#include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Application/GameplayTestService.h"
 #include "Horo/Application/TerrainAuthoringAssets.h"
 #include "Horo/Application/TerrainAuthoringCook.h"
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
+#include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorDataBus.h"
@@ -15,10 +18,12 @@
 #include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/PrefabProjectSettingsSession.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Editor/SemanticDocumentHistory.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 #include "Horo/Foundation/Sha256.h"
+#include "ai/queries/preview/EnvironmentQueryPreviewNavigation.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -26,19 +31,28 @@
 #include "editor/document/SceneFileWatchService.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
+#include "editor/language/ClangdProvider.h"
+#include "editor/language/HoroScriptSyntax.h"
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
-#include "editor/screens/workspace/PCGPreviewWorkspace.h"
-#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
-#include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
-#include "terrain/TerrainAssetCreation.h"
+#include "editor/screens/workspace/ai/decisions/DecisionGraphDocumentHistory.h"
+#include "editor/screens/workspace/ai/queries/EnvironmentQueryWorkspaceSource.h"
+#include "editor/screens/workspace/pcg/PCGPreviewWorkspace.h"
+#include "editor/screens/workspace/prefab/assets/PrefabApplyTransaction.h"
+#include "editor/screens/workspace/prefab/document/PrefabDocumentSession.h"
+#include "editor/screens/workspace/prefab/hierarchy/PrefabHierarchySources.h"
+#include "editor/source_editor/SourceReviewApplication.h"
+#include "inspection/EditorDebugCapture.h"
+#include "screen/EditorWorkspaceHostServices.h"
+#include "terrain/assets/TerrainAssetCreation.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -46,6 +60,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace Horo {
+    class BuildOutputStore;
+}
 
 namespace Horo::Extensions {
     class EditorInspectorHost;
@@ -55,7 +73,33 @@ namespace Horo::Platform {
     class IProjectReadFiles;
 }
 
+namespace Horo::Application {
+    struct ProjectAssetImportReceipt;
+}  // namespace Horo::Application
+
 namespace Horo::Editor {
+    struct EditorSourceCommandEndpoint;
+    struct EditorInspectionCommandEndpoint;
+    struct ObjectInspectionRequest;
+    struct TransformInspectionPage;
+    struct BoundsInspectionPage;
+    struct ComponentInspectionPage;
+    struct GeometryInspectionPage;
+    struct DistanceInspectionPage;
+    struct GridInspectionPage;
+    struct SurfaceInspectionPage;
+    struct CollisionInspectionPage;
+    struct PenetrationInspectionPage;
+    struct VisualInspectionPage;
+    struct EditorInspectionPhysics;
+    struct InspectionSceneRevision;
+    struct AgentSceneObjectRename;
+    struct AgentSceneLightUpdate;
+    struct EditorBuildCommandEndpoint;
+    struct EditorTestCommandEndpoint;
+    struct CapturedDecisionExternal;
+    struct EnvironmentQueryPreviewPhysics;
+
     struct TerrainDocumentView;
     class IEditorPlayXrHost;
     class ILocalizationService;
@@ -76,10 +120,13 @@ namespace Horo::Editor {
     struct EditorWorkspaceGameplayServices {
         Application::GameplayBuildService *builds{};
         Application::GameplayBuildEnvironment environment{};
+        Application::GameplayTestService *tests{};
+        Application::GameplayTestEnvironment testEnvironment{};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
         std::shared_ptr<EditorPlaySaveRetirement> saveRetirement;
         std::shared_ptr<Extensions::ScriptModuleHostServices> moduleScripts;
-        EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
+        EditorPlaySceneFactory sceneFactory{};             /**< Host composition capturing the selected native and asset authorities. */
+        const ConfigurationService *assistConfiguration{}; /**< Process authority outliving the workspace. */
     };
 
     /** @brief Explicit host composition for prefab source capture and isolated authoring previews. */
@@ -92,6 +139,7 @@ namespace Horo::Editor {
     struct EditorWorkspaceSourceNavigation {
         SourceOpenNavigator sourceOpenNavigator{};
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
+        BuildOutputStore *diagnosticOutput{}; /**< Borrowed process output store, outliving the workspace. */
     };
 
     /** @brief Explicit procedural source catalog, optional migrator and detached preview inputs. */
@@ -129,7 +177,15 @@ namespace Horo::Editor {
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Immutable project capture; omitted in Null. */
         const Application::TerrainAuthoringCookFactory *terrainCook{};
         const Application::TerrainAuthoringAssetFactory *terrainAssets{};
+        AI::LatticeQueryAuthoringFactory latticeQueryFactory{};
+        const AI::QuerySchemaRegistry *querySchema{}; /**< Application-owned immutable descriptor registry. */
+        AI::QueryContextProviderAccess queryContextAccess;
+        const EnvironmentQueryPreviewPhysics *queryPreviewPhysics{};
+        const EnvironmentQueryPreviewNavigation *queryPreviewNavigation{};
+        const EditorInspectionPhysics *inspectionPhysics{};
     };
+
+    class IEditorViewportRenderer;
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
     public:
@@ -147,6 +203,9 @@ namespace Horo::Editor {
             return m_xrSceneSource.Port();
         }
 
+        /** @brief Selects the mounted Play source and retires receipts from the previous draw owner. */
+        void SelectMountedWorldPlay(bool selected) noexcept;
+
         /** @brief Selects the actual application XR host; null preserves authored-camera desktop Play. */
         void SelectXrPlayHost(IEditorPlayXrHost *host) noexcept {
             m_selectedXrPlayHost = host;
@@ -157,6 +216,39 @@ namespace Horo::Editor {
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
+
+        /** @brief Binds a source presentation endpoint to the current editor workspace and authorization revision.
+         * @param project Host-issued portable project identity. @param authorizationRevision Exact active MCP trust revision.
+         * @return A borrowed lease suitable for the host's adapter composition.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorSourceCommandEndpoint> BindSourcePresentation(std::string project,
+                                                                                              std::uint64_t authorizationRevision);
+        /** @brief Binds approved gameplay builds to this workspace's native build environment.
+         * @param project Host-issued project identity. @param authorizationRevision Exact active trust revision.
+         * @return Borrowed endpoint, or an empty lease when the project has no gameplay build capability.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorBuildCommandEndpoint> BindGameplayBuildCommands(std::string project,
+                                                                                                std::uint64_t authorizationRevision);
+        /** @brief Binds the active workspace's configured native test operations.
+         * @param project Host-issued project identity. @param authorizationRevision Exact active trust revision.
+         * @return Borrowed endpoint, or an empty lease when the host lacks CTest capability.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorTestCommandEndpoint> BindGameplayTestCommands(std::string project,
+                                                                                              std::uint64_t authorizationRevision);
+        /** @brief Revokes workspace command leases and cancels command-owned work before project retirement. */
+        void RevokeWorkspaceCommands() noexcept;
+        /** @brief Binds numeric inspection to this exact committed editor workspace. */
+        [[nodiscard]] std::weak_ptr<const EditorInspectionCommandEndpoint> BindSceneInspection(std::string project,
+                                                                                               std::uint64_t authorizationRevision);
+        /** @brief Binds approved debug capture to this exact committed editor workspace.
+         * @param project Host-issued project identity.
+         * @param authorizationRevision Exact active trust revision.
+         * @param viewport Optional renderer borrowed until the binding is revoked, replaced or the workspace retires.
+         * @return A weak endpoint for the exact binding.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorDebugCaptureEndpoint> BindDebugCapture(std::string project,
+                                                                                       std::uint64_t authorizationRevision,
+                                                                                       IEditorViewportRenderer *viewport = nullptr);
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
         void RefreshWorldSourceProjection();
@@ -184,8 +276,10 @@ namespace Horo::Editor {
         /** @brief Host must call before destroying the borrowed world owner; retained reader leases remain immutable and valid. */
         void DetachWorldSourceOwner() noexcept;
         /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
-         * @param object Exact selected authored source. @param revision Expected document revision. @return Typed admission/failure. */
-        [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision);
+         * @param object Exact selected authored source. @param revision Expected document revision.
+         * @param outputSwitch Explicit replacement intent, if supplied. @return Typed admission/failure. */
+        [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision,
+                                                     std::optional<AudioComponentPreviewOutputSwitch> outputSwitch = std::nullopt);
         /** @brief Revokes only this workspace's output, retaining native ownership in the application. */
         void StopAudioPreview() noexcept;
         /** @brief Reconciles authoring/selection changes and copies current typed preview facts. */
@@ -201,17 +295,30 @@ namespace Horo::Editor {
          * @return Unchanged dirty rejection or successful owner shutdown. */
         [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
 
-        /** @brief Starts a camera-only authored preview using the same runtime hard-cut composition as a packaged view.
+        /** @brief Starts a camera-only authored preview using the runtime camera admission policy.
          * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
-         * @param view Host-issued generation-safe preview view. @return Success or typed admission failure. */
-        [[nodiscard]] Result<void> StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,
-                                                         const Cinematic::CameraCutActivation &cuts, Runtime::CameraViewContextId view);
+         * @param view Host-issued generation-safe preview view. @param transitions Camera transitions admitted by the host.
+         * @param crossFade Optional exact reservation from the selected viewport frontend.
+         * @return Success or typed admission failure. */
+        [[nodiscard]] Result<void> StartCameraCutPreview(
+            Cinematic::SequencePlaybackActivation activation, const Cinematic::CameraCutActivation &cuts, Runtime::CameraViewContextId view,
+            Runtime::CameraTransitionSupport transitions = Runtime::CameraTransitionSupport::SingleViewBlend,
+            std::optional<Runtime::CameraCrossFadeAdmission> crossFade = std::nullopt);
         /** @brief Advances the preview with exact owner-clock ticks before viewport extraction.
          * @param delta Non-negative exact timeline delta. @return Success or typed runtime/binding failure. */
         [[nodiscard]] Result<void> AdvanceCameraCutPreview(Cinematic::SequenceTime delta);
         /** @brief Seeks without event traversal and immediately re-extracts the final camera.
          * @param position Exact authored timeline target. @return Success or typed seek/binding failure. */
         [[nodiscard]] Result<void> SeekCameraCutPreview(Cinematic::SequenceTime position);
+        /** @brief Copies an effect sample into the active preview for the next viewport extraction.
+         * @param view Exact current preview view. @param worldOffset Cosmetic world-space translation, or zero to clear.
+         * @return Success or a typed stale preview or nonfinite sample rejection.
+         */
+        [[nodiscard]] Result<void> SetCameraCutPreviewShake(Runtime::CameraViewContextId view, Math::Vec3 worldOffset);
+        /** @brief Copies the host's visual accessibility multiplier before preview extraction.
+         * @param scale Validated scale in [0, 1].
+         */
+        void SetCameraShakeScale(float scale) noexcept;
         /** @brief Releases preview authority at the owner boundary and restores the current authoring camera. */
         void StopCameraCutPreview();
 
@@ -227,6 +334,65 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
             return m_viewModel;
         }
+
+        /** @brief Captures the ordinary Scene selection and its revocable lifetime on the owner lane.
+         * @param purpose The immersive Play workflow may capture an empty selection in the active Play scene.
+         * @return A scoped selection snapshot, or no value when the workflow is unavailable. */
+        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection(
+            AgentSceneSelectionPurpose purpose = AgentSceneSelectionPurpose::SelectedObjects);
+        /** @brief Reviews captured references against the same document and current Play scene. */
+        [[nodiscard]] std::optional<AgentSceneReferenceReview> ReviewAgentSceneReferences(const AgentSceneReferenceRequest &request) const;
+        /** @brief Checks whether a retained reference review still describes the active Play publication. */
+        [[nodiscard]] bool AgentSceneReferencesCurrent(const AgentSceneReferenceReview &review) const;
+        /** @brief Captures and reviews the current authored selection in the exact live Play scene. */
+        [[nodiscard]] std::optional<AgentSceneReferenceReview> ReadSelectedPlayReferences();
+        /** @brief Checks availability of the read-only authored Play reference workflow. */
+        [[nodiscard]] bool CanReviewSelectedPlayReferences() const noexcept;
+        /** @brief Reads the selected ordinary Scene object's latest complete Physics tick. */
+        [[nodiscard]] std::optional<AgentSceneContactReview> ReadAgentSceneContacts();
+        /** @brief Reports whether read-only contact review is available for the active Play selection. */
+        [[nodiscard]] bool CanReviewAgentSceneContacts() const;
+        /** @brief Checks the exact document, Scene topology and selected owner of a retained preview. */
+        [[nodiscard]] bool AgentSceneContactsCurrent(const AgentSceneContactReview &review) const;
+
+        /** @brief Captures the currently authored camera and selection for one explicit local review. */
+        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentViewport(AgentViewportComponents components);
+
+        /** @brief Checks a bounded set of proposed edit targets against the exact authored Scene on the owner lane.
+         * @param revision Scene opening and revision of the proposal. @param objects Stable proposed object IDs.
+         * @return Success when every target is editable, or the first typed rejection.
+         */
+        [[nodiscard]] Result<void> InspectAgentSceneEditTargets(InspectionSceneRevision revision,
+                                                                std::span<const std::uint64_t> objects) const;
+
+        /** @brief Displays a validated batch in the authored viewport while leaving the scene unchanged.
+         * @param revision Exact scene opening and revision captured by the proposing client.
+         * @param updates Bounded list of proposed object-local transforms.
+         * @param renames Bounded list of proposed object names.
+         * @param cancellation Revocable proposal lifetime.
+         * @param authorized Optional live client authority for an embedded request.
+         * @param lights Bounded list of enabled-state changes for existing authored lights.
+         * @return Owner-issued review identity or a zero-mutation rejection.
+         */
+        [[nodiscard]] Result<std::uint64_t> PreviewAgentSceneEdits(InspectionSceneRevision revision,
+                                                                   std::span<const SceneObjectTransformUpdate> updates,
+                                                                   std::span<const AgentSceneObjectRename> renames,
+                                                                   CancellationToken cancellation, std::function<bool()> authorized = {},
+                                                                   std::span<const AgentSceneLightUpdate> lights = {});
+
+        /** @brief Applies the displayed proposal after an explicit local approval.
+         * @param review Exact owner-issued review identity.
+         * @return Success or the scene admission error; the matched review is consumed.
+         */
+        [[nodiscard]] Result<void> ApproveAgentSceneReview(std::uint64_t review);
+        /** @brief Acknowledges the spatial warning for the exact live proposal without committing an edit. */
+        [[nodiscard]] Result<void> ConfirmAgentSceneReviewImpact(std::uint64_t review);
+
+        /** @brief Cancels the displayed proposal only if its identity still matches.
+         * @param review Exact owner-issued review identity.
+         * @return Whether a matching review was retired.
+         */
+        bool CancelAgentSceneReview(std::uint64_t review);
 
         /** @brief Returns the captured native project root without reparsing presentation text.
          * @return Canonical/lexical root retained by this workspace owner. */
@@ -246,6 +412,8 @@ namespace Horo::Editor {
         /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
          * @return Success only after every source is durably clean. */
         [[nodiscard]] Result<void> SaveSourceDocuments();
+        /** @brief Captures authored decision revisions to fence delayed workspace departure. */
+        [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> DecisionGraphRevisions() const;
         /** @brief Capture terrain instances/revisions for exact delayed workspace leave decisions. */
         [[nodiscard]] std::vector<std::pair<DocumentInstanceId, std::uint64_t>> TerrainDocumentRevisions() const;
         /** @brief Settle asset-rooted terrain owners after explicit save/discard navigation. */
@@ -270,7 +438,32 @@ namespace Horo::Editor {
             return m_sourceSaveAllOutcome;
         }
 
-        /** @brief Last explicit source close choice outcome; false retains the document after Cancel. */
+        /** @brief Reads source review feedback and stages an exact undo command through the workspace lane. */
+        [[nodiscard]] const SourceReviewTransactions &SourceReviews() const noexcept {
+            return m_sourceReviews;
+        }
+
+        /** @brief Projects current source review and native validation state for the attached panel. */
+        [[nodiscard]] Proposals::SourceTransactionStatus ReadSourceReviewStatus() const;
+
+        /** @brief Applies an explicit revision-fenced canvas close decision, preserving dirty state on failure. */
+        [[nodiscard]] Result<bool> ResolveUiCanvasClose(UiCanvasDocumentStateId state, SourceCloseDecision decision);
+        /** @brief Handles the shared close dialog's exact Blackboard revision choice. */
+        [[nodiscard]] Result<bool> ResolveBlackboardClose(BlackboardDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Executes the explicit close decision only for its captured Decision document revision. */
+        [[nodiscard]] Result<bool> ResolveDecisionGraphClose(DecisionGraphDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Clears this workspace's checkpoints for an explicit discard-and-leave action. */
+        [[nodiscard]] Result<void> DiscardAiDocumentAutosaves();
+        /** @brief Saves or discards one exact authored Query revision through the shared close modal. */
+        [[nodiscard]] Result<bool> ResolveEnvironmentQueryClose(EnvironmentQueryDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Captures every editable Query revision for the shared workspace leave fence. */
+        [[nodiscard]] std::vector<EnvironmentQueryDocumentFence> EnvironmentQueryRevisions() const;
+        /** @brief Captures the current canvas instances and their exact publication fences for leave consent. */
+        [[nodiscard]] std::vector<UiCanvasDocumentStateId> UiCanvasStates() const;
+        /** @brief Retires all canvases after durable recovery or explicit discard. */
+        [[nodiscard]] Result<void> ShutdownUiCanvasDocuments(bool discard = false);
+
+        /** @brief Last explicit source close choice outcome. False retains the document after Cancel. */
         [[nodiscard]] const std::optional<Result<bool>> &SourceCloseOutcome() const noexcept {
             return m_sourceCloseOutcome;
         }
@@ -307,8 +500,10 @@ namespace Horo::Editor {
         void SaveScene(bool overwriteConflict = false);
         /** @brief Flushes recovery or explicitly discards before releasing prefab owners. */
         [[nodiscard]] Result<void> ShutdownPrefabDocuments(bool discard = false);
-        /** @brief Advances bounded recovery cadence; zero requests an immediate flush. */
+        /** @brief Advances background recovery cadence without serializing or accessing native files. */
         void UpdatePrefabAutosave(float seconds, int minutes);
+        /** @brief Drains queued recovery and flushes exact dirty prefab revisions for an explicit owner operation. */
+        void FlushPrefabAutosave();
         /** @brief Replaces detached preview input and cancels all old overlays/work without changing graph or Scene.
          * @param inputs New immutable provider/schema/evaluation admission. @return Success or invalid input rejection. */
         [[nodiscard]] Result<void> ReplacePCGPreviewInputs(PCGPreviewInputs inputs);
@@ -451,10 +646,27 @@ namespace Horo::Editor {
         }
 
         void ProcessCommand(const EditorWorkspaceViewCommandData &cmd);
+
+        /** @brief Stages the existing activation command for a registered panel, honoring its saved dock placement. */
+        void StagePanelActivation(std::string_view panelId, WorkspaceDockArea fallback, EditorWorkspaceViewCommandData &command) const;
+        /** @brief Releases Play debugger control when the inspector was absent from the current draw. */
+        void SetPlayDecisionInspectorVisibility(std::optional<AI::AgentHandle> agent);
         void UpdateFps(float fps);
+
+        /** @brief Sets only the read-only package execution evidence accompanying the Decision catalog. */
+        void SetDecisionPackageActivationTrustRequired(bool required) noexcept {
+            m_viewModel.decisionPackageActivationTrustRequired = required;
+        }
+
+        /** @brief Projects an exact package catalog while the application owns its live activation.
+         * @param source Owner-lane reacquisition callback, or empty to detach package declarations. */
+        void SetPackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source);
+
         /** @brief Replaces the Content Browser projection when a newer registry revision is published.
          */
         void RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry);
+        /** @brief Opens the containing directory of a current registered recording and returns its exact browser path. */
+        [[nodiscard]] std::optional<std::string> RevealRecordedAsset(Assets::AssetId id);
         /** @brief Advances a requested synchronous Content Browser refresh without blocking the request
          * frame. */
         void UpdateContentBrowser();
@@ -472,6 +684,14 @@ namespace Horo::Editor {
          * @param elapsedSeconds Host update delta. @param delaySeconds Zero disables source saves.
          */
         void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
+        /** @brief Binds the host runner and trusted settings to this project's source owner. */
+        void BindSourceLanguage(IExternalProcessRunner &runner, Language::ClangdSettings settings);
+        /** @brief Pumps bounded language results on the workspace owner lane. */
+        void UpdateSourceLanguage();
+        /** @brief Publishes a terminal Project usage review only for its original document and registry revision. */
+        void UpdateBlackboardUsageReview();
+        /** @brief Polls one bounded read-only EQS job and invalidates evidence from a retired authored Scene. */
+        void UpdateEnvironmentQueryPreview();
         /**
          * @brief Schedules and drains non-blocking canonical scene identity inspections.
          * @param elapsedSeconds Owner-thread elapsed frame time.
@@ -486,8 +706,15 @@ namespace Horo::Editor {
         void FlushAutosave();
         /** @brief Publishes a newly activated runtime scene to the cached viewport snapshot. */
         void SynchronizeRuntimeScenePreview();
+        /** @brief Refreshes the active preview against the cold-prepared viewport in the same extraction update.
+         * @param capacity Observed viewport capacity, absent for compositions without a frontend observation.
+         * @return Success or typed preview camera failure, with no replacement snapshot on a rejected camera. */
+        [[nodiscard]] Result<void> SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity> capacity);
         /** @brief Advances gameplay presentation callbacks without changing authoring state. */
         void UpdatePlayPresentation(float elapsedSeconds);
+
+        /** @brief Forwards the active Play session's authenticated structural cutoff. */
+        void UpdatePlaySceneCutoff(const Runtime::FrameContext &context);
         /** @brief Advances one play-mode fixed tick with already-routed semantic actions. */
         void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, double fixedDeltaSeconds);
         [[nodiscard]] Result<void> BindPlayRuntimeDispatch(const Runtime::RuntimeDispatchSource &source);
@@ -516,10 +743,104 @@ namespace Horo::Editor {
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         EditorPlaySceneFactory m_playSceneFactory;
+
+        /** @brief Accepted disk identity and bounded authoring state for a single Decision session. */
+        struct DecisionGraphDraft final {
+            std::weak_ptr<const AI::DecisionBlackboardProviderMetadata> reviewedSubtreeCatalog;
+            Sha256Digest savedDigest;
+            Sha256Digest currentDigest;
+            std::size_t acceptedBytes{};
+            Assets::AssetSourceIdentity acceptedLayout;
+            std::shared_ptr<const AI::DecisionGraphSource> savedGraph;
+            std::shared_ptr<const DecisionGraphLayout> savedLayout;
+            DecisionGraphDocumentHistory history;
+            std::uint64_t recoveryRevision{};
+            bool recoveryAttempted{};
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+        };
+
+        std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
+        float m_aiRecoverySeconds{};
+        void UpdateAiDocumentRecovery(float elapsedSeconds, int intervalMinutes);
+        void FlushAiDocumentRecovery();
+        void InspectDecisionRecovery(DecisionGraphWorkspaceDocument &document);
+        void ProcessDecisionRecovery(const EditorWorkspaceViewCommandData &command);
+        void ProcessDecisionExternalChange(const DecisionExternalRequest &request);
+        [[nodiscard]] Result<void> ResolveDecisionExternalChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                 const DecisionExternalRequest &request);
+        [[nodiscard]] Result<void> AcceptInterruptedDecisionSave(DecisionGraphWorkspaceDocument &document,
+                                                                 const CapturedDecisionExternal &captured);
+        [[nodiscard]] Result<void> ApplyDecisionExternalChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                               DecisionExternalAction action, const CapturedDecisionExternal &captured);
+        [[nodiscard]] Result<void> RestoreDecisionRecovery(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> ValidateDecisionDraftRoot(const AI::DecisionGraphSource &graph,
+                                                             DecisionGraphWorkspaceDocument &document) const;
+        void DiscardDecisionRecoveryAfterSave(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> DiscardOwnedDecisionRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> WriteDecisionRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
+        Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                            bool saveReferenceParticipant = false);
+        /** @brief Joins an accepted recovery writer before its borrowed project services retire. */
+        void JoinAiDocumentRecovery(std::optional<DocumentInstanceId> instance = {});
+        /** @brief Observes terminal recovery and acknowledges the exact published revision. */
+        void ObserveAiDocumentRecovery();
+        void StartQueuedAiDocumentRecovery();
+
+        struct AiDocumentRecoveryWork final {
+            DocumentInstanceId instance;
+            std::uint64_t revision;
+            JobHandle job;
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedCheckpoint;
+        };
+
+        std::optional<AiDocumentRecoveryWork> m_aiDocumentRecovery;
+        std::vector<DocumentInstanceId> m_aiRecoveryQueue;
+        bool m_aiAutosaveDiscarded{};
+        /** @brief Projects structured Decision findings into the workspace's Build Output. */
+        void PublishDecisionGraphDiagnostics(const Error &error) const;
+        /** @brief Obtains the project metadata generation for the supported authoring family. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionDraftProviders(
+            const AI::DecisionGraphSource &source) const;
+        /** @brief Reviews one explicitly selected saved Behavior Tree under current project authority. */
+        Result<void> ReviewDecisionSubtree(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                           const BehaviorTreeEditRequest &request);
+        /** @brief Executes and commits one fully validated editable candidate. */
+        template <typename Request>
+        Result<void> ApplyDecisionGraphEdit(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, const Request &request);
+        /** @brief Applies one bounded layout candidate to the same revision and history timeline. */
+        Result<void> ApplyDecisionGraphLayout(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                              const DecisionGraphLayoutRequest &request);
+        /** @brief Replays the next heterogeneous Decision history entry. */
+        Result<void> ReplayDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft, bool redo);
+        /** @brief Captures one exact current Decision document for prepared publication. */
+        [[nodiscard]] static DecisionGraphHistoryFence CaptureDecisionHistoryFence(const DecisionGraphWorkspaceDocument &document,
+                                                                                   const DecisionGraphDraft &draft) noexcept;
+        /** @brief Reserves reviewed key-retarget bytes for a clean session with the exact previously accepted source.
+         * @param document Existing Decision participant. @param draft Its history and accepted source state.
+         * @param revision Expected document revision. @param source Reviewed registered record and canonical replacement bytes.
+         * @param group Shared nonzero Blackboard transaction identity.
+         * @return Detached reservation, or the typed decoder, stale-source or capacity failure.
+         * @pre The coordinator has validated the entire candidate closure against its paired schema.
+         */
+        [[nodiscard]] Result<DecisionGraphDocumentHistory::Prepared> PrepareDecisionReferenceChange(
+            const DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft, std::uint64_t revision,
+            const Assets::AssetCookPinnedSource &source, std::uint64_t group) const;
+        /** @brief Publishes one fully prepared Decision root before the coordinated view refresh.
+         * @param document Same participant session. @param draft Its authoring history. @param prepared Exact live reservation.
+         * @return False if the owner no longer matches the reservation. No state is changed on failure.
+         */
+        [[nodiscard]] bool PublishDecisionGraphChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                      DecisionGraphDocumentHistory::Prepared &prepared) noexcept;
+        /** @brief Publishes the semantic draft flags to shared tab lifecycle. */
+        void ProjectDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, const DecisionGraphDraft &draft);
+
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
         std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
+        SourceReviewTransactions m_sourceReviews;
         std::optional<Result<bool>> m_sourceCloseOutcome;
         /** @brief Intercept only explicitly registered terrain assets; generic source routing remains unchanged. */
         bool TryOpenTerrainDocument(const SourceOpenRequest &request);
@@ -575,12 +896,107 @@ namespace Horo::Editor {
         Assets::AssetRegistryRevision m_terrainCookRegistry;
         std::filesystem::path m_projectRoot;
         SourceFileOpenService m_sourceOpenService;
+        IExternalProcessRunner *m_sourceLanguageRunner{};
+        Language::ClangdSettings m_clangdSettings;
+        std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
+        std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
+        std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
+        std::shared_ptr<const EditorInspectionCommandEndpoint> m_inspectionCommandEndpoint;
+        std::shared_ptr<const EditorDebugCaptureEndpoint> m_debugCaptureEndpoint;
+        CancellationSource m_debugCaptureLifetime;
+        EditorDebugCaptureStorage m_debugCapture;
+        std::function<bool()> m_debugCaptureAuthorized;
+        Runtime::SceneRuntimeId m_debugCaptureScene;
+        std::optional<Runtime::EntityRef> m_debugCaptureEntity;
+        SceneObjectId m_debugCaptureObject;
+
+        /** @brief Admits one capture in an existing active Play scene. */
+        [[nodiscard]] Result<std::uint64_t> StartDebugCapture(const EditorDebugCaptureRequest &request, std::function<bool()> authorized);
+        /** @brief Captures pixels only while the exact approved authored viewport remains current. */
+        [[nodiscard]] Result<std::uint64_t> StartDebugImage(IEditorViewportRenderer &viewport, EditorDebugImageSource expected,
+                                                            EditorViewportImageRegion region, std::function<bool()> authorized);
+        /** @brief Observes revision and extent evidence for one complete authored viewport. */
+        [[nodiscard]] std::optional<EditorDebugImageSource> ReadDebugImageSource(const IEditorViewportRenderer &viewport) const;
+        /** @brief Samples the committed Play transformation on the editor owner lane. */
+        void UpdateDebugCapture();
+        /** @brief Reads a numeric page without changing authored state, selection, or presentation. */
+        [[nodiscard]] Result<TransformInspectionPage> InspectLocalTransforms(const ObjectInspectionRequest &request) const;
+        /** @brief Reads the world bounds of exact authored objects, using only a matching published geometry snapshot. */
+        [[nodiscard]] Result<BoundsInspectionPage> InspectWorldBounds(const ObjectInspectionRequest &request) const;
+        /** @brief Reads authored component counts without exposing component payloads. */
+        [[nodiscard]] Result<ComponentInspectionPage> InspectComponents(const ObjectInspectionRequest &request) const;
+        /** @brief Reads committed viewport geometry counts without contacting the renderer. */
+        [[nodiscard]] Result<GeometryInspectionPage> InspectGeometry(const ObjectInspectionRequest &request) const;
+        /** @brief Measures committed world bounds and forward orientation relative to a visible reference object. */
+        [[nodiscard]] Result<DistanceInspectionPage> InspectDistances(const ObjectInspectionRequest &request) const;
+        /** @brief Measures the offset of committed object origins to a requested world grid. */
+        [[nodiscard]] Result<GridInspectionPage> InspectGridOffsets(const ObjectInspectionRequest &request) const;
+
+        /** @brief Samples committed viewport mesh surfaces with a bounded world-space segment. */
+        [[nodiscard]] Result<SurfaceInspectionPage> InspectSurfaces(const ObjectInspectionRequest &request) const;
+
+        /** @brief Inspects the authored collider shapes contributed by one visible object. */
+        [[nodiscard]] Result<CollisionInspectionPage> InspectCollisions(const ObjectInspectionRequest &request) const;
+
+        /** @brief Reads positive penetration for an exact visible authored body pair. */
+        [[nodiscard]] Result<PenetrationInspectionPage> InspectPenetrations(const ObjectInspectionRequest &request) const;
+
+        /** @brief Reports projected bounds clipping and overlap in an explicit viewport region. */
+        [[nodiscard]] Result<VisualInspectionPage> InspectVisualIssues(const ObjectInspectionRequest &request) const;
+        /** @brief Checks that the current extraction belongs to the committed authored Scene. */
+        [[nodiscard]] bool HasCurrentInspectionGeometry(const Runtime::RuntimeSceneView &active) const noexcept;
+        /** @brief Fences inspection against the authored Scene and its current editor projection. */
+        [[nodiscard]] Result<InspectionSceneRevision> InspectSceneRevision() const;
+        std::shared_ptr<const EditorBuildCommandEndpoint> m_buildCommandEndpoint;
+        std::shared_ptr<const EditorTestCommandEndpoint> m_testCommandEndpoint;
+        std::optional<Application::GameplayBuildSessionId> m_commandBuildSession;
+        std::optional<OperationId> m_commandTestOperation;
+
+        struct SourceValidationRun final {
+            std::shared_ptr<const SavedSourceReview> evidence;
+            Application::GameplayBuildRequest request;
+            std::optional<Application::GameplayBuildSessionId> build;
+            std::optional<OperationId> test;
+            Proposals::SourceReviewValidation refused{};
+        };
+
+        std::optional<SourceValidationRun> m_sourceValidation;
+        Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
+        std::uint64_t m_scriptLanguageApiRevision{};
+        Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
+
+        struct PendingSourceLanguage final {
+            SourceLanguageIntent intent;
+            Language::ProjectLanguageRequest request;
+            Language::ProjectLanguageWorkspace::Clock::time_point deadline;
+        };
+
+        std::optional<PendingSourceLanguage> m_pendingSourceLanguage;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
         std::optional<DocumentInstanceId> m_activePrefabDocument;
         EditorViewportSceneSnapshot m_prefabViewportScene;
         std::uint64_t m_nextPrefabRuntime{EditorFirstPrefabStage.value};
         float m_prefabAutosaveSeconds{};
+
+        struct PrefabRecoveryWork final {
+            JobHandle job;
+            std::shared_ptr<const PrefabRecoveryCheckpoint> checkpoint;
+            std::shared_ptr<std::shared_ptr<const DocumentRecoveryRecord>> persisted;
+        };
+
+        /** @brief Worker writes its detached result once, before the job publishes terminal state. The UI reads after that state. */
+        struct PrefabExternalWatchWork final {
+            JobHandle job;
+            std::shared_ptr<const PrefabExternalInspection> request;
+            std::shared_ptr<std::shared_ptr<const PrefabExternalComparison>> comparison;
+        };
+
+        std::optional<PrefabExternalWatchWork> m_prefabExternalWatch;
+        float m_prefabExternalWatchSeconds{};
+        std::size_t m_nextPrefabExternalWatch{};
+        std::optional<PrefabRecoveryWork> m_prefabRecoveryWork;
+        std::vector<DocumentInstanceId> m_prefabRecoveryQueue;
         std::uint64_t m_prefabStageAttemptRevision{};
         bool m_prefabRefreshing{};
         bool m_prefabStagePending{};
@@ -610,6 +1026,8 @@ namespace Horo::Editor {
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        bool m_prefabApplyRecoveryPendingOnDisk{};
+        std::array<std::optional<PrefabApplyRecovery>, 2> m_prefabApplyRecovery;
         std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
         /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */
         [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
@@ -620,7 +1038,75 @@ namespace Horo::Editor {
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        AI::LatticeQueryAuthoringFactory m_latticeQueryFactory{};
+        const AI::QuerySchemaRegistry *m_querySchema{};
+        AI::QueryContextProviderAccess m_queryContextAccess;
+        const EnvironmentQueryPreviewPhysics *m_queryPreviewPhysics{};
+        const EnvironmentQueryPreviewNavigation *m_queryPreviewNavigation{};
+        const EditorInspectionPhysics *m_inspectionPhysics{};
         UiInspectorResources *m_uiInspectorResources{};
+        JobSystem *m_sourceRecoveryJobs{};
+
+        /** @brief Detached result slot written by one worker before the JobHandle publishes its terminal state. */
+        struct EnvironmentQueryPreviewWork final {
+            DocumentInstanceId instance;
+            JobHandle job;
+            std::shared_ptr<std::shared_ptr<const AI::QueryDebugSnapshot>> result;
+        };
+
+        std::optional<EnvironmentQueryPreviewWork> m_environmentQueryPreviewWork;
+        EnvironmentQueryDocumentFence m_playQueryDigestFence;
+        Runtime::SceneRuntimeId m_playQueryDigestRuntime;
+        std::optional<Sha256Digest> m_playQueryDigest;
+        void RefreshLiveEnvironmentQueryPreview(std::optional<Runtime::EntityRef> owner);
+        /** @brief Borrows the built-in catalog or retains the active gameplay image's inert authoring schema for this transaction. */
+        [[nodiscard]] std::shared_ptr<const AI::QuerySchemaRegistry> CaptureEnvironmentQueryAuthoringSchema() const;
+
+        /** @brief Immutable semantic root retained by both history and the active Query draft. */
+        struct EnvironmentQueryState final {
+            std::shared_ptr<const AI::EnvironmentQueryAsset> source;
+            EditableEnvironmentQuerySettings settings;
+            Sha256Digest digest;
+            std::size_t bytes{};
+        };
+
+        struct EnvironmentQueryHistoryEntry final {
+            EnvironmentQueryState before;
+            EnvironmentQueryState after;
+            std::size_t bytes{};
+        };
+
+        struct EnvironmentQueryDraft final {
+            EnvironmentQueryState current;
+            std::shared_ptr<const AI::EnvironmentQueryAsset> savedSource;
+            Sha256Digest saved;
+            Sha256Digest sidecar;
+            std::size_t acceptedBytes{};
+            SemanticDocumentHistory<EnvironmentQueryHistoryEntry> history{};
+            std::uint64_t recoveryRevision{};
+            bool recoveryAttempted{};
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+        };
+
+        /** @brief Stages an exact Query recovery candidate for an explicit user decision. */
+        void InspectEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document) const;
+        /** @brief Installs an accepted compatible Query checkpoint as a dirty draft. */
+        Result<void> RestoreEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Publishes a durable registered Query source while owning the mutation lease. */
+        Result<void> PublishEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Rebases an exact conflicted Query draft onto validated current disk inputs. */
+        Result<void> ResolveEnvironmentQueryExternal(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft,
+                                                     const EnvironmentQueryEditRequest &request);
+        /** @brief Removes only a Query checkpoint accepted or captured by this draft. */
+        Result<void> ClearEnvironmentQueryRecovery(const EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Applies an exact restore or discard action for the candidate the user reviewed. */
+        Result<void> ResolveEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft,
+                                                     const EnvironmentQueryEditRequest &request);
+        /** @brief Schedules immutable Query checkpoint input on the shared workspace recovery lane. */
+        void StartQueuedEnvironmentQueryRecovery(DocumentInstanceId instance);
+        /** @brief Checkpoints the latest dirty Query revisions at a workspace lifecycle boundary. */
+        void FlushEnvironmentQueryRecovery();
+        std::map<DocumentInstanceId, EnvironmentQueryDraft> m_environmentQueryDrafts;
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
@@ -630,11 +1116,15 @@ namespace Horo::Editor {
         DurableFileSystem *m_durableFiles{};
         std::shared_ptr<const Assets::IAssetRegistrySource> m_assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
+        decltype(EditorWorkspaceAssetServices::acquireImporters) m_acquireImporters;
         std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
         SourceOpenNavigator m_sourceOpenNavigator;
         DiagnosticSourceNavigator m_diagnosticSourceNavigator;
+        BuildOutputStore *m_diagnosticOutput{};
         Application::GameplayBuildService *m_gameplayBuilds{};
         Application::GameplayBuildEnvironment m_gameplayBuildEnvironment;
+        Application::GameplayTestService *m_gameplayTests{};
+        Application::GameplayTestEnvironment m_gameplayTestEnvironment;
         const ILocalizationService *m_localization{};
         std::optional<Application::GameplayBuildSessionId> m_gameplayBuildSession;
         bool m_playAfterGameplayBuild{false};
@@ -646,6 +1136,23 @@ namespace Horo::Editor {
         std::optional<Error> m_initializationError;
         std::unique_ptr<SceneFileWatchService> m_sceneFileWatch;
         EditorWorkspaceViewModel m_viewModel;
+        std::optional<CancellationSource> m_agentSceneSelectionLifetime;
+        std::optional<CancellationSource> m_agentViewportLifetime;
+        std::uint64_t m_agentViewportRevision{};
+
+        struct AgentSceneReview final {
+            std::uint64_t id;
+            CancellationSource lifetime;
+            SceneTransactionContext context;
+            SceneDocumentTransactions owner;
+            SceneDocumentTransactions::ReplacementPreview preview;
+            std::function<bool()> authorized;
+            DocumentChangeKind kind;
+            bool spatialImpactConfirmed{};
+        };
+
+        std::optional<AgentSceneReview> m_agentSceneReview;
+        std::uint64_t m_agentSceneReviewSerial{};
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
@@ -681,6 +1188,7 @@ namespace Horo::Editor {
         std::weak_ptr<const ProjectMutationLease> m_worldBakeSourceReservation;
         SceneDocument m_document;
         EditorHistory m_history;
+        SceneDocumentTransactions m_prefabSceneTransaction;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;
         std::optional<SceneDocumentTransactions> m_collisionScene;
         std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
@@ -706,6 +1214,7 @@ namespace Horo::Editor {
         EditorAssetMeshCache m_assetMeshCache;
         EditorXrSceneSourceOwner m_xrSceneSource{m_document, m_primitiveMeshCache, m_assetMeshCache};
         IEditorPlayXrHost *m_selectedXrPlayHost{};
+        bool m_mountedWorldPlaySelected{};
         EditorViewportSceneSnapshot m_viewportScene;
 
         struct CameraPreviewState final {
@@ -713,11 +1222,13 @@ namespace Horo::Editor {
             Runtime::CameraService camera;
             std::optional<Cinematic::CinematicCameraPlayback> playback;
             std::vector<Cinematic::SequenceFrameCameraCutRequest> crossings;
+            Math::Vec3 shakeOffset{};
             std::uint64_t frame{};
             CameraPreviewState(Cinematic::CinematicRuntimeService &&runtimeValue, Runtime::CameraService &&cameraValue);
         };
 
         std::unique_ptr<CameraPreviewState> m_cameraPreview;
+        float m_cameraShakeScale{1.0F};
         std::uint64_t m_viewportSceneRevision{};
         bool m_assetPlacementPreviewActive{false};
 
@@ -736,6 +1247,7 @@ namespace Horo::Editor {
         std::optional<SceneDocumentSnapshot> m_deferredRuntimeSnapshot;
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> m_gameplayRetirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
+        std::shared_ptr<const ProjectPackageDecisionNodeSource> m_packageDecisionNodes;
         std::unique_ptr<ProjectGameplayRegistry> m_pendingGameplayRegistry;
         std::shared_ptr<EditorPlaySaveRetirement> m_playSaveRetirement;
         EditorPlaySessionController m_playSession;
@@ -756,7 +1268,47 @@ namespace Horo::Editor {
         std::uint64_t m_contentBrowserPreviewGeneration{};
         Sha256Digest m_contentBrowserPreviewSchemaRevision;
         std::size_t m_contentBrowserNextPreviewEntry{};
+        std::vector<std::unique_ptr<BlackboardSchemaDocument>> m_blackboardDocuments;
+
+        /** @brief Exact checkpoint acknowledgement and transfer authority for one Blackboard tab. */
+        struct BlackboardRecoveryState final {
+            std::uint64_t recoveryRevision{};
+            bool recoveryAttempted{};
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+        };
+
+        std::map<DocumentInstanceId, BlackboardRecoveryState> m_blackboardRecovery;
+        /** @brief Projects a prior recovery candidate for an explicit Blackboard decision. */
+        void InspectBlackboardRecovery(BlackboardWorkspaceDocument &view) const;
+        /** @brief Runs an exact Blackboard restore or discard, keeping canonical bytes untouched. */
+        Result<void> ResolveBlackboardRecovery(BlackboardSchemaDocument &document, const BlackboardWorkspaceRequest &request);
+        /** @brief Queues an immutable Blackboard capture for the shared AI I/O lane. */
+        void CheckpointBlackboard(DocumentInstanceId instance, bool synchronous);
+        /** @brief Synchronously flushes dirty Blackboard checkpoints during workspace shutdown. */
+        void FlushBlackboardRecovery();
+        /** @brief Removes only the checkpoint owned or accepted by this Blackboard tab. */
+        Result<void> ClearBlackboardRecovery(const BlackboardSchemaDocumentSnapshot &snapshot);
+
+        struct BlackboardUsageWork final {
+            JobHandle job;
+            BlackboardDocumentFence fence;
+            std::shared_ptr<std::shared_ptr<const Application::BlackboardUsageReview>> result;
+            std::optional<BlackboardReferenceEditPreview> preview;
+            std::shared_ptr<const AI::DecisionNodeGeneration> generation;
+        };
+
+        std::optional<BlackboardUsageWork> m_blackboardUsageWork;
+        std::map<DocumentInstanceId, std::shared_ptr<const AI::DecisionNodeGeneration>> m_blackboardReviewGenerations;
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
+        float m_uiCanvasAutosaveSeconds{};
+
+        struct CanvasRecoveryWork final {
+            JobHandle job;
+            std::shared_ptr<const UiCanvasRecoveryCheckpoint> checkpoint;
+        };
+
+        std::optional<CanvasRecoveryWork> m_uiCanvasRecovery;
+        std::vector<DocumentInstanceId> m_uiCanvasRecoveryQueue;
         float m_pcgAutosaveElapsedSeconds{};
         float m_pcgAutosaveRetrySeconds{};
         bool m_pcgAutosaveErrorPresented{};
@@ -767,6 +1319,7 @@ namespace Horo::Editor {
         float m_gameplaySourceWatchElapsedSeconds{0.0F};
         bool m_sceneFileWatchErrorPresented{false};
         DocumentStateId m_lastAutosavedState{};
+        std::optional<SceneApprovalRecoveryReceipt> m_requestedSceneRecovery; /**< Exact approval awaiting the next enabled autosave tick. */
         bool m_autosaveSuppressedForDiscard{false};
         DocumentRevision m_queuedRuntimeRevision{};
         Runtime::SceneDefinitionRevision m_activeRuntimeRevision{};
@@ -802,6 +1355,8 @@ namespace Horo::Editor {
         void RefreshCollisionActivation();
         [[nodiscard]] Result<void> BindCollisionScene();
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
+        /** @brief Captures the project importers for one synchronous browser operation. */
+        [[nodiscard]] std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> CaptureProjectImporters() const;
         void ScheduleContentBrowserPreviews();
         /** @brief Refills bounded thumbnail admission from the immutable directory projection. */
         void AdmitContentBrowserPreviews();
@@ -865,6 +1420,24 @@ namespace Horo::Editor {
                                     const std::vector<std::string> &displacedPanelIds);
         void MovePanelActivitySlot(const EditorWorkspaceViewCommandData &cmd);
         void RefreshSceneProjections();
+        /** @brief Revokes agent evidence before publishing a changed scene or selection projection. */
+        void InvalidateAgentSceneSelection() noexcept;
+        /** @brief Issues or reuses the current workspace evidence lifetime on the owner lane. */
+        [[nodiscard]] const CancellationSource &AgentSceneSelectionLifetime();
+        /** @brief Checks exact ownership and rejects expired evidence even after returning to an earlier source. */
+        [[nodiscard]] bool AgentSceneSelectionLifetimeCurrent(const CancellationToken &token) const noexcept;
+        /** @brief Revokes only viewport-specific reviews after camera or tool changes. */
+        void InvalidateAgentViewport() noexcept;
+        /** @brief Withdraws renderer-owned capture before retiring the command binding and its telemetry. */
+        void RetireDebugCaptureBinding() noexcept;
+        /** @brief Revokes any retained Scene inspection callbacks and the proposals they have staged. */
+        void RetireSceneInspectionBinding() noexcept;
+        /** @brief Withdraws captures of the prior viewport projection before advancing its revision. */
+        void AdvanceViewportSceneRevision() noexcept;
+        /** @brief Copies a scene revision and bounded selection under the caller's owner lease. */
+        [[nodiscard]] AgentSceneSelectionSnapshot CaptureAgentSelectionValues(const CancellationSource &lifetime) const;
+        /** @brief Borrows the running Play scene built from the current authoring state. */
+        [[nodiscard]] std::optional<Runtime::RuntimeSceneView> ReadAgentReferenceScene() const;
         /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */
         void RefreshInspectorDocumentPort();
         /** @brief Retires approvals before an actual project behavior catalog publication; epochs never wrap. */
@@ -885,12 +1458,31 @@ namespace Horo::Editor {
         void PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document, std::uint64_t publication);
         /** @brief Admit and publish the canonical creation result before presentation callbacks. */
         [[nodiscard]] PrefabCreationOutcome ExecutePrefabCreation(const PrefabCreationIntent &intent);
+        /** @brief Admits another prefab pair only when earlier failed cleanup evidence no longer needs recovery. */
+        [[nodiscard]] bool CanPublishPrefabPair() const;
+        /** @brief Forks the exact retained draft through the existing prefab pair authority. */
+        [[nodiscard]] Result<void> SavePrefabAs(const PrefabDocumentSnapshot &draft, const std::filesystem::path &destination);
         /** @brief Executes a confirmed create-from-selection through canonical document/source owners. */
         [[nodiscard]] bool ProcessCreatePrefabCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
         [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
+
+        /** @brief Commits a validated inspector revert while the exact source bytes and project lease remain pinned. */
+        [[nodiscard]] Result<SceneCommandResult> RevertPrefabHierarchyOverrides(const PrefabHierarchyCommand &request,
+                                                                                const PrefabHierarchyEntry &entry);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;
+        /** @brief Borrows the one Prefab transaction port for the current Scene opening. */
+        [[nodiscard]] Result<SceneTransactionContext> CapturePrefabSceneContext();
+        /** @brief Applies the selected Scene overrides using the already open canonical Prefab source owner. */
+        [[nodiscard]] Result<void> ApplyPrefabHierarchyOverrides(const PrefabHierarchyCommand &request, const PrefabHierarchyEntry &entry);
+        /** @brief Settles unreachable paired history before reporting either document's current replay actions. */
+        void ReconcilePrefabApplyHistory();
+        /** @brief Routes a coordinated head from either document, or false when ordinary history owns the command. */
+        [[nodiscard]] Result<bool> ReplayPrefabApply(bool redo, PrefabDocumentSession *source = nullptr);
+        /** @brief Publishes the paired completion and retains any unresolved native rollback evidence. */
+        [[nodiscard]] Result<void> CompletePrefabApply(PrefabApplyOutcome outcome, DocumentChangeKind kind);
+
         /** @brief Contains every postcommit observer failure without reverting authoritative Scene or asset state.
          * @param selectionChanged Whether the canonical selection owner committed a clear requiring notification.
          * @param observerFailure Engaged fallback optional prepared before publication and moved without throwing on observer failure.
@@ -904,6 +1496,78 @@ namespace Horo::Editor {
         bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
         void RefreshSourceDocumentProjection();
+        /** @brief Admits a language provider once its compiler metadata is available. */
+        void PrepareSourceLanguage();
+        /** @brief Loads the project's authored script-to-module bindings. */
+        void ConfigureScriptLanguage(std::shared_ptr<Extensions::ScriptModuleHostServices> host);
+        /** @brief Reads current inert module metadata for the source's registered project binding. */
+        [[nodiscard]] Result<std::vector<Extensions::ScriptModuleApiMetadata>> CaptureScriptLanguageImports(
+            const SourceDocumentSnapshot &source);
+        /** @brief Clears displayed script metadata when the host replaces or withdraws a schema. */
+        void UpdateScriptLanguageRevision();
+        /** @brief Reads the current schema revision without recapturing module metadata. */
+        [[nodiscard]] std::uint64_t ScriptAuthoringApiRevision() const noexcept;
+        /** @brief Localizes the current script diagnostics and refuses results from a retired registry revision. */
+        void PublishScriptDiagnostics(Language::LanguageResult publication);
+        /** @brief Resolves a module and queries its metadata in the exact source revision. */
+        [[nodiscard]] Result<Language::LanguageResult> QueryScriptLanguage(const SourceLanguageIntent &intent);
+        /** @brief Publishes one explicit Lua completion or hover request. */
+        void RequestScriptLanguage(const SourceLanguageIntent &intent);
+        /** @brief Revalidates an accepted Lua completion against the current registered provider. */
+        [[nodiscard]] bool ScriptCompletionCurrent(const SourceLanguageCompletions &result, std::size_t index);
+        /** @brief Asks the synchronized provider for the active source feature. */
+        void RequestSourceLanguage(const SourceLanguageIntent &intent);
+        /** @brief Retires a request if its document is no longer active or its deadline passed. */
+        void ExpireSourceLanguageRequest(Language::ProjectLanguageWorkspace::Clock::time_point now);
+        /** @brief Releases language projections from replaced or closed source publications. */
+        void RetireStaleSourceLanguageProjections();
+        /** @brief Observes the active source's background syntax check. */
+        void UpdateScriptSyntax();
+        /** @brief Stores diagnostics for the exact source revision shared by both language adapters. */
+        void PublishSourceLanguageDiagnostics(Language::LanguageResult result);
+        /** @brief Consumes one matching language reply from the current request. */
+        void AcceptSourceLanguage(Language::LanguageResult result);
+        /** @brief Displays completion choices for their originating view and source lease. */
+        void AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view, bool fromScriptModule = false);
+        /** @brief Displays a symbol description for its originating selection. */
+        void AcceptSourceHover(Language::LanguageResult &result, const SourceEditingView &view, bool fromScriptModule = false);
+        /** @brief Applies a selected completion using the source document's history authority. */
+        void ApplySourceCompletion(const SourceCompletionIntent &intent);
+        /** @brief Opens an in-project source location and publishes its selection. */
+        [[nodiscard]] bool FocusSourceLocation(const Language::LanguageLocation &target);
+        /** @brief Opens a reference selected from the active source publication. */
+        void OpenSourceReference(const SourceReferenceIntent &intent);
+        /** @brief Publishes the byte selection of a symbol from the active source. */
+        void SelectSourceSymbol(const SourceSymbolIntent &intent);
+        /** @brief Publishes the document symbols from a current provider reply. */
+        void AcceptSourceSymbols(Language::LanguageResult &result);
+        /** @brief Publishes current-document proposals for explicit user review. */
+        void AcceptSourceCodeActions(Language::LanguageResult &result, const SourceEditingView &view);
+        /** @brief Previews or applies one still-current proposal using the source history owner. */
+        void ReviewSourceCodeAction(const SourceCodeActionIntent &intent);
+        /** @brief Starts an isolated gameplay build and gives the native workspace its normal completion notification. */
+        [[nodiscard]] Result<Application::GameplayBuildSessionId> StartApprovedGameplayBuild(const std::function<bool()> &stop);
+        /** @brief Consumes a deferred, explicitly approved build or test for the supplied audit. */
+        void RunSourceReviewValidation(const EditorWorkspaceViewCommandData &command);
+        /**
+         * @brief Starts an isolated build for a newly approved saved source review.
+         * @param audit The exact audit of the approved application.
+         * @param stop Returns true when the editor command lifetime has ended.
+         */
+        void StartSourceReviewBuild(const std::shared_ptr<const Proposals::SourceReviewAudit> &audit, const std::function<bool()> &stop);
+        /**
+         * @brief Starts separately approved tests for the current successful review build.
+         * @param stop Returns true when the editor command lifetime has ended.
+         * @pre The current review status permits test execution.
+         */
+        void StartSourceReviewTests(const std::function<bool()> &stop);
+        /** @brief Cancels operations owned by the current review and retires its presentation. */
+        void RevokeSourceReviewValidation() noexcept;
+        /** @brief Cancels the exact test operation and expires the workspace's borrowed command endpoint. */
+        void RevokeGameplayTestCommands() noexcept;
+        /** @brief Opens embedded source and publishes a validated optional text location on the editor lane. */
+        [[nodiscard]] Result<void> PresentSourceCommand(const SourceDocumentId &path, std::optional<Language::LanguageLocation> target,
+                                                        const std::function<bool()> &stop);
         /** @brief Refreshes changed canvas projections outside GUI draw work. */
         void RefreshUiCanvasProjection();
         /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */
@@ -913,9 +1577,21 @@ namespace Horo::Editor {
                                                           const EditorWorkspaceViewCommandData &command,
                                                           const UiInspectorResourceSnapshot &resources);
         /** @brief Saves one canvas through the shared project mutation boundary and returns its typed outcome. */
-        [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner) const;
+        [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner);
         /** @brief Joins explicit canvas close admission with workspace routing and presents dirty-state errors. */
         void CloseUiCanvasSource(DocumentInstanceId instance);
+        /** @brief Refreshes a cached recovery choice only at an explicit cold persistence boundary. */
+        void InspectUiCanvasRecovery(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &view);
+        /** @brief Checks due canvas recovery on the existing workspace autosave cadence. */
+        void UpdateUiCanvasAutosave(float seconds, int minutes);
+        /** @brief Polls one pending checkpoint without waiting, and retires it only at a terminal state. */
+        bool ObserveUiCanvasRecovery();
+        /** @brief Cancels and joins accepted work before mutating or releasing its host authorities. */
+        [[nodiscard]] Result<void> DrainUiCanvasRecovery(std::optional<DocumentInstanceId> instance = {});
+        /** @brief Places an immutable checkpoint on the dedicated shared I/O lane. */
+        void ScheduleUiCanvasRecovery(UiCanvasDocument &canvas);
+        /** @brief Presents a recovery failure only on the still-live matching document. */
+        void ReportUiCanvasRecoveryError(DocumentInstanceId instance, const Error &error);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
         /** @brief Completes default metadata and active identity only after a successful destination source save.
@@ -934,8 +1610,9 @@ namespace Horo::Editor {
         [[nodiscard]] bool LoadInitialScene(const std::filesystem::path &absoluteProjectRoot);
         void CreateBootstrapScene();
         void InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot);
-        [[nodiscard]] bool CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
-                                           const std::optional<std::filesystem::path> &newActivePath = std::nullopt);
+        [[nodiscard]] bool CommitSceneSave(DocumentRevision revision, DocumentStateId state, SceneFileFingerprint fingerprint,
+                                           const std::optional<std::filesystem::path> &newActivePath = std::nullopt,
+                                           DocumentChangeKind kind = DocumentChangeKind::SaveStateChanged);
         /** @brief Closed owner intents; every deferred replacement retains its original authoring consent. */
         enum class PlaySceneReplacementKind {
             External,
@@ -964,14 +1641,19 @@ namespace Horo::Editor {
         /** @brief Reads and validates detached external values before any canonical document mutation. */
         [[nodiscard]] Result<LoadedProjectScene> ReadExternalSceneForReplacement() const;
         /** @brief Commits already validated values through existing collision/document owners. */
-        [[nodiscard]] bool InstallExternalScene(LoadedProjectScene scene);
+        [[nodiscard]] bool InstallExternalScene(LoadedProjectScene scene, bool preserveRecovery = false);
         /** @brief Restores validated recovery content into a new dirty document session. */
         void RestoreSceneRecovery();
+        /** @brief Explicitly reconciles the exact startup pair presented to the confirming user. */
+        void RestorePrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &accepted);
+        /** @brief Resets live Scene projections after canonical replacement and optionally preserves draft recovery. */
+        void FinishExternalSceneReplacement(bool preserveRecovery);
         /** @brief Explicitly discards recovery state and suppresses leave-checkpoint autosave. */
         void DiscardSceneRecovery();
         /** @brief Attempts one recovery write when the active document has unsaved content. */
         void WriteAutosaveRecovery();
         void QueueRuntimeScene(SceneDocumentSnapshot snapshot);
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> BuildRuntimeSceneProjection(const SceneDocumentSnapshot &snapshot);
         void StartPlaySession();
         void BeginPlaySession();
         /** @brief Captures the complete current native save inventory cold; errors disable save without silently dropping owners. */
@@ -982,13 +1664,30 @@ namespace Horo::Editor {
         [[nodiscard]] bool HasNativeGameplaySources() const;
         void StopPlaySession();
         void RefreshPlayStateProjection();
+        /** @brief Projects the latest exact runtime failure while its Play scene remains active. */
+        void RefreshPlayDecisionProblem();
+        /** @brief Resolves a reported entity to the unchanged authored clone source, when it exists. */
+        [[nodiscard]] std::optional<SceneObjectId> ResolvePlayDecisionProblemObject(const EditorPlayDecisionProblem &problem) const;
+        /** @brief Revalidates the visible problem and its entity before changing selection. */
+        void NavigatePlayDecisionProblem(const PlayDecisionNavigationRequest &request);
+        void NavigatePlayDecisionGraphProblem(const PlayDecisionGraphNavigationRequest &request);
+        /** @brief Resolves the exact current Play problem behind a selected Build Output row. */
+        void NavigatePlayDecisionDiagnostic(std::uint64_t sequence);
+        std::uint64_t m_playDecisionGraphFocusSequence{};
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
         /** @brief Clear unavailable simulated evidence before publishing another viewport revision. */
         void ClearSimulatorViewport();
         /** @brief Extract the exact current Play Scene with an explicitly admitted camera. */
         void ExtractPlayViewportWithCamera(const Runtime::RuntimeSceneView &runtimeView, const EditorViewportCamera &camera);
-        [[nodiscard]] Result<EditorViewportCamera> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene);
+
+        struct CameraPreviewFrame final {
+            EditorViewportCamera destination;
+            std::optional<EditorViewportCameraCrossFade> crossFade;
+        };
+
+        [[nodiscard]] Result<CameraPreviewFrame> ResolveCameraCutPreview(Runtime::RuntimeSceneView scene,
+                                                                         std::optional<EditorViewportCrossFadeCapacity> capacity);
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform, bool publishFailure = true) const;
@@ -1017,6 +1716,24 @@ namespace Horo::Editor {
         void PreviewObjectTransform(SceneObjectId object, const Math::Transform &transform);
         void PreviewObjectTransforms(std::span<const SceneObjectTransformUpdate> updates);
         void CancelObjectTransformPreview();
+        /** @brief Retires a displayed agent proposal once its authored viewport or authorization becomes stale. */
+        void ReconcileAgentSceneReview();
+        /** @brief Checks the pending review against the current document and workspace authority. */
+        [[nodiscard]] bool IsAgentSceneReviewCurrent(std::uint64_t review) const;
+        /** @brief Publishes the localized status for a withdrawn or outdated review. */
+        void NotifyAgentSceneReviewWithdrawn();
+        /** @brief Checks whether the current authored viewport can safely display or approve a review. */
+        [[nodiscard]] bool CanReviewAgentSceneEdits() const;
+        /** @brief Borrows a live authored object only while visible, editable and within workspace scope. */
+        [[nodiscard]] Result<const SceneObjectSnapshot *> FindAgentSceneEditTarget(SceneObjectId id) const;
+        /** @brief Captures one exact visible object's replacement without altering authored state. */
+        [[nodiscard]] Result<SceneObjectReplacement> CaptureAgentSceneReplacement(SceneObjectId id) const;
+        /** @brief Merge an additional typed field change into the captured replacement for this object. */
+        [[nodiscard]] Result<SceneObjectReplacement *> FindOrCaptureAgentSceneReplacement(
+            SceneObjectId id, std::vector<SceneObjectReplacement> &changes) const;
+        /** @brief Stage existing light changes for the same authored transaction as transforms and renames. */
+        [[nodiscard]] Result<void> StageAgentSceneLights(std::span<const AgentSceneLightUpdate> lights,
+                                                         std::vector<SceneObjectReplacement> &changes) const;
         void PreviewLightComponent(SceneObjectId object, const Runtime::LightComponent &light);
         void CancelLightComponentPreview();
         void RefreshViewportLightProjection();
@@ -1075,6 +1792,18 @@ namespace Horo::Editor {
         void PreparePrefabStage(PrefabDocumentSession &document);
         /** @brief Publishes the exact durable recovery candidate for an active prefab source. */
         void RefreshPrefabRecovery(const PrefabDocumentSnapshot &snapshot);
+        /** @brief Acknowledges the completed immutable recovery checkpoint on the document owner thread. */
+        bool ObservePrefabRecovery();
+        /** @brief Cancels/joins borrowed persistence work before save, reload or source owner retirement. */
+        [[nodiscard]] Result<void> DrainPrefabRecovery(std::optional<DocumentInstanceId> instance = {});
+        /** @brief Hands the exact detached checkpoint to the existing shared recovery I/O lane. */
+        void SchedulePrefabRecovery(PrefabDocumentSession &document);
+        /** @brief Observes dirty open Prefabs fairly using one background inspection and owner-lane publication. */
+        void UpdatePrefabExternalWatch(float seconds);
+        /** @brief Projects one completed inspection without waiting for background work. */
+        bool ObservePrefabExternalWatch();
+        /** @brief Cancels/joins detached disk inspection before workspace retirement. */
+        void StopPrefabExternalWatch();
         /** @brief Advances bounded preparation and extracts only a newly ready generation. */
         void ExtractPrefabStage(PrefabDocumentSession &document);
         /** @brief Executes an admitted durable or history action on its sole source owner. */
@@ -1101,6 +1830,98 @@ namespace Horo::Editor {
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
+        /** @brief Loads or focuses an exact registry-backed Blackboard schema through the embedded workspace. */
+        void OpenEmbeddedBlackboardSource(const SourceOpenResult &result);
+        /** @brief Opens an exact registered decision source independently of runtime admission. */
+        void OpenEmbeddedDecisionGraphSource(const SourceOpenResult &result, bool reloadExternal = false);
+        /** @brief Releases the matching read-only decision tab if open. */
+        bool CloseDecisionGraphSource(DocumentInstanceId instance);
+
+        /** @brief Opens one exact registered query source in the normal workspace. */
+        void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result, bool reloadExternal = false);
+        /** @brief Restages the exact registered Query before discarding a conflicted draft. */
+        void ReloadExternalEnvironmentQuery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDocumentFence fence);
+        /** @brief Routes a Run or Cancel request for the currently active registered saved query. */
+        bool ProcessEnvironmentQueryPreview(const EditorWorkspaceViewCommandData &command);
+        /** @brief Routes one revision-fenced Query edit or history command to the active document. */
+        bool ProcessEnvironmentQueryEdit(const EditorWorkspaceViewCommandData &command);
+        /** @brief Commits one detached typed Query edit or replays one shared history entry. */
+        Result<void> ApplyEnvironmentQueryEdit(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft,
+                                               const EnvironmentQueryEditRequest &request);
+        /** @brief Publishes canonical query bytes through the Project owner and tracked native receipt. */
+        Result<void> SaveEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Saves dirty Query documents through the shared workspace Save All route. */
+        Result<void> SaveEnvironmentQueryDocuments();
+        /** @brief Projects one accepted semantic root and retires any preview of its previous source. */
+        void ProjectEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, const EnvironmentQueryDraft &draft);
+        /** @brief Captures exact authoring inputs and submits pure bounded lattice evaluation. */
+        Result<void> StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
+                                                  const EnvironmentQueryPreviewRequest &request);
+        [[nodiscard]] Result<EnvironmentQueryPreviewNavigation::Evaluate> CaptureEnvironmentQueryNavigation(
+            const Runtime::RuntimeSceneView &scene, SceneObjectId anchor, AI::QueryStageId stage);
+        /** @brief Frames a retained point from the same saved query and active authoring Scene revision. */
+        void FocusEnvironmentQueryCandidate(EnvironmentQueryWorkspaceDocument &document, const EnvironmentQueryPreviewRequest &request);
+        /** @brief Cancels the worker and detaches its result before retiring the controller. */
+        void StopEnvironmentQueryPreview();
+        /** @brief Returns true for the same published editor preview Scene and selected query anchor. */
+        [[nodiscard]] bool IsEnvironmentQueryPreviewCurrent(const EnvironmentQueryPreviewScene &pin,
+                                                            const std::optional<Runtime::RuntimeSceneView> &current) const;
+
+        /** @brief Closes the matching immutable query source tab if present. */
+        bool CloseEnvironmentQuerySource(DocumentInstanceId instance);
+        /** @brief Dispatches a revision-fenced Blackboard document request. */
+        bool ProcessBlackboardDocumentCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Submits one explicit review of a durable key without blocking the workspace draw path. */
+        [[nodiscard]] Result<void> StartBlackboardUsageReview(const BlackboardWorkspaceRequest &request,
+                                                              const BlackboardSchemaDocument &document);
+        /** @brief Publishes an exact reviewed migration through the Blackboard and Decision document owners. */
+        [[nodiscard]] Result<void> ApplyBlackboardReferenceEdit(const BlackboardWorkspaceRequest &request,
+                                                                BlackboardSchemaDocument &document);
+        /** @brief Requests a coordinated undo or redo from any participating document. */
+        [[nodiscard]] Result<void> ReplayBlackboardReferenceEdit(std::uint64_t group, bool redo);
+        /** @brief Finds the reviewed documents needed by a new migration without opening or replacing their sessions. */
+        [[nodiscard]] bool CanApplyBlackboardReferenceEdit(const BlackboardWorkspaceDocument &view) const;
+        /** @brief Identifies documents whose individual save would split a staged migration. */
+        [[nodiscard]] bool HasPendingBlackboardReferenceEdit(DocumentInstanceId instance) const;
+        /** @brief Identifies members of the retained group, including an available redo. */
+        [[nodiscard]] bool InBlackboardReferenceEdit(DocumentInstanceId instance) const;
+        /** @brief Persists migrated Decision files before the schema, which is rechecked under the project lease. */
+        [[nodiscard]] Result<void> SaveBlackboardReferenceEdit(BlackboardSchemaDocument &document, std::uint64_t revision);
+        /** @brief Retires a group once its source changes are saved or its unapplied redo is abandoned. */
+        void RetireBlackboardReferenceEdit();
+
+        /** @brief Tracks the participants in a workspace-local history transition. */
+        struct BlackboardReferenceGroup final {
+            std::uint64_t identity{};
+            DocumentInstanceId schema;
+            std::vector<DocumentInstanceId> decisions;
+            std::shared_ptr<const Application::BlackboardUsageReview> review;
+            std::shared_ptr<const AI::DecisionNodeGeneration> nodes;
+            bool applied{true};
+            bool saving{};
+        };
+
+        /** @brief Prepared root and history from one exact current Decision participant. */
+        struct PreparedDecisionReference final {
+            DecisionGraphWorkspaceDocument *document;
+            DecisionGraphDraft *draft;
+            DecisionGraphDocumentHistory::Prepared reservation;
+        };
+
+        /** @brief Checks every participant, then swaps all roots without allocating or notifying between swaps. */
+        [[nodiscard]] bool PublishBlackboardReferenceEdit(BlackboardSchemaDocument &document,
+                                                          BlackboardSchemaDocument::PreparedReferenceChange &schema,
+                                                          std::vector<PreparedDecisionReference> &decisions);
+        std::optional<BlackboardReferenceGroup> m_blackboardReferenceGroup;
+        std::uint64_t m_nextBlackboardReferenceGroup{1};
+        /** @brief Revokes and joins an outstanding Project review before borrowed owners leave scope. */
+        void StopBlackboardUsageReview();
+        /** @brief Looks up the existing authored session by tab identity. */
+        [[nodiscard]] BlackboardSchemaDocument *FindBlackboardDocument(DocumentInstanceId instance) noexcept;
+        /** @brief Saves a Blackboard through the same native source publication owner as Save All. */
+        [[nodiscard]] Result<void> SaveBlackboardDocument(BlackboardSchemaDocument &document, std::uint64_t revision);
+        /** @brief Updates immutable tab data and typed diagnostic after one authorized operation. */
+        void RefreshBlackboardDocument(BlackboardSchemaDocument &document, const Result<void> &result);
         /** @brief Dispatches one command to the explicit owning workspace subsystem. */
         void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Routes focused prefab persistence/history and global transport without granting Scene mutation. */
@@ -1112,7 +1933,60 @@ namespace Horo::Editor {
         /** @brief Loads and focuses one validated embedded UI Canvas source result. */
         void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
+        /** @brief Executes typed state-machine authoring against the active document revision. */
+        bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Reopens the exact conflicted Decision document after an explicit discard request. */
+        void ReloadExternalDecisionGraph(DecisionGraphDocumentFence fence);
+        /** @brief Resolves a focused dirty Decision draft against the reviewed registered disk version. */
+        void ResolveExternalDecisionGraph(DecisionGraphDocumentFence fence, DecisionExternalAction action);
+        /** @brief Resolves a current finding to a registered Blackboard document and selects its exact key. */
+        void OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request);
+        /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */
+        Result<void> SaveDecisionGraphDocuments();
+        /** @brief Records an admitted AI source by its registered identity. */
+        void RememberRecentAiAsset(const SourceOpenResult &result);
+        /** @brief Reprojects recent identities against the current project registry publication. */
+        void RefreshRecentAiAssets();
+        /** @brief Resolves a recent registered identity and opens its current validated source. */
+        void OpenRecentAiAsset(Assets::AssetId asset);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
+        /** @brief Creates a registered EQS source from an explicitly selected existing query. */
+        [[nodiscard]] bool CopyEnvironmentQuerySource(const ContentBrowserAssetTransferPlan &plan, Assets::AssetId newId);
+
+        /** @brief Resolves a portable and currently unoccupied destination in the project's actual Assets root. */
+        [[nodiscard]] std::optional<std::filesystem::path> PrepareInitialAiAssetDestination(std::string_view directory,
+                                                                                            std::string_view name,
+                                                                                            std::string_view extension,
+                                                                                            std::size_t maximumNameBytes);
+        /** @brief Validates the browser request and attempts to create an initial authored Blackboard source. */
+        void CreateContentBrowserBlackboard(const BlackboardCreationRequest &request);
+        /** @brief Validates the browser request and attempts to author an initial state machine. */
+        void CreateContentBrowserStateMachine(const StateMachineCreationRequest &request);
+        /** @brief Refreshes starter Tasks from the actually admitted native gameplay generation. */
+        void RefreshDecisionTaskChoices();
+        /** @brief Checks the authored filename and target folder for a native Task-based Decision source. */
+        void CreateContentBrowserTaskDecision(const TaskDecisionCreationRequest &request);
+        /** @brief Publishes an initial Behavior Tree or Utility source with a real selected native Task. */
+        void PublishInitialTaskDecision(const std::filesystem::path &destination, const TaskDecisionCreationRequest &request,
+                                        Assets::AssetId newId);
+        /** @brief Admits and opens one provider-free State Machine bound to an exact saved schema. */
+        void PublishInitialStateMachine(const std::filesystem::path &destination, const StateMachineCreationRequest &request,
+                                        Assets::AssetId newId);
+        /** @brief Validates, publishes and opens one initial Blackboard with an explicitly authored first key. */
+        void PublishInitialBlackboard(const std::filesystem::path &destination, const BlackboardCreationRequest &request,
+                                      Assets::AssetId newId);
+        /** @brief Validates the browser request and attempts to create an initial authored EQS source. */
+        void CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request);
+        /** @brief Builds the selected native query shape before any durable publication. */
+        [[nodiscard]] Result<AI::EnvironmentQueryAsset> CreateInitialEnvironmentQuerySource(const EnvironmentQueryCreationRequest &request,
+                                                                                            AI::QueryId id, AI::QueryStageId stage,
+                                                                                            AI::QueryResultSchemaId result) const;
+        /** @brief Creates and opens one registered query using the installed typed provider's authoring factory. */
+        void PublishInitialEnvironmentQuery(const std::filesystem::path &destination, const EnvironmentQueryCreationRequest &request,
+                                            Assets::AssetId newId);
+        /** @brief Resolves the authored publication outcome and refreshes the shared browser and registry projection. */
+        [[nodiscard]] bool FinishAuthoredAiPublication(const Application::ProjectAssetImportReceipt &receipt, const Result<void> &outcome,
+                                                       std::string_view failureKey);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);
         [[nodiscard]] std::optional<ContentBrowserAssetTransferPlan> PrepareContentBrowserAssetTransfer(
@@ -1144,5 +2018,6 @@ namespace Horo::Editor {
         void ReconcileContentBrowserNavigation();
         IAudioComponentPreview *m_audioPreview{};
         Assets::AssetId m_audioPreviewWorkspace;
+        std::uint64_t m_playDecisionDiagnosticSequence{};
     };
 }  // namespace Horo::Editor

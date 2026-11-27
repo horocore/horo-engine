@@ -100,8 +100,10 @@ namespace Horo::XR {
 
     /** @copydoc XRInputProjection::Reset */
     Result<void> XRInputProjection::Reset() {
+        if (auto revoked = source_.Reset(); revoked.HasError())
+            return revoked;
         session_ = {};
         bindingRevision_ = 0;
-        return source_.Reset();
+        return Result<void>::Success();
     }
 }  // namespace Horo::XR

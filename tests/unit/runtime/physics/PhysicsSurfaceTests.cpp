@@ -3,8 +3,8 @@
 #include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Physics/SurfaceMaterial.h"
-#include "PhysicsEventProjection.h"
 #include "PhysicsTestUtils.h"
+#include "events/PhysicsEventProjection.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>

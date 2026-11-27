@@ -6,12 +6,25 @@
  */
 #include "CommittedSceneAssets.h"
 #include "HeadlessNetworkServices.h"
+#include "HeadlessSimulationAssets.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 #include "Horo/Scene/SceneSource.h"
+#include "MountedWorldHost.h"
+#include "ProjectScenePerception.h"
+
+namespace Horo::Application {
+    struct ProjectLocalPolicySettings;
+}
 
 namespace Horo::Application::Internal {
+    enum class HeadlessNavigationMode : std::uint8_t {
+        Disabled,
+        RecastDetour
+    };
+
     /** @brief Explicit Scene input parsed at the CLI boundary, without backend discovery. */
     struct HeadlessProjectSceneOptions final {
         std::filesystem::path projectRoot;
@@ -21,13 +34,21 @@ namespace Horo::Application::Internal {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
         std::chrono::milliseconds loadTimeout{30'000};
         std::string publicationNamespace; /**< Empty preserves read-only hosts; explicit derived output selected by the application. */
+        HeadlessNavigationMode navigationMode{HeadlessNavigationMode::Disabled};
+        std::optional<CommittedWorldSelection> world; /**< Explicit independent committed World selection. */
+        std::string perceptionPolicyPath;             /**< Explicit project-relative source for one selected committed Scene. */
+        bool captureNetworkSettings{};                /**< Authenticated network gameplay selects the existing project settings. */
+        std::size_t cpuWorkerCount{1};                /**< Explicit process CPU worker allocation selected before preparation. */
+        std::optional<HeadlessSimulationAssets> simulationAssets; /**< Explicit dedicated payload retention policy. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.
      * @details Its operation boundary may be replaced only before an entire owner-lane Startup/Travel call.
      */
     struct HeadlessProjectSceneResources final {
-        JobSystem jobs{JobSystemConfig{1, 128}};
+        explicit HeadlessProjectSceneResources(std::size_t cpuWorkerCount) : jobs(JobSystemConfig{cpuWorkerCount, 128}) {}
+
+        JobSystem jobs;
         Assets::AssetRegistry registry;
         std::unique_ptr<CommittedSceneAssets> committed;
         Assets::MemoryAssetProvider empty;
@@ -41,7 +62,19 @@ namespace Horo::Application::Internal {
         std::shared_ptr<DurableFileSystem> publication;
         Platform::ProjectReadContext sourceContext;
         std::optional<SceneSource::SceneSourceDocument> authoredSource; /**< Exact decoded admitted source, never a second parse. */
+        std::optional<Network::NetworkProjectSettings> networkSettings; /**< Owner-validated snapshot captured from the same root. */
+        AI::AiTaskSchedulerSettings decisionScheduler;                  /**< Authoritative scheduler budgets from the project snapshot. */
+        bool decisionSchedulerModeAuthored{};
+        std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        std::optional<AI::QueryResultCacheLimits> queryCacheLimits;
+        std::shared_ptr<const ProjectLocalPolicySettings> localPolicy;
+        bool developmentReplayAllowed{true}; /**< Legacy projects retain the explicit development CLI workflow. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
+        Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
+        std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
+        std::shared_ptr<const ProjectScenePerceptionPolicy>
+            perceptionPolicy; /**< Matched source and definition, without provider activation. */
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */
         Prefab::PrefabProjectPolicy prefabPolicy;  /**< Project-launch capture, passed by value to source-free world composition. */

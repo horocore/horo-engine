@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
 
 namespace Horo::Tests::AllocationProbe {
     /** @brief Owner-thread allocation observer; must not allocate or throw. */
@@ -40,6 +41,45 @@ namespace Horo::Tests::AllocationProbe {
     private:
         Measurement measurement_{};
         Measurement *previous_{};
+    };
+
+    /** @brief Caller-reserved storage for one live allocation identity. */
+    struct LiveAllocation final {
+        const void *address{};
+        std::size_t requestedBytes{};
+        std::size_t usableBytes{};
+    };
+
+    /** @brief Requested and allocator-reported usable C++ bytes in one exclusive test scope. */
+    struct LiveMeasurement final {
+        std::size_t liveBytes{};
+        std::size_t peakBytes{};
+        std::size_t liveUsableBytes{};
+        std::size_t peakUsableBytes{};
+        bool incomplete{};
+    };
+
+    /** @brief Measures live request sizes and backing block capacity across allocating and freeing threads.
+     * @details Caller storage must outlive the scope. Direct C allocations and allocator metadata
+     * outside the usable blocks are outside this probe. Finish workers before the final snapshot.
+     */
+    class ScopedLiveMeasurement final {
+    public:
+        explicit ScopedLiveMeasurement(std::span<LiveAllocation> storage) noexcept;
+        ~ScopedLiveMeasurement();
+        ScopedLiveMeasurement(const ScopedLiveMeasurement &) = delete;
+        ScopedLiveMeasurement &operator=(const ScopedLiveMeasurement &) = delete;
+        [[nodiscard]] LiveMeasurement Snapshot() const noexcept;
+
+        /** @brief Records a successful allocation. Alignment is zero for ordinary C++ allocations. */
+        static void Acquired(void *address, std::size_t requestedBytes, std::size_t alignment = 0) noexcept;
+        /** @brief Removes an allocation from the scope before storage is freed. */
+        static void Released(const void *address) noexcept;
+
+    private:
+        std::span<LiveAllocation> storage_;
+        std::size_t count_{};
+        LiveMeasurement measurement_{};
     };
 
     /** @brief Non-allocating observer called immediately before an injected failure is thrown. */

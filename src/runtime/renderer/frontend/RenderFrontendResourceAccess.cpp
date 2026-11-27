@@ -87,8 +87,18 @@ namespace Horo::Render {
 
     /** @copydoc Detail::RenderFrontendResourceAccess::CreateMultiviewDepth */
     Result<ResourceCreation<RenderTextureHandle>> Detail::RenderFrontendResourceAccess::CreateMultiviewDepth(
-        RenderFrontend &frontend, const RenderMemoryScopeId scope, const FramebufferExtent extent, const std::uint32_t viewCount) {
-        return frontend.CreateMultiviewDepthTexture(scope, extent, viewCount);
+        RenderFrontend &frontend, const RenderMemoryScopeId scope, const FramebufferExtent extent, const std::uint32_t viewCount,
+        const bool sampled) {
+        return frontend.CreateMultiviewDepthTexture(scope, extent, viewCount, sampled);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::CreateStereoCoverageCounter */
+    Result<ResourceCreation<RenderBufferHandle>> Detail::RenderFrontendResourceAccess::CreateStereoCoverageCounter(
+        RenderFrontend &frontend, const RenderMemoryScopeId scope) {
+        constexpr RenderBufferDescriptor counters{RenderGraphStereoCoverageReduction::CounterBytes,
+                                                  RenderBufferUsage::Storage | RenderBufferUsage::CopyDestination,
+                                                  RenderBufferAccess::HostVisible};
+        return frontend.CreateOwnedUiPaintBuffer(scope, counters, {}, {}, true);
     }
 
     /** @copydoc RenderFrontend::UploadSnapshot */

@@ -1,5 +1,5 @@
-#include "CanonicalWorldSettings.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "canonical/solver/CanonicalWorldSettings.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>

@@ -24,7 +24,7 @@ namespace Horo::Render {
             RenderTextureHandle texture;
         };
 
-        /** @brief One cold-declared optional read in a single graphics pass; never an optional write or native resource. */
+        /** @brief One cold-declared optional buffer read with the same role in every admitted pass. */
         struct RenderGraphOptionalRead final {
             RenderGraphResourceId resource;
             RenderGraphUsageKind role;
@@ -55,6 +55,15 @@ namespace Horo::Render {
             PreparedRenderGraphTemplate &operator=(const PreparedRenderGraphTemplate &) = delete;
             PreparedRenderGraphTemplate(PreparedRenderGraphTemplate &&) noexcept = default;
             PreparedRenderGraphTemplate &operator=(PreparedRenderGraphTemplate &&) = delete;
+
+            /** @brief Reports whether the canonical completion lease still owns a bound execution.
+             * @param execution Borrow from this owner thread's prepared template.
+             * @return True until that execution's scene and GUI references retire.
+             */
+            [[nodiscard]] static bool InFlight(const CompiledRenderGraphExecution &execution) noexcept {
+                return execution.templateBinding_ && execution.templateBinding_->inFlight_;
+            }
+
             /** @brief Declares one typed external slot on an ordinary builder without inventing a resident identity.
              * @param builder Existing owner-thread open builder; all authored pass/resource identities remain canonical.
              * @param descriptor Exact cold-admitted native allocation structure.
@@ -74,9 +83,9 @@ namespace Horo::Render {
              * @param residentStates Initial evidence for ordinary resident imports; external states come from slots.
              * @param queues Actual selected backend queue topology, never inferred or substituted.
              * @param instances Finite canonical frame-slot capacity, between one and eight.
-             * @param optionalReads Closed read-only buffer set for one graphics pass. Empty preserves ordinary fixed uses.
-             * Nonempty admits only persistent vertex/index/uniform reads already declared exactly once; topology,
-             * attachment writes, queue/order and precompiled synchronization/retention superset remain immutable.
+             * @param optionalReads Closed read-only buffer set for graphics passes on one logical queue role.
+             * Empty preserves ordinary fixed uses. A selected buffer keeps all declared vertex/index/uniform reads
+             * with its exact role. Attachment writes, queue/order and synchronization/retention stay immutable.
              * @return Cold prepared storage or a typed structural/state/capacity/allocation failure.
              */
             [[nodiscard]] static Result<PreparedRenderGraphTemplate> Prepare(RenderGraph graph,
@@ -128,6 +137,7 @@ namespace Horo::Render {
             struct ReadStorage final {
                 std::vector<RenderGraphOptionalRead> declarations;
                 std::vector<RenderGraphResourceUsage> completeUses;
+                std::vector<RenderGraphExecutionRange> completePassUses;
                 std::vector<int> roles;  // Resource-indexed closed role; -1 means mandatory/non-optional.
                 std::vector<std::uint8_t> selected;
                 std::vector<std::uint8_t> externalSlots;

@@ -1,5 +1,8 @@
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Platform/NativeCredentialBackend.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -11,14 +14,33 @@
 #include <thread>
 
 #if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <pthread.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
 namespace {
+#if !defined(_WIN32)
+    /** @brief Checks the native child's control policy before it installs any application handlers. */
+    bool HasDefaultControlSignals() {
+        sigset_t mask{};
+        if (pthread_sigmask(SIG_SETMASK, nullptr, &mask) != 0)
+            return false;
+        for (const int controlSignal : {SIGINT, SIGTERM, SIGPIPE}) {
+            struct sigaction disposition{};
+            if (sigaction(controlSignal, nullptr, &disposition) != 0 || disposition.sa_handler != SIG_DFL ||
+                sigismember(&mask, controlSignal) != 0)
+                return false;
+        }
+        return sigismember(&mask, SIGUSR1) == 0;
+    }
+#endif
     [[noreturn]] void Heartbeat(const std::filesystem::path &path) {
         for (;;) {
             std::ofstream stream{path, std::ios::app};
@@ -35,6 +57,22 @@ namespace {
             std::cerr << std::string(1024, 'e') << '\n';
         }
         return 17;
+    }
+
+    /** @brief Fills the output pipe before reading input, then echoes a fixed binary transfer. */
+    int ExchangeBytes() {
+#if defined(_WIN32)
+        if (_setmode(_fileno(stdin), _O_BINARY) < 0 || _setmode(_fileno(stdout), _O_BINARY) < 0)
+            return 4;
+#endif
+        constexpr std::size_t TransferBytes = 192 * 1024;
+        std::cerr << "raw channel ready\n" << std::flush;
+        std::cout << std::string(TransferBytes, 'b') << std::flush;
+        std::array<char, TransferBytes> input{};
+        if (!std::cin.read(input.data(), static_cast<std::streamsize>(input.size())))
+            return 4;
+        std::cout.write(input.data(), static_cast<std::streamsize>(input.size())).flush();
+        return std::cout.good() ? 0 : 4;
     }
 
     [[nodiscard]] bool SpawnDescendant(const char *executable, const char *marker) {
@@ -73,6 +111,15 @@ int main(const int argc, char **argv) {
     if (argc < 2)
         return 2;
     const std::string mode{argv[1]};
+    if (mode == "verify-credential-fixture" && argc == 3) {
+        constexpr std::array fixture{std::byte{9}, std::byte{0}, std::byte{4}};
+        const auto reference = Horo::CredentialReference::Parse(argv[2]);
+        if (reference.HasError())
+            return 4;
+        Horo::Security::PersistentCredentialStore store{Horo::Platform::CreateNativeCredentialBackend(), {}};
+        const auto secret = store.Resolve(reference.Value(), 0);
+        return secret.HasValue() && std::ranges::equal(secret.Value().View(), fixture) ? 0 : 4;
+    }
     if (mode == "exit-failure")
         return 17;
     if (mode == "adopt-probe-lease" && argc == 3) {
@@ -94,6 +141,12 @@ int main(const int argc, char **argv) {
     }
 #endif
 #if !defined(_WIN32)
+    if (mode == "signal-policy") {
+        if (!HasDefaultControlSignals())
+            return 4;
+        std::cout << "default-control-signals\n";
+        return 0;
+    }
     if (mode == "signalled") {
         std::raise(SIGTERM);
         return 99;
@@ -106,6 +159,8 @@ int main(const int argc, char **argv) {
     }
     if (mode == "finite-tail")
         return WriteFiniteTail();
+    if (mode == "exchange-bytes")
+        return ExchangeBytes();
     if (mode == "descendant" && argc == 3) {
         Heartbeat(argv[2]);
     }

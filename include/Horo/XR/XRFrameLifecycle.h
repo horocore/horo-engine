@@ -5,6 +5,8 @@
  * @brief Bounded, backend-neutral predicted-frame transaction owned by XRRuntime.
  */
 
+#include "Horo/Foundation/Time.h"
+#include "Horo/XR/XRReprojection.h"
 #include "Horo/XR/XRSessionLifecycle.h"
 #include "Horo/XR/XRSpacePose.h"
 
@@ -17,7 +19,7 @@ namespace Horo::XR {
     /** @brief Fixed implementation ceilings, not an admitted product or runtime capability. */
     struct XRFrameHardLimits final {
         static constexpr std::uint32_t MaximumViews = XRHardLimits::MaximumViews;
-        static constexpr std::uint32_t MaximumImages = MaximumViews * 2U;
+        static constexpr std::uint32_t MaximumImages = MaximumViews * 4U;
         static constexpr std::uint32_t MaximumLayers = 16;
     };
 
@@ -66,7 +68,8 @@ namespace Horo::XR {
         ImageNotReleased,
         IncompleteSubmission,
         SequenceExhausted,
-        Shutdown
+        Shutdown,
+        WrongThread /**< Operation did not run on the owning session's control thread. */
     };
 
     /** @brief Immutable finite bounds admitted for one session/configuration publication. */
@@ -100,7 +103,9 @@ namespace Horo::XR {
     /**
      * @brief Single-control-thread XR frame gate; records completed adapter operations without performing native work.
      *
-     * XRSessionLifecycle and the selected backend/Renderer owner outlive this gate. Methods cannot race or be re-entered.
+     * XRSessionLifecycle and the selected backend/Renderer owner outlive this gate. The gate uses the exact session
+     * control thread for binding, admission, completion and teardown. Methods cannot be re-entered.
+     * Calls outside the control thread fail with WrongThread, or return empty/do nothing for queries without status.
      * The host reserves a frame before native wait, cancels that reservation only when native wait fails, and records
      * every successful native wait even if its prediction or render intent is unusable. Such a completed wait still
      * returns a valid frame to begin/end with zero layers while the native session remains live; the host must never
@@ -129,10 +134,12 @@ namespace Horo::XR {
          * @param configuration Currently active configuration owned by the published session.
          * @param capabilities Exact accepted system capability publication; no reference is retained.
          * @param limits Finite runtime/product limits, no greater than the publication or XRFrameHardLimits.
+         * @param reprojection Exact provider/Renderer format agreement, required only for negotiated SpaceWarp.
          * @return Ok or typed invalid, stale, capacity, order, or shutdown status without partial mutation.
          */
         [[nodiscard]] XRFrameStatus BindConfiguration(const XRViewConfigurationId &configuration, const XRCapabilitySnapshot &capabilities,
-                                                      XRFrameLimits limits) noexcept;
+                                                      XRFrameLimits limits,
+                                                      std::optional<XRReprojectionPolicy> reprojection = std::nullopt) noexcept;
 
         /**
          * @brief Reserve one exact frame before invoking native wait; reject unavailable/stale/duplicate/exhausted work first.
@@ -156,6 +163,15 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameWaitOutcome RecordWait(XRRenderPredictionTime predictedDisplayTime, bool shouldRender) noexcept;
 
+        /** @brief Records the reserved frame with actual cadence supplied by the same native wait.
+         * @param predictedDisplayTime Runtime prediction.
+         * @param shouldRender Runtime-supplied intent.
+         * @param predictedDisplayPeriod Actual period. Nonpositive periods leave cadence unproven.
+         * @return Same native obligation and result as RecordWait.
+         */
+        [[nodiscard]] XRFrameWaitOutcome RecordWaitWithNativePeriod(XRRenderPredictionTime predictedDisplayTime, bool shouldRender,
+                                                                    Duration predictedDisplayPeriod) noexcept;
+
         /** @brief Record native begin for the waited frame. @param frame Exact open frame. @return Typed order/owner result. */
         [[nodiscard]] XRFrameStatus Begin(const XRFrameId &frame) noexcept;
 
@@ -175,6 +191,12 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameStatus Acquire(const XRFrameId &frame, const XRSwapchainImageId &image) noexcept;
 
+        /** @brief Records an auxiliary image acquired and ready from its exact runtime allocation owner.
+         * @param frame Exact current rendering frame. @param image Copied format, usage, sample and allocation evidence.
+         * @return Typed stale, unsupported, malformed or acquisition error without partial mutation.
+         */
+        [[nodiscard]] XRFrameStatus AcquireReprojectionImage(const XRFrameId &frame, const XRReprojectionImage &image) noexcept;
+
         /**
          * @brief Record complete Renderer submission after the bridge has proved use/completion for every image.
          * @param frame Exact rendering frame with at least one acquired image.
@@ -182,6 +204,26 @@ namespace Horo::XR {
          * @return Ok or typed incomplete/mismatched/order result; this does not wait for the GPU.
          */
         [[nodiscard]] XRFrameStatus Submit(const XRFrameId &frame, std::span<const XRSwapchainImageId> completedImages) noexcept;
+
+        /** @brief Preflights same-frame completed color plus exact motion and depth before accepting optional queue work.
+         * @param frame Exact current frame with only baseline images registered.
+         * @param projection Exact ordinary completed image set in original acquisition order.
+         * @param motion Current imported motion allocation.
+         * @param depth Current imported depth allocation.
+         * @return Typed owner, baseline, format or capacity error without changing frame state.
+         */
+        [[nodiscard]] XRFrameStatus ValidateReprojectionSubmission(const XRFrameId &frame, std::span<const XRSwapchainImageId> projection,
+                                                                   const XRReprojectionImage &motion,
+                                                                   const XRReprojectionImage &depth) const noexcept;
+
+        /** @brief Commits the accepted color, motion and depth submission atomically for one frame.
+         * @param frame Exact current begun frame. @param projection Accepted ordinary images in acquisition order.
+         * @param motion Accepted current motion allocation. @param depth Accepted current depth allocation.
+         * @pre Both auxiliary images and all projection images were accepted by the same real Renderer submission.
+         * @return Typed validation failure leaves the entire frame unchanged for ordinary projection or abort.
+         */
+        [[nodiscard]] XRFrameStatus SubmitReprojection(const XRFrameId &frame, std::span<const XRSwapchainImageId> projection,
+                                                       const XRReprojectionImage &motion, const XRReprojectionImage &depth) noexcept;
 
         /**
          * @brief Choose a backend-confirmed legal zero-layer abort after begin, retaining image-release obligations.
@@ -206,6 +248,39 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameStatus End(const XRFrameId &frame, std::uint32_t layerCount) noexcept;
 
+        /** @brief Preflights a complete ordinary projection plan against the exact released frame.
+         * @param frame Exact current frame. @param plan Complete baseline projection-layer intent.
+         * @return Typed frame/order or image failure, with no mutation.
+         */
+        [[nodiscard]] XRFrameStatus ValidateProjectionEnd(const XRFrameId &frame, const XRViewRenderPlan &plan) const noexcept;
+
+        /** @brief Records successfully completed native projection and advances the owned predecessor.
+         * @param frame Exact frame already submitted to the native compositor. @param plan Exact already validated complete layer.
+         * @return Same status as ValidateProjectionEnd; other End calls clear the predecessor.
+         */
+        [[nodiscard]] XRFrameStatus EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan) noexcept;
+
+        /** @brief Records the tracked native projection-reference to World observation for runtime-observed reprojection.
+         * @param frame Exact acquired frame before renderer admission. @param reference Calibrated pose at the same prediction.
+         * @return Ok or a typed failure. Missing evidence leaves ordinary projection available.
+         * @details Only a successful native projection End promotes this observation to predecessor evidence.
+         */
+        [[nodiscard]] XRFrameStatus RecordReprojectionReference(const XRFrameId &frame, const XRPoseSample &reference) noexcept;
+        /** @brief Borrows proved cadence and unchanged reference for the current projection before optional registration.
+         * @param frame Exact acquired/submitted frame. @param plan Its current projection plan.
+         * @return Adjacent committed history, or absence. Image completion and coverage still require native End validation.
+         */
+        [[nodiscard]] std::optional<XRObservedReprojectionHistory> ObserveReprojectionHistory(const XRFrameId &frame,
+                                                                                              const XRViewRenderPlan &plan) const noexcept;
+
+        /** @brief Checks optional provider inputs at the runtime-owned submission cutoff.
+         * @param frame Exact begun/rendered frame. @param plan Independently valid baseline projection intent.
+         * @param inputs Exact released auxiliary subresources, preceding frame and app-space delta.
+         * @return Ready, baseline fallback, or a typed stale/incompatible input category. Performs no native work or mutation.
+         */
+        [[nodiscard]] XRReprojectionStatus ValidateReprojection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                const XRReprojectionInputs &inputs) const noexcept;
+
         /**
          * @brief Fence an adapter against current session, plan and open frame identity without advancing a phase.
          * @param frame Exact retained frame being considered for native work.
@@ -229,10 +304,10 @@ namespace Horo::XR {
         /** @brief Return a fixed-size current publication. @return Copy of frame identity, phase, prediction, and counts. */
         [[nodiscard]] XRFrameSnapshot Snapshot() const noexcept;
 
-        /** @brief Drop old session/configuration evidence only after host-proved native quiescence. */
+        /** @brief Drop old session/configuration evidence only on the control thread after host-proved native quiescence. */
         void ResetAfterQuiescence() noexcept;
 
-        /** @brief Permanently close frame admission after host-proved native quiescence; idempotent. */
+        /** @brief Permanently close frame admission on the control thread after host-proved native quiescence; idempotent. */
         void Shutdown() noexcept;
 
     private:
@@ -242,17 +317,43 @@ namespace Horo::XR {
         /** @brief Clear the current logical transaction without issuing native cleanup. */
         void ClearFrame() noexcept;
 
+        /** @brief Checks the exact current subresource against its acquired and native-released allocation. */
+        [[nodiscard]] XRFrameStatus ValidateSubmission(const XRFrameId &frame,
+                                                       std::span<const XRSwapchainImageId> completedImages) const noexcept;
+        [[nodiscard]] XRFrameStatus ValidateReprojectionImage(const XRReprojectionImage &image) const noexcept;
+        void RecordReprojectionImage(const XRReprojectionImage &image) noexcept;
+        /** @brief Checks a released subresource against its exact admitted view extent. */
+        [[nodiscard]] bool MatchesReprojectionImage(const XRFrameId &frame, const XRReprojectionSubImage &input,
+                                                    XRReprojectionImageKind kind, Render::FramebufferExtent extent) const noexcept;
+        /** @brief Admits the format and ordered view extent envelope for the negotiated current session. */
+        [[nodiscard]] XRFrameStatus ValidateReprojectionPolicy(const std::optional<XRReprojectionPolicy> &candidate,
+                                                               XRFrameLimits limits) const noexcept;
+
         XRSessionLifecycle *sessions_;
         XRViewConfigurationId configuration_{};
         XRCapabilityRevision revision_{};
         XRFrameLimits limits_{};
         XRFrameSnapshot current_{};
         XRFrameId lastEnded_{};
+
+        /** @brief Calibration and cadence owned by this exact successfully submitted native projection. */
+        struct ProjectionHistory final {
+            XRViewRenderPlan plan;
+            Duration period;
+            std::optional<XRPoseSample> reference;
+        };
+
+        std::optional<ProjectionHistory> previousProjection_;
+        Duration currentPeriod_;
+        std::optional<XRPoseSample> currentReference_;
+        std::optional<XRReprojectionPolicy> reprojection_;
+        std::array<std::optional<XRReprojectionImage>, XRFrameHardLimits::MaximumImages> reprojectionImages_{};
         std::array<XRSwapchainImageId, XRFrameHardLimits::MaximumImages> images_{};
         std::array<bool, XRFrameHardLimits::MaximumImages> released_{};
         std::uint64_t nextSequence_{1};
         bool aborted_{};
         bool submitted_{};
         bool shutdown_{};
+        bool quadProjection_{};
     };
 }  // namespace Horo::XR

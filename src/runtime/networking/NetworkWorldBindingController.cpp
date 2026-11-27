@@ -15,6 +15,12 @@ namespace Horo::Network {
             !setup.policy.authorityPublisher.IsValid() || setup.maximumPeers == 0 || setup.maximumPeers > 64 ||
             setup.maximumPendingTicks == 0 || plan.mode == NetworkProjectRole::Standalone)
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
+        if (!ValidPrefabLifecycleRoute(setup.policy, *setup.codecs) || !ValidAuthoredSceneRoute(setup.policy, *setup.codecs) ||
+            !ValidInitialStateRoute(setup.policy, *setup.codecs) || setup.policy.initialState.has_value() != bool(setup.initialStateHost))
+            return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
+        if (!ValidStateUpdateRoute(setup.policy, *setup.codecs) || setup.policy.stateUpdates.has_value() != bool(setup.stateUpdateHost) ||
+            (setup.policy.stateUpdates && setup.policy.stateUpdates->channel == setup.controlChannel))
+            return Result<std::shared_ptr<NetworkWorldBindingController>>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
         try {
             auto implementation = std::make_unique<Impl>(std::move(plan), std::move(setup));
             return Result<std::shared_ptr<NetworkWorldBindingController>>::Success(
@@ -40,11 +46,12 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkWorldBindingController::Prepare */
-    Result<void> NetworkWorldBindingController::Prepare() {
+    Result<void> NetworkWorldBindingController::Prepare(const NetworkAuthoredSceneProjection &authored,
+                                                        NetworkAuthoredSceneProjection client) {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
-        return impl_->worlds.Prepare();
+        return impl_->worlds.Prepare(authored, std::move(client));
     }
 
     /** @copydoc NetworkWorldBindingController::Attach */
@@ -56,11 +63,12 @@ namespace Horo::Network {
         if (owner.get() != this || impl_->transport || impl_->detached || !dispatcher.UsesCodecRegistry(*impl_->setup.codecs) ||
             !impl_->setup.controlChannel.IsWithin(transport.Capabilities().maximumChannels))
             return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
-        const auto &control = impl_->setup.policy.control;
-        if (auto registered = dispatcher.RegisterHandler({control.protocol, control.id, MessageTrafficClass::Control,
-                                                          Runtime::RuntimePhase::NetworkPoll, 4},
-                                                         owner);
-            registered.HasError())
+        if (const auto &route = impl_->setup.policy.stateUpdates;
+            route && (!route->channel.IsWithin(transport.Capabilities().maximumChannels) ||
+                      transport.Capabilities().delivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] !=
+                          TransportSupport::Available))
+            return Result<void>::Failure(MakeError(NetworkErrors::AdmissionPolicyInvalid));
+        if (auto registered = impl_->RegisterRoutes(dispatcher, owner); registered.HasError())
             return registered;
         dispatcher.worldBinding_ = owner;
         dispatcher.requiresWorldBinding_ = true;
@@ -69,12 +77,57 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkWorldBindingController::Impl::RegisterRoutes */
+    Result<void> NetworkWorldBindingController::Impl::RegisterRoutes(InboundMessageDispatcher &router,
+                                                                     const std::shared_ptr<NetworkWorldBindingController> &owner) const {
+        struct Route final {
+            const MessageIdentityDescriptor *identity;
+            std::uint32_t rate;
+            MessageTrafficClass traffic{MessageTrafficClass::Control};
+        };
+
+        const auto &policy = setup.policy;
+        const std::array routes{Route{&policy.control, 4}, Route{policy.prefabLifecycle ? &policy.prefabLifecycle->control : nullptr, 16},
+                                Route{policy.authoredScene ? &policy.authoredScene->control : nullptr, 16},
+                                Route{policy.initialState ? &policy.initialState->control : nullptr, 64},
+                                Route{policy.stateUpdates ? &policy.stateUpdates->snapshot : nullptr,
+                                      policy.stateUpdates ? policy.stateUpdates->maximumMessagesPerTick : 0,
+                                      MessageTrafficClass::Snapshot}};
+        for (std::size_t index{}; index < routes.size(); ++index) {
+            const auto [identity, rate, traffic] = routes[index];
+            if (!identity)
+                continue;
+            const InboundHandlerBinding binding{identity->protocol, identity->id, traffic, Runtime::RuntimePhase::NetworkPoll, rate};
+            auto registered =
+                traffic == MessageTrafficClass::Snapshot
+                    ? router.RegisterSnapshotHandler(binding, owner, policy.stateUpdates->channel, policy.stateUpdates->maximumBytesPerTick)
+                    : router.RegisterHandler(binding, owner);
+            if (registered.HasValue())
+                continue;
+            for (const auto &previous : std::span{routes}.first(index)) {
+                if (previous.identity)
+                    router.RevokeHandler(previous.identity->protocol, previous.identity->id);
+            }
+            return registered;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc NetworkWorldBindingController::Detach */
     void NetworkWorldBindingController::Detach(const INetworkTransport &transport) noexcept {
         if (impl_->transport != &transport)
             return;
-        if (impl_->dispatcher)
+        if (impl_->dispatcher) {
             impl_->dispatcher->RevokeHandler(impl_->setup.policy.control.protocol, impl_->setup.policy.control.id);
+            if (const auto &route = impl_->setup.policy.prefabLifecycle)
+                impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
+            if (const auto &route = impl_->setup.policy.authoredScene)
+                impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
+            if (const auto &route = impl_->setup.policy.initialState)
+                impl_->dispatcher->RevokeHandler(route->control.protocol, route->control.id);
+            if (const auto &route = impl_->setup.policy.stateUpdates)
+                impl_->dispatcher->RevokeHandler(route->snapshot.protocol, route->snapshot.id);
+        }
         impl_->dispatcher = nullptr;
         impl_->transport = nullptr;
         impl_->detached = true;
@@ -99,14 +152,60 @@ namespace Horo::Network {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
-        if (const auto &control = impl_->setup.policy.control; !impl_->transport || message.protocol != control.protocol ||
-                                                               message.message != control.id || message.schema != control.schema ||
-                                                               message.schemaVersion != control.version || !message.fields.empty())
+        if (!impl_->transport || !message.fields.empty())
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        const auto matches = [&message](const MessageIdentityDescriptor &identity) {
+            return message.protocol == identity.protocol && message.message == identity.id && message.schema == identity.schema &&
+                   message.schemaVersion == identity.version;
+        };
+        const auto &policy = impl_->setup.policy;
+        if (policy.prefabLifecycle && matches(policy.prefabLifecycle->control))
+            return impl_->worlds.AcceptPrefab(message.payload, context);
+        if (policy.authoredScene && matches(policy.authoredScene->control))
+            return impl_->worlds.AcceptAuthored(message.payload, context);
+        if (policy.initialState && matches(policy.initialState->control))
+            return impl_->AcceptInitial(message, context);
+        if (policy.stateUpdates && matches(policy.stateUpdates->snapshot))
+            return impl_->AcceptStateUpdate(message, context);
+        if (!matches(policy.control))
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         const auto decoded = DecodeNetworkWorldBinding(message.payload);
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
         return impl_->worlds.Accept(decoded.Value(), context);
+    }
+
+    /** @copydoc NetworkWorldBindingController::HasPrefabLifecycle */
+    bool NetworkWorldBindingController::HasPrefabLifecycle() const noexcept {
+        return impl_->setup.policy.prefabLifecycle.has_value();
+    }
+
+    /** @copydoc NetworkWorldBindingController::HasAuthoredScene */
+    bool NetworkWorldBindingController::HasAuthoredScene() const noexcept {
+        return impl_->setup.policy.authoredScene.has_value();
+    }
+
+    /** @copydoc NetworkWorldBindingController::TakePrefab */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> NetworkWorldBindingController::TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                                Runtime::RuntimePhase phase) {
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Result<std::vector<NetworkPrefabLifecycleRecord>>::Failure(checked.ErrorValue());
+        if (!impl_->transport)
+            return Result<std::vector<NetworkPrefabLifecycleRecord>>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        const Impl::BusyScope busy{impl_->busy};
+        return impl_->worlds.TakePrefab(scene, phase);
+    }
+
+    /** @copydoc NetworkWorldBindingController::PrepareClientPrefab */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkWorldBindingController::PrepareClientPrefab(
+        Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+        bool creating, const CancellationToken &cancellation) const {
+        using Outcome = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        if (auto checked = impl_->CheckOwner(); checked.HasError())
+            return Outcome::Failure(checked.ErrorValue());
+        if (!impl_->transport || !impl_->setup.policy.prefabLifecycle)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return impl_->worlds.PrepareClientPrefab(scene, spawn, members, creating, cancellation);
     }
 
     /** @copydoc NetworkWorldBindingController::Ready */
@@ -127,9 +226,22 @@ namespace Horo::Network {
         return impl_->worlds.Acquire(kind, request, capability);
     }
 
+    /** @copydoc NetworkWorldBindingController::PrepareAuthorityObjects */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkWorldBindingController::PrepareAuthorityObjects(
+        Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+        const CancellationToken &cancellation) const {
+        return impl_->worlds.PrepareAuthorityObjects(scene, added, retired, cancellation);
+    }
+
     void NetworkWorldBindingController::Impl::ClearPending() noexcept {
         for (auto &peer : peers) {
             peer.pending.reset();
+            peer.prefabPending.reset();
+            peer.authoredPending.reset();
+            peer.initial = {};
+            peer.initialUpdateCohort.reset();
+            peer.initialFramePending = false;
+            peer.knownPrefabs.clear();
             peer.frameBytes = 0;
         }
     }

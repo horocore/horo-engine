@@ -39,6 +39,11 @@ namespace Horo::Render::VulkanTest {
         int endCalls{};
         int waitCalls{};
         int counterCalls{};
+        int queryReads{};
+        int destroyedQueryPools{};
+        bool validQueryRead{true};
+        std::vector<std::uint32_t> timestampWrites;
+        std::array<std::uint64_t, 4> queryResults{250, 1, 4, 1};
         int failPoolAt{};
         VkResult submitResult{VK_SUCCESS};
         VkResult beginResult{VK_SUCCESS};
@@ -135,6 +140,31 @@ namespace Horo::Render::VulkanTest {
         return native->waitResult;
     }
 
+    inline VKAPI_ATTR VkResult VKAPI_CALL CreateQueries(VkDevice, const VkQueryPoolCreateInfo *, const VkAllocationCallbacks *,
+                                                        VkQueryPool *pool) {
+        *pool = NativeHandle<VkQueryPool>(native->next++);
+        return VK_SUCCESS;
+    }
+
+    inline VKAPI_ATTR void VKAPI_CALL DestroyQueries(VkDevice, VkQueryPool, const VkAllocationCallbacks *) {
+        ++native->destroyedQueryPools;
+    }
+
+    inline VKAPI_ATTR void VKAPI_CALL ResetQueries(VkCommandBuffer, VkQueryPool, std::uint32_t, std::uint32_t) {}
+
+    inline VKAPI_ATTR void VKAPI_CALL WriteTimestamp(VkCommandBuffer, VkPipelineStageFlags2, VkQueryPool, std::uint32_t index) {
+        native->timestampWrites.push_back(index);
+    }
+
+    inline VKAPI_ATTR VkResult VKAPI_CALL GetQueries(VkDevice, VkQueryPool, std::uint32_t, std::uint32_t count, std::size_t size,
+                                                     void *data, VkDeviceSize stride, VkQueryResultFlags flags) {
+        ++native->queryReads;
+        native->validQueryRead &= count == 2 && size == sizeof(native->queryResults) && stride == 2 * sizeof(std::uint64_t) &&
+                                  flags == (VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        std::ranges::copy(native->queryResults, static_cast<std::uint64_t *>(data));
+        return VK_SUCCESS;
+    }
+
     [[nodiscard]] inline PFN_vkVoidFunction Resolver(VkDevice, const char *name) {
         struct Entry {
             std::string_view name;
@@ -151,7 +181,12 @@ namespace Horo::Render::VulkanTest {
                                  Entry{"vkDestroySemaphore", EraseFunction(PFN_vkDestroySemaphore{DestroySemaphore})},
                                  Entry{"vkQueueSubmit2", EraseFunction(PFN_vkQueueSubmit2{Submit})},
                                  Entry{"vkGetSemaphoreCounterValue", EraseFunction(PFN_vkGetSemaphoreCounterValue{Counter})},
-                                 Entry{"vkWaitSemaphores", EraseFunction(PFN_vkWaitSemaphores{Wait})}};
+                                 Entry{"vkWaitSemaphores", EraseFunction(PFN_vkWaitSemaphores{Wait})},
+                                 Entry{"vkCreateQueryPool", EraseFunction(PFN_vkCreateQueryPool{CreateQueries})},
+                                 Entry{"vkDestroyQueryPool", EraseFunction(PFN_vkDestroyQueryPool{DestroyQueries})},
+                                 Entry{"vkCmdResetQueryPool", EraseFunction(PFN_vkCmdResetQueryPool{ResetQueries})},
+                                 Entry{"vkCmdWriteTimestamp2", EraseFunction(PFN_vkCmdWriteTimestamp2{WriteTimestamp})},
+                                 Entry{"vkGetQueryPoolResults", EraseFunction(PFN_vkGetQueryPoolResults{GetQueries})}};
         const auto found = std::ranges::find(entries, std::string_view{name}, &Entry::name);
         return found == entries.end() ? nullptr : found->function;
     }

@@ -419,6 +419,26 @@ namespace {
 }  // namespace
 
 namespace {
+    TEST_CASE("Vulkan depth-stencil allocation may omit CPU texel padding", "[unit][vulkan][resource][memory]") {
+        NativeResourceScope native;
+        Detail::VulkanResourceRuntime runtime;
+        InitializeNativeResourceRuntime(runtime);
+        const RenderTextureDescriptor descriptor{.extent = {64, 32},
+                                                 .format = RenderTextureFormat::Depth32FloatStencil8,
+                                                 .usage = RenderTextureUsage::RenderAttachment};
+        REQUIRE(RenderTextureBaseLevelByteSize(descriptor) == 16384);
+        native.state.imageRequirements = {.size = 10240, .alignment = 1024, .memoryTypeBits = 1};
+        const auto cost = runtime.QueryTextureMemoryCost(descriptor);
+        REQUIRE(cost.HasValue());
+        CHECK(cost.Value().payloadBytes == 10240);
+        CHECK(cost.Value().requiredBytes == 10240);
+        const auto texture = runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 1));
+        REQUIRE(texture.HasValue());
+        runtime.DestroyTexture(texture.Value());
+        --native.state.imageRequirements.size;
+        CHECK(runtime.QueryTextureMemoryCost(descriptor).HasError());
+    }
+
     TEST_CASE("Vulkan sized image fixture preserves canonical payload and strict fixed-requirement failures",
               "[unit][vulkan][resource][memory]") {
         NativeResourceScope native;

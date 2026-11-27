@@ -100,6 +100,29 @@ Detached blackboard projection storage is bounded and reserved during instance
 creation. Retiring a program closes new calls while its existing VMs remain alive
 for abort, cleanup and destruction.
 
+## Project script authoring
+
+Project authoring discovers opted-in Decision scripts under the project's existing
+script root. A script uses the same `.horo_script` extension and sibling `.meta`
+file as a behavior. Use a Decision declaration instead of a behavior identity.
+
+```json
+{
+  "schemaVersion": 1,
+  "runtime": "lua",
+  "decisionNode": {"typeId": "701", "providerId": "702", "descriptorVersion": 1}
+}
+```
+
+Type and provider identities are nonzero decimal strings. The descriptor version
+is a positive 32-bit integer. The editor validates script declarations in the
+existing bounded Lua adapter and composes them with the current native catalog.
+Changing an admitted source replaces its catalog generation after validation.
+A failed edit retains the last working generation. Type or provider identity
+changes require a separate migration. Newly added files are admitted when the
+project rediscovers its gameplay sources. This authoring path does not select
+package activations or supply standalone headless launch with a script catalog.
+
 ## Verified packages
 
 `GameplayPackageModuleHost::AcquireDecisionNodes()` selects an exact live package,

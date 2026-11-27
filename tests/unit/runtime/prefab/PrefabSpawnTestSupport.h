@@ -35,6 +35,9 @@ namespace Horo::Prefab::SpawnTest {
         std::shared_ptr<const Gameplay::GameplayPrefabContext> retained;
         std::function<void(Gameplay::BehaviorContext &)> onTick;
         std::function<void(Gameplay::BehaviorContext &)> onCreate;
+        std::function<void(Gameplay::BehaviorContext &)> onEnable;
+        std::function<void(Gameplay::BehaviorContext &)> onDestroy;
+        std::vector<Gameplay::GameplayEventTypeId> deliveredEvents;
     };
 
     class Behavior final : public Gameplay::IBehaviorInstance {
@@ -52,14 +55,25 @@ namespace Horo::Prefab::SpawnTest {
             ++trace_.starts;
         }
 
+        void OnEnable(Gameplay::BehaviorContext &context) override {
+            if (trace_.onEnable)
+                trace_.onEnable(context);
+        }
+
+        void OnEvent(Gameplay::BehaviorContext &, const Gameplay::GameplayEvent &event) override {
+            trace_.deliveredEvents.push_back(event.type);
+        }
+
         void OnFixedUpdate(Gameplay::BehaviorContext &context, Gameplay::FixedDeltaTime) override {
             trace_.retained = context.PrefabContext();
             if (trace_.onTick)
                 trace_.onTick(context);
         }
 
-        void OnDestroy(Gameplay::BehaviorContext &) override {
+        void OnDestroy(Gameplay::BehaviorContext &context) override {
             ++trace_.destroys;
+            if (trace_.onDestroy)
+                trace_.onDestroy(context);
         }
 
     private:

@@ -1,4 +1,5 @@
 #include "Horo/Packages/PackageLockfile.h"
+#include "Horo/Packages/PackageRequest.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -108,6 +109,87 @@ TEST_CASE("Package lock generation is deterministic and round trips exact graph 
     CHECK(parsed.Value().Packages().front().contributions == std::vector<std::string>{"assets", "runtime"});
 }
 
+TEST_CASE("Package removal preview prunes only entries no remaining root can reach", "[packages][lockfile][removal]") {
+    Fixture fixture;
+    SECTION("removing the last root prunes the entire graph") {
+        const auto lock = fixture.Generate();
+        REQUIRE(lock.HasValue());
+        const auto preview = lock.Value().PreviewRemoval(Id("com.game.root"));
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().directRoot);
+        CHECK(preview.Value().removed == std::vector<LockedPackageReference>{{Id("com.game.root"), Version("1.2.0")},
+                                                                             {Id("com.horo.runtime"), Version("2.0.1")},
+                                                                             {Id("com.shared.data"), Version("3.4.5")}});
+        CHECK(preview.Value().requiredBy.empty());
+    }
+    SECTION("another root preserves shared dependencies and explains retained roots") {
+        fixture.roots.push_back(Id("com.horo.runtime"));
+        const auto lock = fixture.Generate();
+        REQUIRE(lock.HasValue());
+        const auto preview = lock.Value().PreviewRemoval(Id("com.game.root"));
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().removed == std::vector<LockedPackageReference>{{Id("com.game.root"), Version("1.2.0")}});
+
+        const auto retainedRoot = lock.Value().PreviewRemoval(Id("com.horo.runtime"));
+        REQUIRE(retainedRoot.HasValue());
+        CHECK(retainedRoot.Value().directRoot);
+        CHECK(retainedRoot.Value().removed.empty());
+        CHECK(retainedRoot.Value().requiredBy == std::vector<LockedPackageReference>{{Id("com.game.root"), Version("1.2.0")}});
+
+        const auto transitive = lock.Value().PreviewRemoval(Id("com.shared.data"));
+        REQUIRE(transitive.HasValue());
+        CHECK_FALSE(transitive.Value().directRoot);
+        CHECK(transitive.Value().removed.empty());
+        CHECK(transitive.Value().requiredBy.size() == 2);
+        CheckFailure(lock.Value().PreviewRemoval(Id("com.missing")), "packages.lockfile.invalid");
+    }
+}
+
+TEST_CASE("Package removal reports each locked dependent of a transitive package", "[packages][lockfile][removal]") {
+    const auto request = ValidatedPackageRequest::Parse(R"({
+        "sources": {"vendor.index": {"kind": "public-registry", "registry": "vendor"}},
+        "dependencies": {"com.game.root": {"source": "vendor.index", "version": "1.2.0"}}
+    })");
+    REQUIRE(request.HasValue());
+    Fixture fixture;
+    fixture.requestHash = request.Value().Digest();
+    const auto selected = Id("com.shared.data");
+    SECTION("large dependency fan-in stays within the host diagnostic envelope") {
+        for (int index = 10; index < 74; ++index) {
+            const auto name = "com.game.feature" + std::to_string(index);
+            fixture.plan.packages.front().dependencies.push_back(Id(name));
+            fixture.plan.packages.push_back(Resolved(name, "1.0.0", "vendor.index", name, {selected}));
+            fixture.artifacts.push_back(Artifact(fixture.plan.packages.back()));
+        }
+        const auto lock = fixture.Generate();
+        REQUIRE(lock.HasValue());
+        const auto refused = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), selected);
+        CheckFailure(refused, "packages.request.removal_blocked");
+        const auto &diagnostics = refused.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 9);
+        for (int index = 10; index < 74; ++index) {
+            const auto identity = "com.game.feature" + std::to_string(index) + " 1.0.0";
+            CHECK(std::ranges::any_of(diagnostics, [&identity](const auto &entry) { return entry.message.find(identity) != std::string::npos; }));
+        }
+        return;
+    }
+    const auto lock = fixture.Generate();
+    REQUIRE(lock.HasValue());
+
+    const auto refused = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), selected);
+    CheckFailure(refused, "packages.request.removal_blocked");
+    const auto &diagnostics = refused.ErrorValue().diagnostics;
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].code.Value() == "packages.request.removal_required_by");
+    CHECK(diagnostics[0].message == "com.game.root 1.2.0 requires com.shared.data");
+    CHECK(diagnostics[1].code.Value() == "packages.request.removal_required_by");
+    CHECK(diagnostics[1].message == "com.horo.runtime 2.0.1 requires com.shared.data");
+
+    const auto unknown = PackageRemovalPlan::Prepare(request.Value(), lock.Value(), Id("com.missing"));
+    CheckFailure(unknown, "packages.request.invalid");
+    CHECK(unknown.ErrorValue().diagnostics.empty());
+}
+
 TEST_CASE("Package lock generation binds every resolver selection to exact verified evidence", "[packages][lockfile]") {
     Fixture fixture;
 
@@ -142,6 +224,12 @@ TEST_CASE("Package lock parser rejects noncanonical schema and portable identity
     const auto generated = fixture.Generate();
     REQUIRE(generated.HasValue());
     const Json valid = Json::parse(generated.Value().SerializeCanonical());
+
+    SECTION("a nonempty graph requires roots") {
+        Json changed = valid;
+        changed["roots"] = Json::array();
+        CheckFailure(ValidatedPackageLockfileV1::Parse(changed.dump()), "packages.lockfile.invalid");
+    }
 
     SECTION("unknown root field") {
         Json changed = valid;

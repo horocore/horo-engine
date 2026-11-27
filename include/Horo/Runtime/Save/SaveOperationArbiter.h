@@ -174,8 +174,9 @@ namespace Horo::Runtime {
          * @return Success or an invalid-transition error.
          */
         [[nodiscard]] Result<void> Complete(OperationId operation);
-        /** @brief Fails the active operation with its original typed cause. @param operation Active identity. @param error Cause.
+        /** @brief Fails the active operation with typed causal evidence. @param operation Active identity. @param error Cause.
          * @param outcome Publication evidence. @return Success or an invalid-transition error.
+         * @details Auto, Checkpoint and Suspend modes publish classified errors without provider text.
          */
         [[nodiscard]] Result<void> Fail(OperationId operation, Error error,
                                         SaveOperationCommitOutcome outcome = SaveOperationCommitOutcome::NotCommitted);

@@ -2,6 +2,7 @@
 #include "ColorPipelineTestSupport.h"
 
 #include <array>
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 
 namespace {
@@ -255,5 +256,46 @@ TEST_CASE("Cold and complete color admission share grading and aggregate atlas b
         REQUIRE(complete.HasError());
         CHECK(cold.ErrorValue().code.Value() == ColorPipelineErrors::UnsupportedGrading.code.Value());
         CHECK(complete.ErrorValue().code.Value() == cold.ErrorValue().code.Value());
+    }
+}
+
+TEST_CASE("Vulkan color recipe admits explicit manual exposure and the existing SDR encoder", "[renderer][color][vulkan]") {
+    const ShaderTargetRequirement target{ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 1, 1, 16, 128};
+    using enum ColorOutputShaderStage;
+    const auto manual = MakeColorOutputShaderManifest(SceneToDisplayLinear, target);
+    REQUIRE(manual.HasValue());
+    CHECK(manual.Value().bindings.size() == 6);
+    CHECK(manual.Value().parameters.size() == 2);
+    const auto names = ColorOutputShaderReflectionNames(SceneToDisplayLinear, target.backend);
+    REQUIRE(names.size() == 6);
+    REQUIRE(names.front().parameters.size() == 2);
+    CHECK(names.front().parameters.back().name == "ExposureSelection");
+    CHECK(MakeColorOutputShaderManifest(EncodeSdr, target).HasValue());
+    CHECK(MakeColorOutputShaderManifest(SceneToDisplayLinearWithLook, target).HasError());
+    CHECK(ColorOutputShaderReflectionNames(SceneToDisplayLinearWithLook, target.backend).empty());
+}
+
+TEST_CASE("SDR encoder revision two exposes three reflected matrix rows on Metal and Vulkan", "[renderer][color][accessibility]") {
+    const auto target =
+        GENERATE(ShaderTargetRequirement{ShaderTargetBackend::Metal, ShaderPayloadFormat::MetalLibrary24, 1, 1, 16, 128, false, true},
+                 ShaderTargetRequirement{ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 1, 1, 16, 128});
+    using enum ColorOutputShaderStage;
+    const auto legacy = MakeColorOutputShaderManifest(SelectColorOutputShaderStage(1, false), target);
+    const auto accessible = MakeColorOutputShaderManifest(SelectColorOutputShaderStage(1, true), target);
+    REQUIRE(legacy.HasValue());
+    REQUIRE(accessible.HasValue());
+    CHECK(legacy.Value().sourceRevision == 1);
+    CHECK(accessible.Value().sourceRevision == 2);
+    CHECK(legacy.Value().parameters.size() == 1);
+    REQUIRE(accessible.Value().parameters.size() == 4);
+    const auto names = ColorOutputShaderReflectionNames(EncodeSdrWithAccessibility, target.backend);
+    REQUIRE(names.size() == 2);
+    REQUIRE(names.front().parameters.size() == 4);
+    constexpr std::array rows{"AccessibilityRed", "AccessibilityGreen", "AccessibilityBlue"};
+    for (std::size_t row = 0; row < rows.size(); ++row) {
+        const auto &parameter = accessible.Value().parameters[row + 1];
+        CHECK(parameter.id.value == row + 2);
+        CHECK(parameter.columns == 4);
+        CHECK(names.front().parameters[row + 1].name == rows[row]);
     }
 }

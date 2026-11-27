@@ -1,10 +1,12 @@
 #pragma once
 
 #include "SceneDocumentTestSupport.h"
-#include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
+#include "editor/screens/workspace/prefab/hierarchy/PrefabHierarchySources.h"
 
 #include <chrono>
 #include <fstream>
+#include <optional>
+#include <utility>
 
 namespace Horo::Editor::PrefabHierarchyTestSupport {
     using namespace SceneDocumentTestSupport;
@@ -77,12 +79,14 @@ namespace Horo::Editor::PrefabHierarchyTestSupport {
             };
         }
 
-        void WriteScene() const {
+        void WriteScene(std::optional<Prefab::PrefabValueOverrideSet> overrides = {}) const {
             std::filesystem::create_directories(directory.path / "assets/scenes");
             std::ofstream(directory.path / ".horo/project.json") << R"({"settings":{"defaultScene":"assets/scenes/main.horo"}})";
             const std::vector<SceneObjectSnapshot> objects{{.id = {11}, .name = "Authored parent"}};
-            const std::vector<ScenePrefabInstance> placements{
-                {.instanceId = instance, .sourcePrefab = PrefabAsset(), .parent = SceneObjectId{11}}};
+            const std::vector<ScenePrefabInstance> placements{{.instanceId = instance,
+                                                               .sourcePrefab = PrefabAsset(),
+                                                               .parent = SceneObjectId{11},
+                                                               .valueOverrides = std::move(overrides)}};
             std::ofstream(directory.path / "assets/scenes/main.horo") << SceneSource::EncodeSceneSource({objects, placements});
         }
     };

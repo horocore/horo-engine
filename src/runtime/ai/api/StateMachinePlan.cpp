@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <new>
 #include <ranges>
+#include <tuple>
 
 namespace Horo::AI {
     namespace StateMachineErrors {
@@ -170,7 +171,7 @@ namespace Horo::AI {
                 return Invalid<void>();
             if (!state.call)
                 return Result<void>::Success();
-            if (!state.call->asset.IsValid() || state.call->kind >= DecisionPlanKind::Utility || !state.call->schema.IsValid())
+            if (!state.call->asset.IsValid() || state.call->kind >= DecisionPlanKind::Count || !state.call->schema.IsValid())
                 return Invalid<void>(AIErrors::DecisionAssetSubtreeIncompatible);
             return Result<void>::Success();
         }
@@ -255,11 +256,7 @@ namespace Horo::AI {
         try {
             if (auto admitted = AdmitSource(source, *decision); admitted.HasError())
                 return Result<Output>::Failure(admitted.ErrorValue());
-            std::ranges::sort(source.transitions, [](const auto &left, const auto &right) {
-                if (left.priority != right.priority)
-                    return left.priority > right.priority;
-                return left.id < right.id;
-            });
+            std::ranges::sort(source.transitions, StateMachineTransitionPrecedes);
             return Result<Output>::Success(
                 std::make_shared<const CookedStateMachinePlan>(ConstructionToken{}, std::move(decision), std::move(source)));
         } catch (const std::bad_alloc &) {
@@ -268,6 +265,39 @@ namespace Horo::AI {
     }
 
     /** @brief Resolves one stable state identity to its admitted flat index. */
+    namespace {
+        /** @brief Identifies the admitted provider node assigned to one action phase. */
+        DecisionNodeId PhaseNode(const std::optional<StateMachineProviderAction> &action) noexcept {
+            return action.has_value() ? action->binding.id : DecisionNodeId{};
+        }
+
+        /** @brief Compares executable state data without source coordinates. */
+        bool SameState(const StateMachineState &a, const StateMachineState &b) noexcept {
+            return std::tie(a.id, a.parent, a.initialChild, a.entry, a.update, a.exit, a.call, a.terminal) ==
+                       std::tie(b.id, b.parent, b.initialChild, b.entry, b.update, b.exit, b.call, b.terminal) &&
+                   PhaseNode(a.entryProvider) == PhaseNode(b.entryProvider) && PhaseNode(a.updateProvider) == PhaseNode(b.updateProvider) &&
+                   PhaseNode(a.exitProvider) == PhaseNode(b.exitProvider);
+        }
+
+        /** @brief Compares the ordered executable guards after transition identity and priority match. */
+        bool SameTransition(const StateMachineTransition &a, const StateMachineTransition &b) noexcept {
+            return std::tie(a.id, a.source, a.target, a.priority, a.event, a.childOutcome) ==
+                       std::tie(b.id, b.source, b.target, b.priority, b.event, b.childOutcome) &&
+                   std::ranges::equal(a.guards, b.guards, [](const auto &left, const auto &right) {
+                return std::tie(left.key, left.operation, left.operand) == std::tie(right.key, right.operation, right.operand);
+            });
+        }
+    }  // namespace
+
+    /** @copydoc CookedStateMachinePlan::IsCompatible */
+    bool CookedStateMachinePlan::IsCompatible(const CookedStateMachinePlan &candidate) const noexcept {
+        return source_.initial == candidate.source_.initial &&
+               source_.maximumTransitionsPerStep == candidate.source_.maximumTransitionsPerStep &&
+               decision_->HasEquivalentBindings(*candidate.decision_) &&
+               std::ranges::equal(source_.states, candidate.source_.states, SameState) &&
+               std::ranges::equal(source_.transitions, candidate.source_.transitions, SameTransition);
+    }
+
     std::size_t CookedStateMachinePlan::Index(const DecisionNodeId id) const noexcept {
         const auto found = std::ranges::lower_bound(source_.states, id, {}, &StateMachineState::id);
         return static_cast<std::size_t>(found - source_.states.begin());

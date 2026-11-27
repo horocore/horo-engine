@@ -1,8 +1,10 @@
 #include "EditorRenderExtractionErrors.h"
 #include "Horo/Runtime/Render/LightSceneExtraction.h"
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace Horo::Editor {
@@ -18,6 +20,7 @@ namespace Horo::Editor {
         struct WorldPose {
             Math::Mat4 matrix{Math::Mat4::Identity()};
             Math::Quaternion rotation;
+            bool overridden{};
         };
 
         Result<void> AccumulatePose(const Math::Transform &local, WorldPose &pose) {
@@ -39,11 +42,13 @@ namespace Horo::Editor {
                 const auto view = scene.Get(entity);
                 if (view.HasError())
                     return Result<WorldPose>::Failure(view.ErrorValue());
-                const Math::Transform *local = view.Value().localTransform;
+                const Math::Transform *local = view.Value().PresentationLocalTransform();
                 if (entity.entity.index < overrides.size()) {
                     const auto &transformOverride = overrides[entity.entity.index];
-                    if (transformOverride.present && transformOverride.entity == entity)
+                    if (transformOverride.present && transformOverride.entity == entity) {
                         local = &transformOverride.localTransform;
+                        pose.overridden = true;
+                    }
                 }
                 if (const auto accumulated = AccumulatePose(*local, pose); accumulated.HasError())
                     return Result<WorldPose>::Failure(accumulated.ErrorValue());
@@ -205,6 +210,12 @@ namespace Horo::Editor {
                 return Result<void>::Failure(MakeError(ViewportSceneErrors::ObjectNotFound));
             return Result<void>::Success();
         }
+
+        /** @brief Checks the three parallel draw columns before appending or removing transient geometry. */
+        bool ValidDrawColumns(const EditorViewportSceneSnapshot &snapshot) noexcept {
+            return snapshot.instances.size() == snapshot.instanceObjects.size() &&
+                   snapshot.instances.size() == snapshot.instancePickable.size();
+        }
     }  // namespace
 
     Result<void> ApplyEditorViewportTransformPreview(const Runtime::RuntimeSceneView &scene,
@@ -228,6 +239,75 @@ namespace Horo::Editor {
         snapshot.transformOverrides.swap(snapshot.stagedTransformOverrides);
         PublishLights(snapshot, *bank, lights.Value());
         return Result<void>::Success();
+    }
+
+    /** @copydoc AppendEditorViewportSceneReviewGhosts */
+    Result<bool> AppendEditorViewportSceneReviewGhosts(const Runtime::RuntimeSceneView &scene,
+                                                       const std::span<const SceneObjectTransformPreview> previews,
+                                                       EditorViewportSceneSnapshot &snapshot) {
+        using Output = Result<bool>;
+        if (!ValidSnapshot(scene, snapshot) || !ValidDrawColumns(snapshot))
+            return Output::Failure(MakeError(ViewportSceneErrors::InvalidResult));
+        if (const auto staged = StageTransforms(scene, previews, snapshot); staged.HasError())
+            return Output::Failure(staged.ErrorValue());
+
+        constexpr auto MaximumDraws = Render::RenderGraphMaterialRaster::MaximumDraws;
+        std::array<std::size_t, MaximumDraws> affected{};
+        std::size_t size{};
+        const auto committedCount = snapshot.instances.size();
+        for (std::size_t index = 0; index < committedCount; ++index) {
+            const auto pose = ResolvePose(scene, snapshot.instanceEntities[index], snapshot.stagedTransformOverrides);
+            if (pose.HasError())
+                return Output::Failure(pose.ErrorValue());
+            const auto &world = pose.Value().matrix;
+            if (!pose.Value().overridden || snapshot.instances[index].localToWorld == world)
+                continue;
+            if (!Math::IsFinite(world))
+                return Output::Failure(MakeError(ViewportSceneErrors::InvalidResult));
+            if (committedCount + size >= MaximumDraws)
+                return Output::Success(false);
+            snapshot.stagedInstanceWorlds[index] = world;
+            affected[size++] = index;
+        }
+        if (size == 0)
+            return Output::Success(false);
+
+        snapshot.instances.reserve(committedCount + size);
+        snapshot.instanceObjects.reserve(committedCount + size);
+        snapshot.instancePickable.reserve(committedCount + size);
+        constexpr Render::RenderInstancePresentation PreviewTint{{1.0F, 0.64F, 0.18F}, 0.8F};
+        for (const auto index : std::span{affected}.first(size)) {
+            auto ghost = snapshot.instances[index];
+            ghost.localToWorld = snapshot.stagedInstanceWorlds[index];
+            ghost.presentation = PreviewTint;
+            snapshot.instances.push_back(ghost);
+            snapshot.instanceObjects.emplace_back();
+            snapshot.instancePickable.push_back(0);
+        }
+        return Output::Success(true);
+    }
+
+    /** @copydoc ClearEditorViewportSceneReviewGhosts */
+    bool ClearEditorViewportSceneReviewGhosts(EditorViewportSceneSnapshot &snapshot) noexcept {
+        if (!ValidDrawColumns(snapshot) || snapshot.instanceEntities.size() > snapshot.instances.size())
+            return false;
+        auto next = snapshot.instanceEntities.size();
+        for (auto index = next; index < snapshot.instances.size(); ++index) {
+            if (!snapshot.instanceObjects[index].IsValid())
+                continue;
+            if (next != index) {
+                snapshot.instances[next] = snapshot.instances[index];
+                snapshot.instanceObjects[next] = snapshot.instanceObjects[index];
+                snapshot.instancePickable[next] = snapshot.instancePickable[index];
+            }
+            ++next;
+        }
+        if (next == snapshot.instances.size())
+            return false;
+        snapshot.instances.resize(next);
+        snapshot.instanceObjects.resize(next);
+        snapshot.instancePickable.resize(next);
+        return true;
     }
 
     Result<void> ApplyEditorViewportLightPreview(const Runtime::RuntimeSceneView &scene, const SceneObjectLightPreview *preview,

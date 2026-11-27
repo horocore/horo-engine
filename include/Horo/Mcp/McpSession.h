@@ -67,6 +67,18 @@ namespace Horo::Mcp {
         nlohmann::json params = nlohmann::json::object();
     };
 
+    /** @brief Revocable, monotonic lifetime for a single delivery of a sensitive operation result. */
+    struct McpResultLease {
+        std::weak_ptr<const void> owner;                 /**< Thread-safe liveness observation of an application-owned lease. */
+        std::chrono::steady_clock::time_point expiresAt; /**< Result delivery deadline on the local monotonic clock. */
+        CancellationToken cancellation;                  /**< Optional application owner revocation independent of renderer progress. */
+
+        /** @brief Returns whether the source still allows delivery. */
+        [[nodiscard]] bool IsLive() const noexcept {
+            return !cancellation.IsCancellationRequested() && std::chrono::steady_clock::now() < expiresAt && !owner.expired();
+        }
+    };
+
     /** @brief Immutable authority and lifetime view for one accepted controller callback. */
     struct McpRequestContext {
         McpSessionHandle session;
@@ -78,9 +90,10 @@ namespace Horo::Mcp {
         CancellationToken cancellation;                 /**< Explicit cancellation only; observe the complete stop view for expiry. */
         std::chrono::steady_clock::time_point deadline; /**< Cooperative monotonic deadline, bounded by authority expiry. */
         std::function<void(double, std::string)> reportProgress;
-        std::shared_ptr<const McpAuthority> authority;   /**< Revocable, non-secret principal retained through queued work. */
-        std::shared_ptr<McpAuthorization> authorization; /**< Exact host policy; never deserialized from protocol fields. */
-        nlohmann::json requestIdentity;                  /**< Exact immutable ID used for one-use approval, not an argument. */
+        std::shared_ptr<const McpAuthority> authority;       /**< Revocable, non-secret principal retained through queued work. */
+        std::shared_ptr<McpAuthorization> authorization;     /**< Exact host policy; never deserialized from protocol fields. */
+        nlohmann::json requestIdentity;                      /**< Exact immutable ID used for one-use approval, not an argument. */
+        std::function<bool(McpResultLease)> bindResultLease; /**< Controller-owned admission for an ephemeral response. */
 
         /** @brief Reports cancellation, request deadline, credential expiry or revoked/missing authority.
          * @return True when deferred work must stop before its next application commit.
@@ -92,6 +105,13 @@ namespace Horo::Mcp {
         void ReportProgress(double fraction, std::string phase) const {
             if (reportProgress)
                 reportProgress(fraction, std::move(phase));
+        }
+
+        /** @brief Restricts this running operation's result to one read while the source is live.
+         * @param lease Revocable application lifetime. The controller never acquires ownership of it.
+         * @return True when the controller bound the lease. An adapter must withhold sensitive results on failure. */
+        [[nodiscard]] bool BindResultLease(McpResultLease lease) const {
+            return bindResultLease && bindResultLease(std::move(lease));
         }
     };
 

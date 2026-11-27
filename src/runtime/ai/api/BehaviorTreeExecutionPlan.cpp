@@ -116,28 +116,30 @@ namespace Horo::AI {
             return Result<std::vector<std::size_t>>::Success(std::move(parents));
         }
 
-        /** @brief Matches full admitted bindings; schema pointer identity fences the exact publication. */
-        bool CompatibleBindings(const DecisionAssetPlan &left, const DecisionAssetPlan &right) noexcept {
-            if (left.Asset() != right.Asset() || left.SchemaVersion() != right.SchemaVersion() ||
-                left.BlackboardSchema() != right.BlackboardSchema() || left.Nodes().size() != right.Nodes().size() ||
-                left.Bindings().size() != right.Bindings().size())
-                return false;
-            for (std::size_t index = 0; index < left.Nodes().size(); ++index) {
-                const auto &a = left.Nodes()[index];
-                const auto &b = right.Nodes()[index];
-                if (a.id != b.id || a.type != b.type || a.origin != b.origin || a.firstBlackboardBinding != b.firstBlackboardBinding ||
-                    a.blackboardBindingCount != b.blackboardBindingCount)
-                    return false;
-            }
-            for (std::size_t index = 0; index < left.Bindings().size(); ++index) {
-                const auto &a = left.Bindings()[index];
-                const auto &b = right.Bindings()[index];
-                if (a.key != b.key || a.schemaIndex != b.schemaIndex || a.kind != b.kind || a.cardinality != b.cardinality ||
-                    a.access != b.access || a.presence != b.presence || a.defaultValue != b.defaultValue)
-                    return false;
-            }
-            return true;
+        /** @brief Identifies only executable provider roles; ordinary controls invoke no factory callback. */
+        std::optional<BehaviorTreeOperation> CallbackRole(const BehaviorTreeOperation operation) noexcept {
+            if (operation == BehaviorTreeOperation::Task || operation == BehaviorTreeOperation::BlackboardCheck)
+                return operation;
+            return {};
         }
+
+        /** @brief Keeps the provider callback set stable across control-only edits and preorder changes. */
+        bool CompatibleCallbacks(const BehaviorTreeExecutionPlan &left, const BehaviorTreeExecutionPlan &right) noexcept {
+            if (left.Nodes().size() != right.Nodes().size() || left.Services().size() != right.Services().size())
+                return false;
+            for (const auto &node : left.Nodes()) {
+                const auto found = std::ranges::find(right.Nodes(), node.execution.id, [](const auto &entry) {
+                    return entry.execution.id;
+                });
+                if (found == right.Nodes().end() || CallbackRole(node.execution.operation) != CallbackRole(found->execution.operation))
+                    return false;
+            }
+            return std::ranges::all_of(left.Services(), [&](const auto &service) {
+                return std::ranges::find(right.Services(), service.id, &BehaviorTreeExecutionService::id) != right.Services().end();
+            });
+        }
+
+        /** @brief Matches full admitted bindings; schema pointer identity fences the exact publication. */
     }  // namespace
 
     /** @copydoc BehaviorTreeExecutionPlan::Compile */
@@ -176,6 +178,27 @@ namespace Horo::AI {
             if (const auto attached = plan->Attach(services); attached.HasError())
                 return PlanResult::Failure(attached.ErrorValue());
             return PlanResult::Success(std::move(plan));
+        } catch (const std::bad_alloc &) {
+            return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeStorageUnavailable);
+        }
+    }
+
+    /** @copydoc BehaviorTreeExecutionPlan::CompileUtilityAction */
+    Result<std::shared_ptr<const BehaviorTreeExecutionPlan>> BehaviorTreeExecutionPlan::CompileUtilityAction(
+        DecisionClosureAdmission, std::shared_ptr<const DecisionAssetPlan> bindings, const DecisionNodeId node, const TaskId task) {
+        using Plan = Result<std::shared_ptr<const BehaviorTreeExecutionPlan>>;
+        if (!bindings || bindings->Kind() != DecisionPlanKind::Utility || !node.IsValid() || !task.IsValid())
+            return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeSchemaInvalid);
+        const auto found = std::ranges::find(bindings->Nodes(), node, &DecisionPlanNode::id);
+        if (found == bindings->Nodes().end() || found->intrinsic != DecisionControlKind::Unspecified)
+            return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::DecisionAssetDescriptorMissing);
+        try {
+            auto plan = std::make_shared<BehaviorTreeExecutionPlan>(ConstructionKey{});
+            plan->bindings_ = std::move(bindings);
+            const BehaviorTreeExecutionNode action{.id = node, .operation = BehaviorTreeOperation::Task, .task = task};
+            if (auto built = plan->BuildTopology(node, std::span{&action, 1}, {.maximumNodes = 1, .maximumDepth = 1}); built.HasError())
+                return Plan::Failure(built.ErrorValue());
+            return Plan::Success(std::move(plan));
         } catch (const std::bad_alloc &) {
             return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::BehaviorTreeStorageUnavailable);
         }
@@ -253,6 +276,13 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    /** @copydoc BehaviorTreeExecutionPlan::MaximumDecisionWorkUnits */
+    std::size_t BehaviorTreeExecutionPlan::MaximumDecisionWorkUnits() const noexcept {
+        // Priority observation scans all nodes and can inspect each child once. Traversal
+        // has a hard two-visits-per-node ceiling; each attached service can run once per evaluation.
+        return 1 + nodes_.size() + children_.size() + 2 * nodes_.size() + services_.size();
+    }
+
     std::size_t BehaviorTreeExecutionPlan::TaskSlots() const noexcept {
         std::size_t span{};
         for (std::size_t index = 0; index < nodes_.size(); ++index)
@@ -261,10 +291,14 @@ namespace Horo::AI {
         return span;
     }
 
+    /** @copydoc BehaviorTreeExecutionPlan::HasCompatibleBindings */
+    bool BehaviorTreeExecutionPlan::HasCompatibleBindings(const BehaviorTreeExecutionPlan &candidate) const noexcept {
+        return bindings_->HasEquivalentBindings(*candidate.bindings_) && CompatibleCallbacks(*this, candidate);
+    }
+
     /** @copydoc BehaviorTreeExecutionPlan::IsCompatible */
     bool BehaviorTreeExecutionPlan::IsCompatible(const BehaviorTreeExecutionPlan &candidate) const noexcept {
-        if (nodes_.size() != candidate.nodes_.size() || services_ != candidate.services_ ||
-            !CompatibleBindings(*bindings_, *candidate.bindings_))
+        if (nodes_.size() != candidate.nodes_.size() || services_ != candidate.services_ || !HasCompatibleBindings(candidate))
             return false;
         for (std::size_t index = 0; index < nodes_.size(); ++index)
             if (nodes_[index].execution != candidate.nodes_[index].execution)

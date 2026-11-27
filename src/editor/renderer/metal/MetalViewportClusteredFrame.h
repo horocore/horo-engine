@@ -8,6 +8,7 @@
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "MetalViewportClusteredLighting.h"
 #include "MetalViewportResourceBridge.h"
+#include "editor/renderer/EditorGraphViewportImageCapture.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/EditorViewportGridGeometry.h"
 #include "editor/screens/workspace/panels/viewport/visualizers/light/LightVisualizerGeometry.h"
@@ -19,7 +20,7 @@ namespace Horo::Editor {
     class MetalViewportClusteredFrame final {
     public:
         static constexpr std::size_t MaximumDraws = Render::RenderGraphMaterialRaster::MaximumDraws;
-        static constexpr std::size_t MaximumPasses = 13;
+        static constexpr std::size_t MaximumPasses = 14;
         static constexpr std::size_t MaximumUniformDraws = MaximumDraws * 8;
         static constexpr std::size_t MaximumUniformBytes = 4096;
 
@@ -29,7 +30,11 @@ namespace Horo::Editor {
         ~MetalViewportClusteredFrame();
         [[nodiscard]] Result<void> Prepare(const Render::StaticMeshPassDescriptor &descriptor, Render::RenderViewId view);
         [[nodiscard]] Result<void> Execute(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &descriptor,
-                                           const Render::PrimaryOutputAttachment &output);
+                                           const Render::PrimaryOutputAttachment &output,
+                                           EditorGraphViewportImageCapture *capture = nullptr);
+        /** @brief Prepares an optional one-shot copy against the selected native frame slot. */
+        [[nodiscard]] Result<void> PrepareCapture(const Render::StaticMeshPassDescriptor &descriptor,
+                                                  const EditorGraphViewportImageCapture::Copy &copy);
         /** @brief Admits the actual frontend-selected CPU forward recipe before any baseline preparation. */
         [[nodiscard]] Result<void> ConfigureBaseline(const Render::LightPreparationSelection &selection);
         [[nodiscard]] EditorViewportLightingDiagnostics Diagnostics() const noexcept;
@@ -132,7 +137,8 @@ namespace Horo::Editor {
                                                       Render::RenderGraphMaterialRaster &raster);
         [[nodiscard]] Result<void> BuildGraph(Slot &slot, const Render::StaticMeshPassDescriptor &descriptor);
         [[nodiscard]] Result<void> BuildVariant(Slot &slot, Slot::Variant &variant, std::uint32_t cascadeCount,
-                                                const Render::StaticMeshPassDescriptor &descriptor);
+                                                const Render::StaticMeshPassDescriptor &descriptor,
+                                                const EditorGraphViewportImageCapture::Copy *copy = nullptr);
         [[nodiscard]] Result<void> BuildRaster(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author, std::size_t pass,
                                                std::uint32_t cascadeCount, const Render::StaticMeshPassDescriptor &descriptor);
         [[nodiscard]] Result<void> BuildRasterDraws(Slot &slot, Slot::Variant &variant, MetalViewportGraphAuthor &author, std::size_t pass,
@@ -147,6 +153,8 @@ namespace Horo::Editor {
         Render::MetalEditorGraphicsBridge *bridge_;
         EditorViewportLightingProfile profile_;
         std::unique_ptr<Slot[]> slots_;
+        std::unique_ptr<Slot::Variant> captureVariant_;
+        std::uint64_t captureId_{};
         std::array<Render::IdentifiedRenderLight, Render::MaximumSceneLights> lights_;
         std::array<Render::LightCluster, Render::LightCullingBudget::HardMaximumClusters> clusters_;
         std::array<Render::PackedRenderLight, Render::MaximumSceneLights> packedLights_;

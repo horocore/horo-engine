@@ -1,6 +1,7 @@
 #include "Horo/PlatformServices/PlatformRequest.h"
 
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
+#include "PlatformCloudFailurePrivacy.h"
 #include "PlatformRequestState.h"
 #include "PlatformServicesMetrics.h"
 
@@ -179,6 +180,19 @@ namespace Horo::PlatformServices {
                                                                          const std::type_index type,
                                                                          const PlatformRequestState terminalState,
                                                                          std::shared_ptr<const void> value, std::optional<Error> error) {
+        try {
+            if (error && Detail::IsCloudResult(type))
+                error = Detail::RedactCloudProviderFailure(*error);
+        } catch (const std::bad_alloc &) {
+            return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::CapacityExceeded));
+        }
+        return PublishCompletion(id, generation, type, terminalState, std::move(value), std::move(error));
+    }
+
+    /** @copydoc PlatformRequestStore::PublishCompletion */
+    Result<PlatformRequestMutation> PlatformRequestStore::PublishCompletion(
+        const PlatformRequestId id, const PlatformRequestGeneration generation, const std::type_index type,
+        const PlatformRequestState terminalState, std::shared_ptr<const void> value, std::optional<Error> error) {
         auto &state = MutableState();
         auto completed = state.MutateRecord(id, generation, type,
                                             [&state, id, terminalState, value = std::move(value),
@@ -220,11 +234,12 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformRequestStore::OnComplete */
-    Result<PlatformRequestSubscription> PlatformRequestStore::SubscribeErased(const PlatformRequestId id,
+    Result<PlatformRequestSubscription> PlatformRequestStore::SubscribeErased(const std::shared_ptr<State> &store,
+                                                                              const PlatformRequestId id,
                                                                               const PlatformRequestGeneration generation,
                                                                               const std::type_index type,
                                                                               std::function<void(const ErasedSnapshot &)> observer) {
-        auto &state = MutableState();
+        auto &state = *store;
         std::lock_guard lock(state.mutex);
         if (state.closed)
             return Result<PlatformRequestSubscription>::Failure(MakeError(RequestErrors::FrontendUnavailable));
@@ -239,7 +254,7 @@ namespace Horo::PlatformServices {
             return Result<PlatformRequestSubscription>::Failure(MakeError(RequestErrors::CapacityExceeded));
 
         auto slot = std::make_shared<PlatformRequestSubscription::Slot>();
-        const std::weak_ptr<State> weakState = state_;
+        const std::weak_ptr<State> weakState = store;
         const auto *slotIdentity = slot.get();
         slot->observer = std::move(observer);
         slot->release = [weakState, id, slotIdentity]() noexcept {

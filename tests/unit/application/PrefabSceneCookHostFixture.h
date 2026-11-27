@@ -82,9 +82,7 @@ namespace Horo::Application::PrefabCookTestSupport {
 
         HostFixture() {
             std::filesystem::create_directories(project.dir.path / ".horo/local");
-            WriteText(
-                ".horo/project.json",
-                R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})");
+            WriteProjectMetadata();
             WritePrefab();
             const std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Authoring name"}};
             const std::vector<SceneSource::ScenePrefabInstance> placements{
@@ -106,6 +104,18 @@ namespace Horo::Application::PrefabCookTestSupport {
             WriteFile(project.dir.path / relative, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
         }
 
+        /** @brief Writes the fixture's canonical project root with an optional authored AI policy. */
+        void WriteProjectMetadata(const std::string_view aiPolicy = {}) const {
+            std::string metadata =
+                R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl")";
+            if (!aiPolicy.empty()) {
+                metadata += R"(,"ai":)";
+                metadata += aiPolicy;
+            }
+            metadata += "}}";
+            WriteText(".horo/project.json", metadata);
+        }
+
         void WritePrefab(const float offset = 4, std::vector<AssetId> resources = {}) const {
             const auto limits = Prefab::PrefabLimitProfile::Create({});
             REQUIRE(limits.HasValue());
@@ -123,14 +133,15 @@ namespace Horo::Application::PrefabCookTestSupport {
             WriteText("assets/hierarchy.prefab", canonical.Value());
         }
 
-        void PublishRegistry() {
-            REQUIRE(registry
-                        .Publish({TestMeshRecord(), Record(prefabId, "core.prefab", "assets/hierarchy.prefab"),
-                                  Record(sceneId, "core.scene", "assets/level.scene")})
-                        .status == AssetRegistryBuildStatus::Complete);
+        void PublishRegistry(const std::span<const AssetRecord> additional = {}) {
+            std::vector records{TestMeshRecord(), Record(prefabId, "core.prefab", "assets/hierarchy.prefab"),
+                                Record(sceneId, "core.scene", "assets/level.scene")};
+            records.insert(records.end(), additional.begin(), additional.end());
+            REQUIRE(registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
         }
 
-        PrefabSceneCookHost MakeHost(const std::uint8_t resourceSetting = 1) {
+        PrefabSceneCookHost MakeHost(const std::uint8_t resourceSetting = 1,
+                                     const std::span<const Assets::CookerContribution> additional = {}) {
             CookerCatalog catalog;
             REQUIRE(catalog
                         .Register({.contributionId = "test.mesh",
@@ -138,6 +149,8 @@ namespace Horo::Application::PrefabCookTestSupport {
                                    .targets = {request.assets.target},
                                    .strategy = std::make_shared<const SettingsCooker>(resourceSetting)})
                         .HasValue());
+            for (const auto &entry : additional)
+                REQUIRE(catalog.Register(entry).HasValue());
             auto sealed = catalog.Publish();
             REQUIRE(sealed.HasValue());
             return PrefabSceneCookHost{jobs, sealed.Value(), registry, inspector, mutations, migrations};

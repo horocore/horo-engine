@@ -1,24 +1,44 @@
 #include "EditorWorkspaceScreen.h"
 
-#include "EditorWorkspaceInputRouting.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/XRSimulatorModel.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
-#include "WorkspacePathText.h"
+#include "Horo/PlatformServices/PlatformDiagnostics.h"
+#include "docking/WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
+#include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
+#include "editor/source_editor/SourceReviewOverlay.h"
+#include "screen/EditorWorkspaceInputRouting.h"
 
+#include <algorithm>
 #include <imgui.h>
+#include <utility>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
+    /** @copydoc WorkspaceInputState::ConsumeGameplay */
+    std::span<const Gameplay::GameplayInputAction> WorkspaceInputState::ConsumeGameplay(Input::SimulationTick tick) noexcept {
+        const auto command = gameplayFrames.Consume(tick);
+        auto &movement = gameplayActions_.front();
+        movement.x = command.moveX;
+        movement.y = command.moveY;
+        movement.down = command.moveDown;
+        movement.pressed = command.movePressed;
+        movement.released = command.moveReleased;
+        const auto actions = std::span{gameplayActions_};
+        return command.interactPressed ? std::span<const Gameplay::GameplayInputAction>{actions} : actions.first(1);
+    }
+
     /** @copydoc EditorWorkspaceScreen::EditorWorkspaceScreen */
     EditorWorkspaceScreen::EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
         : GuiScreen(kTextScope), packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
           modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
           contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
-          input_(services.Get<Input::InputRouter>()), xr_{services.TryGet<IEditorPlayXrHost>()},
+          input_(services.Get<Input::InputRouter>()),
+          xr_{services.TryGet<IEditorPlayXrHost>(), services.TryGetConst<EditorXrInputPlayerSelection>()},
           view_(context_, contributions_.panels, services.Get<std::uintptr_t>(), input_.router, input_.context,
                 services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
           viewportSceneState_(services.Get<EditorViewportSceneState>()), runtimeScene_(services.Get<Runtime::RuntimeSceneService>()),
@@ -30,10 +50,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
               .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),
               .buildOutputQuery = services.TryGetConst<IBuildOutputQuery>(),
               .gameplayBuilds = services.TryGetConst<Application::GameplayBuildService>(),
+              .gameplayTests = services.TryGet<Application::GameplayTestService>(),
               .operationQuery = services.TryGetConst<IOperationQuery>(),
               .operationControl = services.TryGet<IOperationControl>(),
               .networkDebuggerQuery = services.TryGetConst<Application::INetworkDebuggerQuery>(),
               .networkDebuggerControl = services.TryGet<Application::INetworkDebuggerControl>(),
+              .platformDiagnostics = services.TryGet<PlatformServices::IPlatformDiagnostics>(),
           },
           projectServices_{
               .assetRegistry = services.TryGet<Assets::AssetRegistry>(),
@@ -71,12 +93,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         host_.SetCurrentProjectRoot(controller_->ProjectRoot());
         LoadProjectInputProfile(controller_->ProjectRoot());
         if (auto attached = AttachXrInput(); attached.HasError()) {
-            if (input_.previousProfile) {
-                if (auto restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError())
-                    LOG_ERROR("editor.input", "Failed to restore the host profile after XR admission: %s",
-                              restored.ErrorValue().message.c_str());
-                input_.previousProfile.reset();
-            }
+            RestoreWorkspaceInputProfile();
+            input_.profilePaths.reset();
             return attached;
         }
         RestoreExtensionWorkspace();
@@ -87,14 +105,25 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         publishedRevisions_.viewportScene = controller_->CurrentViewportSceneRevision();
         LOG_INFO("editor.workspace", "EditorWorkspaceScreen entered for '%s'", controller_->ViewModel().projectRoot.c_str());
 
-        AttachWorkspacePanels();
+        const auto &surfaces = activation.Candidate().surfaces;
+        AttachWorkspacePanels(surfaces.settings ? std::string_view{surfaces.settings->Input().projectId} : std::string_view{});
+        const std::string projectIdentity = surfaces.settings ? surfaces.settings->Input().projectId : std::string{};
         UpdateStatusItems();
+        const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {
             contributions_.panels.DetachAll();
+            agentProjectFiles_.reset();
+            agentProjectReadIdentity_.clear();
+            DetachXrInput();
+            RestoreWorkspaceInputProfile();
+            input_.profilePaths.reset();
             viewportSceneState_.Clear();
             controller_.reset();
             return committed;
         }
+        platformSources_ = platformSources;
+        settings_.SetInputProfilePaths(input_.profilePaths);
+        AttachWorkspaceCommands(projectIdentity);
         return Result<void>::Success();
     }
 
@@ -108,8 +137,31 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ ? controller_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
     }
 
+    /** @copydoc EditorWorkspaceScreen::RevealSavedRecording */
+    void EditorWorkspaceScreen::RevealSavedRecording() {
+        if (!context_.microphoneRecorder)
+            return;
+        const auto id = context_.microphoneRecorder->TakeSavedRecording();
+        if (!id)
+            return;
+        for (const auto &panel : contributions_.panels.GetAllPanels()) {
+            auto *dock = dynamic_cast<GlobalDockPanel *>(panel.get());
+            if (!dock)
+                continue;
+            if (const auto path = controller_->RevealRecordedAsset(*id); path && dock->RevealAsset(*path)) {
+                EditorWorkspaceViewCommandData command;
+                controller_->StagePanelActivation(dock->GetId(), dock->GetDefaultDockArea(), command);
+                controller_->ProcessCommand(command);
+            }
+            return;
+        }
+    }
+
     /** @copydoc EditorWorkspaceScreen::OnUpdate */
     void EditorWorkspaceScreen::OnUpdate(float dt) {
+        PumpWorkspaceCommands();
+        if (panelServices_.gameplayTests)
+            panelServices_.gameplayTests->Poll();
         if (controller_) {
             while (const auto destination = view_.UpdateExtensionActivities())
                 controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
@@ -117,28 +169,59 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                              .stringPayload = std::string{}});
             controller_->ReconcileAudioPreview();
             controller_->UpdatePlayPresentation(dt);
-            if (packages_.pump) {
+            if (packages_.pump || packages_.activationTrustRequired || packages_.decisionCatalog) {
                 const auto &model = controller_->ViewModel();
+                const auto &root = controller_->ProjectRoot();
                 const auto boundary = model.playState == EditorPlayState::Idle || model.playState == EditorPlayState::Failed
                                           ? Packages::PackageActivationBoundary::Quiescent
                                           : Packages::PackageActivationBoundary::Running;
-                static_cast<void>(packages_.pump(controller_->ProjectRoot(), boundary));
+                if (packages_.pump)
+                    static_cast<void>(packages_.pump(root, boundary));
+                if (packages_.decisionCatalog && packages_.acquireDecisionNodes) {
+                    const auto catalog = packages_.decisionCatalog(root);
+                    if (catalog != packageDecisionCatalog_) {
+                        std::shared_ptr<const ProjectPackageDecisionNodeSource> nodes;
+                        if (catalog) {
+                            nodes = std::make_shared<const ProjectPackageDecisionNodeSource>(
+                                [acquire = packages_.acquireDecisionNodes, root, stamp = *catalog] {
+                                return acquire(root, stamp);
+                            });
+                        }
+                        controller_->SetPackageDecisionNodeSource(std::move(nodes));
+                        packageDecisionCatalog_ = catalog;
+                    }
+                }
+                const auto active = model.workspacePanelHost.ActiveDocument();
+                const bool decisionActive = std::ranges::any_of(model.decisionGraphDocuments, [active](const auto &document) {
+                    return document.identity.instance == active;
+                });
+                controller_->SetDecisionPackageActivationTrustRequired(decisionActive && packages_.activationTrustRequired &&
+                                                                       packages_.activationTrustRequired(root));
             }
             controller_->UpdateNavigationSettingsProjection();
             controller_->UpdateUiCanvasResources();
             const auto preferences = settings_.Snapshot();
             controller_->UpdateAutosave(dt, preferences.settings.autoSaveIntervalMinutes);
             controller_->UpdateSourceAutosave(dt, preferences.settings.codeEditor.autoSaveDelaySeconds);
+            controller_->UpdateSourceLanguage();
             controller_->UpdateExternalSceneWatch(dt);
             controller_->UpdateGameplaySources(dt);
             if (projectServices_.assetRegistry != nullptr) {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
+            RevealSavedRecording();
+            controller_->UpdateBlackboardUsageReview();
             controller_->UpdateWorldBake();
             controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();
-            controller_->SynchronizeRuntimeScenePreview();
+            controller_->SetCameraShakeScale(viewportSceneState_.CameraShakeScale());
+            if (auto preview = controller_->SynchronizeRuntimeScenePreview(viewportSceneState_.CameraCrossFadeCapacity());
+                preview.HasError()) {
+                viewportSceneState_.SetCameraPreviewError(std::move(preview).ErrorValue());
+            }
+            controller_->UpdateEnvironmentQueryPreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
+            ReconcileEditorDiagnostics();
         }
     }
 
@@ -150,7 +233,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             input_.gameplayFrames.Reset();
             return;
         }
-        input_.gameplayFrames.Capture(input_.router, input_.context);
+        const auto player = xr_.attached && xr_.playerSelection ? std::optional{xr_.playerSelection->player} : std::nullopt;
+        input_.gameplayFrames.Capture(input_.router, input_.context, player);
     }
 
     /** @copydoc EditorWorkspaceScreen::OnFixedUpdate */
@@ -159,14 +243,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                              controller_->ViewModel().playState != EditorPlayState::Paused)) {
             return;
         }
-        const Input::GameplayInputFrame command = input_.gameplayFrames.Consume(simulationTick);
-        const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
-                                                   command.moveX,
-                                                   command.moveY,
-                                                   command.moveDown,
-                                                   command.movePressed,
-                                                   command.moveReleased};
-        controller_->UpdatePlayFixed({&action, 1}, fixedDeltaSeconds);
+        controller_->UpdatePlayFixed(input_.ConsumeGameplay(simulationTick), fixedDeltaSeconds);
         PublishViewportSceneIfChanged();
     }
 
@@ -180,15 +257,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
                              controller_->ViewModel().playState != EditorPlayState::Paused))
             return Result<void>::Success();
-        const auto command = input_.gameplayFrames.Consume(context.simulationTick);
-        const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
-                                                   command.moveX,
-                                                   command.moveY,
-                                                   command.moveDown,
-                                                   command.movePressed,
-                                                   command.moveReleased};
-        controller_->UpdatePlayFixed({&action, 1}, context);
+        controller_->UpdatePlayFixed(input_.ConsumeGameplay(context.simulationTick), context);
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OnRuntimeSceneCutoff */
+    void EditorWorkspaceScreen::OnRuntimeSceneCutoff(const Runtime::FrameContext &context) {
+        if (controller_)
+            controller_->UpdatePlaySceneCutoff(context);
     }
 
     Result<void> EditorWorkspaceScreen::PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) {
@@ -216,7 +292,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
         controller_->RefreshWorldDocumentProjection();
+        ReconcileEditorDiagnostics();
         GuiLive::Invoke<&EditorWorkspaceView::Draw>(context_.theme.liveReload, view_, controller_->ViewModel(), command, contentRegion);
+        controller_->SetPlayDecisionInspectorVisibility(command.visiblePlayDecisionInspector);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
             sourceCommands_.RouteInput(input_.router, input_.context, *controller_, command);
@@ -236,6 +314,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Route captured source creation commands through their exclusive transient workflows. */
     bool EditorWorkspaceScreen::TryOpenCreationModal(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
+        if (command.command == OpenGyroscopeBinding && command.gyroscopeBinding) {
+            const auto opened = modalHost_.OpenRoot(MakeGyroscopeBindingModal(context_, input_.router, *command.gyroscopeBinding));
+            if (opened.HasError())
+                LOG_WARN("editor.input", "Gyroscope editor could not open: %s", opened.ErrorValue().message.c_str());
+            return true;
+        }
         if (command.command == CreatePrefabFromSelection && command.objectPayload) {
             OpenPrefabCreationModal(*command.objectPayload);
             return true;
@@ -264,6 +348,19 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             OpenPlayTopologyProfilesModal();
             return true;
         }
+        if (command.command == PrefabDocument && command.prefabAction == PrefabDocumentAction::CompareExternal && command.prefabFence) {
+            OpenPrefabExternalComparison(*command.prefabFence);
+            return true;
+        }
+        if (command.command == PrefabDocument && command.prefabAction == PrefabDocumentAction::SaveAs && command.prefabFence &&
+            !command.prefabSaveDestination) {
+            SavePrefabAs(*command.prefabFence);
+            return true;
+        }
+        if (command.command == ReviewPrefabApplyRecovery) {
+            OpenPrefabApplyRecovery(command.prefabApplyRecovery);
+            return true;
+        }
         if (command.command == CompareExternalScene) {
             OpenSceneComparison();
             return true;
@@ -278,8 +375,21 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         if (command.command == None)
             return;
+        if (command.command == ReviewSourceProposal) {
+            const auto &documents = controller_->ViewModel().sourceDocuments;
+            if (command.sourceReview &&
+                std::ranges::any_of(documents,
+                                    [&](const auto &source) {
+                return source.SharesStateWith(command.sourceReview->Source());
+            }) &&
+                view_.StageSourceReview(command.sourceReview))
+                controller_->ProcessCommand(
+                    {.command = FocusWorkspaceDocument, .documentInstance = command.sourceReview->Source().Identity().instance});
+            return;
+        }
         if (!TryOpenDocumentModal(command) && !TryOpenCreationModal(command))
             controller_->ProcessCommand(command);
+        ReconcileEditorDiagnostics();
         if (command.command == ReturnToWelcome)
             static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
     }

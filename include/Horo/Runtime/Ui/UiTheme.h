@@ -44,12 +44,14 @@ namespace Horo::Runtime::Ui {
     struct UiThemeSurfaceProjection final {
         UiLayoutElementDescriptor layout;
         UiDrawCommand paint;
+        UiVisualStateMask state; /**< Same record's immutable control and presentation state for paint consumers. */
     };
 
     /** @brief Projects one computed surface for isolated authoring consumers without creating another theme authority.
      * @param snapshot Actual computed style publication. @param input Canonical source surface and selected responsive base layout.
      * @param properties Actual property bindings for the registered vocabulary.
-     * @return Copied layout/paint projection or the original typed stale/category/invalid-layout failure; no caller data is changed.
+     * @return Copied layout, paint and state projection or the original typed stale/category/invalid-layout failure; no caller data is
+     * changed.
      */
     [[nodiscard]] Result<UiThemeSurfaceProjection> ProjectUiThemeSurface(const UiComputedStyleSnapshot &snapshot,
                                                                          const UiThemeSurfaceInput &input,

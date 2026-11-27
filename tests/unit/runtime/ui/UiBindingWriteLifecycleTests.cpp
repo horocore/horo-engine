@@ -1,5 +1,6 @@
 #include "UiBindingWriteTestFixture.h"
 
+#include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Runtime::Ui::BindingWriteTests {
@@ -173,6 +174,27 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         CHECK(lease.expired());
         CHECK(fixture.state->destroyed == 1);
         CHECK(fixture.state->abandons == 1);
+    }
+
+    TEST_CASE("Binding inspection exposes write admission and pending correlation without polling the authority",
+              "[runtime_ui][binding][write][inspection]") {
+        WriteSession fixture;
+        auto authority = fixture.Authority(0);
+        authority->disposition = UiBindingWriteDisposition::Pending;
+        fixture.Admit(fixture.store, 10, authority);
+        const auto queued = fixture.QueueCurrentChange();
+        REQUIRE(Process(fixture.store, fixture.tree, fixture.layout).disposition == UiBindingWriteDisposition::Pending);
+        const auto capture = fixture.store.Inspect(fixture.tree, 1, MaximumUiBindingDescriptors);
+        REQUIRE(capture.HasValue());
+        const auto &rows = capture.Value().bindings;
+        const auto row = std::ranges::find(rows, Stable<UiBindingId>(10), &UiBindingInspectionRow::binding);
+        REQUIRE(row != rows.end());
+        CHECK(row->write == UiBindingWriteInspection::Admitted);
+        CHECK(row->trigger == UiBindingCommitTrigger::Change);
+        CHECK(row->pendingRequest == queued.request);
+        CHECK(row->pendingOperation == queued.operation);
+        CHECK(fixture.state->prepares == 1);
+        CHECK(fixture.state->commits == 0);
     }
 
     TEST_CASE("Pending producer writes are fenced by revocation reload retirement and shutdown exactly once",

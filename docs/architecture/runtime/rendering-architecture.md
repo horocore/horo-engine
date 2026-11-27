@@ -467,6 +467,21 @@ transfer encoding. Creative look/grading is step 3 and is not that pass.
 Encoding occurs exactly once. Scene-linear captures and display screenshots are
 separate typed products with their color-pipeline metadata.
 
+The SDR plan accepts desired color settings as part of its captured settings
+generation. Preparation validates the settings and pins the row-major Rec.709
+matrix separately from cooked scene/output transforms. An exact identity
+matrix skips the accessibility stage. A malformed preference rejects the
+candidate with the visual accessibility error, leaving an already published
+plan unchanged.
+
+New Metal and Vulkan SDR color cooks declare encoder revision 2 in the existing
+package generation. The final encoder receives three reflected RGB rows and
+applies them before gamut containment and sRGB transfer. The viewport compositor
+can supply an explicit preview matrix after its display-linear overlays, with
+identity as the default. Packages without an encoder revision use the legacy
+uniform interface. The native desktop output still needs to route its complete
+scene and HUD composition through the accessibility encoder.
+
 Changing exposure/color/output conventions invalidates or explicitly rescales
 dependent histories. SDR/HDR or display transitions stage a new plan and publish
 at `CommandThreadPolicy::RenderSafePoint`; scene shading remains ACEScg. Missing transforms, invalid
@@ -1119,6 +1134,12 @@ usable until the new generation is ready, and release follows dependency order. 
 editor-private OpenGL bridge resolves ready generic handles to backend instances for
 frame-local command encoding. OpenGL names, framebuffer objects, and vertex-array
 objects remain private to the OpenGL module and its matching editor integration.
+The OpenGL editor viewport can copy one explicitly requested rectangle from the
+exact offscreen target generation after successful viewport rendering. The GPU
+copy uses a bounded pixel pack buffer and a fence. The owner polls the fence
+with zero timeout and publishes detached top-to-bottom RGBA8 bytes. Resize,
+renderer failure, cancellation, and expiry prevent pending bytes from
+publishing while the staging allocation retires on its own fence.
 The Metal editor viewport still uses its transitional frontend-owned logical target
 identity and editor-private texture bridge until its corresponding resource-migration
 ticket is complete.
@@ -1470,6 +1491,15 @@ requires a positive finite timeout. Resource retirement consumes exact queue
 timeline evidence rather than frame indices, presentation, or CPU owner release.
 Sequence and timeline exhaustion fail before wraparound.
 
+`RenderGraphColorReadback` declares a bounded top-left rectangle over a resolved
+RGBA8 attachment and writes tightly packed bytes to exclusive persistent host
+staging. A color clear in the same graph must initialize the attachment, and
+later passes must preserve its pixels until the copy. Vulkan
+records a host visibility barrier and maps only after observing the exact accepted
+submission. Metal encodes the crop on the owner lane, then consumes the
+one-use shared-buffer receipt after successful command completion. The color
+receipt is distinct from the XR coverage receipt, even when their byte counts match.
+
 One frame:
 
 1. acquires a backend frame token
@@ -1801,6 +1831,89 @@ no independent thread, cancellation, or shutdown lifecycle. The application host
 the immutable request and invokes negotiation before a renderer-owned surface lifecycle
 applies the resolved value. Surface reconfiguration, pacing, HDR, and backend-native
 translation remain in their owning downstream contracts.
+
+The editor's owning window coalesces monitor, display-scale, and fullscreen
+notifications into a monotonic display revision at an idle frame boundary.
+Surface candidates bind that revision even when the drawable pixel extent is
+unchanged. Pending native work from an earlier display revision cannot commit
+after a newer observation.
+
+
+### Multiple presentation surfaces
+
+[RND-008.8](https://github.com/horocore/horo-engine/issues/345) defines
+desktop output ownership for the primary window, detached viewports and
+secondary tool windows. The desktop host makes an explicit request for each
+window. The selected renderer, device and frontend remain shared. Platform
+owns the window and private attachment on its platform thread. The frontend
+owns admission and publishes one independent surface lifecycle for that
+attachment. The viewport or document owner holds a borrowed view and can
+return it to the workspace when the detached window closes.
+
+| Lifetime | Authority and identity |
+|---|---|
+| Host window and attachment | Platform assigns a window identity and an attachment revision and accepts only events for that pair. It retains the attachment until the renderer has returned its last lease. |
+| Renderer surface | The frontend allocates a distinct `RenderSurfaceId` owner for each admitted output and advances its generation on replacement. It binds the active extent, output profile and exact display/attachment revisions to that generation. |
+| Frame and borrowed drawable | An acquired frame scope carries the exact surface generation, backend device generation, frame token and realized output configuration. Execute, GUI, Present and Abort validate that same scope. Each acquired scope has one terminal disposition. |
+| Display facts and policy | Platform publishes facts for the display attached to that window. The frontend resolves supported formats, modes, HDR and latency independently for each output using the device's effective capabilities and the host's requested policy. |
+
+Admission verifies that the same selected backend supports the requested
+attachment, presentation queue or context, output format, and surface limits.
+It reserves from finite per-surface and aggregate limits before native
+creation. The quota covers live or retiring surfaces, in-flight frames,
+pending handoffs and the old/new resource overlap required by a replacement.
+Capacity exhaustion or unavailable secondary-surface support returns a typed
+error before publication. The host may retain the view in its existing window
+under its explicit policy.
+
+Each surface has one coalesced pending reconfiguration, independent frame
+pacing and its own presentation revision. Output plans bind that revision
+before execution. The frontend visits ready surfaces in stable order and
+advances a bounded fair admission cursor when the shared budget is exhausted.
+A busy, suspended or minimized output yields its opportunity. Each backend
+must support this nonblocking progress model to advertise secondary surfaces.
+The baseline uses independent presentation and rejects requests for atomic
+grouped presentation. XR compositor targets and offscreen textures keep
+their existing owners and stay outside the desktop surface quota.
+
+Resize, monitor movement, cancellation and window loss act on the exact
+owning surface. A failed secondary realization preserves other active
+surfaces and their leases. On close, admission stops for the affected surface,
+its acquired frames complete or abort, its queued references retire, and the
+backend detaches before Platform releases the window. Primary-window close
+follows the explicit host shutdown policy. Device loss revokes all surface
+scopes on that device through the existing device owner. Recovery uses fresh
+generations and an explicitly admitted backend. Normal progress uses bounded
+polling and can keep other surfaces active while one surface retires.
+
+**Alternatives and migration.** One renderer instance per window can isolate
+native context failure at the cost of duplicating managed resources, caches,
+and submission authority. A backend-global frame token keeps single-window
+ordering simple but serializes unrelated drawables and gives resize and loss
+no independent frame identity. A shared device with explicit per-surface
+scopes preserves resource sharing and makes local failure and retirement
+observable. It requires bounded scheduling and backend support for the
+surface-specific checks.
+
+Current desktop composition remains single-surface. The existing
+`RenderFrontend`, GUI, SDL presentation adapters and backend callers migrate
+through the same primary-surface owner. First bind existing operations to the
+primary identity internally and add contract coverage for stale, foreign and
+terminal requests. Then expose surface-scoped admission and finish the
+frontend and backend frame-scope migration. Retire the implicit primary
+wrappers once existing callers use the scoped entry points. Each backend
+advertises secondary-output support only after capability negotiation and
+qualification on its own window system. Future DXGI window requirements use
+a dedicated attachment capability. The platform adapters keep all native
+handles private.
+
+Qualification requires two native windows on a supporting backend, distinct
+surface and frame identities, alternate acquisition order, independent
+output revisions and continued progress when one output is busy, suspended,
+reconfigured, lost or closed. Tests exercise cap exhaustion, stale callbacks,
+terminal frame settlement and final device loss. Verify that retiring windows
+retain their native attachment until all exact leases settle. Existing
+single-surface tests continue to guard migration compatibility.
 
 ### Metal exact output and drawable admission
 

@@ -43,6 +43,10 @@ catalog or expose local paths. `CloudSaveCoordinator`, owned by the application/
 session, is the single sync state authority. It consumes immutable local catalog/
 archive leases and the narrow platform backend.
 
+Cloud dispatch and request snapshots project provider failures to host-owned
+error descriptors. A normalized provider failure may retain its typed category.
+Provider text, diagnostics and unrecognized causal details stay inside the adapter.
+
 Game load always uses a locally published validated archive. A remote archive must be
 downloaded, boundedly verified under local scope/signature/compatibility policy and
 published through the local storage transaction before Runtime Save can load it.

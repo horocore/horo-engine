@@ -1,4 +1,5 @@
 #include "../mcp/McpAuthorizationTestSupport.h"
+#include "CliOutputContractFixture.h"
 #include "Horo/Cli/PackageCommands.h"
 #include "Horo/Editor/PackageModalSession.h"
 #include "Horo/Mcp/McpErrors.h"
@@ -36,6 +37,16 @@ namespace {
         return std::move(resolved).Value();
     }
 
+    /** @brief Validates fields emitted by the actual shared package result producer. */
+    void CheckResultContract(const std::string_view schema, const Cli::CliCommandResult &result) {
+        auto fields = nlohmann::json::object();
+        for (const auto &field : result.fields)
+            std::visit([&](const auto &value) {
+                fields[field.name] = value;
+            }, field.value);
+        Horo::Tests::CliContract::ValidateResult(schema, fields);
+    }
+
     Cli::CliDispatcher Dispatcher(Fixture &fixture, std::function<Result<Packages::PackageActivationBoundary>()> boundary = [] {
         return Result<Packages::PackageActivationBoundary>::Success(Packages::PackageActivationBoundary::Quiescent);
     }) {
@@ -58,8 +69,11 @@ namespace {
     TEST_CASE("Every package CLI adapter preserves the canonical registry option schema", "[packages][application][cli]") {
         const auto descriptors = Cli::DescribePackageCommands();
         REQUIRE(descriptors.size() == 4);
-        for (const auto &descriptor : descriptors)
+        for (const auto &descriptor : descriptors) {
             CHECK(std::ranges::is_sorted(descriptor.options, {}, &Cli::CliOptionDescriptor::name));
+            Horo::Tests::CliContract::ValidateSchema(descriptor.path.segments[0] + "." + descriptor.path.segments[1], descriptor.output.id,
+                                                     descriptor.output.version);
+        }
         const auto activation = std::ranges::find_if(descriptors, [](const auto &descriptor) {
             return descriptor.path == Cli::CommandPath{{"package", "activate"}};
         });
@@ -77,6 +91,11 @@ namespace {
         Editor::PackageModalSession modal{Borrow(fixture)};
         auto first = modal.Open();
         REQUIRE(first.HasValue());
+        const auto preview = modal.InspectRemoval(first.Value(), fixture.graph.package);
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().graph.removed ==
+              std::vector<Packages::LockedPackageReference>{{fixture.graph.package, fixture.graph.version}});
+        CHECK(preview.Value().activeOrRetiring.empty());
         REQUIRE(fixture.source.calls == 0);
         auto operation = modal.Submit(first.Value(), PackageOperationKind::Install);
         REQUIRE(operation.HasValue());
@@ -87,6 +106,8 @@ namespace {
         REQUIRE(modal.Operation());
         CHECK(modal.Operation()->id == operation.Value());
         CHECK(modal.Cancel(first.Value()).HasError());
+        CHECK(modal.PreviewRemoval(first.Value(), fixture.graph.package).HasError());
+        CHECK(modal.InspectRemoval(first.Value(), fixture.graph.package).HasError());
         CHECK(WaitForTerminal(fixture, operation.Value()).outcome == PackageOperationOutcome::Succeeded);
         REQUIRE(modal.Refresh(second.Value()).HasValue());
         REQUIRE(modal.Plan());
@@ -101,6 +122,7 @@ namespace {
         Cli::CliCommandRequest request{.command = {{"package", "install"}}};
         auto terminal = dispatcher.Dispatch(request, {.invocation = {1}, .configuration = &configuration});
         REQUIRE(terminal.Outcome().HasValue());
+        CheckResultContract("horo.package.install", terminal.Outcome().Value());
         CHECK(fixture.source.calls == 1);
         REQUIRE(fixture.application->Current().Value());
         CHECK(fixture.application->Current().Value()->installedRevision.has_value());
@@ -156,11 +178,13 @@ namespace {
         auto configuration = Configuration();
         auto restored = dispatcher.Dispatch({.command = {{"package", "restore"}}}, {.invocation = {1}, .configuration = &configuration});
         REQUIRE(restored.Outcome().HasValue());
+        CheckResultContract("horo.package.restore", restored.Outcome().Value());
         REQUIRE(restored.Correlation().operation);
         CHECK(fixture.application->Current().Value()->kind == PackageOperationKind::Restore);
         CHECK(fixture.application->Current().Value()->outcome == PackageOperationOutcome::Succeeded);
         auto disabled = dispatcher.Dispatch({.command = {{"package", "disable"}}}, {.invocation = {2}, .configuration = &configuration});
         REQUIRE(disabled.Outcome().HasValue());
+        CheckResultContract("horo.package.disable", disabled.Outcome().Value());
         CHECK(fixture.application->Current().Value()->kind == PackageOperationKind::Disable);
         CHECK_FALSE(fixture.application->Current().Value()->activeGeneration);
         CHECK(fixture.source.calls == 1);

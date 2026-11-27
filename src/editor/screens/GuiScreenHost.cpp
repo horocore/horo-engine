@@ -2,10 +2,13 @@
 
 #include "../modals/extension_pages/EditorPageModal.h"
 #include "../modals/extension_pages/EditorPageThemeCapture.h"
+#include "EditorControlMetadata.h"
 #include "EditorPageFileStore.h"
+#include "EditorPlayXrHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/AudioComponentPreview.h"
+#include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -40,11 +43,12 @@
 #include "editor/modals/build_release/BuildActivity.h"
 #include "editor/modals/build_release/BuildModal.h"
 #include "editor/modals/build_release/BuildReleaseModal.h"
+#include "editor/modals/xr_setup/XrSetupModal.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
 #include "editor/update/UpdateExperienceSession.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
-#include "workspace/terrain/TerrainAssetFormat.h"
+#include "workspace/terrain/assets/TerrainAssetFormat.h"
 
 #include <algorithm>
 #include <array>
@@ -183,12 +187,13 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::GuiScreenHost */
     GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition)
-        : context_(context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
-          settingsService_(&composition.settingsService), localization_(&composition.localization),
+        : context_(context), controlMetadata_(std::make_unique<Detail::EditorControlMetadataCapture>()), modalHost_(&composition.modalHost),
+          inputRouter_(&composition.inputRouter), settingsService_(&composition.settingsService), localization_(&composition.localization),
           engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
           nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
           workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)), dispatchSource_(std::move(composition.dispatchSource)) {
+        static_cast<void>(controlMetadata_->Bind(ImGui::GetCurrentContext()));
         gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
                                                                : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
@@ -430,6 +435,10 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::Shutdown */
     void GuiScreenHost::Shutdown() noexcept {
+        if (auto *recorder = context_.microphoneRecorder)
+            recorder->CancelRecording();
+        if (auto *microphone = context_.microphonePermission)
+            microphone->AdvanceTest(false);
         if (fixedScreen_) {
             shutdownPending_ = true;
             return;
@@ -438,6 +447,7 @@ namespace Horo::Editor {
             return;
         }
         shutdown_ = true;
+        controlMetadata_->Unbind();
         if (activeScreen_) {
             activeScreen_->OnLeave();
             activeScreen_.reset();
@@ -543,9 +553,16 @@ namespace Horo::Editor {
     void GuiScreenHost::SetCurrentProjectRoot(const std::filesystem::path &root) {
         if (currentProjectRoot_ != root)
             nativeBuildSession_.reset();
+        SetWorkspaceProject(root);
+        currentProjectRoot_ = root;
+    }
+
+    /** @copydoc GuiScreenHost::SetWorkspaceProject */
+    void GuiScreenHost::SetWorkspaceProject(const std::filesystem::path &root) {
         if (extensionPageStore_)
             extensionPageStore_->SetProject(root);
-        currentProjectRoot_ = root;
+        if (auto *recorder = context_.microphoneRecorder)
+            recorder->SetProject(root);
     }
 
     /** @copydoc GuiScreenHost::CurrentProjectRoot */
@@ -681,8 +698,8 @@ namespace Horo::Editor {
 
         const GuiRouteKind prevKind = activeRoute_.kind;
         const GuiRouteRevision prevRev = activeRevision_;
-        if (extensionPageStore_ && destination.kind != GuiRouteKind::EditorWorkspace)
-            extensionPageStore_->SetProject({});
+        if (destination.kind != GuiRouteKind::EditorWorkspace)
+            SetWorkspaceProject({});
         activeRoute_ = std::move(destination);
         activeRevision_++;
         activeScreen_ = std::move(candidate);
@@ -760,6 +777,10 @@ namespace Horo::Editor {
                     actions.emplace_back(Input::ActionId{entry.command.id.value}, Input::ActionValueType::Digital,
                                          Input::InputContextId{kEditorWorkspaceInputContext}, false, std::move(defaults));
                 }
+                const auto profile = inputRouter_->Profile();
+                if (const auto applied = ActivateEditorInputProfile(*inputRouter_, profile, actions); applied.HasError())
+                    LOG_ERROR("editor.input", "Keeping last valid input actions after module command update: %s",
+                              applied.ErrorValue().message.c_str());
                 settingsService_->SetContributedInputActions(std::move(actions));
                 extensionCommandRevision_ = revision;
             }
@@ -799,6 +820,12 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OnInputSnapshot */
     void GuiScreenHost::OnInputSnapshot() {
+        if (auto *microphone = context_.microphonePermission) {
+            const auto *settings = modalHost_ ? dynamic_cast<const SettingsModal *>(modalHost_->TopModal()) : nullptr;
+            const bool settingsFocused =
+                settings && settings->ShowsAudioSettings() && context_.inputRouter && context_.inputRouter->Snapshot().window.focused;
+            microphone->AdvanceTest(settingsFocused);
+        }
         if (fixedScreen_)
             return;
         if (activeScreen_) {
@@ -841,6 +868,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::Draw() {
+        if (!shutdown_)
+            static_cast<void>(controlMetadata_->Bind(ImGui::GetCurrentContext()));
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         const bool showStatusBar = activeRoute_.kind != GuiRouteKind::ProjectCreation;
         const float contentHeight = std::max(0.0F, viewport->WorkSize.y - (showStatusBar ? EditorStatusBar::Height : 0.0F));
@@ -884,6 +913,8 @@ namespace Horo::Editor {
                                              MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
         const auto prefab =
             activeScreen_ ? activeScreen_->PrefabSettings() : Result<std::shared_ptr<PrefabProjectSettingsSession>>::Success(nullptr);
+        auto projectConfiguration =
+            activeScreen_ ? activeScreen_->ProjectConfiguration() : Result<std::shared_ptr<ConfigurationSettingsSession>>::Success(nullptr);
         auto modal =
             std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
                                             SettingsModalProjectOpening{
@@ -894,6 +925,10 @@ namespace Horo::Editor {
                                                     collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt,
                                                 .prefab = prefab.HasValue() ? std::weak_ptr{prefab.Value()}
                                                                             : std::weak_ptr<PrefabProjectSettingsSession>{},
+                                                .configuration = projectConfiguration.HasValue() ? projectConfiguration.Value() : nullptr,
+                                                .configurationError = projectConfiguration.HasError()
+                                                                          ? std::optional<Error>{projectConfiguration.ErrorValue()}
+                                                                          : std::nullopt,
                                             },
                                             SettingsModalPagePresentation{editorPageHost_,
                                                                           extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr,
@@ -986,6 +1021,15 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc GuiScreenHost::AcquireImporterCatalog */
+    Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>> GuiScreenHost::AcquireImporterCatalog(
+        const std::filesystem::path &root) const {
+        const auto *packages = services_.TryGetConst<PackageWorkspaceAccess>();
+        if (packages && packages->composeImporters)
+            return packages->composeImporters(root, importerCatalog_);
+        return Result<std::shared_ptr<const Assets::AssetImporterCatalogSnapshot>>::Success(importerCatalog_);
+    }
+
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         if (IsWorkspaceMenuAction(invocation.action)) {
@@ -1003,8 +1047,15 @@ namespace Horo::Editor {
             case OpenProject:
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 return;
-            case ImportAssets:
-                OpenImportWorkflow(modalHost_, context_.theme.fonts, m_importJobs, importerCatalog_,
+            case ImportAssets: {
+                if (!modalHost_ || modalHost_->HasOpenModal())
+                    return;
+                auto importers = AcquireImporterCatalog(currentProjectRoot_);
+                if (importers.HasError()) {
+                    LOG_ERROR("editor.import", "Importer catalog unavailable: %s", importers.ErrorValue().code.Value().c_str());
+                    return;
+                }
+                OpenImportWorkflow(modalHost_, context_.theme.fonts, m_importJobs, std::move(importers).Value(),
                                    {services_,
                                     {.assetRegistry = services_.TryGet<Assets::AssetRegistry>(),
                                      .operationStore = services_.TryGet<OperationStore>(),
@@ -1013,8 +1064,12 @@ namespace Horo::Editor {
                                      .inputRouter = inputRouter_}},
                                    currentProjectRoot_, invocation.assetDestination);
                 return;
+            }
             case OpenEditorSettings:
                 OpenEditorSettingsModal();
+                return;
+            case OpenXrSetup:
+                static_cast<void>(modalHost_->OpenRoot(std::make_unique<XrSetupModal>(context_, services_.TryGet<IEditorXrSetup>())));
                 return;
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());

@@ -1,7 +1,13 @@
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/GameplayAiContext.h"
+#include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/NativeBehavior.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
+#include "Horo/Gameplay/NativePerceptionSense.h"
 
+#include <array>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -33,6 +39,12 @@ namespace {
             return Result<GameModuleReloadSnapshot>::Success({1, {revoked ? std::byte{1} : std::byte{0}}});
         }
 
+        Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot, GameRuntimeContext &) override {
+            if (snapshot.schemaVersion != GameModuleReloadSnapshotSchemaVersion || snapshot.payload != std::vector{std::byte{1}})
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestoreFailed));
+            return Result<void>::Success();
+        }
+
         void Stop(GameRuntimeContext &) noexcept override {
             retained_.reset();
         }
@@ -43,7 +55,33 @@ namespace {
 }  // namespace
 
 namespace {
+    std::weak_ptr<const Horo::Gameplay::GameplayPrefabContext> prefabCapabilityProbe;
+
+    /** @brief Holds a weak observation of the exact native prefab grant issued by the startup owner. */
+    class PrefabCapabilityProbeBehavior final : public Horo::Gameplay::IBehaviorInstance {
+    public:
+        static Horo::Gameplay::BehaviorDescriptor DescribeBehavior() {
+            Horo::Gameplay::BehaviorDescriptor descriptor;
+            descriptor.displayName = "AI Prefab Capability Probe";
+            descriptor.phases.push_back({Horo::Gameplay::BehaviorPhase::Gameplay, "game.ai.tests.prefab_capability_probe", {}, {}, {}});
+            return descriptor;
+        }
+
+        void OnFixedUpdate(Horo::Gameplay::BehaviorContext &context, Horo::Gameplay::FixedDeltaTime) override {
+            prefabCapabilityProbe = context.PrefabContext();
+        }
+    };
+}  // namespace
+HORO_BEHAVIOR(PrefabCapabilityProbeBehavior, "game.ai.tests.prefab_capability_probe")
+
+extern "C" HORO_GAME_EXPORT void HoroTestCopyAiPrefabCapability(
+    std::shared_ptr<const Horo::Gameplay::GameplayPrefabContext> *destination) noexcept {
+    *destination = prefabCapabilityProbe.lock();
+}
+
+namespace {
     std::uint32_t *decisionLifecycleCounters{};
+    std::uint32_t *decisionFactoryCounter{};
 
     /** @brief Identifies a deliberate rejection by the unloadable native fixture factory. */
     class FixtureFactoryRejection final : public std::runtime_error {
@@ -52,7 +90,10 @@ namespace {
     };
 
     /** @brief Real generated decision-node callbacks live in the unloadable fixture image. */
-    class FixtureDecisionNode final : public Horo::AI::IBehaviorTreeExecutor {
+    class FixtureDecisionNode : public Horo::AI::IBehaviorTreeExecutor {
+    protected:
+        FixtureDecisionNode() = default;
+
     public:
         static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
             using namespace Horo::AI;
@@ -63,6 +104,8 @@ namespace {
         }
 
         explicit FixtureDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty> properties) {
+            if (decisionFactoryCounter)
+                ++*decisionFactoryCounter;
             if (std::get<bool>(properties.front().value))
                 throw FixtureFactoryRejection("fixture factory rejection");
         }
@@ -97,14 +140,164 @@ namespace {
             return Horo::Result<void>::Success();
         }
     };
+
+    /** @brief Registered test task with one typed query result and an explicit writable key. */
+    template <Horo::AI::BlackboardValueKind Kind> class FixtureQueryDecisionNode final : public FixtureDecisionNode {
+    public:
+        static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
+            using namespace Horo::AI;
+            DecisionNodeContract contract;
+            contract.descriptor.origin = {DecisionDescriptorSourceKind::Native, DecisionProviderId::Create(501).Value(), 1};
+            const auto key = BlackboardKeyId::Create(4).Value();
+            contract.descriptor.requirements = {{.key = key, .kind = Kind, .access = BlackboardKeyAccess::ReadWrite}};
+            const BehaviorTreeQueryOutput output{QueryId::Create(1).Value(),
+                                                 QueryResultSchemaId::Create(1).Value(),
+                                                 1,
+                                                 QueryItemTypeId::Create(1).Value(),
+                                                 key,
+                                                 1};
+            contract.properties.emplace_back(BehaviorTreePropertyId::Create(10).Value(), "output", BehaviorTreePropertyKind::QueryOutput,
+                                             output);
+            return contract;
+        }
+
+        explicit FixtureQueryDecisionNode(std::span<const Horo::AI::BehaviorTreeProperty>) {}
+    };
 }  // namespace
 HORO_AI_NODE(FixtureDecisionNode, "101")
+using FixturePointQueryDecisionNode = FixtureQueryDecisionNode<Horo::AI::BlackboardValueKind::WorldCoordinate>;
+using FixtureActorQueryDecisionNode = FixtureQueryDecisionNode<Horo::AI::BlackboardValueKind::EntityReference>;
+HORO_AI_NODE(FixturePointQueryDecisionNode, "102")
+HORO_AI_NODE(FixtureActorQueryDecisionNode, "103")
+
+namespace {
+    std::uint32_t *perceptionLifecycleCounters{};
+    bool perceptionMetadataFailure{};
+
+    class FixturePerceptionFailure final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
+    /** @brief Real module-owned bounded sense used to observe construction, invocation and destruction across retirement. */
+    class FixturePerceptionSense final : public Horo::AI::IPerceptionSenseProvider {
+    public:
+        static Horo::AI::PerceptionSenseContract DescribePerceptionSense() {
+            using namespace Horo::AI;
+            if (perceptionMetadataFailure)
+                throw std::runtime_error("fixture sense metadata failure");
+            PerceptionSenseContract contract;
+            contract.sense.origin = {PerceptionDescriptorSourceKind::Native, PerceptionProviderId::Create(601).Value(), 1};
+            contract.sense.displayName = "fixture spatial sense";
+            contract.sense.requiredCapabilities = PerceptionCapabilitySet::Of(PerceptionCapability::SpatialCandidateQuery);
+            contract.stimulus = {StimulusTypeId::Create(602).Value(), contract.sense.origin, "fixture spatial observation", 1, {}};
+            contract.workUnits = 4;
+            contract.maximumCandidates = 2;
+            return contract;
+        }
+
+        FixturePerceptionSense() {
+            if (perceptionLifecycleCounters)
+                ++perceptionLifecycleCounters[0];
+        }
+
+        ~FixturePerceptionSense() override {
+            if (perceptionLifecycleCounters)
+                ++perceptionLifecycleCounters[2];
+        }
+
+        static void FailRecipient(std::optional<std::uint32_t> slot) noexcept {
+            failedRecipient_ = slot;
+        }
+
+        /** @copydoc Horo::AI::IPerceptionSenseProvider::Evaluate */
+        Horo::Result<std::size_t> Evaluate(const Horo::AI::PerceptionSenseInput &input,
+                                           const std::span<Horo::AI::PerceptionSenseSample> output,
+                                           Horo::AI::AiWorkBudget &budget) override {
+            if (perceptionLifecycleCounters)
+                ++perceptionLifecycleCounters[1];
+            if (failedRecipient_ == input.listener.slot)
+                throw FixturePerceptionFailure("fixture recipient sense failure");
+            for (std::size_t index = 0; index < input.candidates.size(); ++index) {
+                if (!budget.Consume())
+                    return Horo::Result<std::size_t>::Failure(Horo::MakeError(Horo::AI::AIErrors::SchedulerBudgetExhausted));
+                output[index] = {static_cast<std::uint32_t>(index), input.candidates[index].position.Millimeters()[0] < 1500};
+            }
+            return Horo::Result<std::size_t>::Success(input.candidates.size());
+        }
+
+    private:
+        inline static std::optional<std::uint32_t> failedRecipient_;
+    };
+}  // namespace
+HORO_AI_SENSE(FixturePerceptionSense, "102")
+
+namespace {
+    Horo::AI::QueryTestSample FilterTacticalPoint(const void *, const Horo::AI::GameplayQueryPointInput &input,
+                                                  Horo::AI::AiWorkBudget &budget) noexcept {
+        using namespace Horo::AI;
+        if (!budget.Consume(1) || input.properties.size() != 1)
+            return {.stage = input.stage, .availability = QueryTestAvailability::Failed};
+        const auto limit = std::get_if<std::uint64_t>(&input.properties.front().value);
+        const auto point = input.point.Millimeters();
+        return {.stage = input.stage,
+                .filter = limit && point[0] == 1500 && point[2] >= 0 && static_cast<std::uint64_t>(point[2]) <= *limit};
+    }
+}  // namespace
+
+/** @brief Supplies the native cooked tactical fixture's point filter and authored property contract. */
+extern "C" HORO_GAME_EXPORT const Horo::AI::NativeGameplayQueryTestRegistration *GetHoroGameplayQueryTestsV1(std::size_t &count) noexcept {
+    using namespace Horo::AI;
+    static const auto identity = QueryTestId::Create(90).Value();
+    static const QueryDescriptorOrigin origin{QueryDescriptorSourceKind::Native, QueryProviderId::Create(91).Value(), 1};
+    static const NativeGameplayQueryTestRegistration
+        qualified{.descriptor = {.id = identity,
+                                 .origin = origin,
+                                 .inputItemType = BuiltinQueryPointItemType(),
+                                 .inputItemVersion = {1, 1},
+                                 .properties = {{QueryPropertyId::Create(93).Value(), QueryPropertyKind::Unsigned64, true}}},
+                  .binding = {.test = identity, .origin = origin, .requiredFilter = true, .workUnits = 1, .evaluate = FilterTacticalPoint}};
+    static const auto tests = [] {
+        auto unqualified = qualified;
+        unqualified.descriptor.id = QueryTestId::Create(94).Value();
+        unqualified.binding.test = unqualified.descriptor.id;
+        return std::array{qualified, std::move(unqualified)};
+    }();
+    count = tests.size();
+    return tests.data();
+}
+
+/** @brief Qualifies the stateless integer-only filter for deterministic owner scheduling. */
+extern "C" HORO_GAME_EXPORT const Horo::AI::QueryTestId *GetHoroDeterministicGameplayQueryTestsV1(std::size_t &count) noexcept {
+    static const auto id = Horo::AI::QueryTestId::Create(90).Value();
+    count = 1;
+    return &id;
+}
+
+/** @brief Installs caller-owned test counters before descriptor capture or native provider invocation. */
+extern "C" HORO_GAME_EXPORT void HoroTestObservePerceptionSenseLifecycle(std::uint32_t *counters, const bool failMetadata) noexcept {
+    perceptionLifecycleCounters = counters;
+    perceptionMetadataFailure = failMetadata;
+    FixturePerceptionSense::FailRecipient(std::nullopt);
+}
+
+/** @brief Selects one fixture recipient to fail without changing the other providers. */
+extern "C" HORO_GAME_EXPORT void HoroTestFailPerceptionRecipient(const std::uint32_t slot) noexcept {
+    FixturePerceptionSense::FailRecipient(slot);
+}
 
 extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionNodeLifecycle(std::uint32_t *counters) noexcept {
     decisionLifecycleCounters = counters;
 }
 
+/** @brief Observes native decision factory attempts without changing the lifecycle probe ABI. */
+extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionFactory(std::uint32_t *counter) noexcept {
+    decisionFactoryCounter = counter;
+}
+
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {
+    if (perceptionLifecycleCounters)
+        ++perceptionLifecycleCounters[3];
     return std::make_unique<AiModule>().release();
 }
 

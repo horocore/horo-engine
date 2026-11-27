@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Application/ProjectMigrationErrors.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "ProjectVersionErrors.h"
 
@@ -31,8 +32,6 @@ namespace Horo::Application::ProjectErrors {
     extern const ErrorCodeDescriptor MigrationInventoryLimit;
     extern const ErrorCodeDescriptor MigrationDocumentStale;
     extern const ErrorCodeDescriptor MigrationWriteConflict;
-    extern const ErrorCodeDescriptor MigrationStageFailed;
-    extern const ErrorCodeDescriptor MigrationCancelled;
     extern const ErrorCodeDescriptor MigrationLocked;
     extern const ErrorCodeDescriptor MigrationInputChanged;
     extern const ErrorCodeDescriptor MigrationCapacityInsufficient;

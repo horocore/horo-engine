@@ -138,6 +138,65 @@ resolver.
 
 ## Consequences
 
+### CFG-001.6 implementation record
+
+`CredentialReference` is owned by the `HoroFoundation` public-header boundary so
+the immutable configuration value can carry the existing Security identity
+without a reverse dependency. `Horo::Security::CredentialReference` remains a
+source-compatible alias of that same type. Consumers must rebuild because the
+canonical C++ type ownership and the `SettingValue` variant have changed.
+Descriptors previously using a string default with `SecretReference` sensitivity
+must migrate to `SettingValueType::CredentialReference` and an unset or validated
+`CredentialReference` default. String values are rejected for those descriptors.
+
+The bounded serialized identity is `cred:v1:` and 48 lowercase hexadecimal
+digits, matching `CredentialVault` issuance. JSON uses an explicit
+`{"credentialReference":"cred:v1:..."}` value. An unset default is omitted from
+persistence. Environment bindings parse that identity through the same validator.
+Identity parsing establishes syntax only. The explicitly supplied
+`Security::CredentialProvider` retains authority over existence, expiry and
+revocation. `CredentialVault` implements that operation-facing contract; its
+raw `CredentialBackend` is not the configuration resolution interface.
+
+`Horo::Security::ResolveConfigurationCredential` resolves inside a consuming
+operation and returns the existing move-only `SecureBytes` owner. Provider error
+payloads are replaced with safe typed descriptors before crossing this boundary.
+The operation must release the secret when it finishes. Snapshots, JSON and
+notifications carry only references or key/revision metadata. Native provider
+qualification remains owned by SEC-001 downstream work.
+The operation supplies its observation time explicitly in the provider's expiry
+domain. Primitive CLI option parsing rejects reference-valued configuration with
+a safe incompatible-value diagnostic; it does not coerce the reference to text.
+
+### CFG-001.5 and CFG-001.7 implementation migration
+
+Descriptors may declare inert localization identities, inclusive integer ranges,
+bounded string rules and read-only presentation policy. The resolver enforces
+these rules on every admitted source, including shadowed values. Portable key
+segments contain ASCII letters, digits, underscores or hyphens and are separated
+by single dots. Existing callers with invalid keys or sensitive string defaults
+must migrate before registration succeeds. No descriptor invokes a service.
+
+Drafts name their authored source; existing callers retain Session semantics,
+while the editor writes User values. Snapshots retain immutable supplied values
+and provenance for every admitted layer. Changing a shadowed value advances the
+revision, so an editor cannot overwrite an externally changed user preference
+just because an invocation override still wins. Unchanged complete inputs do not
+publish another configuration revision.
+
+Editor legacy appearance fields project the shared configuration authority. The
+combined modal operation reserves a same-thread prepared configuration write,
+validates and persists one editor document, then activates both projections
+before notifying observers. Destruction before activation cancels the prepared
+write. Persistence uses `SourceToJson(User)`, never resolved invocation or
+environment values. Loaded nested configuration is untrusted ingress and cannot
+be written through the low-level store without a validated snapshot.
+
+Theme hosts now supply captured UTF-8 override and user-resource roots explicitly
+to `Theme::Apply`/`RefreshThemeList`; the theme reader no longer discovers these
+paths from ambient environment variables. Callers that need user themes must
+pass the user-resource root. The optional arguments preserve built-in-only uses.
+
 - The current schema and immutable snapshot code remain valid foundations rather than being replaced wholesale.
 - Current `ConfigurationService` file loading is explicitly a prototype ingress, preventing new callers from treating last-write order as canonical precedence.
 - Domain ownership is derived from validated module identity and key namespace, while persistence/source policy remains independently typed.

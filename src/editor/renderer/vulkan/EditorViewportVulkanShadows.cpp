@@ -5,6 +5,8 @@
 
 namespace Horo::Editor {
     Result<void> EditorViewportRendererVulkan::RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile) {
+        if (crossFadeSourceSlots_ && profile.enabled && profile.cascadeCount > crossFadeShadowBudget_)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
         return resources_.RequestDirectionalShadowProfile(profile);
     }
 
@@ -28,8 +30,15 @@ namespace Horo::Editor {
         if (auto layout = ProgramResources::CreateMaterialLayout(frontend_, program, program.metadata.reflection, device_.frames);
             layout.HasError())
             return layout;
+        return CreateShadowSlots(program, slots, MaximumDirectionalShadowCascades);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::CreateShadowSlots */
+    Result<void> EditorViewportRendererVulkan::CreateShadowSlots(const ShaderResources &program, std::span<FrameSlot> slots,
+                                                                 const std::uint32_t cascades) {
+        using namespace Render;
         for (std::uint32_t slot = 0; slot < device_.frames; ++slot)
-            for (std::uint32_t cascade = 0; cascade < MaximumDirectionalShadowCascades; ++cascade)
+            for (std::uint32_t cascade = 0; cascade < cascades; ++cascade)
                 for (std::size_t draw = 0; draw < RenderMaterialPass::MaximumDraws; ++draw) {
                     const auto identity = (slot * MaximumDirectionalShadowCascades + cascade) * RenderMaterialPass::MaximumDraws + draw + 1;
                     if (auto created = ProgramResources::CreateUniformSlot(frontend_, program, slots[slot].shadows[cascade][draw], identity,
@@ -46,13 +55,18 @@ namespace Horo::Editor {
             return Result<void>::Success();
         if (!atlas.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto &scene = SceneProgram();
         for (std::uint32_t frame = 0; frame < device_.frames; ++frame) {
             for (auto &draw : slots_[frame].draws)
-                if (auto bound = ProgramResources::BindUniformSlot(shader_, draw, shader_.pipeline, atlas); bound.HasError())
+                if (auto bound = ProgramResources::BindUniformSlot(scene, draw, scene.pipeline, atlas); bound.HasError())
                     return bound;
             if (auto bound = ProgramResources::BindUniformSlot(shader_, slots_[frame].overlay.uniforms, shader_.overlayPipeline, atlas);
                 bound.HasError())
                 return bound;
+            if (crossFadeSourceSlots_)
+                for (auto &draw : std::span{(*crossFadeSourceSlots_)[frame].draws}.first(crossFadeDrawCount_))
+                    if (auto bound = ProgramResources::BindUniformSlot(scene, draw, scene.pipeline, atlas); bound.HasError())
+                        return bound;
         }
         boundShadowAtlas_ = atlas;
         return Result<void>::Success();

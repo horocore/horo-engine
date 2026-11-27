@@ -13,8 +13,12 @@ namespace Horo::Tests::OpenXRAction {
         std::uint32_t count{2};
         XrTime time{};
         XrSpace reference{};
+        float eyeHeight{};
         bool malformedFov{};
         bool staleAfterLocate{};
+        bool quad{};
+        bool displacedInset{};
+        bool oversizedInset{};
 
         PresentationScript() {
             REQUIRE(active == nullptr);
@@ -29,17 +33,25 @@ namespace Horo::Tests::OpenXRAction {
                                                      std::uint32_t capacity, std::uint32_t *count, XrView *views) {
             REQUIRE(session != XR_NULL_HANDLE);
             REQUIRE(info->type == XR_TYPE_VIEW_LOCATE_INFO);
-            REQUIRE(info->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
+            const auto expected =
+                active->quad ? XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET : XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            REQUIRE(info->viewConfigurationType == expected);
             REQUIRE(info->space != XR_NULL_HANDLE);
-            REQUIRE(capacity == 2);
+            REQUIRE(capacity == (active->quad ? 4U : 2U));
             active->time = info->displayTime;
             active->reference = info->space;
             state->viewStateFlags = active->flags;
             *count = active->count;
             for (std::uint32_t index = 0; index < std::min(capacity, active->count); ++index) {
                 REQUIRE(views[index].type == XR_TYPE_VIEW);
-                views[index].pose = {{0, 0, 0, 1}, {index == 0 ? -0.032F : 0.032F, 0, 0}};
+                views[index].pose = {{0, 0, 0, 1}, {index % 2 == 0 ? -0.032F : 0.032F, active->eyeHeight, 0}};
                 views[index].fov = {-0.8F, 0.9F, 0.7F, -0.6F};
+                if (index >= 2)
+                    views[index].fov = {-0.3F, 0.3F, 0.3F, -0.3F};
+                if (index == 2 && active->displacedInset)
+                    views[index].pose.position.x += 0.01F;
+                if (index == 3 && active->oversizedInset)
+                    views[index].fov.angleRight = 1.0F;
                 if (active->malformedFov)
                     views[index].fov.angleLeft = std::numeric_limits<float>::quiet_NaN();
             }

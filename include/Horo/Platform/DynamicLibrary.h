@@ -20,6 +20,11 @@ namespace Horo::Platform {
          * @return A pointer to the symbol, or nullptr if it could not be found.
          */
         [[nodiscard]] virtual void *GetSymbol(std::string_view name) const noexcept = 0;  // NOSONAR(cpp:S5008)
+
+        /** @brief Checks that an exported address belongs to the exact loaded artifact path. */
+        [[nodiscard]] virtual bool OwnsSymbolAtPath(const void *, const std::filesystem::path &) const {
+            return false;
+        }
     };
 
     /**

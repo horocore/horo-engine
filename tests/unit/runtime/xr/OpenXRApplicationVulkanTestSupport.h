@@ -7,6 +7,8 @@
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/ShaderReflectionCookTestSupport.h"
 
+#include <cstring>
+#include <functional>
 #include <utility>
 
 namespace Horo::Tests::OpenXRApplication {
@@ -19,7 +21,7 @@ namespace Horo::Tests::OpenXRApplication {
             driver = &state;
             state.specializationCount = 0;
             state.admittedAttributeCounts = {1, 3};
-            state.admittedUniformRanges = {1744, 64, 2624};
+            state.admittedUniformRanges = {1744, 64, 2624, 4096, 32};
         }
 
         ShaderDriverScope(const ShaderDriverScope &) = delete;
@@ -34,6 +36,11 @@ namespace Horo::Tests::OpenXRApplication {
     class GraphGraphicsPort final : public PreparedGraphicsPort {
     public:
         std::size_t multiviewUniformWrites{};
+        std::size_t motionUniformWrites{};
+        std::vector<std::array<float, 8>> comfortUniformWrites;
+        std::function<Result<std::shared_ptr<Render::IResidentStereoCoverageReducer>>(
+            const RenderNative::VulkanStereoCoveragePreparation &)>
+            prepareColdReduction;
 
         explicit GraphGraphicsPort(Render::VulkanGraphTest::NativeGraphFixture &native) : native_(native) {}
 
@@ -54,11 +61,56 @@ namespace Horo::Tests::OpenXRApplication {
             return native_.graph.FrameSlot(frame);
         }
 
+        Result<bool> WasSubmissionAccepted(const Render::RenderTimelinePoint signal, const std::uint64_t deviceIncarnation) const override {
+            return native_.graph.WasSubmissionAccepted(signal, deviceIncarnation);
+        }
+
+        Result<bool> SupportsGraphGpuDuration(Render::RenderQueueId queue) const override {
+            return native_.graph.SupportsGraphGpuDuration(queue);
+        }
+
+        Result<bool> ArmGraphGpuDuration(Render::FrameToken frame, Render::RenderTimelinePoint signal) override {
+            return native_.graph.ArmGraphGpuDuration(frame, signal);
+        }
+
+        void DisarmGraphGpuDuration(Render::FrameToken frame, Render::RenderTimelinePoint signal) noexcept override {
+            native_.graph.DisarmGraphGpuDuration(frame, signal);
+        }
+
+        Result<RenderNative::VulkanGraphGpuDuration> ObserveGraphGpuDuration(Render::RenderTimelinePoint signal,
+                                                                             std::uint64_t incarnation) override {
+            return native_.graph.ObserveGraphGpuDuration(signal, incarnation);
+        }
+
+        bool SupportsStereoCoverageReadback() const noexcept override {
+            return native_.graph.SupportsStereoCoverageReadback();
+        }
+
+        Result<bool> ReadCompletedStereoCoverage(const std::uint64_t instance, const Render::RenderTimelinePoint completion,
+                                                 const std::span<std::byte> bytes) override {
+            return native_.graph.ReadCompletedStereoCoverage(instance, completion, bytes);
+        }
+
+        bool SupportsStereoCoverageReduction(const Render::RenderQueueId queue) const noexcept override {
+            return prepareColdReduction && queue == native_.commandState.queues[0].identity;
+        }
+
+        Result<std::shared_ptr<Render::IResidentStereoCoverageReducer>> PrepareStereoCoverageReduction(
+            const RenderNative::VulkanStereoCoveragePreparation &request) override {
+            return prepareColdReduction ? prepareColdReduction(request) : PreparedGraphicsPort::PrepareStereoCoverageReduction(request);
+        }
+
         Result<void> WriteFrameBuffer(const Render::FrameToken frame, const std::uint64_t instance,
                                       const std::span<const std::byte> bytes) override {
             if (!native_.graph.CanWriteFrameInputs(frame))
                 return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624));
+            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624 || bytes.size() == 4096 || bytes.size() == 32));
+            if (bytes.size() == 32) {
+                auto &words = comfortUniformWrites.emplace_back();
+                std::memcpy(words.data(), bytes.data(), bytes.size());
+            }
+            if (bytes.size() == 4096)
+                ++motionUniformWrites;
             if (bytes.size() == 2624) {
                 CHECK(std::ranges::all_of(bytes.subspan(2612), [](const std::byte value) {
                     return value == std::byte{};
@@ -115,10 +167,10 @@ namespace Horo::Tests::OpenXRApplication {
 
     struct ApplicationVulkanFixture final {
         ShaderDriverScope shader;
-        Render::VulkanGraphTest::NativeGraphFixture native{true};
+        Render::VulkanGraphTest::NativeGraphFixture native;
         GraphGraphicsPort port{native};
 
-        ApplicationVulkanFixture() {
+        explicit ApplicationVulkanFixture(bool timestamps = false) : native(true, timestamps) {
             native.resourceState.state.sizedAllocations = true;
             native.encoded.expectedIndexCount = 36;  // Canonical authored box from MakeHierarchyScene.
             VkPhysicalDeviceProperties properties{};
@@ -162,6 +214,39 @@ namespace Horo::Tests::OpenXRApplication {
                                     Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
                                                                 Code(Render::ShaderStage::Fragment)}};
             return ShaderCook::CookFixture{multiview ? ShaderCook::MultiviewEvidence() : ShaderCook::Evidence(), stages, multiview};
+        }
+
+        static ShaderCook::CookFixture CookComfort() {
+            using enum Render::ShaderStage;
+            const std::array stages{Render::ShaderArtifactStage{Vertex, "VSMain", Code(Vertex)},
+                                    Render::ShaderArtifactStage{Fragment, "PSMain", Code(Fragment)}};
+            return {ShaderCook::CookFixtureRole::XrComfort, ShaderCook::XrComfortEvidence(), stages};
+        }
+
+        static ShaderCook::CookFixture CookMotion() {
+            const std::array stages{Render::ShaderArtifactStage{Render::ShaderStage::Vertex, "VSMain", Code(Render::ShaderStage::Vertex)},
+                                    Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
+                                                                Code(Render::ShaderStage::Fragment)}};
+            return ShaderCook::CookFixture{ShaderCook::CookFixtureRole::MultiviewMotion, ShaderCook::MultiviewMotionEvidence(), stages};
+        }
+
+        /** @brief Entry records for the injected shader dispatch, with no native shader execution claim. */
+        static ShaderCook::CookFixture CookCoverage() {
+            using namespace Render;
+            const auto stage = [](ShaderStage type, std::string_view entry) {
+                const std::uint32_t nameWords = static_cast<std::uint32_t>((entry.size() + 4) / 4);
+                const std::array
+                    words{0x07230203U, 0x00010600U, 0U, 2U, 0U, ((3 + nameWords) << 16) | 15U, type == ShaderStage::Vertex ? 0U : 4U, 1U};
+                auto source = std::as_bytes(std::span{words});
+                std::vector<std::uint8_t> bytes((words.size() + nameWords) * 4);
+                std::ranges::transform(source, bytes.begin(), [](const std::byte value) {
+                    return std::to_integer<std::uint8_t>(value);
+                });
+                std::ranges::copy(entry, bytes.begin() + source.size());
+                return ShaderArtifactStage{type, std::string{entry}, std::move(bytes)};
+            };
+            const std::array stages{stage(ShaderStage::Vertex, "VSCoverage"), stage(ShaderStage::Fragment, "PSCoverage")};
+            return {ShaderCook::CookFixtureRole::MultiviewCoverage, ShaderCook::MultiviewCoverageEvidence(), stages};
         }
 
         /** @brief Uses the shared canonical shadow role and unchanged scripted evidence; this is never native shader execution proof. */

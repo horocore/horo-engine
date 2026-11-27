@@ -30,6 +30,8 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor QueryCancelled;
     /** @brief An admitted query result belongs to an old navigation topology generation. */
     extern const ErrorCodeDescriptor StaleSnapshot;
+    /** @brief Published coverage was withdrawn by an authorized forced cell eviction. */
+    extern const ErrorCodeDescriptor TileEvicted;
     /** @brief Required navigation coverage or active world data is unavailable. */
     extern const ErrorCodeDescriptor NoNavigationData;
     /** @brief Provider execution failed after admission; normalized Horo diagnostics carry actionable detail. */

@@ -12,6 +12,8 @@ namespace Horo::Packages::PackageInstallErrors {
     extern const ErrorCodeDescriptor InvalidInput;
     /** @brief Candidate archive evidence no longer matches its lock record. */
     extern const ErrorCodeDescriptor EvidenceMismatch;
+    /** @brief The exact installed generation does not expose the requested asset. */
+    extern const ErrorCodeDescriptor MountedAssetUnavailable;
     /** @brief Cancellation was accepted before the install commit point. */
     extern const ErrorCodeDescriptor Cancelled;
     /** @brief Another installer owns the project transaction lock. */

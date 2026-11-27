@@ -277,6 +277,7 @@ public:
     virtual ScreenId Id() const = 0;
     virtual Result<void> OnEnter(const GuiRoute&) = 0;
     virtual void OnUpdate(float dt) = 0;
+    virtual void OnRuntimeSceneCutoff(const Runtime::FrameContext&);
     virtual void Draw(const GuiContentRegion& contentRegion) = 0;
     virtual void CollectActivePanelIds(
         std::vector<std::string_view>& output) const;
@@ -287,6 +288,11 @@ public:
     virtual void OnLeave() = 0;
 };
 ```
+
+The host forwards `OnRuntimeSceneCutoff` to the active screen only during
+`CommitDeferredLifecycleChanges` issued by its bound runtime. Screens with
+structural producers can override the hook to publish at that cutoff. Existing
+screens can inherit its default no-op.
 
 An `Allow` decision permits the transition. `Deny` keeps the current route
 active without presentation. `RequireResolution` identifies one typed

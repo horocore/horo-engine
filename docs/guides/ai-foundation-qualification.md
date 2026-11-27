@@ -94,6 +94,142 @@ batch preparation is allocation-free. Regression coverage checks consumption
 on successful, invalid, stale and reentrant exits, authorization release on
 rejection, and unchanged values, revisions and observer notifications.
 
+## Offline evaluation manifests
+
+Use `qualify_ai_evaluation.py` to export metadata from an existing headless
+`evidence.json` produced by an explicit `--ai-replay-output` invocation. The
+exporter reads files locally, starts no capture and makes no network requests.
+Use only authorized evidence. A reviewed local approval must bind the SHA-256
+of the exact replay bytes to the intended qualification tuple. The approval is
+an operator assertion and belongs in the same access-controlled workflow as
+the source evidence.
+
+```json
+{
+  "schemaVersion": 1,
+  "purpose": "offline-evaluation",
+  "replaySha256": "<SHA-256 of evidence.json>",
+  "expiresOnUtc": "<YYYY-MM-DD>",
+  "qualification": {
+    "provider": {"version": "1.0.0", "sha256": "<provider artifact SHA-256>"},
+    "model": null,
+    "platform": {"os": "windows", "architecture": "x64", "version": "10.0.26100"},
+    "workload": {"version": "1", "sha256": "<scenario artifact SHA-256>"}
+  }
+}
+```
+
+Set `model` to the same version/hash shape as `provider` when evaluating a
+learned model. The date is exclusive at midnight UTC and is copied to the
+export. Keep the source and export in storage whose owner expires both by that
+date. The exporter rejects expired approvals and has no authority over files
+already retained elsewhere.
+
+```bash
+python scripts/qualify_ai_evaluation.py evidence.json --approval approval.json --output evaluation-manifest.json
+```
+
+The destination must be new and its parent directory must exist on a filesystem
+that supports hard links. The exporter stages the redacted manifest beside the
+destination, rechecks the approval before publishing, and preserves any existing
+file at that path. Omit `--output` to stream the redacted manifest to stdout.
+Both modes suppress publication if the replay approval is withdrawn, changed,
+or expired by the final approval check.
+
+Pass `--qualification-artifacts <directory>` to also check the provider, model
+and workload files against the approved SHA-256 values. Store each file under
+its lowercase digest, without an extension. A null `model` needs no file. The
+checker rejects missing, empty, symlinked, mismatched or oversized files, and
+files replaced during verification. The limit is 512 MiB per file. The manifest
+still records operator-declared versions.
+
+Before admitting a stored manifest for evaluation, check it against the
+original approval using the current UTC date.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --verify-retained
+```
+
+The check returns zero for a schema-valid manifest whose approval remains
+current through verification. It rejects expired
+approvals, mismatched replay digests or qualification tuples, and extra fields
+outside the redacted schema.
+When using a manifest as reproducible evidence, also pass `--source-replay evidence.json`.
+This verifies the original replay bytes against the approved digest and
+reproduces the redacted counts and frame provenance for comparison. The
+verification emits neither raw replay values nor regenerated evidence.
+The artifact check is also available with `--verify-retained` and
+`--read-retained` when the original replay is supplied.
+
+To compare two recordings under the same provider, model, platform and
+workload tuple, use both current approvals and a trusted build of `horo-engine`.
+
+```bash
+python scripts/qualify_ai_evaluation.py recorded.json --approval recorded-approval.json \
+  --compare-replay replayed.json --comparison-approval replayed-approval.json --engine /path/to/horo-engine
+```
+
+The native comparator checks each approved digest against the bytes it
+actually compares. The tool writes a redacted result with both digests, the
+qualification tuple and the earlier expiry. A match exits zero. Divergence
+emits a result with status `diverged` and exits one. Invalid, incompatible or
+expired inputs exit one without emitting a result. As with the native
+comparator, a match applies to the recorded coverage. The optional artifact
+directory can verify the tuple's provider, model and workload files.
+Both approvals are rechecked before native comparison and before publishing
+its result. Removing either approval or changing its approved content stops
+publication.
+
+Consumers that need the stored manifest as input can use `--read-retained`.
+This emits the redacted manifest only after checking the current UTC expiry,
+matching the original approval, and reproducing its evidence from the approved
+source replay. Consumers can use the verified output directly without opening
+the file again after a separate check.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --read-retained --source-replay evidence.json
+```
+
+For retention automation, use `--audit-retention` with the same manifest and
+original approval. It returns a schema-versioned JSON record with `status`
+(`current` or `expired`) and `expiresOnUtc`. A matched record switches to
+`expired` at the start of its expiry date in UTC. Missing, malformed or mismatched
+inputs produce a nonzero exit and no status record. The audit rechecks the
+original approval and manifest contents before determining the status from the
+current UTC date.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --audit-retention
+```
+
+The storage owner can explicitly purge an expired pair from a directory it
+controls exclusively. Stop concurrent writers before invoking the purge. Pass
+the manifest and source replay as distinct files in the same directory.
+
+```bash
+python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --purge-expired --source-replay evidence.json
+```
+
+The purge checks the UTC expiry, matches the approval, and reproduces the
+manifest from the source before removal. It rechecks the approval before each
+removal and stops if the approval was withdrawn or changed. The source goes
+first so that an interruption leaves the verified manifest available for retry. If the source
+is already absent, retry verifies the expired manifest against the approval
+and removes it. The approval remains available for audit. The purge affects
+the specified directory entries and does not erase copies or backups.
+A successful purge emits a schema-versioned status record without replay data
+or paths. Check `sourceRemoved` to distinguish a removed replay from one that
+was already absent at the supplied path.
+
+The exporter emits schema 1 with decision outcome counts and exact source, scene,
+canonical AI and plan digests. It omits IDs, paths, observation records and
+Blackboard values. A replay window requires consecutive ticks for the same
+Scene and subject. The native per-frame limit applies to each compact UTF-8 frame,
+within the separate total window limit. The versioned provider, model, platform
+and workload tuple
+is marked operator-declared. Use separate reproducible qualification runs to
+establish support for failure, bias, replay and offline behavior.
+
 ## Validation
 
 Build `HoroAIFoundationQualificationTests`, then run its discovered CTests:

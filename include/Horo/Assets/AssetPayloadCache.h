@@ -42,6 +42,23 @@ namespace Horo::Assets {
         std::size_t residentEntries{};
     };
 
+    /** @brief Observes physically retained byte capacity without pinning the cache or its payloads. */
+    class AssetPayloadRetainedBytes final {
+    public:
+        /** @brief Construct an empty observation that reports zero bytes. */
+        AssetPayloadRetainedBytes() noexcept = default;
+        /** @brief Read the retained capacity after any completed final lease releases.
+         * @return Capacity in bytes, including payloads that outlive the cache.
+         * @details Safe to read concurrently with allocation release on another lane.
+         */
+        [[nodiscard]] std::size_t Bytes() const noexcept;
+
+    private:
+        friend class AssetPayloadCache;
+        explicit AssetPayloadRetainedBytes(std::shared_ptr<const Detail::AssetPayloadAccounting> accounting) noexcept;
+        std::shared_ptr<const Detail::AssetPayloadAccounting> accounting_;
+    };
+
     /**
      * @brief Owner-thread immutable byte cache; canonical SHA-256 identity is computed from admitted bytes.
      * @details Admission, eviction and snapshots run on one host owner thread. Immutable leases may cross
@@ -69,6 +86,10 @@ namespace Horo::Assets {
         void Shutdown() noexcept;
         /** @brief Obtain current storage evidence. @return Retained/resident payload and fixed bookkeeping bytes. */
         [[nodiscard]] AssetPayloadCacheSnapshot Snapshot() const noexcept;
+        /** @brief Observe retained bytes from any lane after acquiring this value on the cache owner lane.
+         * @return Non-pinning observation that remains valid after cache destruction.
+         */
+        [[nodiscard]] AssetPayloadRetainedBytes ObserveRetainedPayloadBytes() const noexcept;
 
         /** @brief Key required by the checked factory; callers cannot construct it. */
         class ConstructionKey final {

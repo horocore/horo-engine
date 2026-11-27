@@ -1,5 +1,6 @@
 #include "../../support/AllocationProbe.h"
 #include "../../support/OwnedJobTestThread.h"
+#include "Horo/Foundation/JobAdmission.h"
 #include "Horo/Foundation/JobSystem.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -313,6 +314,11 @@ TEST_CASE("Priority admission enforces class and global limits without consuming
     CHECK(background.Value().Id() == interactive.Value().Id() + 1);
     const auto globallyFull = jobs.Submit({}, NoOpJob);
     CheckSubmissionRejected(globallyFull, "job.queue_full");
+    CHECK(IsJobAdmissionPressure(globallyFull.ErrorValue()));
+    auto foreign = globallyFull.ErrorValue();
+    foreign.domain = ErrorDomainId{"other"};
+    CHECK_FALSE(IsJobAdmissionPressure(foreign));
+    CHECK_FALSE(IsJobAdmissionPressure(JobCancelled().ErrorValue()));
     const auto pressure = jobs.AdmissionSnapshot();
     CHECK(pressure.queued == std::array<std::size_t, 3>{1, 0, 1});
     CHECK(pressure.rejected == std::array<std::uint64_t, 3>{1, 1, 0});
@@ -336,6 +342,7 @@ TEST_CASE("Shed drops only optional incoming work at class or global capacity", 
     CHECK(jobs.AdmissionSnapshot().shed[2] == 0);
     const auto dropped = jobs.Submit({.priority = JobPriority::Background, .requirement = JobRequirement::Optional}, NoOpJob);
     CheckSubmissionRejected(dropped, "job.queue_shed");
+    CHECK(IsJobAdmissionPressure(dropped.ErrorValue()));
     CHECK(first.Value().Snapshot()->state == JobState::Queued);
     REQUIRE(first.Value().RequestCancel().HasValue());
     const auto replacement = jobs.Submit({.priority = JobPriority::Background}, NoOpJob);
@@ -388,6 +395,7 @@ TEST_CASE("Critical and unknown producer scopes cannot gain blocking rights thro
     }
     const auto unknown = fixture.jobs.Submit({}, NoOpJob);
     CheckSubmissionRejected(unknown, "job.wait_forbidden");
+    CHECK(IsJobAdmissionPressure(unknown.ErrorValue()));
     CHECK(fixture.jobs.AdmissionSnapshot().waitingProducers == 0);
 }
 
@@ -416,10 +424,25 @@ TEST_CASE("Cancellation wakes all producers sharing an ancestor without admittin
     REQUIRE(fixture.jobs.Submit({}, NoOpJob).HasValue());
     CancellationSource parent;
     CancellationSource child{parent.Token()};
-    auto first = SubmitProducer(fixture.jobs, child.Token());
-    auto second = SubmitProducer(fixture.jobs, child.Token());
+    CancellationSource caller;
+    auto token = child.Token();
+    bool cancelCaller = false;
+    SECTION("ordinary shared ancestor") {}
+    SECTION("independent caller cancels derived joined scopes") {
+        cancelCaller = true;
+        const auto merged = CancellationToken::AnyOf(child.Token(), caller.Token());
+        const CancellationSource derived{CancellationToken::AnyOf(merged, parent.Token())};
+        token = derived.Token();
+    }
+    auto first = SubmitProducer(fixture.jobs, token);
+    auto second = SubmitProducer(fixture.jobs, token);
     REQUIRE(fixture.Waiters(2));
-    parent.RequestCancellation();
+    if (cancelCaller) {
+        caller.RequestCancellation();
+        CHECK_FALSE(child.Token().IsCancellationRequested());
+    } else {
+        parent.RequestCancellation();
+    }
     REQUIRE(first.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready);
     REQUIRE(second.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready);
     CheckProducerPairRejected(first, second, "job.cancelled");

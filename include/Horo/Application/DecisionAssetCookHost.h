@@ -3,7 +3,12 @@
  * @brief Real captured-source decision cooking through the existing asset transaction owner.
  */
 #include "Horo/AI/DecisionGraphCompiler.h"
+#include "Horo/AI/LocalLearnedPolicy.h"
 #include "Horo/Assets/AssetCookService.h"
+
+namespace Horo::AI {
+    class QuerySchemaRegistry;
+}
 
 namespace Horo::Application {
     namespace DecisionCookErrors {
@@ -12,8 +17,24 @@ namespace Horo::Application {
         extern const ErrorCodeDescriptor Cancelled;
     }  // namespace DecisionCookErrors
 
-    inline constexpr std::string_view DecisionBehaviorTreeSourceType = "core.behavior_tree";
-    inline constexpr std::string_view DecisionStateMachineSourceType = "core.state_machine";
+    inline constexpr std::string_view DecisionBehaviorTreeSourceType = AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree);
+    inline constexpr std::string_view DecisionStateMachineSourceType = AI::DecisionAssetType(AI::DecisionPlanKind::StateMachine);
+    inline constexpr std::string_view DecisionUtilitySourceType = AI::DecisionAssetType(AI::DecisionPlanKind::Utility);
+
+    /** @brief Decodes one captured registered graph using the cooker's canonical family and project-path checks. */
+    [[nodiscard]] Result<AI::DecisionGraphSource> DecodeRegisteredDecisionGraphSource(const Assets::AssetCookPinnedSource &file,
+                                                                                      AI::DecisionCompilationLimits limits = {});
+
+    /** @brief Captured model capabilities and task declarations for one asset package target. */
+    struct LocalPolicyAssetCookAdmission final {
+        AssetCookTargetId packageTarget;
+        AI::LocalPolicyCookTarget target;
+        AI::AiCapabilityDescriptorSet tasks;
+        std::optional<AI::BlackboardSchemaId> blackboard;
+    };
+
+    /** @brief Creates the target-scoped resource cooker used by the Scene and release package hosts. */
+    [[nodiscard]] Result<Assets::CookerContribution> MakeLocalPolicyAssetCooker(const LocalPolicyAssetCookAdmission &admission);
 
     struct DecisionAssetCookRequest final {
         Assets::AssetCookRequest assets; /**< Actual pinned registry/files, project lease/fence and durable publication authority. */
@@ -22,6 +43,8 @@ namespace Horo::Application {
         std::vector<Assets::CookerContribution>
             additionalCookers; /**< Existing host strategies for non-decision records, not an alternate registry. */
         std::uint64_t maximumPreparedBytes{64ULL * 1024ULL * 1024ULL};
+        std::shared_ptr<const AI::QuerySchemaRegistry> querySchema; /**< Explicit target descriptors for built-in query cooking. */
+        std::optional<LocalPolicyAssetCookAdmission> localPolicy;
     };
 
     /** @brief Domain adapter; AssetCookService remains the sole generation/cache/publication owner.

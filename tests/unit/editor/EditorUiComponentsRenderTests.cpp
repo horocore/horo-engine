@@ -1,8 +1,19 @@
+#include "EditorControlMetadata.h"
+#include "Horo/Application/NetworkDebugger.h"
+#include "Horo/Debug/ConsoleBuiltins.h"
+#include "Horo/Debug/ConsoleConfiguration.h"
+#include "Horo/Debug/ConsoleVariableSet.h"
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "RuntimeConsoleRecordList.h"
+#include "RuntimeConsoleView.h"
+#include "support/AllocationProbe.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -11,11 +22,144 @@
 #include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace Metadata = Horo::Editor::Detail;
 
 namespace {
+    /** @brief Composes the same canonical console schema as the actual Editor root. */
+    Horo::ConfigurationSchema ConsoleViewSchema() {
+        auto descriptors = Horo::Debug::ConsoleConfigurationDescriptors(Horo::Debug::ProductProfile::Editor);
+        REQUIRE(descriptors.HasValue());
+        Horo::ConfigurationSchema schema;
+        for (const auto &descriptor : descriptors.Value())
+            REQUIRE(schema.Register(descriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        return schema;
+    }
+
+    /** @brief Counts queries over the real bounded log authority. */
+    struct ConsoleObservedLogs final : Horo::Log::IStructuredLogQuery {
+        Horo::Log::StructuredLogStore store{512};
+        mutable std::size_t queries{};
+
+        std::optional<Horo::Log::StructuredLogSnapshot> SnapshotIfChanged(std::uint64_t revision) const override {
+            ++queries;
+            return store.SnapshotIfChanged(revision);
+        }
+    };
+
+    /** @brief Counts reads of the actual immutable application network query, without an alternate producer/store. */
+    struct ConsoleObservedNetwork final : Horo::Application::INetworkDebuggerQuery {
+        std::shared_ptr<Horo::Application::NetworkDebuggerService> service{
+            std::make_shared<Horo::Application::NetworkDebuggerService>(std::chrono::hours{1})};
+        mutable std::size_t queries{};
+
+        Horo::Application::NetworkDebuggerProjection Query() const override {
+            ++queries;
+            return service->Query();
+        }
+    };
+
+    /** @brief Counts reads of the same operation authority used by the executor. */
+    struct ConsoleObservedOperations final : Horo::IOperationQuery {
+        const Horo::OperationStore &store;
+        mutable std::size_t queries{};
+
+        explicit ConsoleObservedOperations(const Horo::OperationStore &value) : store(value) {}
+
+        std::optional<Horo::OperationStoreSnapshot> SnapshotIfChanged(std::uint64_t revision) const override {
+            ++queries;
+            return store.SnapshotIfChanged(revision);
+        }
+    };
+
+    /** @brief Real core/configuration/input/operation authorities; only native window/font realization is omitted. */
+    struct ConsoleViewFixture final {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0}};
+        std::shared_ptr<Horo::Debug::ConsoleHistory> history{std::make_shared<Horo::Debug::ConsoleHistory>()};
+        std::shared_ptr<Horo::OperationStore> operations{std::make_shared<Horo::OperationStore>(8, 8)};
+        ConsoleObservedOperations operationQuery{*operations};
+        ConsoleObservedLogs logs;
+        Horo::Input::InputService input;
+        std::shared_ptr<Horo::ConfigurationService> configurationOwner{std::make_shared<Horo::ConfigurationService>(ConsoleViewSchema())};
+        Horo::ConfigurationService &configuration{*configurationOwner};
+        std::shared_ptr<Horo::Debug::CommandRegistry> registry;
+        std::shared_ptr<Horo::Debug::ConsoleVariableSet> variables;
+        std::unique_ptr<Horo::Debug::CommandExecutor> executor;
+        std::unique_ptr<Horo::Editor::RuntimeConsoleView> view;
+
+        explicit ConsoleViewFixture(const bool terminal = true, const bool overlays = false,
+                                    std::span<const Horo::Debug::OverlaySource> panels = {},
+                                    Horo::Debug::DebugCommandContext principal = {3, false, false}, const bool sceneInspection = false,
+                                    std::shared_ptr<const Horo::Application::INetworkDebuggerQuery> network = {}) {
+            Horo::Debug::RegistryPolicy policy;
+            policy.profile = Horo::Debug::ProductProfile::Editor;
+            auto created = Horo::Debug::CommandRegistry::Create(Horo::Debug::CoreConsoleDescriptors(), policy);
+            REQUIRE(created.HasValue());
+            registry = std::make_shared<Horo::Debug::CommandRegistry>(std::move(created).Value());
+            std::vector descriptors{Horo::Debug::ConsoleHistoryVariableDescriptor(), Horo::Debug::ConsoleVisibilityVariableDescriptor(),
+                                    Horo::Debug::ConsoleLogOverlayVariableDescriptor(),
+                                    Horo::Debug::ConsoleJobsOverlayVariableDescriptor()};
+            if (sceneInspection)
+                descriptors.push_back(Horo::Debug::ConsoleSceneOverlayVariableDescriptor());
+            if (network)
+                descriptors.push_back(Horo::Debug::ConsoleNetworkOverlayVariableDescriptor());
+            auto inventory =
+                Horo::Debug::ConsoleVariableSet::Create(descriptors, Horo::Debug::CoreConsoleDescriptors(), policy, configurationOwner);
+            REQUIRE(inventory.HasValue());
+            variables = std::make_shared<Horo::Debug::ConsoleVariableSet>(std::move(inventory).Value());
+            REQUIRE(variables->Set(Horo::Debug::ConsoleVisibleVariableName, terminal, {}).HasValue());
+            for (const auto source : {Horo::Debug::OverlaySource::Logs, Horo::Debug::OverlaySource::Jobs}) {
+                const auto name = source == Horo::Debug::OverlaySource::Logs ? Horo::Debug::ConsoleLogOverlayVariableName
+                                                                             : Horo::Debug::ConsoleJobsOverlayVariableName;
+                REQUIRE(variables->Set(name, std::ranges::find(panels, source) != panels.end(), {3, false, false}).HasValue());
+            }
+            if (network)
+                REQUIRE(variables
+                            ->Set(Horo::Debug::ConsoleNetworkOverlayVariableName,
+                                  std::ranges::find(panels, Horo::Debug::OverlaySource::Network) != panels.end(), {3, false, false})
+                            .HasValue());
+            auto bound = Horo::Debug::BindCoreConsoleCommands(registry, history, "Product Editor", variables);
+            if (sceneInspection) {
+                REQUIRE(variables
+                            ->Set(Horo::Debug::ConsoleSceneOverlayVariableName,
+                                  std::ranges::find(panels, Horo::Debug::OverlaySource::Scene) != panels.end(), {3, false, false})
+                            .HasValue());
+                REQUIRE(variables->Apply(Horo::Debug::ConsoleVariableApplyPolicy::NextFrame).HasValue());
+            }
+            REQUIRE(bound.HasValue());
+            auto dispatched = Horo::Debug::CommandExecutor::Create(registry, bound.Value(), jobs, operations, std::this_thread::get_id(),
+                                                                   std::this_thread::get_id(), 128, nullptr, variables);
+            REQUIRE(dispatched.HasValue());
+            executor = std::move(dispatched).Value();
+            AdvanceInputFrame();
+            view =
+                std::make_unique<Horo::Editor::RuntimeConsoleView>(Horo::Editor::RuntimeConsoleViewPorts{input.Router(), *executor,
+                                                                                                         *history, *registry,
+                                                                                                         operationQuery, configuration,
+                                                                                                         logs, principal, variables.get(),
+                                                                                                         sceneInspection, network},
+                                                                   Horo::Editor::RuntimeConsoleViewPresentation{terminal, overlays,
+                                                                                                                panels});
+        }
+
+        /** @brief Advances the real router across a presentation-frame input barrier. */
+        void AdvanceInputFrame() {
+            input.BeginFrame(nextFrame++);
+            static_cast<void>(input.CommitFrame());
+        }
+
+    private:
+        Horo::Input::FrameNumber nextFrame{1};
+    };
+
     std::string gClipboardText;
 
     void CaptureClipboardText(ImGuiContext *, const char *text) {
@@ -26,7 +170,9 @@ namespace {
     struct ImGuiTestContext {
         explicit ImGuiTestContext(const ImVec2 displaySize) {
             IMGUI_CHECKVERSION();
-            ImGui::CreateContext();
+            previous = ImGui::GetCurrentContext();
+            context = ImGui::CreateContext();
+            ImGui::SetCurrentContext(context);
             io = &ImGui::GetIO();
             io->DisplaySize = displaySize;
             io->DeltaTime = 1.0F / 60.0F;
@@ -37,9 +183,14 @@ namespace {
         }
 
         ~ImGuiTestContext() {
-            ImGui::DestroyContext();
+            ImGui::DestroyContext(context);
+            ImGui::SetCurrentContext(previous);
         }
 
+        ImGuiTestContext(const ImGuiTestContext &) = delete;
+        ImGuiTestContext &operator=(const ImGuiTestContext &) = delete;
+
+        ImGuiContext *context{}, *previous{};
         ImGuiIO *io{nullptr};
         Horo::Editor::Theme::Fonts fonts;
     };
@@ -101,6 +252,55 @@ namespace {
         ImGui::NewFrame();
         drawFrame();
         ImGui::Render();
+    }
+
+    /** @brief Runs actual shared controls inside one fixed test window and the framework's normal frame lifecycle. */
+    template <typename DrawFrame> void RenderMetadataFrame(DrawFrame &&drawFrame) {
+        RenderImGuiFrame([&] {
+            ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({600, 450}, ImGuiCond_Always);
+            ImGui::Begin("Metadata observations");
+            drawFrame();
+            ImGui::End();
+        });
+    }
+
+    /** @brief Checks actual rendered glyphs against the arrow geometry and field bounds, including inherited disablement. */
+    void CheckComboPreviewBounds(const ImDrawList &draw, const int firstVertex, const ImRect bounds) {
+        using namespace Horo::Editor;
+        const auto textColor = Theme::U32(Theme::Text()), arrowColor = Theme::U32(Theme::Muted());
+        const auto whitePixel = ImGui::GetFontTexUvWhitePixel();
+        float arrowLeft = bounds.Max.x;
+        int arrowVertices = 0;
+        for (int index = firstVertex; index < draw.VtxBuffer.Size; ++index) {
+            const auto &vertex = draw.VtxBuffer[index];
+            if (vertex.col != arrowColor || vertex.uv.x != whitePixel.x || vertex.uv.y != whitePixel.y)
+                continue;
+            ++arrowVertices;
+            arrowLeft = std::min(arrowLeft, vertex.pos.x);
+        }
+        REQUIRE(arrowVertices > 0);
+        int textVertices = 0;
+        for (int index = firstVertex; index < draw.VtxBuffer.Size; ++index) {
+            const auto &vertex = draw.VtxBuffer[index];
+            if (vertex.col != textColor || (vertex.uv.x == whitePixel.x && vertex.uv.y == whitePixel.y))
+                continue;
+            ++textVertices;
+            CHECK(vertex.pos.x >= bounds.Min.x);
+            CHECK(vertex.pos.x < arrowLeft);
+            CHECK(vertex.pos.y >= bounds.Min.y);
+            CHECK(vertex.pos.y <= bounds.Max.y);
+        }
+        CHECK(textVertices > 0);
+    }
+
+    /** @brief Sends one keyboard press and release through the actual Dear ImGui navigation input. */
+    template <typename DrawFrame> void PressImGuiKey(ImGuiIO &io, const ImGuiKey key, DrawFrame &&drawFrame) {
+        io.AddKeyEvent(key, true);
+        RenderImGuiFrame(drawFrame);
+        io.AddKeyEvent(key, false);
+        RenderImGuiFrame(drawFrame);
+        RenderImGuiFrame(drawFrame);
     }
 
     /** @brief Sends a complete pointer click sequence while rendering each interaction state. */
@@ -477,9 +677,10 @@ TEST_CASE("Component metrics use theme overrides while global scaling is disable
     std::filesystem::remove(path, removeError);
 
     Theme::SetUiScalePercent(120);
-    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(24.0F));
+    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(28.8F));
     Theme::SetUiScalePercent(130);
-    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(24.0F));
+    REQUIRE(MetricsFor(Theme::GetActiveTokens(), ComponentSize::XS).minimumHeight == Catch::Approx(31.2F));
+    Theme::SetUiScalePercent(100);
 }
 
 TEST_CASE("Small toolbar primitives share height and fixed action width", "[unit][editor][gui][design-system]") {
@@ -1216,4 +1417,875 @@ TEST_CASE("Context submenus flip at the right edge and remain inside the viewpor
             }
         }
     }
+}
+
+TEST_CASE("Shared combo keyboard navigation skips disabled rows and preserves no-op selection with wrapped labels",
+          "[unit][editor][gui][input][accessibility]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{400, 700}};
+    imgui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    const std::array labels{"First", "Unavailable",
+                            "A deliberately long localized option that must wrap without shrinking the shared label typography"};
+    const Ui::ComboItemSource source{.label = [&](const int index) {
+        return labels[index];
+    }, .enabled = [](const int index) {
+        return index != 1;
+    }};
+    int selected = 0;
+    bool changed = false, focus = true, fieldFocused = false;
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({260, 600}, ImGuiCond_Always);
+        if (focus)
+            ImGui::SetNextWindowFocus();
+        ImGui::Begin("Keyboard combo interaction");
+        focus = false;
+        ImGui::SetNextItemWidth(180);
+        changed = Ui::ComboControl("KeyboardChoice", &selected, static_cast<int>(labels.size()), source, imgui.fonts) || changed;
+        fieldFocused = ImGui::IsItemFocused();
+        ImGui::End();
+    };
+    for (int frame = 0; frame < 3; ++frame)
+        RenderImGuiFrame(draw);
+    PressImGuiKey(*imgui.io, ImGuiKey_Tab, draw);
+    REQUIRE(fieldFocused);
+    REQUIRE(GImGui->NavCursorVisible);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    REQUIRE_FALSE(GImGui->OpenPopupStack.empty());
+    CHECK(selected == 0);
+    CHECK_FALSE(changed);
+    REQUIRE(GImGui->OpenPopupStack.back().Window != nullptr);
+    CHECK(GImGui->OpenPopupStack.back().Window->Size.y > 3 * 28.0F);
+    CHECK(GImGui->OpenPopupStack.back().Window->ScrollMax.x == 0);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    CHECK(GImGui->OpenPopupStack.empty());
+    CHECK_FALSE(changed);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    REQUIRE_FALSE(GImGui->OpenPopupStack.empty());
+    PressImGuiKey(*imgui.io, ImGuiKey_DownArrow, draw);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    CHECK(selected == 2);
+    CHECK(changed);
+    CHECK(GImGui->OpenPopupStack.empty());
+}
+
+TEST_CASE("Disabled shared combo rejects pointer and keyboard activation", "[unit][editor][gui][input][accessibility]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{400, 500}};
+    imgui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    const std::array labels{"First", "Second"};
+    int selected = 0;
+    bool changed = false;
+    ImVec2 center;
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({300, 400}, ImGuiCond_Always);
+        ImGui::Begin("Disabled combo interaction");
+        ImGui::BeginDisabled();
+        ImGui::SetNextItemWidth(180);
+        changed = Ui::ComboControl("DisabledChoice", &selected, labels.data(), static_cast<int>(labels.size()), imgui.fonts) || changed;
+        const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
+        center = {(minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F};
+        ImGui::EndDisabled();
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    ClickImGuiItem(*imgui.io, center, draw);
+    PressImGuiKey(*imgui.io, ImGuiKey_Enter, draw);
+    CHECK(selected == 0);
+    CHECK_FALSE(changed);
+    CHECK(GImGui->OpenPopupStack.empty());
+}
+
+TEST_CASE("Shared command input retains native completion and Enter submission semantics", "[editor][gui][console][design-system]") {
+    using namespace Horo::Editor::Ui;
+    ImGuiTestContext imgui{{640, 400}};
+    std::array<char, 64> value{};
+    std::string completion = "version";
+    InputTextNavigation navigation{&completion,
+                                   [](void *context, InputTextNavigationAction action, std::string_view current,
+                                      std::size_t cursor) -> std::optional<std::string_view> {
+        if (action == InputTextNavigationAction::Complete && cursor == current.size())
+            return *static_cast<std::string *>(context);
+        if (action == InputTextNavigationAction::Previous && current.size() >= 3)
+            return current.substr(0, 3);
+        return {};
+    }};
+    bool focus = true;
+    bool submitted{};
+    const auto draw = [&] {
+        ImGui::SetNextWindowSize({500, 250});
+        ImGui::Begin("CommandInputGallery");
+        if (focus) {
+            ImGui::SetKeyboardFocusHere();
+            focus = false;
+        }
+        submitted = InputTextControl("##command", value.data(), value.size(), imgui.fonts,
+                                     {.componentSize = ComponentSize::Medium, .submitOnEnter = true, .navigation = &navigation});
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    imgui.io->AddInputCharactersUTF8("ver");
+    RenderImGuiFrame(draw);
+    CHECK(std::string_view(value.data()) == "ver");
+    CHECK_FALSE(submitted);
+    imgui.io->AddKeyEvent(ImGuiKey_Tab, true);
+    RenderImGuiFrame(draw);
+    CHECK(std::string_view(value.data()) == "version");
+    imgui.io->AddKeyEvent(ImGuiKey_Tab, false);
+    RenderImGuiFrame(draw);
+    CHECK(std::string_view(value.data()) == "version");
+    CHECK_FALSE(submitted);
+    imgui.io->AddKeyEvent(ImGuiKey_UpArrow, true);
+    RenderImGuiFrame(draw);
+    CHECK(std::string_view(value.data()) == "ver");
+    imgui.io->AddKeyEvent(ImGuiKey_UpArrow, false);
+    RenderImGuiFrame(draw);
+    CHECK(std::string_view(value.data()) == "ver");
+    imgui.io->AddKeyEvent(ImGuiKey_Tab, true);
+    RenderImGuiFrame(draw);
+    imgui.io->AddKeyEvent(ImGuiKey_Tab, false);
+    RenderImGuiFrame(draw);
+    CHECK(std::string_view(value.data()) == "version");
+    imgui.io->AddKeyEvent(ImGuiKey_Enter, true);
+    RenderImGuiFrame(draw);
+    CHECK(submitted);
+    imgui.io->AddKeyEvent(ImGuiKey_Enter, false);
+    RenderImGuiFrame(draw);
+    CHECK_FALSE(submitted);
+}
+
+TEST_CASE("Runtime console record gallery clips long Unicode rows and bounds painting across a full history",
+          "[editor][gui][console][design-system]") {
+    using namespace Horo::Editor;
+    Horo::Debug::ConsoleLimits limits;
+    limits.historyEntries = 10000;
+    Horo::Debug::ConsoleHistory history(limits);
+    const std::string command = "find \"" + std::string(128, 'x') + "\xc3\xb6\"";
+    for (std::size_t index = 0; index < 10000; ++index)
+        history.Append({Horo::Debug::FindCommandId, {}, command}, "Tamamlandi\nAyrintili sonuc");
+    REQUIRE(history.Entries().size() == 10000);
+    auto revision = history.Revision();
+    ImGuiTestContext imgui{{640, 400}};
+    for (const bool enabled : {true, false}) {
+        Ui::RuntimeConsoleRecordListResult painted;
+        const auto draw = [&] {
+            ImGui::SetNextWindowPos({20, 20});
+            ImGui::SetNextWindowSize({260, 300});
+            ImGui::Begin("RuntimeConsoleRecordGallery");
+            painted = Ui::RuntimeConsoleRecordList({.rows = history.Entries(),
+                                                    .revision = history.Revision(),
+                                                    .empty = "Bos",
+                                                    .pending = "Bekleniyor",
+                                                    .unavailable = "Artik saklanmiyor",
+                                                    .selected = history.Entries().size() - 1,
+                                                    .height = 170,
+                                                    .enabled = enabled},
+                                                   imgui.fonts);
+            ImGui::End();
+        };
+        RenderImGuiFrame(draw);
+        RenderImGuiFrame(draw);
+        CHECK(painted.painted > 0);
+        CHECK(painted.painted <= 128);
+        CHECK(painted.painted < history.Entries().size());
+        CHECK(history.Revision() == revision);
+        CHECK_FALSE(painted.activated);
+        bool checkedChild{};
+        ImVec2 rowTarget{};
+        for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+            if (window->Active && std::string_view(window->Name).find("##RuntimeConsoleRecords") != std::string_view::npos) {
+                CHECK(window->ScrollMax.x == 0);
+                CHECK(window->ScrollMax.y > 0);
+                CHECK(window->Scroll.y == Catch::Approx(window->ScrollMax.y).margin(1));
+                rowTarget = window->InnerRect.GetCenter();
+                checkedChild = true;
+            }
+        }
+        CHECK(checkedChild);
+        if (enabled && checkedChild) {
+            imgui.io->AddMousePosEvent(rowTarget.x, rowTarget.y);
+            RenderImGuiFrame(draw);
+            imgui.io->AddMouseButtonEvent(0, true);
+            RenderImGuiFrame(draw);
+            history.Append({Horo::Debug::FindCommandId, {}, "find changed"}, "changed");
+            revision = history.Revision();
+            imgui.io->AddMouseButtonEvent(0, false);
+            RenderImGuiFrame(draw);
+            CHECK_FALSE(painted.activated);
+        }
+    }
+}
+
+TEST_CASE("Runtime console view does not steal existing or newer modal leases and releases input on host barriers",
+          "[editor][console][input]") {
+    ConsoleViewFixture console;
+    auto gameplay = console.input.Router().PushContext(Horo::Input::InputContextId("gameplay"), Horo::Input::InputContextKind::Gameplay);
+    auto modal =
+        console.input.Router().PushContext(Horo::Input::InputContextId("existing.modal"), Horo::Input::InputContextKind::ModalRoot);
+    console.view->SynchronizeFocus(false);
+    CHECK_FALSE(console.view->Interactive());
+    CHECK(console.input.Router().IsContextActive(modal));
+    modal.Reset();
+    console.view->SynchronizeFocus(false);
+    CHECK_FALSE(console.view->Interactive());
+    console.AdvanceInputFrame();
+    console.view->SynchronizeFocus(false);
+    CHECK(console.view->Interactive());
+    CHECK_FALSE(console.input.Router().IsContextActive(gameplay));
+    auto child = console.input.Router().PushContext(Horo::Input::InputContextId("later.modal"), Horo::Input::InputContextKind::ModalRoot);
+    console.view->SynchronizeFocus(false);
+    CHECK_FALSE(console.view->Interactive());
+    CHECK(console.input.Router().IsContextActive(child));
+    child.Reset();
+    console.AdvanceInputFrame();
+    console.view->SynchronizeFocus(false);
+    CHECK(console.view->Interactive());
+    console.view->SynchronizeFocus(true);
+    CHECK_FALSE(console.view->Interactive());
+    console.AdvanceInputFrame();
+    CHECK(console.input.Router().IsContextActive(gameplay));
+    CHECK(console.view->Visible());
+    console.view->SetVisible(false);
+    CHECK_FALSE(console.view->Visible());
+    CHECK(console.history->Entries().empty());
+}
+
+TEST_CASE("Runtime log and operation panels use real visible sources and explicit host refresh time", "[editor][gui][console][overlays]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{1400, 900}};
+    const std::array requested{Horo::Debug::OverlaySource::Logs, Horo::Debug::OverlaySource::Jobs, Horo::Debug::OverlaySource::Frame};
+    ConsoleViewFixture console(false, true, requested);
+    console.logs.store.Append({0, {}, Horo::Log::Level::Warn, "game.scene", "visible source", {}});
+    REQUIRE(console.operations->Begin({.title = "real operation", .progress = 0.5F}));
+    LocalizationService localization{{"tr-TR"}};
+    REQUIRE(localization.LoadCatalogFile(std::filesystem::path(HORO_PROJECT_SOURCE_DIR) / "assets/localization/editor/tr-TR.json"));
+    REQUIRE(localization.Prepare({"tr-TR"}));
+    REQUIRE(localization.ActivatePrepared());
+    auto now = std::chrono::steady_clock::time_point{};
+    bool blocked = true;
+    const auto draw = [&] {
+        console.view->Draw(localization, imgui.fonts, blocked, now);
+    };
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 0);
+    CHECK(console.operationQuery.queries == 0);
+    blocked = false;
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    CHECK(console.view->Interactive());
+    CHECK_FALSE(console.view->Visible());
+    CHECK(console.view->OverlaysVisible());
+    CHECK(console.logs.queries == 1);
+    CHECK(console.operationQuery.queries == 1);
+    bool logWindow{}, operationWindow{};
+    for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+        if (!window->Active)
+            continue;
+        logWindow |= std::string_view(window->Name) == "##RuntimeLogsOverlay";
+        operationWindow |= std::string_view(window->Name) == "##RuntimeJobsOverlay";
+    }
+    CHECK(logWindow);
+    CHECK(operationWindow);
+    now += std::chrono::milliseconds{249};
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 1);
+    CHECK(console.operationQuery.queries == 1);
+    blocked = true;
+    now += std::chrono::seconds{1};
+    RenderImGuiFrame(draw);
+    CHECK_FALSE(console.view->Interactive());
+    CHECK(console.logs.queries == 1);
+    CHECK(console.operationQuery.queries == 1);
+    blocked = false;
+    console.AdvanceInputFrame();
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 2);
+    CHECK(console.operationQuery.queries == 2);
+    console.view->SetOverlaysVisible(false);
+    now += std::chrono::seconds{10};
+    RenderImGuiFrame(draw);
+    CHECK_FALSE(console.view->AnyVisible());
+    CHECK(console.logs.queries == 2);
+    CHECK(console.operationQuery.queries == 2);
+}
+
+TEST_CASE("Accepted panel variables project to real source queries under the independent overlay feature gate",
+          "[editor][gui][console][overlays]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using namespace Horo::Debug;
+    ImGuiTestContext imgui{{1400, 900}};
+    const std::array requested{OverlaySource::Logs, OverlaySource::Jobs};
+    ConsoleViewFixture console(false, true, requested);
+    console.logs.store.Append({0, {}, Log::Level::Info, "game", "real log", {}});
+    REQUIRE(console.operations->Begin({.title = "real operation"}));
+    LocalizationService localization{LocaleTag{"en-US"}};
+    REQUIRE(localization.LoadCatalogFile(std::filesystem::path(HORO_PROJECT_SOURCE_DIR) / "assets/localization/editor/en-US.json"));
+    REQUIRE(localization.Prepare({"en-US"}));
+    REQUIRE(localization.ActivatePrepared());
+    auto now = std::chrono::steady_clock::time_point{};
+    const auto draw = [&] {
+        console.view->Draw(localization, imgui.fonts, false, now);
+    };
+    const auto project = [&] {
+        for (const auto source : {OverlaySource::Logs, OverlaySource::Jobs}) {
+            const auto name = source == OverlaySource::Logs ? ConsoleLogOverlayVariableName : ConsoleJobsOverlayVariableName;
+            const auto value = console.variables->Read(name, {3, false, false});
+            REQUIRE(value.HasValue());
+            REQUIRE(console.view->SetPanelVisibility(source, std::get<bool>(value.Value().active)).HasValue());
+        }
+        CHECK_FALSE(console.view->TakePanelVisibilityRequest());
+    };
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 1);
+    CHECK(console.operationQuery.queries == 1);
+    const auto revision = console.configuration.Snapshot().Revision();
+    REQUIRE(console.executor->Submit("overlay.logs.visible false", {3, false, false}).HasValue());
+    REQUIRE(console.executor->DrainOwner(1).HasValue());
+    project();
+    now += std::chrono::seconds{1};
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 1);
+    CHECK(console.operationQuery.queries == 2);
+    console.view->SetOverlaysVisible(false);
+    REQUIRE(console.executor->Submit("overlay.logs.visible true", {3, false, false}).HasValue());
+    REQUIRE(console.executor->DrainOwner(1).HasValue());
+    project();
+    now += std::chrono::seconds{1};
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 1);
+    CHECK(console.operationQuery.queries == 2);
+    console.view->SetOverlaysVisible(true);
+    console.AdvanceInputFrame();
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 2);
+    CHECK(console.operationQuery.queries == 3);
+    CHECK(console.configuration.Snapshot().Revision() == revision);
+    CHECK(console.view->SetPanelVisibility(OverlaySource::Frame, true).HasError());
+}
+
+TEST_CASE("Public terminal presentation cannot enable developer store panels", "[editor][console][overlays]") {
+    const std::array requested{Horo::Debug::OverlaySource::Logs, Horo::Debug::OverlaySource::Jobs};
+    ConsoleViewFixture console(false, true, requested, {1, false, false});
+    console.view->SynchronizeFocus(false);
+    CHECK_FALSE(console.view->AnyVisible());
+    CHECK_FALSE(console.view->Interactive());
+    CHECK(console.logs.queries == 0);
+    CHECK(console.operationQuery.queries == 0);
+    CHECK(console.view->SetPanelVisibility(Horo::Debug::OverlaySource::Logs, false).HasError());
+}
+
+TEST_CASE("Graphical variable completion uses the same dispatcher inventory and host permissions", "[editor][gui][console]") {
+    using namespace Horo::Editor;
+    for (const bool developer : {false, true}) {
+        ImGuiTestContext imgui{{1000, 700}};
+        ConsoleViewFixture console(true, false, {}, {developer ? 3U : 1U, false, false});
+        LocalizationService localization{LocaleTag{"en-US"}};
+        REQUIRE(localization.LoadCatalogFile(std::filesystem::path(HORO_PROJECT_SOURCE_DIR) / "assets/localization/editor/en-US.json"));
+        REQUIRE(localization.Prepare({"en-US"}));
+        REQUIRE(localization.ActivatePrepared());
+        const auto draw = [&] {
+            console.view->Draw(localization, imgui.fonts, false, std::chrono::steady_clock::time_point{});
+        };
+        RenderImGuiFrame(draw);
+        RenderImGuiFrame(draw);
+        imgui.io->AddInputCharactersUTF8("console.h");
+        RenderImGuiFrame(draw);
+        imgui.io->AddKeyEvent(ImGuiKey_Tab, true);
+        RenderImGuiFrame(draw);
+        imgui.io->AddKeyEvent(ImGuiKey_Tab, false);
+        RenderImGuiFrame(draw);
+        imgui.io->AddKeyEvent(ImGuiKey_Enter, true);
+        RenderImGuiFrame(draw);
+        imgui.io->AddKeyEvent(ImGuiKey_Enter, false);
+        RenderImGuiFrame(draw);
+        const auto operations = console.operations->SnapshotIfChanged(0);
+        if (developer) {
+            REQUIRE(console.history->Entries().size() == 1);
+            CHECK(console.history->Entries()[0].command == "console.history.limit");
+            REQUIRE(operations);
+            REQUIRE(operations->operations.size() == 1);
+            CHECK(console.history->Entries()[0].operation == operations->operations[0].id);
+            REQUIRE(console.executor->DrainOwner(1).HasValue());
+        } else {
+            CHECK(console.history->Entries().empty());
+            CHECK_FALSE(operations);
+        }
+    }
+}
+
+TEST_CASE("Scene development panel requires an explicit owner capability and follows accepted visibility",
+          "[editor][gui][console][scene]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{1200, 800}};
+    const std::array requested{Horo::Debug::OverlaySource::Scene};
+    ConsoleViewFixture console(false, true, requested, {3, false, false}, true);
+    Horo::Runtime::RuntimeSceneService scene(Horo::Runtime::SceneRuntimeId{101});
+    REQUIRE(scene.Startup({}).HasValue());
+    Horo::Runtime::SceneDefinitionBuilder builder({1}, {1});
+    builder.Add(Horo::Runtime::RuntimeEntityDefinition{.object = {1}});
+    auto definition = std::move(builder).Build();
+    REQUIRE(definition.HasValue());
+    REQUIRE(scene.QueuePreparation(std::move(definition).Value()).HasValue());
+    const Horo::Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, {}};
+    REQUIRE(scene.OnPhase(Horo::Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+    const auto sceneView = scene.ActiveScene();
+    REQUIRE(sceneView);
+    REQUIRE(console.view->PublishScene(&*sceneView).HasValue());
+    LocalizationService localization{{"en-US"}};
+    REQUIRE(localization.LoadCatalogFile(std::filesystem::path(HORO_PROJECT_SOURCE_DIR) / "assets/localization/editor/en-US.json"));
+    REQUIRE(localization.Prepare({"en-US"}));
+    REQUIRE(localization.ActivatePrepared());
+    auto now = std::chrono::steady_clock::time_point{};
+    const auto draw = [&] {
+        console.view->Draw(localization, imgui.fonts, false, now);
+    };
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    const auto *window = ImGui::FindWindowByName("##RuntimeSceneOverlay");
+    REQUIRE(window);
+    CHECK(window->Active);
+    CHECK(console.logs.queries == 0);
+    CHECK(console.operationQuery.queries == 0);
+    REQUIRE(console.view->SetPanelVisibility(Horo::Debug::OverlaySource::Scene, false).HasValue());
+    RenderImGuiFrame(draw);
+    CHECK_FALSE(window->Active);
+    scene.Shutdown();
+    REQUIRE(console.view->PublishScene(&*sceneView).HasValue());
+    REQUIRE(console.view->SetPanelVisibility(Horo::Debug::OverlaySource::Scene, true).HasValue());
+    now += std::chrono::seconds{1};
+    console.AdvanceInputFrame();
+    RenderImGuiFrame(draw);
+    CHECK(window->Active);
+    REQUIRE(console.view->PublishScene(nullptr).HasValue());
+    RenderImGuiFrame(draw);
+    CHECK(console.logs.queries == 0);
+    CHECK(console.operationQuery.queries == 0);
+    ConsoleViewFixture unbound(false, true, requested);
+    CHECK(unbound.view->PublishScene(&*sceneView).HasError());
+    CHECK(unbound.view->SetPanelVisibility(Horo::Debug::OverlaySource::Scene, true).HasError());
+}
+
+TEST_CASE("Network panel uses the actual query only while visible and keeps unrelated sources idle", "[editor][gui][console][network]") {
+    using namespace Horo::Editor;
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        ImGuiTestContext imgui{{800, 700}};
+        auto network = std::make_shared<ConsoleObservedNetwork>();
+        const std::array requested{Horo::Debug::OverlaySource::Network};
+        ConsoleViewFixture console(false, true, requested, {3, false, false}, false, network);
+        CHECK(network->queries == 0);
+        CHECK_FALSE(network->service->Query().snapshot.attached);
+        LocalizationService localization{LocaleTag{locale}};
+        REQUIRE(localization.LoadCatalogFile(std::filesystem::path(HORO_PROJECT_SOURCE_DIR) / "assets/localization/editor" /
+                                             (std::string(locale) + ".json")));
+        REQUIRE(localization.Prepare(LocaleTag{locale}));
+        REQUIRE(localization.ActivatePrepared());
+        auto now = std::chrono::steady_clock::time_point{};
+        bool blocked = true;
+        const auto draw = [&] {
+            console.view->Draw(localization, imgui.fonts, blocked, now);
+        };
+        RenderImGuiFrame(draw);
+        CHECK(network->queries == 0);
+        blocked = false;
+        RenderImGuiFrame(draw);
+        RenderImGuiFrame(draw);
+        const auto *window = ImGui::FindWindowByName("##RuntimeNetworkOverlay");
+        REQUIRE(window);
+        CHECK(window->Active);
+        CHECK(network->queries == 1);
+        CHECK(console.logs.queries == 0);
+        CHECK(console.operationQuery.queries == 0);
+        now += std::chrono::milliseconds{249};
+        RenderImGuiFrame(draw);
+        CHECK(network->queries == 1);
+        now += std::chrono::milliseconds{1};
+        RenderImGuiFrame(draw);
+        CHECK(network->queries == 2);
+        REQUIRE(console.view->SetPanelVisibility(Horo::Debug::OverlaySource::Network, false).HasValue());
+        now += std::chrono::seconds{1};
+        RenderImGuiFrame(draw);
+        CHECK_FALSE(window->Active);
+        CHECK(network->queries == 2);
+        console.view->SetOverlaysVisible(false);
+        REQUIRE(console.view->SetPanelVisibility(Horo::Debug::OverlaySource::Network, true).HasValue());
+        RenderImGuiFrame(draw);
+        CHECK(network->queries == 2);
+        console.view->SetOverlaysVisible(true);
+        console.AdvanceInputFrame();
+        RenderImGuiFrame(draw);
+        CHECK(window->Active);
+        CHECK(network->queries == 3);
+        CHECK(console.logs.queries == 0);
+        CHECK(console.operationQuery.queries == 0);
+        ConsoleViewFixture unbound(false, true, requested);
+        CHECK(unbound.view->SetPanelVisibility(Horo::Debug::OverlaySource::Network, true).HasError());
+    }
+}
+
+TEST_CASE("Inspection identity rows use bounded shared virtual painting", "[editor][gui][console][scene]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{1000, 700}};
+    std::array<Ui::RuntimeInspectionRecordRow, 256> rows;
+    for (auto &row : rows) {
+        const std::string_view reference{"101:0:1"};
+        std::copy(reference.begin(), reference.end(), row.title.begin());
+        row.titleBytes = static_cast<std::uint8_t>(reference.size());
+    }
+    Ui::RuntimeConsoleRecordListResult painted;
+    const auto draw = [&] {
+        ImGui::SetNextWindowSize({600, 500}, ImGuiCond_Always);
+        ImGui::Begin("SceneInspectionGallery");
+        painted = Ui::RuntimeInspectionRecordList({rows, 1, "empty", "Parent", {}, 400}, imgui.fonts);
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    CHECK(painted.painted > 0);
+    CHECK(painted.painted <= 128);
+}
+
+TEST_CASE("Graphical runtime console Tab and Enter use the same core dispatcher and redacted history", "[editor][gui][console]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext imgui{{1000, 700}};
+    ConsoleViewFixture console;
+    LocalizationService localization{LocaleTag{"en-US"}};
+    REQUIRE(localization.LoadCatalogFile(std::filesystem::path(HORO_PROJECT_SOURCE_DIR) / "assets/localization/editor/en-US.json"));
+    REQUIRE(localization.Prepare({"en-US"}));
+    REQUIRE(localization.ActivatePrepared());
+    const auto draw = [&] {
+        console.view->Draw(localization, imgui.fonts, false, std::chrono::steady_clock::time_point{});
+    };
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    REQUIRE(console.view->Interactive());
+    imgui.io->AddInputCharactersUTF8("ver");
+    RenderImGuiFrame(draw);
+    imgui.io->AddKeyEvent(ImGuiKey_Tab, true);
+    RenderImGuiFrame(draw);
+    imgui.io->AddKeyEvent(ImGuiKey_Tab, false);
+    RenderImGuiFrame(draw);
+    imgui.io->AddKeyEvent(ImGuiKey_Enter, true);
+    RenderImGuiFrame(draw);
+    imgui.io->AddKeyEvent(ImGuiKey_Enter, false);
+    RenderImGuiFrame(draw);
+    REQUIRE(console.history->Entries().size() == 1);
+    CHECK(console.history->Entries()[0].command == "version");
+    CHECK(console.history->Entries()[0].output == "Product Editor");
+    CHECK_FALSE(console.operations->SnapshotIfChanged(0));
+    imgui.io->AddKeyEvent(ImGuiKey_Escape, true);
+    RenderImGuiFrame(draw);
+    const auto close = console.view->TakeVisibilityRequest();
+    REQUIRE(close);
+    CHECK_FALSE(*close);
+    CHECK_FALSE(console.view->TakeVisibilityRequest());
+    CHECK(console.view->Visible());
+    CHECK(console.view->Interactive());
+    REQUIRE(console.executor->Submit("console.visible false", {}).HasValue());
+    REQUIRE(console.executor->DrainOwner(1).HasValue());
+    const auto visible = console.variables->Read(Horo::Debug::ConsoleVisibleVariableName, {});
+    REQUIRE(visible.HasValue());
+    console.view->SetVisible(std::get<bool>(visible.Value().active));
+    CHECK_FALSE(console.view->Visible());
+    CHECK_FALSE(console.view->Interactive());
+}
+
+TEST_CASE("Shared combo selected text stays inside the label area for long localized values", "[unit][editor][gui][input][accessibility]") {
+    using namespace Horo::Editor;
+    for (const float width : {80.0F, 180.0F, 320.0F}) {
+        for (const bool disabled : {false, true}) {
+            ImGuiTestContext imgui{{800, 500}};
+            const std::array labels{"Uzun yerelleştirilmiş denetleyici hareket kaynağı seçimi / long localized controller motion source"};
+            int selected = 0;
+            for (int frame = 0; frame < 2; ++frame) {
+                RenderImGuiFrame([&] {
+                    ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Always);
+                    ImGui::SetNextWindowSize({780, 480}, ImGuiCond_Always);
+                    ImGui::Begin("Localized combo label bounds");
+                    ImGui::BeginDisabled(disabled);
+                    auto *const draw = ImGui::GetWindowDrawList();
+                    const int firstVertex = draw->VtxBuffer.Size;
+                    ImGui::SetNextItemWidth(width);
+                    CHECK_FALSE(
+                        Ui::ComboControl("LocalizedChoice", &selected, labels.data(), static_cast<int>(labels.size()), imgui.fonts));
+                    CheckComboPreviewBounds(*draw, firstVertex, {ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
+                    ImGui::EndDisabled();
+                    ImGui::End();
+                });
+            }
+            CHECK(selected == 0);
+        }
+    }
+}
+
+TEST_CASE("Shared controls produce owned versioned observations without retaining editable content",
+          "[unit][editor][gui][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    std::string label{"Save###stable-save"}, secret{"private-value"};
+    bool checked = true;
+    int selected = 1;
+    const std::array choices{"One", "Two"};
+    RenderMetadataFrame([&] {
+        static_cast<void>(Ui::Button({.label = label.c_str()}));
+        label.assign("Changed after submission");
+        static_cast<void>(Ui::CheckboxControl("Enabled", &checked, gui.fonts));
+        static_cast<void>(Ui::InputTextControl("Password", secret, 64, gui.fonts));
+        static_cast<void>(Ui::ComboControl("##Choice", &selected, choices.data(), static_cast<int>(choices.size()), gui.fonts));
+        ImGui::BeginDisabled();
+        static_cast<void>(Ui::Button({.label = "Disabled"}));
+        ImGui::EndDisabled();
+        static_cast<void>(Ui::IconButton({.id = "literal-label", .tooltip = "Literal##help"}));
+    });
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 6);
+    CHECK(frame.schemaVersion == CurrentUiAccessibilitySchemaVersion);
+    CHECK(frame.Text(frame.controls[0].name) == "Save");
+    CHECK(frame.controls[1].role == UiAccessibilityRole::Checkbox);
+    CHECK(frame.controls[1].state.Has(UiAccessibilityStateFlag::Checked));
+    CHECK(frame.controls[1].value.boolean);
+    CHECK(frame.controls[2].valueRedacted);
+    CHECK(frame.controls[2].value.kind == UiAccessibilityValueKind::None);
+    CHECK(std::string_view(frame.text.data(), frame.text.size()).find("private-value") == std::string_view::npos);
+    CHECK(frame.controls[3].value.integer == 1);
+    CHECK(frame.missingNames == 1);
+    CHECK(frame.controls[4].state.Has(UiAccessibilityStateFlag::Disabled));
+    CHECK_FALSE(frame.controls[4].state.Has(UiAccessibilityStateFlag::Focusable));
+    CHECK(frame.Text(frame.controls[5].name) == "Literal##help");
+    CHECK(frame.Text({.offset = 128'000, .size = 2}).empty());
+    CHECK(Metadata::EditorControlMetadataFrame{}.Text({.offset = 0, .size = 0}).empty());
+}
+
+TEST_CASE("Metadata redaction and focus observation cannot be overridden by caller supplied facts and allocate no storage",
+          "[unit][editor][gui][accessibility][metadata][allocation]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    Horo::Tests::AllocationProbe::Measurement allocation;
+    bool focused = false;
+    RenderMetadataFrame([&] {
+        static_cast<void>(ImGui::Button("Actual control"));
+        focused = ImGui::IsItemFocused();
+        Horo::Tests::AllocationProbe::ScopedMeasurement probe;
+        Metadata::ObserveEditorControl(UiAccessibilityRole::Button, "Probe",
+                                       UiAccessibilityState{UiAccessibilityStateFlag::Disabled | UiAccessibilityStateFlag::Focused},
+                                       {.kind = UiAccessibilityValueKind::Text,
+                                        .text = {"sensitive", UiAccessibilityTextSource::UserContent}},
+                                       true);
+        allocation = probe.Snapshot();
+    });
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 1);
+    CHECK(allocation.requests == 0);
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focused) == focused);
+    CHECK_FALSE(frame.controls[0].state.Has(UiAccessibilityStateFlag::Disabled));
+    CHECK(frame.controls[0].valueRedacted);
+    CHECK(frame.controls[0].value.kind == UiAccessibilityValueKind::None);
+    CHECK(std::string_view(frame.text.data(), frame.text.size()).find("sensitive") == std::string_view::npos);
+}
+
+TEST_CASE("Metadata contexts isolate foreign user data and rebind without reviving destroyed context observations",
+          "[unit][editor][gui][accessibility][metadata][lifetime]") {
+    using namespace Horo::Editor;
+    Metadata::EditorControlMetadataCapture capture;
+    ImGuiTestContext first{{800, 500}};
+    REQUIRE(capture.Bind(first.context));
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "First"}));
+    });
+    const auto sequence = capture.Frame().sequence;
+    {
+        ImGuiTestContext second{{800, 500}};
+        second.io->UserData = reinterpret_cast<void *>(static_cast<std::uintptr_t>(1));
+        RenderMetadataFrame([] {
+            static_cast<void>(Ui::Button({.label = "Foreign"}));
+        });
+        CHECK(Metadata::CurrentEditorControlMetadata().status == Metadata::EditorControlMetadataStatus::NoFrame);
+        REQUIRE(capture.Frame().controls.size() == 1);
+        CHECK(capture.Frame().Text(capture.Frame().controls[0].name) == "First");
+        REQUIRE(capture.Bind(second.context));
+        RenderMetadataFrame([] {
+            static_cast<void>(Ui::Button({.label = "Second"}));
+        });
+        REQUIRE(capture.Frame().controls.size() == 1);
+        CHECK(capture.Frame().Text(capture.Frame().controls[0].name) == "Second");
+    }
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::Retired);
+    CHECK(ImGui::GetCurrentContext() == first.context);
+    REQUIRE(capture.Bind(first.context));
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "Restored"}));
+    });
+    CHECK(capture.Frame().sequence > sequence);
+    REQUIRE(capture.Frame().controls.size() == 1);
+    CHECK(capture.Frame().Text(capture.Frame().controls[0].name) == "Restored");
+}
+
+TEST_CASE("Destroying a metadata capture revokes its hooks without replacing another owner or leaving callbacks",
+          "[unit][editor][gui][accessibility][metadata][lifetime]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 500}};
+    {
+        Metadata::EditorControlMetadataCapture capture, other;
+        REQUIRE(capture.Bind(gui.context));
+        CHECK_FALSE(other.Bind(gui.context));
+        RenderMetadataFrame([] {
+            static_cast<void>(Ui::Button({.label = "Owned"}));
+        });
+        REQUIRE(capture.Frame().controls.size() == 1);
+    }
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "After owner destruction"}));
+    });
+    CHECK(Metadata::CurrentEditorControlMetadata().status == Metadata::EditorControlMetadataStatus::NoFrame);
+}
+
+TEST_CASE("Metadata capacity refusal exposes no partial frame and recovers at the next real frame boundary",
+          "[unit][editor][gui][accessibility][metadata][capacity]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    RenderMetadataFrame([] {
+        for (std::size_t item = 0; item <= Metadata::EditorControlMetadataCapture::MaximumControls; ++item) {
+            ImGui::PushID(static_cast<int>(item));
+            static_cast<void>(Ui::Button({.label = "Entry"}));
+            ImGui::PopID();
+        }
+    });
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::CapacityExceeded);
+    CHECK(capture.Frame().controls.empty());
+    CHECK(capture.Frame().text.empty());
+    const auto rejected = capture.Frame().sequence;
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "Recovered"}));
+    });
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::Complete);
+    CHECK(capture.Frame().sequence > rejected);
+    REQUIRE(capture.Frame().controls.size() == 1);
+}
+
+TEST_CASE("Duplicate actual widget identities reject the complete metadata attempt rather than overwriting observations",
+          "[unit][editor][gui][accessibility][metadata][identity]") {
+    using namespace Horo::Editor;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    RenderMetadataFrame([] {
+        static_cast<void>(Ui::Button({.label = "Duplicate"}));
+        static_cast<void>(Ui::Button({.label = "Duplicate"}));
+    });
+    CHECK(capture.Frame().status == Metadata::EditorControlMetadataStatus::InvalidInput);
+    CHECK(capture.Frame().controls.empty());
+    CHECK(capture.Frame().text.empty());
+}
+
+TEST_CASE("Shared text links expose their rendered names and activate through actual keyboard navigation",
+          "[unit][editor][gui][input][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    gui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    int activations = 0;
+    bool focused = false;
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({600, 450}, ImGuiCond_Always);
+        ImGui::Begin("Keyboard link");
+        activations += Ui::TextLink("##link", "Visible##literal", gui.fonts.sansCompact, Theme::TextPx::Label(), true);
+        focused = ImGui::IsItemFocused();
+        ImGui::End();
+    };
+    for (int frame = 0; frame < 3; ++frame)
+        RenderImGuiFrame(draw);
+    PressImGuiKey(*gui.io, ImGuiKey_Tab, draw);
+    REQUIRE(focused);
+    REQUIRE(GImGui->NavCursorVisible);
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 1);
+    CHECK(frame.Text(frame.controls[0].name) == "Visible##literal");
+    CHECK(frame.controls[0].role == UiAccessibilityRole::Link);
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Selected));
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focused));
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focusable));
+    CHECK(activations == 0);
+    PressImGuiKey(*gui.io, ImGuiKey_Enter, draw);
+    CHECK(activations == 1);
+}
+
+TEST_CASE("Inspector property metadata uses visible names and typed values", "[unit][editor][gui][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    const std::array entries{"Automatic", "Manual"};
+    int selection = 1;
+    float strength = 0.5F;
+    RenderMetadataFrame([&] {
+        static_cast<void>(Ui::DrawComboPropRow("Mode##label", "##mode", selection, entries, gui.fonts));
+        static_cast<void>(Ui::DrawFloatPropRow("Strength", "##strength", strength, gui.fonts, {.error = true}));
+    });
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 2);
+    const auto &mode = frame.controls[0];
+    CHECK(frame.Text(mode.name) == "Mode##label");
+    CHECK(mode.role == UiAccessibilityRole::List);
+    CHECK(mode.value.kind == UiAccessibilityValueKind::Integer);
+    CHECK(mode.value.integer == 1);
+    const auto &field = frame.controls[1];
+    CHECK(frame.Text(field.name) == "Strength");
+    CHECK(field.role == UiAccessibilityRole::TextField);
+    CHECK(field.state.Has(UiAccessibilityStateFlag::Editable));
+    CHECK(field.state.Has(UiAccessibilityStateFlag::Invalid));
+    CHECK(field.value.kind == UiAccessibilityValueKind::Number);
+    CHECK(field.value.number == 0.5);
+}
+
+TEST_CASE("Disabled shared links and selected theme chips retain actual metadata without enabling activation",
+          "[unit][editor][gui][input][accessibility][metadata]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Runtime::Ui;
+    ImGuiTestContext gui{{800, 500}};
+    gui.io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    Metadata::EditorControlMetadataCapture capture;
+    REQUIRE(capture.Bind(gui.context));
+    bool activated = false;
+    ImVec2 center;
+    const auto draw = [&] {
+        ImGui::Begin("Disabled link");
+        ImGui::BeginDisabled();
+        activated = Ui::TextLink("##disabled-link", "Disabled link", gui.fonts.sansCompact, Theme::TextPx::Label()) || activated;
+        const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
+        center = {(minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F};
+        ImGui::EndDisabled();
+        static_cast<void>(Ui::ThemeChip("Selected###stable-theme", {1, 0, 0, 1}, true, gui.fonts));
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    ClickImGuiItem(*gui.io, center, draw);
+    PressImGuiKey(*gui.io, ImGuiKey_Enter, draw);
+    CHECK_FALSE(activated);
+    const auto frame = capture.Frame();
+    REQUIRE(frame.status == Metadata::EditorControlMetadataStatus::Complete);
+    REQUIRE(frame.controls.size() == 2);
+    CHECK(frame.controls[0].state.Has(UiAccessibilityStateFlag::Disabled));
+    CHECK_FALSE(frame.controls[0].state.Has(UiAccessibilityStateFlag::Focusable));
+    CHECK(frame.Text(frame.controls[1].name) == "Selected");
+    CHECK(frame.controls[1].role == UiAccessibilityRole::Button);
+    CHECK(frame.controls[1].state.Has(UiAccessibilityStateFlag::Selected));
 }

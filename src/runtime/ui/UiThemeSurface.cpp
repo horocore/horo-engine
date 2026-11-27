@@ -24,11 +24,12 @@ namespace Horo::Runtime::Ui::ThemeInternal {
     }
 
     /** @copydoc ProjectSurface */
-    Result<void> ProjectSurface(const UiComputedStyleSnapshot &snapshot, const UiThemeSurfaceInput &input,
-                                const UiThemeSurfaceProperties &properties, UiLayoutElementDescriptor &layout, UiDrawCommand &paint) {
+    Result<UiVisualStateMask> ProjectSurface(const UiComputedStyleSnapshot &snapshot, const UiThemeSurfaceInput &input,
+                                             const UiThemeSurfaceProperties &properties, UiLayoutElementDescriptor &layout,
+                                             UiDrawCommand &paint) {
         const auto record = snapshot.Get(input.style.element);
         if (record.HasError())
-            return Result<void>::Failure(record.ErrorValue());
+            return Result<UiVisualStateMask>::Failure(record.ErrorValue());
         layout = {input.style.element, input.layout, input.intrinsic};
         paint = {.element = input.style.element, .opacity = input.opacity, .payload = UiSolidDraw{input.fill}};
         for (const auto &property : snapshot.Properties(record.Value())) {
@@ -51,8 +52,8 @@ namespace Horo::Runtime::Ui::ThemeInternal {
             paint.opacity = 0.0F;
         if (!layout.IsValid() || !std::get<UiSolidDraw>(paint.payload).color.IsValid() || !UiStyleScalar{paint.opacity}.IsValid() ||
             paint.opacity < 0.0F || paint.opacity > 1.0F)
-            return StyleInternal::Failure(UiErrors::StyleInvalid);
-        return Result<void>::Success();
+            return Result<UiVisualStateMask>::Failure(MakeError(UiErrors::StyleInvalid));
+        return Result<UiVisualStateMask>::Success(record.Value().state);
     }
 
     /** @copydoc RestoreTokens */
@@ -92,6 +93,7 @@ namespace Horo::Runtime::Ui {
             const auto projected = ThemeInternal::ProjectSurface(snapshot, input, properties, result.layout, result.paint);
             if (projected.HasError())
                 return Result<UiThemeSurfaceProjection>::Failure(projected.ErrorValue());
+            result.state = projected.Value();
         } catch (const std::bad_variant_access &) {
             return Result<UiThemeSurfaceProjection>::Failure(MakeError(UiErrors::StyleTypeMismatch));
         }

@@ -10,6 +10,14 @@
 #include <utility>
 
 namespace Horo::Network {
+    namespace {
+        /** @brief Distinguishes a live synchronizing peer from a stale or unauthorized world grant. */
+        bool InitialStatePending(const Error &error) noexcept {
+            return error.domain.Value() == NetworkErrors::ReplicationInitialStatePending.domain.Value() &&
+                   error.code.Value() == NetworkErrors::ReplicationInitialStatePending.code.Value();
+        }
+    }  // namespace
+
     struct InboundMessageDispatcher::Session final {
         Session(std::shared_ptr<PeerSessionLifecycle> owner, const ConnectionHandle handle,
                 const NetworkOperationGeneration sessionGeneration, MessageDeliveryGate delivery,
@@ -29,15 +37,36 @@ namespace Horo::Network {
             ConnectionHandle connection{};
             std::uint64_t countedTick{};
             std::uint32_t count{};
+            std::size_t bytes{};
         };
 
         Handler(const InboundHandlerBinding &handlerBinding, const std::shared_ptr<IInboundMessageHandler> &handlerOwner,
-                const std::size_t maximumSessions)
-            : binding(handlerBinding), owner(handlerOwner), rates(maximumSessions) {}
+                const std::size_t maximumSessions, std::optional<ChannelId> snapshotChannel, std::size_t maximumBytesPerTick)
+            : binding(handlerBinding), owner(handlerOwner), rates(maximumSessions), channel(snapshotChannel),
+              maximumBytesPerTick(maximumBytesPerTick) {}
+
+        /** @brief Returns the exact peer's rate slot, claiming a vacancy and resetting the tick when needed. */
+        [[nodiscard]] RateState *RateFor(ConnectionHandle connection, std::uint64_t tick) {
+            auto slot = std::ranges::find(rates, connection, &RateState::connection);
+            if (slot == rates.end()) {
+                slot = std::ranges::find(rates, ConnectionHandle{}, &RateState::connection);
+                if (slot == rates.end())
+                    return nullptr;
+                slot->connection = connection;
+            }
+            if (slot->countedTick != tick) {
+                slot->countedTick = tick;
+                slot->count = 0;
+                slot->bytes = 0;
+            }
+            return &*slot;
+        }
 
         InboundHandlerBinding binding;
         std::weak_ptr<IInboundMessageHandler> owner;
         std::vector<RateState> rates;
+        std::optional<ChannelId> channel;
+        std::size_t maximumBytesPerTick{};
     };
 
     /** @copydoc InboundMessageDispatcher::InboundMessageDispatcher */
@@ -129,6 +158,22 @@ namespace Horo::Network {
     /** @copydoc InboundMessageDispatcher::RegisterHandler */
     Result<void> InboundMessageDispatcher::RegisterHandler(const InboundHandlerBinding &binding,
                                                            const std::shared_ptr<IInboundMessageHandler> &handler) {
+        return AddHandler(binding, handler, std::nullopt, 0);
+    }
+
+    /** @copydoc InboundMessageDispatcher::RegisterSnapshotHandler */
+    Result<void> InboundMessageDispatcher::RegisterSnapshotHandler(const InboundHandlerBinding &binding,
+                                                                   const std::shared_ptr<IInboundMessageHandler> &handler,
+                                                                   ChannelId channel, std::size_t maximumBytesPerTick) {
+        if (binding.traffic != MessageTrafficClass::Snapshot || maximumBytesPerTick < MessageEnvelopeFixedHeaderBytes)
+            return Result<void>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
+        return AddHandler(binding, handler, channel, maximumBytesPerTick);
+    }
+
+    /** @copydoc InboundMessageDispatcher::AddHandler */
+    Result<void> InboundMessageDispatcher::AddHandler(const InboundHandlerBinding &binding,
+                                                      const std::shared_ptr<IInboundMessageHandler> &handler,
+                                                      std::optional<ChannelId> channel, std::size_t maximumBytesPerTick) {
         if (const auto owner = CheckOwner(); owner.HasError())
             return owner;
         if (handler == nullptr || !binding.protocol.IsValid() || !binding.message.IsValid() ||
@@ -144,7 +189,7 @@ namespace Horo::Network {
         if (handlers_.size() == limits_.maximumHandlers)
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         try {
-            handlers_.emplace_back(binding, handler, limits_.maximumSessions);
+            handlers_.emplace_back(binding, handler, limits_.maximumSessions, channel, maximumBytesPerTick);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         }
@@ -282,8 +327,11 @@ namespace Horo::Network {
             if (!worlds)
                 return RejectAndClose(connection, MakeError(NetworkErrors::NetworkModeUnavailable));
             if (auto admitted = worlds->AdmitWorldDispatch(connection, session.generation, *session.lifecycle, nowTick);
-                admitted.HasError())
+                admitted.HasError()) {
+                if (InitialStatePending(admitted.ErrorValue()))
+                    return admitted;
                 return RejectAndClose(connection, admitted.ErrorValue());
+            }
         }
         return Result<void>::Success();
     }
@@ -292,37 +340,41 @@ namespace Horo::Network {
     Result<void> InboundMessageDispatcher::InvokeHandler(const std::shared_ptr<Session> &session, Handler &handler,
                                                          const NetworkTransportEvent &event, const MessageEnvelope &message,
                                                          const std::uint64_t nowTick) {
-        if (auto world = AdmitWorldBinding(*session, handler.binding.traffic, event.connection, nowTick); world.HasError())
-            return world;
-        const auto bound = handler.owner.lock();
-        if (bound == nullptr)
-            return RejectAndClose(event.connection, MakeError(NetworkErrors::GameplayDispatchRejected));
-        auto rate = std::ranges::find_if(handler.rates, [&](const Handler::RateState &entry) {
-            return entry.connection == event.connection;
-        });
-        if (rate == handler.rates.end()) {
-            rate = std::ranges::find_if(handler.rates, [](const Handler::RateState &entry) {
-                return !entry.connection.IsValid();
-            });
-            if (rate == handler.rates.end())
-                return RejectAndClose(event.connection, MakeError(NetworkErrors::RpcCapacityExceeded));
-            rate->connection = event.connection;
-        }
-        if (rate->countedTick != nowTick) {
-            rate->countedTick = nowTick;
-            rate->count = 0;
-        }
-        if (rate->count >= handler.binding.maximumPerTick)
-            return RejectAndClose(event.connection, MakeError(NetworkErrors::TransportReliableBackpressure));
+        if (handler.channel && (event.channel != *handler.channel || event.delivery != DeliveryPolicy::UnreliableUnordered))
+            return Result<void>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
         const MessageDeliveryInput
             input{event.connection,    session->generation, event.channel, event.delivery, handler.binding.traffic, message.sequence, 0,
                   event.payload.size()};
+        if (auto world = AdmitWorldBinding(*session, handler.binding.traffic, event.connection, nowTick); world.HasError()) {
+            if (InitialStatePending(world.ErrorValue())) {
+                // Consume an otherwise valid reliable sequence without invoking the handler or extending the session.
+                return session->gate.Apply(input, nowTick, [&world] {
+                    return std::move(world);
+                });
+            }
+            return world;
+        }
+        const auto bound = handler.owner.lock();
+        if (bound == nullptr)
+            return RejectAndClose(event.connection, MakeError(NetworkErrors::GameplayDispatchRejected));
+        auto *rate = handler.RateFor(event.connection, nowTick);
+        if (!rate)
+            return RejectAndClose(event.connection, MakeError(NetworkErrors::RpcCapacityExceeded));
+        if (handler.channel &&
+            (rate->count >= handler.binding.maximumPerTick || event.payload.size() > handler.maximumBytesPerTick - rate->bytes))
+            return session->gate.Apply(input, nowTick, [] {
+                return Result<void>::Failure(MakeError(NetworkErrors::TransportLimitExceeded));
+            });
+        if (rate->count >= handler.binding.maximumPerTick)
+            return RejectAndClose(event.connection, MakeError(NetworkErrors::TransportReliableBackpressure));
         try {
             // Apply invokes synchronously; pin both owners while the decoded message and rate slot are borrowed.
             return session->gate.Apply(input, nowTick,
                                        [rate, &message, bound, session, connection = event.connection, generation = session->generation,
-                                        nowTick, delivery = event.delivery] {
+                                        nowTick, delivery = event.delivery,
+                                        snapshotBytes = handler.channel ? event.payload.size() : std::size_t{}] {
                 ++rate->count;
+                rate->bytes += snapshotBytes;
                 if (auto activity = session->lifecycle->RecordActivity(connection, generation, nowTick); activity.HasError())
                     return activity;
                 return bound->HandleAdmitted({connection, generation, session->lifecycle, nowTick, session->cancellation.Token(), delivery},
@@ -330,10 +382,6 @@ namespace Horo::Network {
             });
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
-        } catch (const std::invalid_argument &) {
-            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        } catch (const std::out_of_range &) {
-            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Untrusted handlers may throw non-standard values; none may cross the admitted owner boundary.
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));

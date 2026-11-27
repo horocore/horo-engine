@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <optional>
 
 namespace Horo::XR {
     namespace {
@@ -17,6 +19,7 @@ namespace Horo::XR {
             const auto depth = std::ranges::find_if(targets, [](const auto &target) {
                 return target.role == XRExternalRenderTargetRole::ProjectionDepth;
             });
+            std::size_t colorLayer = 0;
             std::size_t depthCount = 0;
             for (const auto &target : targets) {
                 if (const auto &baseline = target.role == XRExternalRenderTargetRole::ProjectionDepth ? *depth : first;
@@ -24,14 +27,19 @@ namespace Horo::XR {
                     target.allocationExtent != first.allocationExtent || target.arrayLayerCount != first.arrayLayerCount ||
                     target.sampleCount != first.sampleCount)
                     return false;
-                if (target.role == XRExternalRenderTargetRole::ProjectionDepth) {
-                    ++depthCount;
-                    const auto color = std::ranges::find_if(targets, [&target](const auto &candidate) {
-                        return candidate.view == target.view && candidate.role == XRExternalRenderTargetRole::ProjectionColor;
-                    });
-                    if (color == targets.end() || color->arrayLayer != target.arrayLayer)
+                if (target.role == XRExternalRenderTargetRole::ProjectionColor) {
+                    // Indexed instancing addresses the array layer with the runtime view ordinal.
+                    if (target.arrayLayer != colorLayer)
                         return false;
+                    ++colorLayer;
+                    continue;
                 }
+                ++depthCount;
+                const auto color = std::ranges::find_if(targets, [&target](const auto &candidate) {
+                    return candidate.view == target.view && candidate.role == XRExternalRenderTargetRole::ProjectionColor;
+                });
+                if (color == targets.end() || color->arrayLayer != target.arrayLayer)
+                    return false;
             }
             return depthCount == 0 || depthCount == plan.Views().size();
         }
@@ -103,6 +111,131 @@ namespace Horo::XR {
                 return Result<void>::Failure(MakeError(XRErrors::ViewConfigurationStale));
             return Result<void>::Success();
         }
+
+        struct CanvasPoint final {
+            double x, y;
+        };
+
+        struct CanvasClipEdge final {
+            bool xAxis;
+            double sign;
+            double limit;
+
+            [[nodiscard]] double Distance(const CanvasPoint point) const noexcept {
+                return limit - sign * (xAxis ? point.x : point.y);
+            }
+        };
+
+        /** @brief Clips a convex polygon against one viewport edge without duplicating boundary points. */
+        std::optional<std::size_t> ClipCanvasEdge(const std::span<const CanvasPoint> input, const std::span<CanvasPoint> output,
+                                                  const CanvasClipEdge edge) noexcept {
+            if (input.empty())
+                return 0;
+            std::size_t count = 0;
+            auto previous = input.back();
+            auto priorDistance = edge.Distance(previous);
+            for (const auto point : input) {
+                const auto distance = edge.Distance(point);
+                const bool crossing = (priorDistance < 0 && distance > 0) || (priorDistance > 0 && distance < 0);
+                const bool inside = distance >= 0;
+                const auto emitted = static_cast<std::size_t>(crossing) + static_cast<std::size_t>(inside);
+                if (emitted > output.size() - count)
+                    return std::nullopt;
+                if (crossing) {
+                    const auto fraction = priorDistance / (priorDistance - distance);
+                    const auto boundary = edge.sign * edge.limit;
+                    output[count++] = edge.xAxis ? CanvasPoint{boundary, std::lerp(previous.y, point.y, fraction)}
+                                                 : CanvasPoint{std::lerp(previous.x, point.x, fraction), boundary};
+                }
+                if (inside)
+                    output[count++] = point;
+                previous = point;
+                priorDistance = distance;
+            }
+            return count;
+        }
+
+        /** @brief Measures the narrowest width and, for an unclipped quad, its shortest perspective edge. */
+        double CanvasSpan(const std::span<const CanvasPoint> polygon, const bool includeEdgeLength) noexcept {
+            if (polygon.size() < 3)
+                return 0;
+            auto width = std::numeric_limits<double>::infinity();
+            for (std::size_t index = 0; index < polygon.size(); ++index) {
+                const auto a = polygon[index];
+                const auto b = polygon[(index + 1) % polygon.size()];
+                const auto dx = b.x - a.x;
+                const auto dy = b.y - a.y;
+                const auto length = std::hypot(dx, dy);
+                if (length == 0) {
+                    if (includeEdgeLength)
+                        return 0;
+                    continue;
+                }
+                const auto distance = [a, dx, dy](const CanvasPoint point) {
+                    return dx * (point.y - a.y) - dy * (point.x - a.x);
+                };
+                const auto [low, high] = std::ranges::minmax_element(polygon, {}, distance);
+                width = std::min(width, (distance(*high) - distance(*low)) / length);
+                if (includeEdgeLength)
+                    width = std::min(width, length);
+            }
+            return std::isfinite(width) ? width : 0;
+        }
+
+        /** @brief Clips a projected quad to the eye rectangle using at most eight vertices. */
+        std::optional<double> VisibleCanvasSpan(const std::array<CanvasPoint, 4> &quad, const double halfWidth,
+                                                const double halfHeight) noexcept {
+            constexpr std::size_t MaximumIntersectionVertices = 8;
+            std::array<CanvasPoint, MaximumIntersectionVertices> polygon, scratch;
+            std::ranges::copy(quad, polygon.begin());
+            auto count = quad.size();
+            const std::array edges{CanvasClipEdge{true, 1, halfWidth}, CanvasClipEdge{true, -1, halfWidth},
+                                   CanvasClipEdge{false, 1, halfHeight}, CanvasClipEdge{false, -1, halfHeight}};
+            for (const auto edge : edges) {
+                const auto clipped = ClipCanvasEdge(std::span{polygon}.first(count), scratch, edge);
+                if (!clipped)
+                    return std::nullopt;
+                count = *clipped;
+                std::ranges::copy(std::span{scratch}.first(count), polygon.begin());
+            }
+            return CanvasSpan(std::span{polygon}.first(count), false);
+        }
+
+        /** @brief Measures the visible quad in the exact eye rectangle. A depth crossing suppresses the eye before perspective division. */
+        [[nodiscard]] Result<float> MeasureCanvasEye(const Math::Mat4 &clip, const XRRenderRectangle &rect,
+                                                     const Math::ClipDepthRange depthRange) {
+            using Measure = Result<float>;
+            constexpr std::array corners{Math::Vec4{-0.5F, 0.5F, 0, 1}, Math::Vec4{0.5F, 0.5F, 0, 1}, Math::Vec4{0.5F, -0.5F, 0, 1},
+                                         Math::Vec4{-0.5F, -0.5F, 0, 1}};
+            std::array<Math::Vec4, corners.size()> points;
+            std::ranges::transform(corners, points.begin(), [&clip](const auto corner) {
+                return Math::TransformHomogeneous(clip, corner);
+            });
+            if (!std::ranges::all_of(points, [](const auto point) {
+                return Math::IsFinite(point);
+            }))
+                return Measure::Failure(MakeError(XRErrors::ViewPlanInvalid));
+            if (std::ranges::any_of(points, [depthRange](const auto point) {
+                const auto nearDepth = depthRange == Math::ClipDepthRange::ZeroToOne ? 0.0F : -point.w;
+                return point.w <= 0 || point.z < nearDepth || point.z > point.w;
+            }))
+                return Measure::Success(0);
+            const auto halfWidth = rect.width * 0.5;
+            const auto halfHeight = rect.height * 0.5;
+            std::array<CanvasPoint, points.size()> projected;
+            std::ranges::transform(points, projected.begin(), [halfWidth, halfHeight](const auto point) {
+                return CanvasPoint{halfWidth * point.x / point.w, halfHeight * point.y / point.w};
+            });
+            const auto span = CanvasSpan(projected, true);
+            if (std::ranges::all_of(projected, [halfWidth, halfHeight](const CanvasPoint point) {
+                return std::abs(point.x) <= halfWidth && std::abs(point.y) <= halfHeight;
+            }))
+                return Measure::Success(static_cast<float>(span));
+            const auto visible = VisibleCanvasSpan(projected, halfWidth, halfHeight);
+            if (!visible)
+                return Measure::Failure(MakeError(XRErrors::CapacityExceeded));
+            return Measure::Success(static_cast<float>(std::min(span, *visible)));
+        }
     }  // namespace
 
     /** @copydoc XRMultiviewScene::Create */
@@ -150,6 +283,37 @@ namespace Horo::XR {
         if (const auto live = ValidateOwner(plan_, scene_.Publication(), active); live.HasError())
             return live;
         return scene_.Validate(active.renderer);
+    }
+
+    /** @copydoc XRMultiviewScene::ProjectWorldCanvas */
+    Result<XRWorldCanvasProjection> XRMultiviewScene::ProjectWorldCanvas(const XRWorldCanvasDescriptor &canvas,
+                                                                         const XRMultiviewOwnerState &active) const {
+        using Projection = Result<XRWorldCanvasProjection>;
+        if (const auto live = Validate(active); live.HasError())
+            return Projection::Failure(live.ErrorValue());
+        if (plan_.Configuration().type != XRViewConfigurationType::PrimaryStereo)
+            return Projection::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (!std::isfinite(canvas.minimumSpanPixels) || canvas.minimumSpanPixels <= 0 ||
+            Math::TryInverseAffine(canvas.worldFromCanvas).HasError())
+            return Projection::Failure(MakeError(XRErrors::ViewPlanInvalid));
+
+        XRWorldCanvasProjection output{scene_.Publication(), canvas.worldFromCanvas, {}, true};
+        for (std::size_t index = 0; index < output.views.size(); ++index) {
+            const auto view = plan_.Views()[index].id;
+            const auto target = std::ranges::find_if(plan_.Targets(), [view](const auto &entry) {
+                return entry.view == view && entry.role == XRExternalRenderTargetRole::ProjectionColor;
+            });
+            if (target == plan_.Targets().end())
+                return Projection::Failure(MakeError(XRErrors::ViewPlanInvalid));
+            const auto &eye = scene_.Views()[index];
+            const auto matrix = Math::Multiply(eye.worldToClip, canvas.worldFromCanvas);
+            const auto measured = MeasureCanvasEye(matrix, target->renderRectangle, eye.depthRange);
+            if (measured.HasError())
+                return Projection::Failure(measured.ErrorValue());
+            output.views[index] = {view, matrix, target->renderRectangle, target->arrayLayer, measured.Value()};
+            output.drawable = output.drawable && measured.Value() >= canvas.minimumSpanPixels;
+        }
+        return Projection::Success(output);
     }
 
     /** @copydoc XRMultiviewScene::ExtractInstances */

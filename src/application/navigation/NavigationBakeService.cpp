@@ -27,9 +27,10 @@ namespace Horo::Application {
         }
 
         /** @brief Preserves empty authored surfaces without accepting tiles outside the complete catalog. */
-        bool ValidAuthoredSurfaces(const NavigationBakeRequest &request) {
+        bool ValidAuthoredCatalog(const NavigationBakeRequest &request) {
             const auto &catalog = request.authoredSurfaces;
-            return std::ranges::adjacent_find(catalog) == catalog.end() && std::ranges::all_of(catalog, [](const auto key) {
+            return request.authoredLinks.size() <= NavigationLinkValidationLimits::MaximumAuthoredLinks &&
+                   std::ranges::adjacent_find(catalog) == catalog.end() && std::ranges::all_of(catalog, [](const auto key) {
                 return key.surface.IsValid();
             }) && std::ranges::all_of(request.tiles, [&catalog](const auto &tile) {
                 return std::ranges::binary_search(catalog, NavigationBakeSurfaceKey{tile.key.surface, tile.key.scope});
@@ -63,7 +64,7 @@ namespace Horo::Application {
                 !ValidCompatibility(request.compatibility) || request.execution >= NavigationBakeExecutionMode::Count ||
                 !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
                 std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end() ||
-                !ValidAuthoredSurfaces(request) || !ValidRebuildSelection(request))
+                !ValidAuthoredCatalog(request) || !ValidRebuildSelection(request))
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             if (request.projectProfile && request.projectProfile->Revision() != request.input->Revisions().projectProfile)
                 return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
@@ -93,13 +94,18 @@ namespace Horo::Application {
             return !left || left->MatchesAuthority(*right);
         }
 
+        /** @brief Separately fences authored catalog changes before coalescing captured work. */
+        [[nodiscard]] bool SameAuthoredCatalog(const NavigationBakeRequest &left, const NavigationBakeRequest &right) {
+            return left.authoredSurfaces == right.authoredSurfaces && left.authoredLinks == right.authoredLinks;
+        }
+
         /** @brief Joins only identical uncancelled captures with the same complete layout and source observations. */
         [[nodiscard]] bool IdenticalRequest(const std::shared_ptr<Attempt> &existing, const NavigationBakeRequest &request) {
             if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
                 existing->request.input->Fingerprint() != request.input->Fingerprint() ||
                 existing->request.compatibility != request.compatibility || existing->request.rebuildSurfaces != request.rebuildSurfaces ||
                 existing->request.sourceValidation != request.sourceValidation || existing->request.execution != request.execution ||
-                existing->request.authoredSurfaces != request.authoredSurfaces ||
+                !SameAuthoredCatalog(existing->request, request) ||
                 !SameProjectProfile(existing->request.projectProfile, request.projectProfile) ||
                 existing->request.sources != request.sources || existing->request.diagnosticSources != request.diagnosticSources ||
                 existing->request.tiles.size() != request.tiles.size())

@@ -31,6 +31,7 @@ namespace Horo::Animation::Detail {
         const auto coverage = state.Coverage(occurrence.output);
         std::ranges::fill(coverage, 0);
         float accumulated = 0.0F;
+        AnimationRootMotionDelta motion;
         for (const auto &binding : occurrence.blendSamples) {
             const auto &member = state.blends.members[binding.member];
             const auto weight = member.observation.weight;
@@ -51,8 +52,12 @@ namespace Horo::Animation::Detail {
                      failure != GraphInstanceFailure::None)
                 return {failure};
             accumulated += weight;
+            if (!state.rootMotion.poses.empty())
+                motion = BlendRootMotion(motion, member.rootMotion, weight / accumulated);
             MergeCoverage(coverage, binding.coverage);
         }
+        if (!state.rootMotion.poses.empty())
+            state.rootMotion.poses[occurrence.output.index] = motion;
         return ValidOutput(output, accumulated);
     }
 }  // namespace Horo::Animation::Detail

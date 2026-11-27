@@ -61,6 +61,20 @@ namespace Horo::Animation::Detail {
             return Layer(state, action, state.actions.definitions[slot.handoffAction], slot.handoffSection,
                          Pose(state, state.actions.frozen, slotIndex), weight, occurrence);
         }
+
+        /** @brief Layers the accumulated action travel with the remaining base contribution. */
+        GraphInstanceFailure ComposeActionRootMotion(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                                     GraphWorkingSlot base, std::uint32_t index) noexcept {
+            using enum GraphInstanceFailure;
+            if (state.rootMotion.actions.empty())
+                return None;
+            const auto &travel = state.rootMotion.actions[index];
+            auto output = BlendRootMotion(state.rootMotion.poses[base.index], {}, travel.lastWeight);
+            if (!AppendRootMotionDelta(output, travel.delta))
+                return Malformed;
+            state.rootMotion.poses[occurrence.output.index] = output;
+            return None;
+        }
     }  // namespace
 
     /** @copydoc SampleActions */
@@ -117,6 +131,8 @@ namespace Horo::Animation::Detail {
         std::ranges::copy(state.Pose(base), state.Pose(occurrence.output).begin());
         std::ranges::copy(state.Coverage(base), state.Coverage(occurrence.output).begin());
         const auto index = *occurrence.actionSlot;
+        if (const auto motion = ComposeActionRootMotion(state, occurrence, base, index); motion != GraphInstanceFailure::None)
+            return {motion};
         if (const auto outgoing = Outgoing(state, index, occurrence); outgoing.HasError())
             return outgoing;
         const auto &slot = state.actions.candidateSlots[index];

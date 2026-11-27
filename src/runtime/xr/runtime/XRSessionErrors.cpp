@@ -16,6 +16,33 @@ namespace Horo::XR::XRSessionErrors {
         .retryable = true,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor ActivationCancelled{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.session.activation_cancelled"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "XR session activation was cancelled before publication.",
+        .remediationHint = "Start a new activation if the session is still required.",
+        .retryable = true,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SetupCleanupPending{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.setup.cleanup_pending"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The XR setup test is waiting for native session retirement.",
+        .remediationHint = "Retry retirement before starting Play or running a new session test.",
+        .retryable = true,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor WrongThread{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.session.wrong_thread"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The XR session operation ran outside its control thread.",
+        .remediationHint = "Dispatch the operation to the thread that owns the XR session.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor TransitionInvalid{
         .domain = XRDomain,
         .code = ErrorCode{"xr.session.transition_invalid"},
@@ -28,7 +55,8 @@ namespace Horo::XR::XRSessionErrors {
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
-        static constexpr std::array descriptors{&ActivationFailed, &TransitionInvalid};
+        static constexpr std::array descriptors{&ActivationFailed, &ActivationCancelled, &SetupCleanupPending, &WrongThread,
+                                                &TransitionInvalid};
         return descriptors;
     }
 }  // namespace Horo::XR::XRSessionErrors

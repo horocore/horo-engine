@@ -121,6 +121,7 @@ namespace Horo::Prefab {
         std::vector<std::vector<Runtime::RuntimeGroupReference>> references;   /**< Typed reference interfaces per entity. */
         std::vector<Assets::AssetId> spawnLineage; /**< Inherited creation lineage, bounded by the captured canonical runtime depth. */
         std::vector<std::optional<Runtime::PrimitiveMeshDescriptor>> primitiveMeshes; /**< Optional dense typed geometry projection. */
+        std::shared_ptr<const Runtime::SceneGroupPublication> publication;            /**< Optional command-scoped owner for this group. */
     };
 
     /**

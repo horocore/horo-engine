@@ -24,6 +24,11 @@ namespace Horo::Render {
         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
     }
 
+    /** @copydoc IRenderBackend::ObserveGraphSubmissionAcceptance */
+    std::optional<bool> IRenderBackend::ObserveGraphSubmissionAcceptance(RenderTimelinePoint, std::uint64_t) const noexcept {
+        return std::nullopt;
+    }
+
     /** @copydoc IRenderBackend::ObserveSubmission */
     Result<bool> IRenderBackend::ObserveSubmission(const RenderCpuWait &) {
         return Result<bool>::Failure(MakeError(RenderGraphExecutionErrors::SubmissionObservationUnsupported));

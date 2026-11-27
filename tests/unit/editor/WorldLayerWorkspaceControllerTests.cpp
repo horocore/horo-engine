@@ -1,7 +1,7 @@
 #include "OwnedTestDirectory.h"
 #include "PartitionedWorldResidencyTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
-#include "editor/screens/workspace/WorldLayerOutliner.h"
+#include "editor/screens/workspace/world/WorldLayerOutliner.h"
 
 namespace Horo::Editor::WorldResidencyTests {
     TEST_CASE("Layer outliner routes through actual editor controller and preserves canonical page selection and payloads",

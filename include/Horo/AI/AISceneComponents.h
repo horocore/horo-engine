@@ -7,16 +7,26 @@
 
 #include "Horo/AI/AIIdentity.h"
 #include "Horo/AI/DecisionAssetValidation.h"
+#include "Horo/AI/PerceptionDescriptorRegistry.h"
+#include "Horo/AI/PerceptionFiltering.h"
 #include "Horo/Foundation/Result.h"
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <vector>
 
 namespace Horo::AI {
+    class CookedDecisionPlan;
+
     /** @brief Current semantic version of the authored AI scene component contract. */
     inline constexpr std::uint32_t CurrentAiSceneComponentSchemaVersion = 1;
+
+    /** @brief Hard admission bound shared by live Scene populations and their canonical records. */
+    inline constexpr std::size_t MaximumAiSceneAgents = 65'536;
 
     /** @brief Policy controlling when an authored AI controller may become active. */
     enum class AiStartupPolicy : std::uint8_t {
@@ -102,6 +112,31 @@ namespace Horo::AI {
         const AiControllerComponent *controller{};
     };
 
+    /** @brief Paired writable collections; the smaller admitted key capacity bounds the atomic projection. */
+    struct PerceptionBlackboardProjection final {
+        BlackboardKeyId sources;   /**< EntityReference collection; exact admitted identities. */
+        BlackboardKeyId positions; /**< WorldCoordinate collection; last-known memory facts only. */
+
+        /**
+         * @brief Validates the declared projection against the controller schema before sensing begins.
+         * @param schema Captured blackboard schema for the recipient.
+         * @return The shared item limit or a typed key, access or type failure.
+         */
+        [[nodiscard]] Result<std::size_t> Validate(const BlackboardSchema &schema) const;
+    };
+
+    /** @brief Inert authored endpoint selection resolved against the host's admitted Perception registry. */
+    struct AiControllerPerceptionEndpoints final {
+        static constexpr std::size_t MaximumSenses = 16;
+        std::shared_ptr<const PerceptionDescriptorRegistry> registry;
+        std::vector<PerceptionListenerTypeId> listeners;
+        std::vector<SenseTypeId> sources;
+        PerceptionParticipantFilter participant;
+        PerceptionListenerFilter listenerFilter;
+        std::vector<DecisionWakePerceptionDependency> decisionWatches;      /**< Nonempty selects event-only cooked execution. */
+        std::optional<PerceptionBlackboardProjection> blackboardProjection; /**< Optional Scene-owned synchronized projection. */
+    };
+
     /**
      * @brief Fully admitted immutable controller dependencies used during scene activation.
      * @details A descriptor is inert metadata. It owns no runtime lifecycle and invoking validation does not register or activate anything.
@@ -112,6 +147,8 @@ namespace Horo::AI {
         DecisionPlanKind decisionKind{DecisionPlanKind::BehaviorTree};
         std::shared_ptr<const BlackboardSchema> blackboardSchema;
         std::shared_ptr<const DecisionAssetPlan> decisionPlan;
+        std::shared_ptr<const AiControllerPerceptionEndpoints> perceptionEndpoints;
+        std::shared_ptr<const CookedDecisionPlan> cookedPlan; /**< Optional executable closure with these exact root bindings. */
     };
 
     /**

@@ -6,8 +6,8 @@
 #include "ViewportPanelRenderSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
-#include "editor/screens/workspace/panels/viewport/WorldSourceShapeControls.h"
-#include "editor/screens/workspace/panels/viewport/WorldSourceViewportTool.h"
+#include "editor/screens/workspace/panels/viewport/sources/WorldSourceShapeControls.h"
+#include "editor/screens/workspace/panels/viewport/sources/WorldSourceViewportTool.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>

@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "editor/renderer/EditorGuiComposition.h"
+#include "editor/renderer/metal/EditorGuiRendererMetal.h"
 #include "editor/renderer/metal/EditorViewportRendererMetal.h"
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
 #include "renderer/RenderBackendDrainTestSupport.h"
@@ -14,7 +16,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -128,7 +132,126 @@ namespace {
         Check(viewport.RequestedExtent() == resizedExtent);
         Check(viewport.TextureView().textureId != activeTexture.textureId);
     }
+
+    /** @brief Reads the exact resident viewport on the native graphics queue for comparison. */
+    std::vector<std::uint8_t> ReadNativeViewportPixels(MetalEditorGraphicsBridge &bridge, const EditorViewportTextureView textureView,
+                                                       const EditorViewportExtent extent) {
+        id<MTLTexture> texture = (__bridge id<MTLTexture>)(reinterpret_cast<void *>(textureView.textureId));
+        Check(texture != nil);
+        Check(texture.width == extent.width && texture.height == extent.height);
+        const std::size_t bytesPerRow = texture.width * 4U;
+        const std::size_t byteCount = bytesPerRow * texture.height;
+        id<MTLDevice> device = (__bridge id<MTLDevice>)bridge.Device();
+        id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)bridge.CommandQueue();
+        id<MTLBuffer> readback = [device newBufferWithLength:byteCount options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> readbackCommands = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [readbackCommands blitCommandEncoder];
+        [blit copyFromTexture:texture
+                         sourceSlice:0
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(0, 0, 0)
+                          sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                            toBuffer:readback
+                   destinationOffset:0
+              destinationBytesPerRow:bytesPerRow
+            destinationBytesPerImage:byteCount];
+        [blit endEncoding];
+        [readbackCommands commit];
+        [readbackCommands waitUntilCompleted];
+        Check(readbackCommands.status == MTLCommandBufferStatusCompleted);
+        std::vector<std::uint8_t> rgba(byteCount);
+        std::copy_n(static_cast<const std::uint8_t *>(readback.contents), byteCount, rgba.data());
+        return rgba;
+    }
+
+    /** @brief Compares the published crop to native texture rows at the same top-left pixel origin. */
+    void CheckNativeCrop(const EditorViewportImageArtifact &artifact, const std::span<const std::uint8_t> rgba,
+                         const EditorViewportExtent extent) {
+        const auto bytesPerRow = std::size_t{extent.width} * EditorViewportImageRegion::Channels;
+        const auto cropRowBytes = std::size_t{artifact.region.width} * EditorViewportImageRegion::Channels;
+        for (std::size_t row = 0; row < artifact.region.height; ++row) {
+            const auto offset = (artifact.region.y + row) * bytesPerRow + artifact.region.x * EditorViewportImageRegion::Channels;
+            CHECK(std::memcmp(artifact.rgba.data() + row * cropRowBytes, rgba.data() + offset, cropRowBytes) == 0);
+        }
+    }
+
+    /** @brief Checks that the full readback contains the expected lit geometry and background. */
+    void CheckViewportColors(const std::span<const std::uint8_t> rgba, const EditorViewportExtent extent) {
+        std::uint8_t minimum = 255;
+        std::uint8_t maximum = 0;
+        for (std::size_t index = 0; index < rgba.size(); index += 4) {
+            minimum = std::min(minimum, std::min(rgba[index], std::min(rgba[index + 1], rgba[index + 2])));
+            maximum = std::max(maximum, std::max(rgba[index], std::max(rgba[index + 1], rgba[index + 2])));
+        }
+        Check(maximum > minimum + 32);
+        const std::size_t center = (static_cast<std::size_t>(extent.height / 2) * extent.width + extent.width / 2) * 4;
+        Check(rgba[center] < 150 && rgba[center + 1] > 130 && rgba[center + 2] > 150);
+    }
 }  // namespace
+
+TEST_CASE("Metal presents a GUI frame with a replacement font atlas", "[integration][renderer][gpu][font-atlas]") {
+    REQUIRE(SDL_Init(SDL_INIT_VIDEO));
+
+    const struct SdlSession final {
+        ~SdlSession() {
+            SDL_Quit();
+        }
+    } sdl{};
+
+    REQUIRE(SDL_SetHint(SDL_HINT_VIDEO_METAL_AUTO_RESIZE_DRAWABLE, "0"));
+    constexpr FramebufferExtent output{256, 256};
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{SDL_CreateWindow("Horo Metal atlas smoke", output.width, output.height,
+                                                                                      SDL_WINDOW_METAL),
+                                                                     SDL_DestroyWindow};
+    REQUIRE(window);
+    SdlMetalPresentationPort port{*window};
+    MetalEditorGraphicsBridge bridge;
+    RenderBackendRegistry registry;
+    REQUIRE(RegisterMetalRenderBackend(registry, port, bridge).HasValue());
+    REQUIRE(registry.Seal().HasValue());
+    auto created = RenderFrontend::Create(registry, RenderBackendId{"metal"}, {.requirePresentation = true, .maxFramesInFlight = 2});
+    INFO((created.HasError() ? created.ErrorValue().message : ""));
+    REQUIRE(created.HasValue());
+    auto frontend = std::move(created).Value();
+    REQUIRE(frontend->Resize(output).HasValue());
+
+    ImGui::CreateContext();
+    auto &io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    EditorGuiRendererMetal gui{*window, bridge, *frontend};
+    REQUIRE(gui.Initialize().HasValue());
+    REQUIRE(gui.BeginFrame().HasValue());
+    const auto bootstrap = io.Fonts->TexID;
+    using Atlas = std::unique_ptr<ImFontAtlas, decltype(&IM_DELETE<ImFontAtlas>)>;
+    Atlas candidate{IM_NEW(ImFontAtlas)(), &IM_DELETE<ImFontAtlas>};
+    ImFontConfig config;
+    config.RasterizerDensity = 2;
+    auto *font = candidate->AddFontDefault(&config);
+    REQUIRE(font);
+    CHECK(ReplaceEditorFontAtlas(gui, *candidate).HasError());
+    REQUIRE(candidate->Build());
+    REQUIRE(ReplaceEditorFontAtlas(gui, *candidate).HasValue());
+    CHECK(candidate->TexID != bootstrap);
+    Atlas previous{std::exchange(io.Fonts, candidate.release()), &IM_DELETE<ImFontAtlas>};
+    io.FontDefault = font;
+    REQUIRE(gui.BeginFrame().HasValue());
+    ImGui::NewFrame();
+    previous.reset();
+    ImGui::GetForegroundDrawList()->AddText({12, 12}, IM_COL32_WHITE, "Atlas replacement");
+    ImGui::Render();
+    AwaitPresentation(*frontend, output);
+    auto begun = frontend->BeginFrame({1, output});
+    REQUIRE(begun.HasValue());
+    auto frame = std::move(begun).Value();
+    const std::array passes{
+        RenderPassDescriptor{.id = RenderPassId{1}, .kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+    REQUIRE(frame.Execute(passes).HasValue());
+    REQUIRE(frame.ComposeGui(gui).HasValue());
+    REQUIRE(frame.Present().HasValue());
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
+    gui.Shutdown();
+    ImGui::DestroyContext();
+}
 
 TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(SDL_Init(SDL_INIT_VIDEO));
@@ -158,6 +281,7 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     shadowDepth.usage = shadowDepth.usage | RenderTextureUsage::Storage;
     CHECK_FALSE(frontend->Capabilities().support.Supports(shadowDepth));
 
+    bool captureAuthorized = true;
     EditorViewportRendererMetal viewport{*frontend, graphicsBridge};
     EditorViewportLightingProfile lighting;
     lighting.requested = LightPreparationMode::BaselineForwardCpu;
@@ -206,6 +330,12 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
                                                 .lightSnapshotRevision = 1};
     Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
     const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128});
+    constexpr EditorViewportImageRegion region{63, 63, 3, 2};
+    const auto requested = viewport.RequestImageCapture(region, [&captureAuthorized] {
+        return captureAuthorized;
+    });
+    REQUIRE(requested.HasValue());
+    REQUIRE(PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128}) == viewportTarget);
     Check(frontend->Resize(FramebufferExtent{256, 256}).HasValue());
     AwaitPresentation(*frontend, {256, 256});
     auto begun = frontend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {256, 256}});
@@ -244,44 +374,39 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(textureView.u0 == 0.0F && textureView.v0 == 0.0F);
     Check(textureView.u1 == 1.0F && textureView.v1 == 1.0F);
     Check(frame.Present().HasValue());
+    viewport.FinishColorFrame(true);
     graphicsBridge.WaitUntilIdle();
+    REQUIRE(PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128}) == viewportTarget);
+    const auto crop = viewport.ReadImageCapture(requested.Value());
+    REQUIRE(crop);
+    REQUIRE(crop->phase == EditorViewportImagePhase::Ready);
+    REQUIRE(crop->artifact);
+    CHECK(crop->artifact->region == region);
+    REQUIRE(crop->artifact->rgba.size() == region.Bytes());
 
-    id<MTLTexture> texture = (__bridge id<MTLTexture>)(reinterpret_cast<void *>(textureView.textureId));
-    Check(texture != nil);
-    Check(texture.width == 128 && texture.height == 128);
-    const std::size_t bytesPerRow = texture.width * 4U;
-    const std::size_t byteCount = bytesPerRow * texture.height;
-    id<MTLDevice> device = (__bridge id<MTLDevice>)graphicsBridge.Device();
-    id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)graphicsBridge.CommandQueue();
-    id<MTLBuffer> readback = [device newBufferWithLength:byteCount options:MTLResourceStorageModeShared];
-    id<MTLCommandBuffer> readbackCommands = [queue commandBuffer];
-    id<MTLBlitCommandEncoder> blit = [readbackCommands blitCommandEncoder];
-    [blit copyFromTexture:texture
-                     sourceSlice:0
-                     sourceLevel:0
-                    sourceOrigin:MTLOriginMake(0, 0, 0)
-                      sourceSize:MTLSizeMake(texture.width, texture.height, 1)
-                        toBuffer:readback
-               destinationOffset:0
-          destinationBytesPerRow:bytesPerRow
-        destinationBytesPerImage:byteCount];
-    [blit endEncoding];
-    [readbackCommands commit];
-    [readbackCommands waitUntilCompleted];
-    std::vector<std::uint8_t> rgba(byteCount);
-    std::copy_n(static_cast<const std::uint8_t *>(readback.contents), byteCount, rgba.data());
+    constexpr EditorViewportExtent viewportExtent{128, 128};
+    const auto pixels = ReadNativeViewportPixels(graphicsBridge, textureView, viewportExtent);
+    CheckNativeCrop(*crop->artifact, pixels, viewportExtent);
+    CheckViewportColors(pixels, viewportExtent);
 
-    std::uint8_t minimum = 255;
-    std::uint8_t maximum = 0;
-    for (std::size_t index = 0; index < rgba.size(); index += 4) {
-        minimum = std::min(minimum, std::min(rgba[index], std::min(rgba[index + 1], rgba[index + 2])));
-        maximum = std::max(maximum, std::max(rgba[index], std::max(rgba[index + 1], rgba[index + 2])));
+    SECTION("Loss of approval revokes a completed crop") {
+        REQUIRE_FALSE(crop->publication.expired());
+        captureAuthorized = false;
+        const auto revoked = viewport.ReadImageCapture(requested.Value());
+        REQUIRE(revoked);
+        CHECK(revoked->phase == EditorViewportImagePhase::Cancelled);
+        CHECK_FALSE(revoked->artifact);
+        CHECK(crop->publication.expired());
     }
-    Check(maximum > minimum + 32);
-    const std::size_t center = (static_cast<std::size_t>(texture.height / 2) * texture.width + texture.width / 2) * 4;
-    Check(rgba[center] < 150 && rgba[center + 1] > 130 && rgba[center + 2] > 150);
-
-    CheckSeamlessResourceTransition(viewport, *frontend, viewportScene, viewportTarget, textureView);
+    SECTION("A replacement viewport generation retires the completed crop") {
+        REQUIRE_FALSE(crop->publication.expired());
+        CheckSeamlessResourceTransition(viewport, *frontend, viewportScene, viewportTarget, textureView);
+        const auto resized = viewport.ReadImageCapture(requested.Value());
+        REQUIRE(resized);
+        CHECK(resized->phase == EditorViewportImagePhase::Resized);
+        CHECK_FALSE(resized->artifact);
+        CHECK(crop->publication.expired());
+    }
     frontend->DetachStaticMeshPassExecutor(viewport);
     Horo::Render::Test::RequireDrainedOwner(*frontend);
     viewport.Shutdown();

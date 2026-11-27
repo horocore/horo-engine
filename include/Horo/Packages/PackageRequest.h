@@ -5,7 +5,14 @@
 
 #include <optional>
 
+namespace Horo {
+    struct ModuleErrorDomainDescriptor;
+}
+
 namespace Horo::Packages {
+    /** @brief Declares portable removal review error identities for host presentation. */
+    [[nodiscard]] ModuleErrorDomainDescriptor PackageRemovalErrorDomain();
+
     /** @brief Portable authority categories; local overrides and transport/trust credentials are not project intent. */
     enum class PortablePackageSourceKind : std::uint8_t {
         PublicRegistry,
@@ -49,5 +56,48 @@ namespace Horo::Packages {
         std::vector<PortablePackageDependency> dependencies_;
         std::string canonical_;
         Sha256Digest digest_;
+    };
+
+    /** @brief One changed lock entry, with the exact evidence on either side of the proposed change. */
+    struct PackageUpdateChange final {
+        std::optional<LockedPackage> current;   /**< Empty for an addition. */
+        std::optional<LockedPackage> candidate; /**< Empty for a removal. */
+    };
+
+    /** @brief Inert comparison of two complete portable package plans. */
+    struct PackageUpdatePreview final {
+        bool requestChanged{};                    /**< Whether the portable intent changed even if the selected graph did not. */
+        std::vector<PackageUpdateChange> changes; /**< Exact changed entries, ordered by package ID. */
+
+        /**
+         * @brief Compares the current plan with an explicitly resolved candidate.
+         * @param current Current portable request.
+         * @param currentLock Lock corresponding to the current request.
+         * @param candidate Candidate portable request.
+         * @param candidateLock Lock corresponding to the candidate request.
+         * @return Owned changes or the original typed request-to-lock mismatch.
+         * @post No files, cache, trust, or activation state change. Restore, reference checks, migration, and approval remain
+         * transaction-owned.
+         */
+        [[nodiscard]] static Result<PackageUpdatePreview> Prepare(const ValidatedPackageRequest &current,
+                                                                  const ValidatedPackageLockfileV1 &currentLock,
+                                                                  const ValidatedPackageRequest &candidate,
+                                                                  const ValidatedPackageLockfileV1 &candidateLock);
+    };
+
+    /** @brief Inert replacement documents for withdrawing one explicit package request from a verified plan. */
+    struct PackageRemovalPlan final {
+        ValidatedPackageRequest request;
+        ValidatedPackageLockfileV1 lock;
+        PackageRemovalGraphPreview graph;
+
+        /** @brief Removes only the selected declaration and its unreachable lock entries.
+         * @param current Current validated portable request.
+         * @param locked Exact lockfile corresponding to the current request.
+         * @param package Package explicitly declared in the current request.
+         * @return A validated replacement pair or the original typed mismatch. A transitive-only or unknown request is rejected.
+         * @post No files, cached artifacts, or native modules change. Approval and reference checks remain transaction-owned. */
+        [[nodiscard]] static Result<PackageRemovalPlan> Prepare(const ValidatedPackageRequest &current,
+                                                                const ValidatedPackageLockfileV1 &locked, const HoroPackageId &package);
     };
 }  // namespace Horo::Packages

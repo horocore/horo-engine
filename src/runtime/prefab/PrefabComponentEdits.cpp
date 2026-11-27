@@ -1,7 +1,9 @@
 #include "PrefabValueResolutionInternal.h"
 
 #include <algorithm>
+#include <map>
 #include <new>
+#include <set>
 #include <type_traits>
 
 namespace Horo::Prefab {
@@ -86,31 +88,52 @@ namespace Horo::Prefab {
             return Result<void>::Success();
         }
 
+        /** @brief Checks dependencies even when coalescing removed the last topology record. */
+        Result<void> ValidateTargetObjects(std::span<const ResolvedPrefabObject> objects, const std::set<PrefabObjectAddress> &targets,
+                                           const PrefabValueSchemaSnapshot &schemas) {
+            for (const auto &object : objects)
+                if (targets.contains(object.key.object))
+                    if (auto valid = ValidateComponentObject(object, schemas); valid.HasError())
+                        return valid;
+            return Result<void>::Success();
+        }
+
         /** @brief Coalescing the last add record must still validate the resulting
          * object's dependencies. */
         Result<void> ValidateEditedObjects(const std::span<const ResolvedPrefabObject> objects, const PrefabComponentEdit &edit,
                                            const PrefabValueSchemaSnapshot &schemas) {
-            std::vector<PrefabObjectAddress> targets;
+            std::set<PrefabObjectAddress> targets;
             std::visit([&targets]<typename Edit>(const Edit &value) {
                 if constexpr (std::is_same_v<Edit, PrefabAddComponentOverride>)
-                    targets.push_back(value.object);
+                    targets.insert(value.object);
                 else if constexpr (std::is_same_v<Edit, PrefabRevertComponentOverridesEdit>) {
                     for (const auto &target : value.targets)
-                        targets.push_back(target.object);
+                        targets.insert(target.object);
                 } else
-                    targets.push_back(value.target.object);
+                    targets.insert(value.target.object);
             }, edit);
-            std::ranges::sort(targets);
-            const auto duplicates = std::ranges::unique(targets);
-            targets.erase(duplicates.begin(), duplicates.end());
-            for (const auto &target : targets) {
-                const auto object = std::ranges::find_if(objects, [&target](const auto &entry) {
-                    return entry.key.object == target;
-                });
-                if (object != objects.end())
-                    if (auto valid = ValidateComponentObject(*object, schemas); valid.HasError())
-                        return valid;
+            return ValidateTargetObjects(objects, targets, schemas);
+        }
+
+        /** @brief Checks the selection against the complete layer currently inherited by the Scene. */
+        Result<void> ValidatePromotionSelection(const ResolvedPrefabObject &object, const PrefabComponentOverrideTarget &target,
+                                                const PrefabComponentOverrideRecord &record, const PrefabValueSchemaSnapshot &schemas) {
+            const auto *policy = schemas.FindComponent(target.type);
+            if (!policy)
+                return Result<void>::Failure(MakeError(PrefabErrors::OverrideOrphan));
+            const auto &components = object.object.components;
+            const auto existing = std::ranges::find(components, target.instance, &RawComponentPayload::instance);
+            if (std::holds_alternative<PrefabAddComponentOverride>(record)) {
+                if (existing != components.end() || !policy->allowAddition)
+                    return Result<void>::Failure(MakeError(PrefabErrors::OverrideConflict));
+                return Result<void>::Success();
             }
+            const auto &remove = std::get<PrefabRemoveComponentOverride>(record);
+            if (existing == components.end() || existing->component.typeId != target.type)
+                return Result<void>::Failure(MakeError(PrefabErrors::OverrideOrphan));
+            if (!policy->allowRemoval || existing->component.schemaVersion != remove.componentSchemaVersion ||
+                ComponentDigest(*existing) != remove.expectedSourceComponent)
+                return Result<void>::Failure(MakeError(PrefabErrors::OverrideConflict));
             return Result<void>::Success();
         }
 
@@ -192,6 +215,83 @@ namespace Horo::Prefab {
             return ValidateResolvedComponentEdit(ResolvePrefabValueOverrides(source, next, schemas, limits, cancellation), edit, schemas);
         } catch (const std::bad_alloc &) {
             return Result<PrefabOverrideResolution>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+        }
+    }
+
+    /** @copydoc PreparePrefabComponentPromotion */
+    Result<PrefabOverrideResolution> PreparePrefabComponentPromotion(const PrefabOverrideBaseline &source,
+                                                                     const std::optional<PrefabValueOverrideSet> &current,
+                                                                     std::span<const PrefabComponentOverrideRecord> selected,
+                                                                     const PrefabValueSchemaSnapshot *schemas,
+                                                                     const PrefabLimitProfile &limits,
+                                                                     const CancellationToken &cancellation) {
+        using Return = Result<PrefabOverrideResolution>;
+        try {
+            if (!schemas)
+                return Return::Failure(MakeError(PrefabErrors::OverrideOrphan));
+            if (selected.empty())
+                return Return::Failure(MakeError(PrefabErrors::OverrideInvalid));
+            const auto &policy = limits.Policy();
+            if (selected.size() > policy.maximumOverrideRecords)
+                return Return::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+            const PrefabValueOverrideSet empty{source.RootAsset(), source.SourceRevision(), schemas->Revision()};
+            auto inspected = ResolvePrefabValueOverrides(source, current ? *current : empty, schemas, limits, cancellation);
+            if (inspected.HasError())
+                return inspected;
+            if (!inspected.Value().effective)
+                return Return::Failure(MakeError(PrefabErrors::OverrideConflict));
+
+            auto layer = std::move(inspected).Value();
+            auto next = std::move(layer.rebased);
+            std::map<PrefabObjectAddress, const ResolvedPrefabObject *> effective;
+            for (const auto &object : *layer.effective)
+                effective.emplace(object.key.object, &object);
+            std::set<std::pair<PrefabObjectAddress, PrefabComponentInstanceId>> occurrences;
+            std::set<PrefabObjectAddress> objects;
+            PrefabExpansionBudget work{limits};
+            std::size_t payloadBytes{};
+            for (const auto &record : selected) {
+                if (cancellation.IsCancellationRequested())
+                    return Return::Failure(MakeError(PrefabErrors::Cancelled));
+                if (record.valueless_by_exception())
+                    return Return::Failure(MakeError(PrefabErrors::OverrideInvalid));
+                const auto target = ValueDetail::ComponentTarget(record);
+                if (!occurrences.emplace(target.object, target.instance).second)
+                    return Return::Failure(MakeError(PrefabErrors::OverrideConflict));
+                const auto found = effective.find(target.object);
+                if (found == effective.end())
+                    return Return::Failure(MakeError(PrefabErrors::OverrideOrphan));
+                if (auto valid = ValidatePromotionSelection(*found->second, target, record, *schemas); valid.HasError())
+                    return Return::Failure(std::move(valid).ErrorValue());
+                objects.insert(target.object);
+                if (auto charged = work.Consume(source.Objects().size()); charged.HasError())
+                    return Return::Failure(std::move(charged).ErrorValue());
+                if (auto charged = work.Consume(next.componentRecords.size() + next.records.size()); charged.HasError())
+                    return Return::Failure(std::move(charged).ErrorValue());
+                const auto *add = std::get_if<PrefabAddComponentOverride>(&record);
+                if (add) {
+                    const auto bytes = add->payload.component.payload.size();
+                    if (bytes > policy.maximumOverrideValueBytes || bytes > policy.maximumOverrideSetBytes - payloadBytes)
+                        return Return::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
+                    if (auto valid = ValidateRawComponentPayload(add->payload); valid.HasError())
+                        return Return::Failure(std::move(valid).ErrorValue());
+                    payloadBytes += bytes;
+                }
+                auto lowered = add ? PrepareAddition(next, *add) : PrepareRemoval(next, source, target);
+                if (lowered.HasError())
+                    return Return::Failure(std::move(lowered).ErrorValue());
+            }
+
+            auto resolved = ResolvePrefabValueOverrides(source, next, schemas, limits, cancellation);
+            if (resolved.HasError())
+                return resolved;
+            if (!resolved.Value().effective)
+                return Return::Failure(MakeError(PrefabErrors::OverrideConflict));
+            if (auto valid = ValidateTargetObjects(*resolved.Value().effective, objects, *schemas); valid.HasError())
+                return Return::Failure(std::move(valid).ErrorValue());
+            return resolved;
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }
     }
 }  // namespace Horo::Prefab

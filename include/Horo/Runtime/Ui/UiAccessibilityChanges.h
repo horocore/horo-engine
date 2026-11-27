@@ -188,6 +188,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiAccessibilitySemanticRevision PreviousRevision() const noexcept;
         /** @brief Returns the adopted semantic revision. @return Invalid before first publication. */
         [[nodiscard]] UiAccessibilitySemanticRevision Revision() const noexcept;
+        /** @brief Checks exact adopted immutable publication identity without comparing numeric revisions alone.
+         * @param snapshot Snapshot or copied lease to test against the currently adopted publication.
+         * @return True only for the same live snapshot storage; false before publication, after retirement or move.
+         * @details Independent snapshots with equal descriptors are distinct publications. This read neither
+         * adopts a snapshot nor acknowledges announcements, and allocates no storage.
+         */
+        [[nodiscard]] bool IsCurrentSnapshot(const UiAccessibilitySnapshot &snapshot) const noexcept;
         /** @brief Returns bounded immutable change records. @return Borrowed output with the class lifetime rules. */
         [[nodiscard]] std::span<const UiAccessibilityChange> Changes() const noexcept;
         /** @brief Resolves an announcement's owned text. @param text Range from current Changes(). @return Text or empty for invalid range.
@@ -210,6 +217,9 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> Acknowledge(const UiAccessibilityAnnouncementCursor &cursor);
 
     private:
+        friend class UiAccessibilityReviewLog;
+        /** @brief Identifies this publisher without retaining its storage or snapshot. */
+        [[nodiscard]] std::weak_ptr<const void> ReviewIdentity() const noexcept;
         struct Storage;
         explicit UiAccessibilityChangePublisher(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;

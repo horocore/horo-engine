@@ -1,9 +1,26 @@
+#include "CliOutputContractFixture.h"
+#include "Horo/AI/LocalLearnedPolicy.h"
+#include "Horo/Application/PlatformServicesProjectCook.h"
+#include "Horo/Application/PlatformServicesProjectSources.h"
+#include "Horo/Assets/AssetCookOutput.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Prefab/PrefabDocument.h"
+#include "Horo/Runtime/Ui/UiDocumentSerialization.h"
+#include "Horo/Scene/SceneSource.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <miniz.h>
 #include <nlohmann/json.hpp>
+#include <set>
+#include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -58,12 +75,27 @@ namespace {
                     "CMake CLI executable is missing");
         }
 
+        /** @brief Seeds a retained diagnostic only in this fixture's private child home. */
+        void SeedRetainedLog() const {
+            const auto logs = home_.Path() / ".horo" / "logs";
+            std::filesystem::create_directories(logs);
+            std::ofstream stream(logs / "horo-engine.jsonl.1", std::ios::binary);
+            stream << R"({"headers":{"X-API-Key":"fake-header-material-945"},"message":"retained diagnostic control"})" << '\n';
+            stream << R"({"category":"runtime.save.stage","message":"private-fixture-save-payload",)"
+                      R"("fields":{"stage":"commit","outcome":"succeeded","duration_ns":2,"bytes":9,"retries":0,)"
+                      R"("dropped_work":0,"queue_depth":0,"display":"private-fixture-save-display"}})"
+                   << '\n';
+            stream.close();
+            Require(!stream.fail(), "could not seed the fixture's retained diagnostic");
+        }
+
         std::string Run(std::vector<std::string> arguments, const int expected) {
             std::string output;
             std::string diagnostics;
             bool truncated = false;
             Horo::ExternalProcessRequest request{.executable = executable_,
                                                  .arguments = std::move(arguments),
+                                                 .environment = Environment(),
                                                  .timeout = std::chrono::seconds{30},
                                                  .maximumLineBytes = 1024 * 1024,
                                                  .onOutput =
@@ -80,16 +112,36 @@ namespace {
             Require(result.Value().exitCode == expected, "unexpected CLI exit: " + diagnostics + output);
             Require(output.find('\r') == std::string::npos, "machine output contains terminal carriage returns");
             Require(output.find('\x1b') == std::string::npos, "machine output contains terminal decoration");
+            Require(output.find("fake-cli-secret-731") == std::string::npos, "stdout disclosed a synthetic credential");
+            Require(diagnostics.find("fake-cli-secret-731") == std::string::npos, "stderr disclosed a synthetic credential");
             return output;
         }
 
     private:
+        /** @brief Keeps real user credentials and pre-existing logs outside the privacy fixture's child environment. */
+        Horo::ProcessEnvironment Environment() const {
+            const auto directory = Utf8Path(home_.Path());
+            Horo::ProcessEnvironment environment{.base = Horo::ProcessEnvironmentBase::Replace,
+                                                 .set = {{"HOME", directory},
+                                                         {"USERPROFILE", directory},
+                                                         {"TEMP", directory},
+                                                         {"TMP", directory},
+                                                         {"HORO_CLI_FAKE_CREDENTIAL", "fake-cli-secret-731"}}};
+#if defined(_WIN32)
+            if (const auto *root = std::getenv("SystemRoot"))
+                environment.set.push_back({"SystemRoot", root});
+#endif
+            return environment;
+        }
+
         std::string executable_;
         Horo::NativeExternalProcessRunner runner_;
+        TemporaryDirectory home_;
     };
 
     /** @brief Validates required version-one framing while allowing optional compatible fields. */
     void Envelope(const Json &value) {
+        Horo::Tests::CliContract::ValidateEnvelope(value);
         Require(value.is_object(), "terminal result must be an object");
         Require(value.at("schemaVersion") == 1, "schema version changed");
         Require(value.at("command").is_string(), "missing command identity");
@@ -127,14 +179,54 @@ namespace {
         }
     }
 
+    /** @brief Requires a versioned fixture for every command exposed by production discovery. */
+    void CheckCommandInventory(ProcessFixture &process, const Json &fixture) {
+        const auto help = Json::parse(process.Run({"host", "help", "--output", "json"}, 0));
+        Envelope(help);
+        std::set<std::string> actualCommands;
+        std::istringstream lines{help.at("result").at("help").get<std::string>()};
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.starts_with("  ")) {
+                auto command = line.substr(2, line.find("  ", 2) - 2);
+                std::ranges::replace(command, ' ', '.');
+                actualCommands.insert(std::move(command));
+            }
+        }
+        std::set<std::string> expectedCommands;
+        for (const auto &contract : fixture.at("commandSchemas")) {
+            if (contract.at("command") != "cli.invocation")
+                expectedCommands.insert(contract.at("command").get<std::string>());
+        }
+        Require(actualCommands == expectedCommands, "public command inventory lacks a versioned output fixture");
+    }
+
     /** @brief Exercises one-document success/failure framing without relying on helper-only registrations. */
     void JsonCases(ProcessFixture &process) {
+        const auto &fixture = Horo::Tests::CliContract::Fixture();
+        CheckCommandInventory(process, fixture);
+        for (const auto &test : fixture.at("successCases")) {
+            for (const auto &mode : {std::string{"json"}, std::string{"jsonl"}}) {
+                auto arguments = test.at("arguments").get<std::vector<std::string>>();
+                arguments.insert(arguments.end(), {"--non-interactive", "--output", mode});
+                const auto envelope = Json::parse(process.Run(std::move(arguments), 0));
+                Envelope(envelope);
+                Require(envelope.at("schemaVersion") == fixture.at("schemaVersion"), "fixture schema version changed");
+                if (mode == "jsonl")
+                    Require(envelope.at("recordVersion") == fixture.at("recordVersion"), "fixture record version changed");
+                Require(envelope.at("command") == test.at("command"), "fixture command identity changed");
+                Require(envelope.at("outputSchema").at("id") == test.at("schema"), "fixture output schema changed");
+                Require(envelope.at("result") == test.at("result"), "fixture result changed");
+            }
+        }
         CheckJson(process, {"observability", "smoke", "--output", "json"}, 0);
         CheckJson(process, {"--emit-observability-smoke", "--output=json"}, 0);
         CheckJson(process, {"--help", "--output", "json"}, 0);
         CheckJson(process, {"host", "inspect", "--unknown", "--output", "json"}, 2);
         CheckJson(process, {"missing", "command", "--output", "json"}, 2);
         CheckJson(process, {"diagnostics", "bundle", "--output-path", "relative.zip", "--output", "json"}, 3);
+        for (const char *mode : {"human", "json", "jsonl"})
+            static_cast<void>(process.Run({"host", "inspect", "--fake-secret=fake-cli-secret-731", "--output", mode}, 2));
     }
 
     /** @brief Parses each declared JSONL record separately so log contamination fails the contract. */
@@ -150,10 +242,69 @@ namespace {
         return records;
     }
 
+    /** @brief Inspects decompressed entries for disclosures and returns the canonical Save manifest summary. */
+    Json CheckBundlePrivacy(const std::filesystem::path &destination) {
+        Require(std::filesystem::file_size(destination) <= 64U * 1024U * 1024U, "test bundle exceeded its input bound");
+        std::ifstream bundle(destination, std::ios::binary);
+        const std::string archive{std::istreambuf_iterator<char>{bundle}, std::istreambuf_iterator<char>{}};
+        mz_zip_archive zip{};
+        Require(mz_zip_reader_init_mem(&zip, archive.data(), archive.size(), 0) != 0, "bundle is not a readable ZIP");
+
+        /** @brief Closes the reader when a protocol assertion unwinds. */
+        struct ReaderGuard {
+            explicit ReaderGuard(mz_zip_archive &archive) : zip(archive) {}
+
+            ReaderGuard(const ReaderGuard &) = delete;
+            ReaderGuard &operator=(const ReaderGuard &) = delete;
+            mz_zip_archive &zip;
+
+            ~ReaderGuard() {
+                mz_zip_reader_end(&zip);
+            }
+        } guard{zip};
+
+        bool foundRetained = false;
+        Json saveSummary;
+        for (mz_uint index = 0; index < mz_zip_reader_get_num_files(&zip); ++index) {
+            mz_zip_archive_file_stat entry{};
+            Require(mz_zip_reader_file_stat(&zip, index, &entry) != 0, "bundle entry metadata is invalid");
+            Require(entry.m_uncomp_size <= 64U * 1024U * 1024U, "bundle entry exceeded the test bound");
+            std::string contents(static_cast<std::size_t>(entry.m_uncomp_size), '\0');
+            Require(mz_zip_reader_extract_to_mem(&zip, index, contents.data(), contents.size(), 0) != 0, "bundle entry is unreadable");
+            Require(contents.find("fake-cli-secret-731") == std::string::npos, "bundle disclosed an environment credential");
+            Require(contents.find("fake-header-material-945") == std::string::npos, "bundle disclosed a retained API key");
+            Require(contents.find("private-fixture-save-") == std::string::npos, "bundle disclosed private Save evidence");
+            if (std::string_view{entry.m_filename} == "manifest.json")
+                saveSummary = Json::parse(Json::parse(contents).at("metadata").at("save.summary").get<std::string>());
+            if (std::string_view{entry.m_filename} == "logs/horo-engine.1.jsonl") {
+                foundRetained = contents.find("retained diagnostic control") != std::string::npos &&
+                                contents.find(R"("X-API-Key":"[REDACTED]")") != std::string::npos;
+            }
+        }
+        Require(foundRetained, "expected a redacted retained diagnostic in the bundle");
+        return saveSummary;
+    }
+
+    /** @brief Requires the committed result and manifest to identify the same safe Save data. */
+    void CheckSaveBundleCategories(const Json &result, const Json &saveSummary) {
+        Require(saveSummary.at("observations") == 1, "private Save evidence did not become one numeric observation");
+        const auto &categories = saveSummary.at("data_categories");
+        Require(categories.at("included") == Json::array({"stage_outcomes", "failure_categories", "numeric_totals"}),
+                "bundle's included Save categories changed");
+        Require(categories.at("excluded") ==
+                    Json::array({"save_payload", "display_text", "storage_identity", "local_paths", "provider_text"}),
+                "bundle's excluded Save categories changed");
+        Require(result.at("saveIncludedCategories") == "stage_outcomes, failure_categories, numeric_totals",
+                "terminal result needs the Save inclusion summary");
+        Require(result.at("saveExcludedCategories") == "save_payload, display_text, storage_identity, local_paths, provider_text",
+                "terminal result needs the Save exclusion summary");
+    }
+
     /** @brief Verifies declared progress and one correlated summary for a real ZIP in Unicode/space paths. */
     void JsonLinesCases(ProcessFixture &process) {
         TemporaryDirectory directory;
         const auto destination = directory.Path() / "diagnostics bundle.zip";
+        process.SeedRetainedLog();
         const auto records = Records(process.Run({"--diagnostic-bundle", Utf8Path(destination), "--output", "jsonl"}, 0));
         Require(std::filesystem::is_regular_file(destination), "diagnostic ZIP was not produced");
         Require(records.size() == 2, "expected one progress record and one terminal summary");
@@ -165,10 +316,545 @@ namespace {
         Require(terminal.at("recordVersion") == 1, "terminal record version changed");
         Require(terminal.at("result").at("outputPath") == Utf8Path(destination), "UTF-8 path changed across process boundaries");
         Require(records.front().at("invocationId") == terminal.at("invocationId"), "progress correlation changed");
+        CheckSaveBundleCategories(terminal.at("result"), CheckBundlePrivacy(destination));
         const auto failure = Records(process.Run({"host", "inspect", "--unknown", "--output", "jsonl"}, 2));
         Require(failure.size() == 1, "JSONL admission failure emitted extra records");
         Envelope(failure.front());
         Require(failure.front().at("type") == "result", "JSONL admission failure lacks its summary");
+    }
+
+    namespace PlatformProtocol {
+        using namespace Horo;
+        using namespace Horo::Application;
+        using namespace Horo::PlatformServices;
+
+        /** @brief Owns real project bytes and observed publication receipts across production-process scenarios. */
+        struct Fixture final {
+            explicit Fixture(ProcessFixture &value) : process(value), root(std::filesystem::canonical(directory.Path())), docs(Initial()) {
+                Materialize(root);
+            }
+
+            ProcessFixture &process;
+            TemporaryDirectory directory;
+            std::filesystem::path root;
+            PlatformServicesInitialDocuments docs;
+            Json valid;
+            Json firstCook;
+            Assets::AssetSourceCapture firstPair;
+            Assets::AssetSourceCapture incrementalPair;
+
+            /** @brief Constructs explicit current-version authority without exercising the command under test. */
+            static PlatformServicesInitialDocuments Initial() {
+                const auto *release = BuiltInReleaseCompatibilityRegistry().Find(CurrentEngineReleaseVersion());
+                Require(release != nullptr, "current release contract is missing");
+                Json metadata{{"horoVersion", FormatHoroVersion(release->release.value)},
+                              {"persistentContract", FormatPersistentContractHash(release->persistentContract)},
+                              {"projectId", "platform-cli-contract"},
+                              {"name", "Platform CLI"},
+                              {"projectVersion", "1.0.0"},
+                              {"createdAt", "2026-11-11T00:00:00Z"},
+                              {"settings", {{"renderBackend", "null"}}}};
+                PlatformServicesIdSalt salt;
+                salt.bytes.front() = std::byte{1};
+                auto initial = PreparePlatformServicesInitialDocuments(metadata.dump(), salt);
+                Require(initial.HasValue(), "initial platform documents failed");
+                return std::move(initial).Value();
+            }
+
+            /** @brief Writes fixture input only, preserving literal Unicode project paths. */
+            static void WriteAt(const std::filesystem::path &base, std::string_view relative, std::string_view text) {
+                const auto path = base / relative;
+                std::filesystem::create_directories(path.parent_path());
+                std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+                stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+                stream.close();
+                Require(!stream.fail(), "platform fixture write failed");
+            }
+
+            /** @brief Replaces one authored fixture source in the primary root. */
+            void Write(std::string_view path, std::string_view text) {
+                WriteAt(root, path, text);
+            }
+
+            /** @brief Materializes all six initial documents in an independent clean root. */
+            void Materialize(const std::filesystem::path &base) const {
+                WriteAt(base, ".horo/project.json", docs.projectSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Ledger, docs.ledgerSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Achievements, docs.achievementSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Stats, docs.statSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Leaderboards, docs.leaderboardSource);
+                WriteAt(base, PlatformServicesDocumentPaths::Presence, docs.presenceSource);
+            }
+
+            /** @brief Invokes the actual read-only CLI protocol against the primary project. */
+            Json Validate(int exit) {
+                auto result =
+                    Json::parse(process.Run({"platform-services", "validate", "--project", Utf8Path(root), "--output", "json"}, exit));
+                Envelope(result);
+                return result;
+            }
+
+            /** @brief Invokes actual command registration, authority admission, cooking and publication. */
+            Json Cook(const std::filesystem::path &base, int exit) {
+                auto result =
+                    Json::parse(process.Run({"platform-services", "cook", "--project", Utf8Path(base), "--output", "json"}, exit));
+                Envelope(result);
+                return result;
+            }
+
+            /** @brief Reads and validates the complete committed pair without consulting staging files. */
+            static Assets::AssetSourceCapture Pair(const std::filesystem::path &base) {
+                auto pair = Assets::CaptureAssetSource(base, base / PlatformServicesProjectCookPath,
+                                                       PlatformProviderManifestCookGenerationMaximumBytes);
+                Require(pair.HasValue() && pair.Value().identity.exists, "committed paired output is missing");
+                Require(DecodePlatformProviderManifestCookGeneration(pair.Value().bytes, pair.Value().identity.digest).HasValue(),
+                        "published pair is malformed");
+                return std::move(pair).Value();
+            }
+        };
+
+        /** @brief Compares production registration and capture with the shared immutable headless validator. */
+        void Validation(Fixture &fixture) {
+            Envelope(Json::parse(fixture.process.Run({"platform-services", "validate", "--output", "json"}, 2)));
+            Envelope(Json::parse(
+                fixture.process.Run({"platform-services", "validate", "--project", "relative-project", "--output", "json"}, 2)));
+            const auto expected = CapturePlatformServicesProjectSources(fixture.root, InspectProjectCompatibility(fixture.root),
+                                                                        {.profile = PlatformServicesHostProfile::HeadlessServer});
+            Require(expected.HasValue(), "shared headless validation failed");
+            fixture.valid = fixture.Validate(0);
+            Require(fixture.valid.at("outputSchema").at("id") == "horo.platform-services.validation",
+                    "platform command was not registered");
+            Require(fixture.valid.at("result").at("validated") == true, "platform validation was not executed");
+            Require(fixture.valid.at("result").at("sourceFingerprint") == FormatSha256(expected.Value().SourceFingerprint()),
+                    "CLI captured a different source generation");
+            Require(!std::filesystem::exists(fixture.root / ".horo/local"), "read-only validation created local state");
+        }
+
+        /** @brief Requires semantic edits and independent clean roots to converge through real command processes. */
+        void Convergence(Fixture &fixture) {
+            fixture.firstCook = fixture.Cook(fixture.root, 0);
+            Require(fixture.firstCook.at("outputSchema").at("id") == "horo.platform-services.cook",
+                    "production cook command was not registered");
+            Require(fixture.firstCook.at("result").at("committed") == true &&
+                        fixture.firstCook.at("result").at("durabilityConfirmed") == true,
+                    "cook did not confirm durable publication");
+            fixture.firstPair = Fixture::Pair(fixture.root);
+            Require(fixture.firstCook.at("result").at("generationFingerprint") == FormatSha256(fixture.firstPair.identity.digest),
+                    "CLI cook receipt disagrees with the paired file");
+            auto changedPolicy = Json::parse(fixture.docs.projectSource);
+            changedPolicy["settings"]["platformServices"]["services"][0] = 1;
+            fixture.Write(".horo/project.json", changedPolicy.dump());
+            const auto incrementalCook = fixture.Cook(fixture.root, 0);
+            fixture.incrementalPair = Fixture::Pair(fixture.root);
+            Require(fixture.incrementalPair.bytes != fixture.firstPair.bytes, "semantic policy edit did not invalidate the published pair");
+            TemporaryDirectory clean;
+            const auto cleanRoot = std::filesystem::canonical(clean.Path());
+            fixture.Materialize(cleanRoot);
+            Fixture::WriteAt(cleanRoot, ".horo/project.json", changedPolicy.dump());
+            const auto cleanCook = fixture.Cook(cleanRoot, 0);
+            Require(Fixture::Pair(cleanRoot).bytes == fixture.incrementalPair.bytes, "clean and incremental production cooks diverged");
+            Require(cleanCook.at("result").at("generationFingerprint") == incrementalCook.at("result").at("generationFingerprint"),
+                    "clean and incremental cook receipts diverged");
+            fixture.Write(".horo/project.json", fixture.docs.projectSource);
+        }
+
+        /** @brief Requires malformed, duplicate, oversized and version-skewed inputs to preserve the previous pair. */
+        void Malformed(Fixture &fixture) {
+            auto skewedStats = Json::parse(fixture.docs.statSource);
+            skewedStats["schemaVersion"] = 99;
+            for (const auto &text : {std::string{"{"}, std::string{"{\"schemaVersion\":1,\"schemaVersion\":1}"}, skewedStats.dump(),
+                                     std::string(4U * 1024U * 1024U + 1, ' ')}) {
+                fixture.Write(PlatformServicesDocumentPaths::Stats, text);
+                const auto failure = fixture.Validate(3);
+                const auto shared = CapturePlatformServicesProjectSources(fixture.root, InspectProjectCompatibility(fixture.root),
+                                                                          {.profile = PlatformServicesHostProfile::HeadlessServer});
+                Require(shared.HasError(), "hostile stats source was accepted by shared validation");
+                Require(failure.at("error").at("code") == shared.ErrorValue().code.Value(), "CLI changed the original validator identity");
+                Require(fixture.Cook(fixture.root, 3).at("error").at("code") == shared.ErrorValue().code.Value(),
+                        "cook changed the shared validator identity");
+                Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes, "failed cook replaced the previous pair");
+            }
+            fixture.Write(PlatformServicesDocumentPaths::Stats, fixture.docs.statSource);
+        }
+
+        /** @brief Refuses missing authority and unavailable exact providers without repair or implicit fallback. */
+        void Unavailable(Fixture &fixture) {
+            Require(std::filesystem::remove(fixture.root / PlatformServicesDocumentPaths::Presence), "presence fixture was not removed");
+            Require(fixture.Validate(5).at("error").at("code") == Assets::AssetSourceErrors::ReadFailed.code.Value(),
+                    "missing authority was not preserved");
+            Require(!std::filesystem::exists(fixture.root / PlatformServicesDocumentPaths::Presence), "CLI repaired missing source");
+            Require(fixture.Cook(fixture.root, 5).at("error").at("code") == Assets::AssetSourceErrors::ReadFailed.code.Value(),
+                    "cook repaired missing authority");
+            Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes, "missing-source cook changed the published pair");
+            fixture.Write(PlatformServicesDocumentPaths::Presence, fixture.docs.presenceSource);
+            auto exact = Json::parse(fixture.docs.projectSource);
+            exact["settings"]["platformServices"]["provider"] = {{"mode", "exact"}, {"key", "unavailable.fixture"}};
+            fixture.Write(".horo/project.json", exact.dump());
+            Require(fixture.Validate(4).at("error").at("code") == PlatformProjectConfigurationErrors::ProviderNotFound.code.Value(),
+                    "exact provider selection fell back");
+            Require(fixture.Cook(fixture.root, 4).at("error").at("code") ==
+                        PlatformProjectConfigurationErrors::ProviderNotFound.code.Value(),
+                    "cook selected an implicit provider fallback");
+            Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes,
+                    "unavailable-provider cook changed the published pair");
+        }
+
+        /** @brief Prevents ordinary commands from activating an unmigrated root and checks restoration of source identity. */
+        void Migration(Fixture &fixture) {
+            auto legacy = Json::parse(fixture.docs.projectSource);
+            const auto *release = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion("0.3.0").Value()});
+            Require(release != nullptr, "legacy release fixture is missing");
+            legacy["horoVersion"] = "0.3.0";
+            legacy["persistentContract"] = FormatPersistentContractHash(release->persistentContract);
+            fixture.Write(".horo/project.json", legacy.dump());
+            const auto required = fixture.Validate(6);
+            Require(required.at("status") == "failed", "CLI activated an unmigrated root");
+            Require(required.at("error").at("code") == Assets::AssetSourceErrors::Authority.code.Value(),
+                    "unmigrated input bypassed shared admission");
+            Require(fixture.Cook(fixture.root, 6).at("status") == "failed", "cook bypassed required migration");
+            fixture.Write(".horo/project.json", fixture.docs.projectSource);
+            Require(fixture.Validate(0).at("result").at("sourceFingerprint") == fixture.valid.at("result").at("sourceFingerprint"),
+                    "reload changed source generation");
+        }
+
+        /** @brief Holds the genuine shared mutation lease in the parent process, then proves deterministic retry. */
+        void LeaseAndRetry(Fixture &fixture) {
+            {
+                NativeDurableFileSystem files;
+                Editor::ProjectMutationCoordinator mutations{files};
+                auto held =
+                    mutations.TryAcquire({fixture.root, Editor::ProjectMutationOwner::Migration, "production-cook-busy-regression"});
+                Require(held.HasValue(), "test could not hold the real project mutation lease");
+                const auto busy = fixture.Cook(fixture.root, 5);
+                const auto domain = Editor::ProjectMutationErrorDomain();
+                Require(busy.at("error").at("domain") == domain.id.Value(), "cook bypassed the shared project writer lease");
+                Require(Fixture::Pair(fixture.root).bytes == fixture.incrementalPair.bytes, "busy cook modified the previous publication");
+            }
+            Require(fixture.Cook(fixture.root, 0).at("result").at("generationFingerprint") ==
+                        fixture.firstCook.at("result").at("generationFingerprint"),
+                    "restored authored policy did not reproduce the first cook");
+            Require(Fixture::Pair(fixture.root).bytes == fixture.firstPair.bytes, "restored policy produced different paired bytes");
+        }
+    }  // namespace PlatformProtocol
+
+    /** @brief Exercises actual registration, validation, publication, hostile input and writer lifecycle in protocol order. */
+    void PlatformServicesCases(ProcessFixture &process) {
+        PlatformProtocol::Fixture fixture{process};
+        PlatformProtocol::Validation(fixture);
+        PlatformProtocol::Convergence(fixture);
+        PlatformProtocol::Malformed(fixture);
+        PlatformProtocol::Unavailable(fixture);
+        PlatformProtocol::Migration(fixture);
+        PlatformProtocol::LeaseAndRetry(fixture);
+    }
+
+    /** @brief Runs the shipped prefab CLI against real sources, cache reuse and the shared writer exclusion. */
+    void PrefabCookCases(ProcessFixture &process) {
+        using namespace Horo;
+        using namespace Horo::Application;
+        namespace Ui = Horo::Runtime::Ui;
+        TemporaryDirectory directory;
+        const auto root = std::filesystem::canonical(directory.Path());
+        const auto write = [&](const std::string_view path, const std::string_view bytes) {
+            PlatformProtocol::Fixture::WriteAt(root, path, bytes);
+        };
+        write(".horo/project.json", PlatformProtocol::Fixture::Initial().projectSource);
+
+        constexpr std::string_view PrefabId = "00000000-0000-0000-0000-0000000000b1";
+        const auto prefabId = Assets::AssetId::Parse(PrefabId).Value();
+        auto limits = Prefab::PrefabLimitProfile::Create({});
+        Require(limits.HasValue(), "prefab fixture limits failed");
+        auto document = Prefab::PrefabDocument::Create({.projectVersion = CurrentEngineReleaseVersion().value,
+                                                        .assetId = prefabId,
+                                                        .objects = {{.localId = {0}, .name = "Prefab root"}}},
+                                                       limits.Value());
+        Require(document.HasValue(), "prefab fixture creation failed");
+        const auto encoded = document.Value().SerializeCanonical();
+        Require(encoded.HasValue(), "prefab fixture encode failed");
+        write("Assets/hierarchy.prefab", encoded.Value());
+        const auto uiAsset = Assets::AssetId::Parse("00000000-0000-0000-0000-0000000000d1").Value();
+        Ui::SerializedUiId uiId{};
+        uiId.back() = 1;
+        const auto documentId = Ui::UiDocumentId::Create(uiId).Value();
+        uiId.back() = 2;
+        const auto canvasId = Ui::UiCanvasId::Create(uiId).Value();
+        uiId.back() = 3;
+        const auto elementId = Ui::UiElementId::Create(uiId).Value();
+        const auto revision = Ui::UiDocumentRevision::Create(1).Value();
+        Ui::UiDocumentBuilder ui{documentId, revision};
+        Require(ui.AddCanvas({.id = canvasId, .rootElement = elementId, .renderMode = Ui::UiRenderMode::WorldSpace}).HasValue(),
+                "world canvas fixture is invalid");
+        const auto uiDocument = std::move(ui).Build();
+        Require(uiDocument.HasValue(), "runtime UI fixture is invalid");
+        const auto uiSource = Ui::SerializeUiDocument(uiDocument.Value());
+        Require(uiSource.HasValue(), "runtime UI fixture could not be encoded");
+        write("Assets/room.uicanvas",
+              Json{{"format", "horo.ui_canvas"}, {"formatVersion", 2}, {"document", Json::parse(uiSource.Value())}}.dump());
+        write("Assets/unregistered.uicanvas",
+              Json{{"format", "horo.ui_canvas"}, {"formatVersion", 2}, {"document", Json::parse(uiSource.Value())}}.dump());
+        write("Assets/room.uicanvas.horo",
+              Json{{"schemaVersion", 1}, {"assetId", uiAsset.ToString()}, {"assetType", Ui::UiDocumentAssetTypeName}}.dump());
+
+        std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Scene root"}};
+        objects.front().components.uiCanvas = Runtime::UiCanvasComponent{{uiAsset, documentId, canvasId, revision}};
+        const std::vector<SceneSource::ScenePrefabInstance> instances{
+            {.instanceId = Prefab::PrefabInstanceId::Create(7).Value(),
+             .sourcePrefab = Prefab::PrefabAssetReference::Create(prefabId).Value(),
+             .parent = SceneSource::SceneObjectId{900}}};
+        write("Assets/level.horoasset", SceneSource::EncodeSceneSource({objects, instances}));
+        write("Assets/hierarchy.prefab.horo",
+              R"({"schemaVersion":1,"assetId":"00000000-0000-0000-0000-0000000000b1","assetType":"core.prefab"})");
+        write("Assets/level.horoasset.horo",
+              R"({"schemaVersion":1,"assetId":"00000000-0000-0000-0000-0000000000c1","assetType":"core.scene"})");
+
+        auto command = std::vector<std::string>{"prefab", "cook", "--project", Utf8Path(root), "--output", "json"};
+        static_cast<void>(process.Run(command, 2));
+        command.insert(command.end(), {"--target", "headless-null", "--runtime-prefab", std::string{PrefabId}});
+        auto duplicate = command;
+        duplicate.insert(duplicate.end(), {"--runtime-prefab", std::string{PrefabId}});
+        static_cast<void>(process.Run(std::move(duplicate), 2));
+        const auto cookedRoot = root / ".horo/cooked/prefab/headless-null";
+        Require(!std::filesystem::exists(cookedRoot), "rejected prefab command created cooked output");
+
+        const auto first = Json::parse(process.Run(command, 0));
+        Envelope(first);
+        Require(first.at("outputSchema").at("id") == "horo.prefab.cook", "prefab CLI used the wrong schema");
+        Require(first.at("metadata").at("operationId").get<std::uint64_t>() != 0, "prefab cook lost its canonical operation ID");
+        Require(first.at("result").at("committed") == true && first.at("result").at("artifacts") == 3,
+                "prefab cook lost a runtime prefab, Scene or UI document");
+        NativeDurableFileSystem files;
+        const auto generation = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(generation.HasValue(), "prefab CLI produced no canonical generation");
+        Require(first.at("result").at("manifestDigest") == FormatSha256(generation.Value().manifestDigest),
+                "prefab command result does not match the published manifest");
+
+        const auto contents = Assets::ReadCookGenerationContents(files, generation.Value(), 1024U * 1024U);
+        Require(contents.HasValue(), "prefab CLI published an unreadable generation");
+        const auto &entries = contents.Value().entries;
+        const auto uiEntry = std::ranges::find(entries, uiAsset, &Assets::AssetCookManifestEntry::assetId);
+        Require(uiEntry != entries.end() && uiEntry->assetType.Value() == Ui::UiDocumentAssetTypeName,
+                "prefab CLI omitted the registered UI resource");
+        const auto artifact = Assets::DecodeCookedArtifact(contents.Value().artifacts[static_cast<std::size_t>(uiEntry - entries.begin())]);
+        Require(artifact.HasValue(), "prefab CLI emitted an invalid UI artifact envelope");
+        const auto cookedUi = Ui::CookedUiDocument::Decode(artifact.Value().payload);
+        Require(cookedUi.HasValue() && cookedUi.Value().Id() == documentId && cookedUi.Value().SourceRevision() == revision &&
+                    cookedUi.Value().Canvases().size() == 1 && cookedUi.Value().Canvases().front().id == canvasId,
+                "prefab CLI lost the exact authored world canvas identity");
+
+        const auto repeat = Json::parse(process.Run(command, 0));
+        Require(repeat.at("result").at("cacheHits").get<std::size_t>() > 0, "prefab CLI discarded ordinary cache reuse");
+        Require(repeat.at("result").at("manifestDigest") == first.at("result").at("manifestDigest"),
+                "identical prefab cook changed the manifest commitment");
+
+        {
+            Editor::ProjectMutationCoordinator mutations{files};
+            const auto lease = mutations.TryAcquire({root, Editor::ProjectMutationOwner::Migration, "prefab-cli-boundary"});
+            Require(lease.HasValue(), "prefab CLI fixture could not acquire the existing project mutation lease");
+            const auto blocked = Json::parse(process.Run(command, 5));
+            Require(blocked.at("status") == "failed", "prefab CLI bypassed the existing project writer");
+        }
+
+        auto jsonLines = command;
+        *(std::ranges::find(jsonLines, "--output") + 1) = "jsonl";
+        const auto stream = Records(process.Run(std::move(jsonLines), 0));
+        Require(stream.size() > 1, "prefab JSONL did not emit declared progress");
+        const auto &terminal = stream.back();
+        Envelope(terminal);
+        Require(terminal.at("type") == "result" && terminal.at("metadata").at("operationId").get<std::uint64_t>() != 0,
+                "prefab JSONL lost its canonical operation identity");
+        for (const auto &event : std::span{stream}.first(stream.size() - 1))
+            Require(event.at("type") == "progress" && event.at("command") == terminal.at("command") &&
+                        event.at("invocationId") == terminal.at("invocationId"),
+                    "prefab JSONL progress lost invocation correlation");
+
+        write("Assets/hierarchy.prefab", "private malformed prefab input");
+        const auto malformed = process.Run(command, 3);
+        const auto failure = Json::parse(malformed);
+        Require(failure.at("metadata").at("operationId").get<std::uint64_t>() != 0, "failed prefab cook lost its operation ID");
+        const auto &source = failure.at("metadata").at("assetSource");
+        Require(source.at("assetId").get<std::string>() == PrefabId && source.at("projectPath") == "Assets/hierarchy.prefab",
+                "malformed prefab lost the typed project-relative source identity");
+        Require(malformed.find(Utf8Path(root)) == std::string::npos &&
+                    malformed.find("private malformed prefab input") == std::string::npos,
+                "prefab diagnostic leaked native paths or raw source");
+        const auto retained = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(retained.HasValue() && retained.Value().manifestDigest == generation.Value().manifestDigest,
+                "malformed prefab replaced the previously committed generation");
+    }
+
+    void LocalPolicyCookCases(ProcessFixture &process) {
+        using namespace Horo;
+        using namespace Horo::AI;
+        TemporaryDirectory directory;
+        const auto root = std::filesystem::canonical(directory.Path());
+        const auto write = [&](const std::string_view path, const std::string_view data) {
+            PlatformProtocol::Fixture::WriteAt(root, path, data);
+        };
+        constexpr std::string_view modelId = "00000000-0000-0000-0000-000000000042";
+        auto project = Json::parse(PlatformProtocol::Fixture::Initial().projectSource);
+        auto profile = Json::parse(R"({"schemaVersion":1,"localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
+            "interpreterTarget":7,"maximumModelBytes":4096,"maximumWorkUnits":128,"tasks":[20],
+            "controllers":[{"controller":3,"artifact":"00000000-0000-0000-0000-000000000042","featureKeys":[18]}]}})");
+        project["settings"]["ai"] = profile;
+        write(".horo/project.json", project.dump());
+        const auto task = TaskId::Create(20).Value();
+        AiCapabilityDescriptorRegistry declarations;
+        Require(declarations.Register({task}).HasValue(), "local policy task registration failed");
+        const auto tasks = declarations.Freeze();
+        const auto target = LocalPolicyTargetId::Create(7).Value();
+        const std::array targets{target};
+        const std::array features{LocalPolicyFeatureId::Create(1).Value()};
+        const std::array<std::int16_t, 1> weights{1};
+        const std::array rows{LocalPolicyRowSource{task, 0, weights}};
+        const LocalPolicyCookTarget hardware{target, true, 4096, 128};
+        const auto model = LocalLearnedPolicy::Cook({LocalPolicyModelId::Create(1).Value(), 1, targets, features, rows}, hardware, tasks);
+        Require(model.HasValue(), "local policy fixture model failed");
+        const auto encoded = model.Value().EncodeCooked();
+        Require(encoded.HasValue(), "local policy fixture encoding failed");
+        write("Assets/guard.horo_policy", {reinterpret_cast<const char *>(encoded.Value().data()), encoded.Value().size()});
+        write("Assets/guard.horo_policy.horo",
+              Json{{"schemaVersion", 1}, {"assetId", modelId}, {"assetType", LocalPolicyAssetType}}.dump());
+        const std::vector<std::string> command{"prefab",   "cook",          "--project", Utf8Path(root),
+                                               "--target", "headless-null", "--output",  "json"};
+        const auto cooked = Json::parse(process.Run(command, 0));
+        Require(cooked.at("result").at("artifacts") == 1, "prefab CLI did not publish the authored model");
+        const auto cookedRoot = root / ".horo/cooked/prefab/headless-null";
+        NativeDurableFileSystem files;
+        const auto active = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(active.HasValue(), "local policy cook did not commit a generation");
+        const auto contents = Assets::ReadCookGenerationContents(files, active.Value(), 1024U * 1024U);
+        Require(contents.HasValue() && contents.Value().artifacts.size() == 1, "local policy model artifact was lost");
+        const auto artifact = Assets::DecodeCookedArtifact(contents.Value().artifacts.front());
+        Require(artifact.HasValue() && artifact.Value().type.Value() == LocalPolicyAssetType &&
+                    artifact.Value().payloadDigest == model.Value().Digest(),
+                "local policy artifact changed its committed type or payload");
+
+        project["settings"]["ai"]["localPolicy"]["packageTarget"] = "other-target";
+        write(".horo/project.json", project.dump());
+        const auto failure = Json::parse(process.Run(command, 4));
+        Require(failure.at("status") == "failed", "prefab CLI accepted a model profile for another target");
+        const auto retained = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(retained.HasValue() && retained.Value().manifestDigest == active.Value().manifestDigest,
+                "target rejection replaced the previous generation");
+    }
+
+    /** @brief Exercises the shipped read-only planner against the real generated migration chain. */
+    void PrefabMigrationPlanCases(ProcessFixture &process) {
+        using namespace Horo::Application;
+        TemporaryDirectory directory;
+        const auto root = std::filesystem::canonical(directory.Path());
+        const auto write = [&](const std::string_view path, const std::string_view bytes) {
+            PlatformProtocol::Fixture::WriteAt(root, path, bytes);
+        };
+        const auto read = [&](const std::string_view path) {
+            std::ifstream file(root / path, std::ios::binary);
+            Require(file.is_open(), "migration planner removed project evidence");
+            return std::string{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+        };
+        static_cast<void>(process.Run({"prefab", "migration-plan", "--output", "json"}, 2));
+        static_cast<void>(process.Run({"prefab", "migration-plan", "--project", ".", "--output", "json"}, 2));
+        const std::vector<std::string> command{"prefab", "migration-plan", "--project", Utf8Path(root), "--output", "json"};
+        const auto *target = BuiltInReleaseCompatibilityRegistry().Find(CurrentEngineReleaseVersion());
+        Require(target != nullptr, "built-in compatibility catalog has no current release");
+        const auto targetBaseline = FormatHoroVersion(target->contractBaseline.value);
+
+        constexpr std::string_view Legacy =
+            R"({"horoVersion":"0.0.1","persistentContract":"sha256:5ef87e96e24c0a3a5e44f4dee182dbd3bfb5402e08e07aaf3d64d4a3ff24ae6d","projectId":"migration-fixture","name":"Fixture","projectVersion":"0.2.0","createdAt":"2026-07-19T00:00:00Z","settings":{"renderBackend":"opengl"}})";
+        constexpr std::string_view Authored = R"({"projectVersion":"0.0.1","objects":[]})";
+        write(".horo/project.json", Legacy);
+        write("assets/player.prefab", Authored);
+        constexpr std::string_view Sidecar =
+            R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        write("assets/player.prefab.horo", Sidecar);
+        const auto wire = Json::parse(process.Run(command, 0));
+        Envelope(wire);
+        Require(wire.at("outputSchema").at("id") == "horo.prefab.migration-plan", "prefab plan schema changed");
+        const auto &plan = wire.at("result");
+        Require(plan.at("prefabAdoptionRequired") == true && plan.at("sourceBaseline") == "0.0.1" &&
+                    plan.at("targetBaseline") == targetBaseline && plan.at("definitionCount") == 4 &&
+                    plan.at("definitionChain").get<std::string>() ==
+                        "core.project_settings.compression_defaults\ncore.authoring.navigation_network\n"
+                        "core.authoring.semantic_surfaces\ncore.authoring.platform_services_identity",
+                "prefab CLI did not project the full ordered production adoption chain");
+        Require(Json::parse(process.Run(command, 0)).at("result") == plan, "repeat planning changed the selected chain");
+        Require(plan.at("verified") == false && plan.at("changedFileCount") == 0, "plan-only mode verified the source");
+        Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Authored,
+                "prefab migration planning rewrote authored source");
+
+        auto verifyCommand = command;
+        verifyCommand.push_back("--verify");
+        const auto checkDisposable = [&] {
+            Require(!std::filesystem::exists(root / ".horo/migration_history.json") &&
+                        !std::filesystem::exists(root / ".horo/local/migration"),
+                    "verified prefab migration published transaction state");
+            for (const auto &entry : std::filesystem::directory_iterator(root))
+                Require(!entry.path().filename().string().starts_with(".horo-migration-dry-run-"),
+                        "verified prefab migration left temporary state");
+        };
+        const auto verified = Json::parse(process.Run(verifyCommand, 0)).at("result");
+        const auto paths = verified.at("changedProjectPaths").get<std::string>();
+        Require(verified.at("verified") == true && verified.at("changedFileCount").get<std::size_t>() >= 3 &&
+                    verified.at("changedPathsOmitted") == false && paths.find(".horo/project.json") != std::string::npos &&
+                    paths.find(".horo/migration_history.json") != std::string::npos &&
+                    paths.find("assets/player.prefab") != std::string::npos,
+                "prefab verification did not validate the complete target candidate");
+        Require(Json::parse(process.Run(verifyCommand, 0)).at("result") == verified, "repeat verification changed its portable result");
+        Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Authored &&
+                    read("assets/player.prefab.horo") == Sidecar,
+                "verified prefab migration changed a canonical source");
+        checkDisposable();
+
+        constexpr std::string_view Malformed = "private malformed prefab fixture";
+        write("assets/player.prefab", Malformed);
+        const auto rejected = process.Run(verifyCommand, 5);
+        Require(Json::parse(rejected).at("error").at("code") == "project.migration.stage_failed" &&
+                    rejected.find(Malformed) == std::string::npos && rejected.find(Utf8Path(root)) == std::string::npos,
+                "verified prefab migration lost its typed error or exposed untrusted details");
+        Require(read(".horo/project.json") == Legacy && read("assets/player.prefab") == Malformed &&
+                    read("assets/player.prefab.horo") == Sidecar,
+                "failed verification changed a canonical source");
+        checkDisposable();
+
+        write(".horo/local/migration/outstanding/journal.json", "{");
+        const auto blocked = process.Run(command, 5);
+        Require(Json::parse(blocked).at("error").at("code") == "project.migration.recovery_failed",
+                "pending recovery was overlooked during prefab planning");
+        Require(blocked.find(Utf8Path(root)) == std::string::npos && read(".horo/local/migration/outstanding/journal.json") == "{" &&
+                    read(".horo/project.json") == Legacy,
+                "prefab planning exposed native paths or modified recovery evidence");
+
+        TemporaryDirectory current;
+        const auto currentRoot = std::filesystem::canonical(current.Path());
+        PlatformProtocol::Fixture::WriteAt(currentRoot, ".horo/project.json", PlatformProtocol::Fixture::Initial().projectSource);
+        const auto currentPlan =
+            Json::parse(process.Run({"prefab", "migration-plan", "--project", Utf8Path(currentRoot), "--output", "json", "--verify"}, 0))
+                .at("result");
+        Require(currentPlan.at("prefabAdoptionRequired") == false && currentPlan.at("sourceBaseline") == targetBaseline &&
+                    currentPlan.at("targetBaseline") == targetBaseline && currentPlan.at("definitionCount") == 0 &&
+                    currentPlan.at("definitionChain") == "" && currentPlan.at("verified") == false &&
+                    currentPlan.at("changedFileCount") == 0 && currentPlan.at("changedProjectPaths") == "",
+                "compatible project reported required prefab migration");
+    }
+
+    /** @brief Checks rejected exports emit no collection progress and preserve occupied destinations. */
+    void RejectedBundleCases(ProcessFixture &process) {
+        TemporaryDirectory directory;
+        const auto destination = directory.Path() / "occupied.zip";
+        std::ofstream(destination) << "preserve";
+        for (const auto &path : {std::string{"relative.zip"}, Utf8Path(destination)}) {
+            const auto records =
+                Records(process.Run({"diagnostics", "bundle", "--output-path", path, "--non-interactive", "--output", "jsonl"}, 3));
+            Require(records.size() == 1, "rejected bundle started collection progress");
+            Envelope(records.front());
+            Require(records.front().at("error").at("code") == "observability.bundle.invalid_request", "bundle error changed");
+        }
+        std::ifstream contents(destination);
+        std::string text;
+        contents >> text;
+        Require(text == "preserve", "rejected bundle overwrote existing data");
+        Require(!std::filesystem::exists(directory.Path() / "occupied.zip.tmp"), "rejected bundle created temporary output");
+        const auto missing = Records(process.Run({"diagnostics", "bundle", "--non-interactive", "--output", "jsonl"}, 2));
+        Require(missing.size() == 1, "missing explicit destination emitted progress");
     }
 }  // namespace
 
@@ -179,6 +865,11 @@ int main(const int argc, char **argv) {
         ProcessFixture process{argv[1]};
         JsonCases(process);
         JsonLinesCases(process);
+        PlatformServicesCases(process);
+        PrefabCookCases(process);
+        LocalPolicyCookCases(process);
+        PrefabMigrationPlanCases(process);
+        RejectedBundleCases(process);
         return 0;
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

@@ -24,8 +24,13 @@ meaningful operating system differences or force every host to create a window.
 
 ## Capability Model
 
+The host's operating-system service bundle is `Horo::PlatformHostServices`.
+`Horo::PlatformServices` is reserved for the provider-neutral online platform
+service namespace. These contracts must be includable together by host and editor
+composition; an OS service bundle must not occupy that namespace's name.
+
 ```cpp
-struct PlatformServices {
+struct PlatformHostServices {
     FileSystem& files;
     Clock& clock;
     ProcessService& processes;
@@ -35,6 +40,11 @@ struct PlatformServices {
     CrashService* crash;
 };
 ```
+
+The baseline bundle is `Horo::PlatformHostServices`. The distinct
+`Horo::PlatformServices` namespace owns online provider services. Both public
+contracts must be usable in the same translation unit. See the
+[composition migration](../../guides/platform-provider-package-qualification.md#host-platform-bundle-migration).
 
 `FileSystem`, `Clock`, `ProcessService`, and `UserDirectories` form the baseline
 service set for supported engine hosts. Headless and test hosts provide suitable
@@ -169,6 +179,16 @@ write/copy/remove, same-filesystem atomic replacement, parent-directory
 synchronization according to host policy, capacity inspection, and immediate
 OS-held exclusive locking. Lock-file text is diagnostic only; ownership lives
 in the native handle and is released by RAII or process termination.
+
+Tracked exclusive publication accepts a prepared sibling directory or a
+single-link regular file. The native rename decides whether the destination
+still exists and commits only when that name is absent. Both entry points
+record native visibility before parent-directory synchronization. Alternate
+filesystem providers can leave exclusive file publication unsupported and
+must fail before any destination mutation in that case.
+The tracked regular-file move also accepts a different parent directory on
+the same filesystem. It synchronizes both parents after native commit. A
+cross-volume request fails rather than copying the file or removing its source.
 
 The `ExclusiveFileLock` value wrapper and its public observation symbols belong
 to Foundation. Its incomplete state is implemented by Platform through the
@@ -321,6 +341,15 @@ operation observers see stable codes. Graceful cancellation before work complete
 maps to `job.cancelled`; timeout maps to `job.cancelled` with cause
 `platform.process.timeout`; forced termination maps to
 `platform.process.terminated`.
+
+Native POSIX launches establish a child-owned process group, an unblocked signal
+mask, and default dispositions for `SIGINT`, `SIGTERM` and `SIGPIPE`. Host-side
+presentation or cancellation suppression must not disable child cancellation or
+change pipe behavior across GUI, CLI and MCP callers. This deliberately replaces
+implicit inheritance of those controls. Existing callers that require a different
+child policy must establish it in the launched program after startup, rather than
+changing the host's signal state to configure the child. The request API remains
+backend-neutral and its shape is unchanged.
 
 ## Native Dialogs
 

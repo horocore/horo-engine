@@ -42,8 +42,11 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(XR::XRErrors::LoaderPreflightCancelled));
             if (!gate || deployment.ComponentIdentity() != component.IdentityDigest() || !component.Manifest().dependencies.empty())
                 return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
-            // The first native profile is desktop Linux; other deployment paths remain explicitly unimplemented.
-#if !defined(__linux__) || defined(__ANDROID__)
+            // Verified direct imports do not grant Windows execution without the selected OS dependency-load policy.
+#if defined(_WIN32)
+            return Result<void>::Failure(
+                MakeError(XR::XRErrors::OperationUnsupported, "Windows OpenXR requires an admitted native OS ABI load policy."));
+#elif !defined(__linux__) || defined(__ANDROID__)
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
 #else
             if (component.Manifest().platform.operatingSystem != "linux")
@@ -110,5 +113,10 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRLoaderLease::Component */
     const VerifiedOpenXRComponent &OpenXRLoaderLease::Component() const noexcept {
         return files_->component;
+    }
+
+    /** @copydoc OpenXRLoaderLease::Deployment */
+    const VerifiedOpenXRDeployment &OpenXRLoaderLease::Deployment() const noexcept {
+        return files_->deployment;
     }
 }  // namespace Horo::Application::Internal

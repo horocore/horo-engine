@@ -1,7 +1,10 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
+#include "Horo/Accessibility/VisualAccessibility.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayFormation.h"
+#include "Horo/Gameplay/GameplayFormationMovement.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -10,14 +13,19 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #endif
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 using namespace Horo;
 using namespace Horo::Gameplay;
 using namespace Horo::Navigation;
 using namespace Horo::Navigation::CoordinatorTestSupport;
+
+BehaviorDescriptor HoroGeneratedBehaviorDescriptor_GuardTargetBeacon();
+BehaviorFactoryBinding HoroGeneratedBehaviorFactory_GuardTargetBeacon();
 
 namespace {
     std::unique_ptr<INavigationQueryBackend> Provider() {
@@ -51,13 +59,14 @@ namespace {
         JobSystem jobs{{.workerCount = 0}};
         NavigationWorldLifecycle world{std::move(NavigationWorldLifecycle::Create(4)).Value()};
         NavigationCoordinator coordinator{std::move(NavigationCoordinator::Create(jobs, Limits())).Value()};
-        NavigationAgentRegistry registry{std::move(NavigationAgentRegistry::Create({.maximumAgents = 1})).Value()};
+        NavigationAgentRegistry registry;
         NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
         std::unique_ptr<NavigationAgentSceneCandidate> candidate;
         std::unique_ptr<NavigationMovementController> movement;
         std::shared_ptr<GameplayNavigationContext> context;
 
-        Fixture() {
+        explicit Fixture(std::string moduleId = "game.tests", const std::size_t maximumAgents = 1)
+            : registry(std::move(NavigationAgentRegistry::Create({.maximumAgents = maximumAgents})).Value()) {
             Activate(world, Provider());
             const std::array descriptors{NavigationAgentDescriptor{.owner = {binding.scene, 0, 1},
                                                                    .profile = NavigationAgentProfileId::Create(1).Value(),
@@ -68,8 +77,8 @@ namespace {
                                                              registry.Snapshot().Value().Agents().front().handle, Caller());
             REQUIRE(made.HasValue());
             movement = std::move(made).Value();
-            auto bound =
-                GameplayNavigationContext::Create({"game.tests", binding, true, true}, &world, &coordinator, movement.get(), Input());
+            auto bound = GameplayNavigationContext::Create({std::move(moduleId), binding, true, true}, &world, &coordinator, movement.get(),
+                                                           Input());
             REQUIRE(bound.HasValue());
             context = std::move(bound).Value();
             REQUIRE(context->Refresh(Now()).HasValue());
@@ -122,7 +131,199 @@ namespace {
         REQUIRE(runtime.HasValue());
         return {std::move(scene), std::move(runtime).Value()};
     }
+
+    /** @brief Places the shipped beacon and pursuit behavior on two root entities. */
+    Runtime::RuntimeSceneDefinition GuardPursuitScene(const BehaviorTypeId &pursuit, const BehaviorTypeId &beacon) {
+        const std::vector<BehaviorField> channel{{"channel", std::string{"test guard"}}};
+        auto pursuitFields = channel;
+        pursuitFields.push_back({"assist_reaction_seconds", 0.125});
+        Runtime::RuntimeComponentSet guardComponents, beaconComponents;
+        guardComponents.behaviors.emplace_back(BehaviorInstanceId{1}, pursuit, 1, true, std::move(pursuitFields));
+        beaconComponents.behaviors.emplace_back(BehaviorInstanceId{2}, beacon, 1, true, channel);
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+        builder.Add({Runtime::SceneObjectId{2}, std::nullopt, {}, std::nullopt, std::move(guardComponents)});
+        Math::Transform position;
+        position.translation = {9, 0, 9};
+        builder.Add({Runtime::SceneObjectId{3}, std::nullopt, position, std::nullopt, std::move(beaconComponents)});
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        return std::move(definition).Value();
+    }
+
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+    /** @brief Runs the commissioned route through Detour and checks its canonical movement intent. */
+    void VerifyPursuitRoute(Fixture &fixture, NavigationMovementObservation current) {
+        const auto querying = fixture.movement->Update(current);
+        REQUIRE(querying.HasValue());
+        REQUIRE(querying.Value().state == NavigationMovementState::Querying);
+        REQUIRE(fixture.coordinator.Dispatch(1) == 1);
+        fixture.jobs.Shutdown(ShutdownPolicy::Drain);
+        const std::array callers{Caller()};
+        REQUIRE(fixture.coordinator.Commit(Current(callers, 2)) == 1);
+        current.path.tick = 2;
+        const auto following = fixture.movement->Update(current);
+        REQUIRE(following.HasValue());
+        REQUIRE(following.Value().state == NavigationMovementState::Following);
+        CHECK(following.Value().desiredVelocity.x > 0);
+    }
+#endif
 }  // namespace
+
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+TEST_CASE("Native formation projects reachable slots and withdraws goals from retired topology", "[gameplay][navigation][formation]") {
+    auto world = NavigationWorldLifecycle::Create(4).Value();
+    Activate(world, Provider());
+    const auto pinned = world.Acquire(World());
+    REQUIRE(pinned.HasValue());
+    auto registry = NavigationAgentRegistry::Create({.maximumAgents = 3}).Value();
+    const NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
+    std::array<NavigationAgentDescriptor, 3> descriptors{};
+    for (std::uint32_t index = 0; index < descriptors.size(); ++index) {
+        descriptors[index].owner = {binding.scene, index + 1, 1};
+        descriptors[index].profile = NavigationAgentProfileId::Create(1).Value();
+        descriptors[index].filter = Request().filter;
+    }
+    auto candidate = registry.PrepareScene(binding, descriptors).Value();
+    candidate->Publish();
+    const auto agents = registry.Snapshot().Value();
+    const std::array members{GameplayFormationMember{agents.Agents()[0].handle, {4, 0.3F, 4}},
+                             GameplayFormationMember{agents.Agents()[1].handle, {3, 0.3F, 4}},
+                             GameplayFormationMember{agents.Agents()[2].handle, {2, 0.3F, 4}}};
+    const std::array offsets{Math::Vec3{1, 0, 0}, Math::Vec3{20, 0, 0}};
+    const auto proposed = PrepareGameplayFormation({.group = GameplayFormationId::Create(1).Value(),
+                                                    .revision = 1,
+                                                    .shape = GameplayFormationShape::Custom,
+                                                    .customSlots = offsets},
+                                                   agents, members);
+    REQUIRE(proposed.HasValue());
+    const GameplayFormationQueryPolicy policy{.projection = {NavigationQueryKind::NearestPoint,
+                                                             NavigationQualityLevel::Balanced,
+                                                             {64, 16, 100}},
+                                              .path = Request().requirement,
+                                              .projectionHalfExtents = {1, 1, 1}};
+    const auto resolved = ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy);
+    if (resolved.HasError())
+        UNSCOPED_INFO(resolved.ErrorValue().code.Value());
+    REQUIRE(resolved.HasValue());
+    CHECK(resolved.Value().availability == GameplayFormationAvailability::Degraded);
+    CHECK(resolved.Value().source == Activation());
+    REQUIRE(resolved.Value().goals.size() == 2);
+    CHECK(resolved.Value().goals[1].agent == members[1].agent);
+    CHECK(resolved.Value().goals[1].groundTarget == Math::Vec3{5, 0, 4});
+    CHECK(resolved.Value().goals[1].movementTarget == Math::Vec3{5, 0.3F, 4});
+    REQUIRE(resolved.Value().unassigned.size() == 1);
+    CHECK(resolved.Value().unassigned.front() == members[2].agent);
+
+    auto disconnected = proposed.Value();
+    disconnected.slots.back().start = {100, 0, 4};
+    disconnected.slots.back().unprojectedTarget = {6, 0, 4};
+    const auto inaccessible = ResolveGameplayFormation(disconnected, agents, pinned.Value(), policy);
+    REQUIRE(inaccessible.HasValue());
+    CHECK(inaccessible.Value().goals.size() == 2);
+    CHECK(inaccessible.Value().unassigned == resolved.Value().unassigned);
+
+    auto blocked = proposed.Value();
+    for (auto &slot : blocked.slots)
+        slot.unprojectedTarget.x += 100.0F;
+    const auto dissolved = ResolveGameplayFormation(blocked, agents, pinned.Value(), policy);
+    REQUIRE(dissolved.HasValue());
+    CHECK(dissolved.Value().availability == GameplayFormationAvailability::Dissolved);
+    CHECK(dissolved.Value().goals.empty());
+    CHECK(dissolved.Value().unassigned.size() == members.size());
+
+    CancellationSource cancelled;
+    cancelled.RequestCancellation();
+    REQUIRE(ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy, cancelled.Token()).HasError());
+    world.BeginShutdown();
+    const auto stale = ResolveGameplayFormation(proposed.Value(), agents, pinned.Value(), policy);
+    REQUIRE(stale.HasError());
+    CHECK(stale.ErrorValue().code.Value() == NavigationErrors::QueryCancelled.code.Value());
+}
+
+TEST_CASE("Formation goals start only their exact live movement controllers", "[gameplay][navigation][formation]") {
+    Fixture fixture;
+    const auto agent = fixture.movement->Agent();
+    const auto group = GameplayFormationId::Create(4).Value();
+    const auto current = fixture.Now();
+    GameplayFormationResolution resolved{.group = group,
+                                         .revision = 2,
+                                         .source = Activation(),
+                                         .availability = GameplayFormationAvailability::Complete,
+                                         .goals = {{0, agent, {4, 0, 1}, {4, 0, 1}}}};
+    const auto stale = fixture.context->SubmitFormationSlot(resolved, group, 3);
+    REQUIRE(stale.HasError());
+    CHECK(stale.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+    const auto exact = resolved.goals.front().agent;
+    ++resolved.goals.front().agent.slot.generation;
+    const auto foreign = fixture.context->SubmitFormationSlot(resolved, group, 2);
+    REQUIRE(foreign.HasError());
+    CHECK(foreign.ErrorValue().code.Value() == NavigationErrors::NoNavigationData.code.Value());
+    resolved.goals.front().agent = exact;
+
+    auto admitted = fixture.context->SubmitFormationSlot(resolved, group, 2);
+    REQUIRE(admitted.HasValue());
+    REQUIRE(fixture.movement->Update(current).HasValue());
+    fixture.Publish();
+    const auto following = fixture.movement->Update(fixture.Now(2));
+    REQUIRE(following.HasValue());
+    CHECK(following.Value().operation.agent == agent);
+    CHECK(following.Value().state == NavigationMovementState::Following);
+    CHECK(following.Value().desiredVelocity.x > 0);
+    CHECK(following.Value().desiredVelocity.z == 0);
+    REQUIRE(admitted.Value().Cancel().HasValue());
+    const auto stopped = fixture.movement->Update(fixture.Now(3));
+    REQUIRE(stopped.HasValue());
+    CHECK(stopped.Value().state == NavigationMovementState::Cancelled);
+}
+
+TEST_CASE("Formation revisions replace both moves and release a removed member", "[gameplay][navigation][formation]") {
+    Fixture fixture{"game.tests", 2};
+    const auto first = fixture.movement->Agent();
+    const auto second = fixture.registry.RegisterAtSafePoint(
+        {.owner = {fixture.binding.scene, 1, 1}, .profile = NavigationAgentProfileId::Create(1).Value(), .filter = Request().filter});
+    REQUIRE(second.HasValue());
+    const auto follower =
+        NavigationMovementController::Create(fixture.registry, fixture.world, fixture.coordinator, second.Value(), Caller());
+    REQUIRE(follower.HasValue());
+    const auto grant = GameplayNavigationContext::Create({"game.tests", fixture.binding, false, true}, &fixture.world, &fixture.coordinator,
+                                                         follower.Value().get(), Input());
+    REQUIRE(grant.HasValue());
+    REQUIRE(grant.Value()->Refresh(fixture.Now()).HasValue());
+    const std::array grants{GameplayFormationMovementBinding{first, fixture.context.get()},
+                            GameplayFormationMovementBinding{second.Value(), grant.Value().get()}};
+    const auto group = GameplayFormationId::Create(1).Value();
+    GameplayFormationMovement moves{group};
+    GameplayFormationResolution resolution{.group = group,
+                                           .revision = 1,
+                                           .source = Activation(),
+                                           .availability = GameplayFormationAvailability::Complete,
+                                           .goals = {{0, first, {4, 0, 1}, {4, 0, 1}}, {1, second.Value(), {1, 0, 4}, {1, 0, 4}}}};
+    const auto started = moves.Apply(resolution, 1, fixture.world, grants);
+    REQUIRE(started.HasValue());
+    REQUIRE(started.Value().started.size() == 2);
+    REQUIRE(moves.Apply(resolution, 1, fixture.world, grants).HasError());
+    REQUIRE(fixture.movement->Update(fixture.Now()).HasValue());
+    REQUIRE(follower.Value()->Update(fixture.Now()).HasValue());
+    fixture.Publish();
+    const auto east = fixture.movement->Update(fixture.Now(2));
+    const auto north = follower.Value()->Update(fixture.Now(2));
+    REQUIRE(east.HasValue());
+    REQUIRE(north.HasValue());
+    CHECK(east.Value().desiredVelocity.x > 0);
+    CHECK(north.Value().desiredVelocity.z > 0);
+
+    resolution.revision = 2;
+    resolution.goals.pop_back();
+    REQUIRE(fixture.context->Refresh(fixture.Now(2)).HasValue());
+    const auto replaced = moves.Apply(resolution, 2, fixture.world, std::span(grants).first(1));
+    REQUIRE(replaced.HasValue());
+    CHECK(replaced.Value().started == std::vector{first});
+    CHECK(fixture.movement->Status().id != east.Value().operation);
+    const auto stopped = follower.Value()->Update(fixture.Now(3));
+    REQUIRE(stopped.HasValue());
+    CHECK(stopped.Value().state == NavigationMovementState::Cancelled);
+}
+#endif
 
 TEST_CASE("Loaded native module reload and shutdown revoke pending navigation delivery before unload") {
     Fixture fixture;
@@ -197,8 +398,8 @@ TEST_CASE("Busy native retirement closes retained navigation admission before ru
     runtime->Shutdown();
     runtime.reset();
     REQUIRE(module->TryRetire().HasValue());
-    fixture.Publish();
     REQUIRE(fixture.context->DrainRetired().Value());
+    REQUIRE(fixture.coordinator.IsDrained());
 }
 
 TEST_CASE("Lua retained navigation closures and opaque requests survive callbacks with native typed failures") {
@@ -309,6 +510,161 @@ TEST_CASE("Lua move-to and follow expose canonical replacement and explicit canc
     BehaviorRegistry registry;
     auto active = ActivateScript(*program.Value(), registry, fixture.context);
     CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 5);
+}
+
+TEST_CASE("Lua assist preferences are detached fixed-step values and remain absent when withheld") {
+    const bool optsIn = GENERATE(false, true);
+    std::string source = R"lua(
+        return horo.behavior {
+            type_id = "game.tests.navigation", display_name = "Assist probe",
+    )lua";
+    if (optsIn)
+        source += "uses_assist_preferences = true,";
+    source += R"lua(
+            on_fixed_update = function(ctx, dt, assists)
+                if not assists then
+                    ctx.transform.set_position(2, 0, 0)
+                    return
+                end
+                assert(assists.aim_assist == 0.5 and assists.auto_aim_snap)
+                assert(assists.aggression_reduction == 0.75 and assists.reaction_time_multiplier == 2)
+                assert(assists.skip_quick_time_events and assists.post_hit_invulnerability_seconds == 0.25)
+                assert(assists.damage_multiplier == 0.5)
+                assists.damage_multiplier = 9
+                ctx.transform.set_position(1, 0, 0)
+            end,
+            on_presentation_update = function(ctx, dt, assists)
+                assert(assists == nil)
+            end
+        }
+    )lua";
+    auto program = LuaBehaviorProgram::Compile(source, Type(), "assist-probe.horo_script");
+    REQUIRE(program.HasValue());
+    BehaviorRegistry registry;
+    auto active = ActivateScript(*program.Value(), registry, {});
+    const GameplayAssistPreferences assists{0.5F, true, 0.75F, 2.0F, true, 0.25F, 0.5F};
+    const auto actor = active.scene->View().Find(Runtime::SceneObjectId{2});
+    REQUIRE(actor);
+    REQUIRE(active.runtime->FixedUpdate({}, FixedDeltaTime{0.1}, nullptr, &assists).HasValue());
+    CHECK(active.scene->View().Get(*actor).Value().localTransform->translation.x == (optsIn ? 1.0F : 2.0F));
+    CHECK(assists.damageMultiplier == 0.5F);
+    active.runtime->PresentationUpdate(FrameDeltaTime{0.1});
+    CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 2.0F);
+}
+
+TEST_CASE("Lua can read detached color accessibility values on opt-in") {
+    using Accessibility::ColorblindMode;
+
+    struct ColorQuery final : Accessibility::IColorAccessibilityQuery {
+        ColorblindMode GetActiveColorblindMode() const noexcept override {
+            return ColorblindMode::Tritanopia;
+        }
+
+        float GetColorblindSeverity() const noexcept override {
+            return 0.25F;
+        }
+
+        bool IsHighContrastEnabled() const noexcept override {
+            return true;
+        }
+    };
+
+    const bool optsIn = GENERATE(false, true);
+    std::string source = R"lua(
+        return horo.behavior { type_id = "game.tests.navigation", display_name = "Color cue",
+    )lua";
+    if (optsIn)
+        source += "uses_color_accessibility = true,";
+    source += R"lua(
+            on_fixed_update = function(ctx)
+                local color = ctx.color_accessibility
+                if not color then
+                    ctx.transform.set_position(1, 0, 0)
+                    return
+                end
+                assert(color.mode == 3 and color.severity == 0.25 and color.high_contrast == true)
+                color.severity = 0
+                ctx.transform.set_position(2, 0, 0)
+            end,
+        }
+    )lua";
+    auto program = LuaBehaviorProgram::Compile(source, Type(), "color-cue.horo_script");
+    REQUIRE(program.HasValue());
+    BehaviorRegistry registry;
+    auto active = ActivateScript(*program.Value(), registry, {});
+    const ColorQuery color;
+    const auto actor = active.scene->View().Find(Runtime::SceneObjectId{2});
+    REQUIRE(actor);
+    REQUIRE(active.runtime->FixedUpdate({}, FixedDeltaTime{0.1}, nullptr, nullptr, &color).HasValue());
+    CHECK(active.scene->View().Get(*actor).Value().localTransform->translation.x == (optsIn ? 2.0F : 1.0F));
+    CHECK(color.GetColorblindSeverity() == 0.25F);
+    CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 1.0F);
+}
+
+TEST_CASE("guard pursuit respects fixed-step reaction assists and its existing Navigation grant") {
+    enum class Mode {
+        NoPreferences,
+        Delayed,
+        NavigationWithheld
+    };
+    const auto mode = GENERATE(Mode::NoPreferences, Mode::Delayed, Mode::NavigationWithheld);
+    const GameplayAssistPreferences assists{.reactionTimeMultiplier = 3.0F};
+    constexpr FixedDeltaTime delta{0.125};
+    Fixture fixture("game.example.guard");
+    const auto script = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "examples/gameplay-ai/Assets/Scripts/GuardPursuit.horo_script";
+    std::ifstream input{script, std::ios::binary};
+    REQUIRE(input.is_open());
+    const std::string source{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    const auto pursuit = BehaviorTypeId::Parse("game.example.guard.pursuit").Value();
+    auto program = LuaBehaviorProgram::Compile(source, pursuit, "GuardPursuit.horo_script");
+    REQUIRE(program.HasValue());
+    auto beacon = HoroGeneratedBehaviorDescriptor_GuardTargetBeacon();
+    const auto definition = GuardPursuitScene(pursuit, beacon.typeId);
+    BehaviorRegistry registry;
+    REQUIRE(registry.Register({std::move(beacon), HoroGeneratedBehaviorFactory_GuardTargetBeacon()}).HasValue());
+    REQUIRE(registry.Register(program.Value()->Registration()).HasValue());
+    REQUIRE(registry.Freeze().HasValue());
+    auto scene = Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{fixture.binding.scene.Value()});
+    REQUIRE(scene.HasValue());
+    auto runtime =
+        BehaviorRuntime::Create(*scene.Value(), registry, {}, {.navigation = mode == Mode::NavigationWithheld ? nullptr : fixture.context});
+    REQUIRE(runtime.HasValue());
+    const auto target = scene.Value()->View().Find(Runtime::SceneObjectId{3});
+    REQUIRE(target);
+    auto now = fixture.Now(1);
+    now.target = NavigationMovementTarget{{fixture.binding.scene, target->entity.index, target->entity.generation}, {9, 0, 9}, 1};
+    REQUIRE(fixture.context->Refresh(now).HasValue());
+
+    const auto tick = [&runtime, &assists, mode, delta] {
+        REQUIRE(runtime.Value()->FixedUpdate({}, delta, nullptr, mode == Mode::NoPreferences ? nullptr : &assists).HasValue());
+    };
+    tick();
+    CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+    if (mode != Mode::NoPreferences) {
+        tick();
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+        tick();
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+    }
+    tick();
+    if (mode == Mode::NavigationWithheld) {
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+        return;
+    }
+    REQUIRE(fixture.movement->Status().state == NavigationMovementState::Querying);
+    const auto operation = fixture.movement->Status().id;
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+    VerifyPursuitRoute(fixture, now);
+#endif
+    const auto retainedState = fixture.movement->Status().state;
+    Runtime::SceneCommandBuffer commands;
+    commands.Destroy(*target);
+    REQUIRE(scene.Value()->Commit(std::move(commands)).HasValue());
+    tick();
+    CHECK(fixture.movement->Status().state == retainedState);
+    CHECK(fixture.movement->Status().id == operation);
+    tick();
+    CHECK(fixture.movement->Status().state == NavigationMovementState::Cancelled);
 }
 
 TEST_CASE("Pending actual native behavior navigation keeps SDK code alive through retired host drain") {

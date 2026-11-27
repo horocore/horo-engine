@@ -8,6 +8,47 @@ namespace Horo::Render::VulkanPresentationTest {
         CHECK(fixture.state.acquires == 0);
     }
 
+    TEST_CASE("Vulkan observes only the current realized unmanaged SDR output", "[renderer][vulkan][wsi]") {
+        Fixture fixture;
+        const auto unrealized = fixture.runtime.ObserveOutput();
+        REQUIRE(unrealized.HasError());
+        CHECK(unrealized.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value());
+        SECTION("The ordinary RGBA8 presentation fallback cannot claim BGRA8 color output") {
+            fixture.state.outputFormat.format = VK_FORMAT_R8G8B8A8_UNORM;
+            fixture.Realize();
+            CHECK(fixture.runtime.OutputFormat().Value() == VK_FORMAT_R8G8B8A8_UNORM);
+            const auto unsupported = fixture.runtime.ObserveOutput();
+            REQUIRE(unsupported.HasError());
+            CHECK(unsupported.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
+        }
+        SECTION("Reconfiguration exposes neither a pending nor a rejected generation") {
+            fixture.Realize();
+            const auto current = fixture.runtime.ObserveOutput();
+            REQUIRE(current.HasValue());
+            CHECK(current.Value().active == RenderOutputColor{});
+            CHECK(current.Value().requested.color == current.Value().active);
+            CHECK(current.Value().display.IsValid());
+            CHECK(current.Value().display.attached);
+            CHECK(current.Value().display.hdr == RenderDisplayHdrSupport::Unknown);
+            CHECK_FALSE(current.Value().display.linearHeadroom.has_value());
+
+            fixture.state.outputFormat.format = VK_FORMAT_R8G8B8A8_UNORM;
+            CHECK(fixture.runtime.Resize({800, 600}, PresentMode::Fifo).HasError());
+            CHECK(fixture.runtime.ObserveOutput().Value() == current.Value());
+            fixture.state.outputFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
+            REQUIRE_FALSE(fixture.runtime.PollAvailability({640, 480}).Value());
+            REQUIRE(fixture.runtime.Resize({800, 600}, PresentMode::Fifo).HasError());
+            const auto pending = fixture.runtime.ObserveOutput();
+            REQUIRE(pending.HasError());
+            CHECK(pending.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value());
+            fixture.state.signaled[fixture.state.lastAcquire] = true;
+            REQUIRE(fixture.runtime.Resize({800, 600}, PresentMode::Fifo).HasValue());
+            CHECK(fixture.runtime.ObserveOutput().Value().revision == current.Value().revision + 1);
+            REQUIRE(fixture.runtime.BeginShutdown().HasValue());
+            CHECK(fixture.runtime.ObserveOutput().HasError());
+        }
+    }
+
     TEST_CASE("Vulkan rejects incompatible legacy surface encoding before chain creation or acquisition", "[renderer][vulkan][wsi]") {
         Fixture fixture;
         SECTION("Only sRGB attachment") {

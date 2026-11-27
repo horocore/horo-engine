@@ -87,6 +87,97 @@ namespace Horo::Tests::VoiceRenderFixture {
         }
     };
 
+    TEST_CASE("Live PCM uses an ordinary scene-bound voice with spatial routing", "[audio][voice_render][stream][live-pcm]") {
+        JobSystem jobs({.workerCount = 1});
+        auto created = AudioStreamingService::CreateLive(jobs);
+        REQUIRE(created.HasValue());
+        std::shared_ptr<AudioStreamingService> service{std::move(created).Value()};
+        const auto format = Audio::StreamingTests::Request().decoder.outputFormat;
+        const auto admitted = service->AdmitLivePcm({format, 8});
+        REQUIRE(admitted.HasValue());
+        const auto stream = admitted.Value();
+        auto prepared = AudioVoiceRenderRuntime::CreateStream(Registry(), service, stream, StreamRig::Conversion(), CoefficientBytes,
+                                                               Descriptor());
+        REQUIRE(prepared.HasValue());
+        auto runtime = std::move(prepared).Value();
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto request = Request();
+        request.source.playback.spatialMode = AudioSpatialMode::ThreeD;
+        request.source.motion.current.position = {2.0F, 0.0F, 0.0F};
+        request.listener.emplace();
+        request.listener->identity = {Scope.scene, 2, 1};
+        REQUIRE(runtime->Publish(request, *plan, staging).Value().status == AudioCommandStagingStatus::Ok);
+        REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+        StreamRig::Start(*runtime, staging);
+        const auto silent = runtime->Render(2);
+        REQUIRE(silent.error == nullptr);
+        CHECK(silent.input.samples.planes[0][0] == 0.0F);
+        CHECK_FALSE(silent.terminal);
+
+        std::array<AudioSample, 16> samples;
+        samples.fill(1.0F);
+        REQUIRE(service->SubmitLivePcm(stream, samples).HasValue());
+        const auto spatial = runtime->Render(1);
+        REQUIRE(spatial.error == nullptr);
+        CHECK(spatial.input.samples.planes[1][0] > spatial.input.samples.planes[0][0]);
+        CHECK(spatial.input.samples.planes[1][0] > 0.0F);
+        CHECK(runtime->Cursor().frame > 0);
+        const auto position = runtime->Cursor().frame;
+        CHECK(service->Snapshot(stream).Value().bufferedFrames == 0);
+        REQUIRE(service->RevokeLivePcm(stream));
+        const auto revoked = runtime->Render(1);
+        CHECK(revoked.terminal);
+        CHECK(revoked.input.samples.planes[0][0] == 0.0F);
+        CHECK(revoked.input.samples.planes[1][0] == 0.0F);
+        CHECK(runtime->Cursor().frame == position);
+        const auto retired = runtime->Render(1);
+        CHECK_FALSE(retired.terminal);
+        CHECK(retired.input.samples.planes[1][0] == 0.0F);
+        runtime->Close();
+        REQUIRE(runtime->CompleteShutdown(true));
+        REQUIRE(service->Retire(stream).HasValue());
+    }
+
+    TEST_CASE("Active stream voice retains old media while replacement prepares or fails", "[audio][stream][reload]") {
+        StreamRig rig;
+        auto plan = Plan(Asset());
+        auto staging = Staging();
+        auto runtime = rig.Create();
+        StreamRig::Publish(*runtime, *plan, staging);
+        REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, rig.stream, 4));
+        StreamRig::Start(*runtime, staging);
+        auto next = std::make_shared<Audio::StreamingTests::PackageFixture>();
+        SECTION("Rejected replacement never releases active voice storage") {
+            next->openFailure = Audio::StreamingTests::OpenFailure::TypedFailure;
+            const auto candidate =
+                rig.service
+                    ->StageReplacement(rig.stream, {BorrowedCallbackContext{next.get()}, &Audio::StreamingTests::Open, next},
+                                       Audio::StreamingTests::Request())
+                    .Value();
+            REQUIRE(Audio::StreamingTests::PumpUntilFailure(*rig.service, candidate));
+            CHECK(rig.service->CommitReplacement(rig.stream, candidate).HasError());
+            REQUIRE(rig.service->Retire(candidate).HasValue());
+        }
+        SECTION("Successful replacement leaves the active voice on its retained generation") {
+            const auto candidate =
+                rig.service
+                    ->StageReplacement(rig.stream, {BorrowedCallbackContext{next.get()}, &Audio::StreamingTests::Open, next},
+                                       Audio::StreamingTests::Request())
+                    .Value();
+            REQUIRE(Audio::StreamingTests::PumpUntil(*rig.service, candidate, 4));
+            REQUIRE(rig.service->CommitReplacement(rig.stream, candidate).HasValue());
+            REQUIRE(rig.service->Retire(candidate).HasValue());
+        }
+        CHECK(rig.service->Retire(rig.stream).HasError());
+        CHECK(rig.package.releases.load() == 0);
+        const auto rendered = runtime->Render(1);
+        REQUIRE(rendered.error == nullptr);
+        CHECK(rendered.input.samples.planes[0][0] == 1.0F);
+        CHECK(runtime->Cursor().frame == 1);
+        rig.Finish(*runtime);
+    }
+
     TEST_CASE("Virtual stream realization positions the worker at the logical cursor", "[audio][virtualization][stream]") {
         StreamRig rig{true};
         auto plan = Plan(Asset());
@@ -111,6 +202,46 @@ namespace Horo::Tests::VoiceRenderFixture {
         CHECK(runtime->Cursor().frame == 8);
         CHECK_FALSE(runtime->Render(1).terminal);
         rig.Finish(*runtime);
+    }
+
+    TEST_CASE("Stream lifecycle barriers cancel realization and preserve completed outcomes without releasing worker pins",
+              "[audio][voice_render][stream][lifecycle][qualification]") {
+        for (const bool reset : {false, true}) {
+            for (const auto control : {AudioVoiceControl::StartVirtual, AudioVoiceControl::Stop, AudioVoiceControl::Cancel}) {
+                CAPTURE(reset, control);
+                StreamRig rig{true};
+                auto plan = Plan(Asset());
+                auto staging = Staging();
+                auto runtime = rig.CreateVirtual(*plan, staging);
+                REQUIRE(runtime->Render(2).error == nullptr);
+                StreamRig::Control(*runtime, staging, AudioVoiceControl::Realize);
+                if (control != AudioVoiceControl::StartVirtual)
+                    StreamRig::Control(*runtime, staging, control);
+                const auto cursor = runtime->Cursor();
+                const auto barrier = reset ? staging.StageReset() : staging.StageSceneUnload(Scope.scene);
+                REQUIRE(barrier.status == AudioCommandStagingStatus::Ok);
+                REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+                const auto ended = runtime->Render(16);
+                REQUIRE(ended.error == nullptr);
+                CHECK(ended.terminal);
+                CHECK(runtime->Cursor().frame == cursor.frame);
+                for (const auto *plane : ended.input.samples.planes)
+                    CHECK(std::all_of(plane, plane + 16, [](const float sample) {
+                        return sample == 0.0F;
+                    }));
+                CHECK_FALSE(runtime->Render(16).terminal);
+                runtime->EndBlock();
+                (void)runtime->Reconcile();
+                CHECK(rig.service->Retire(rig.stream).HasError());
+                runtime->Close();
+                CHECK_FALSE(runtime->CompleteShutdown(false));
+                CHECK_FALSE(runtime->TerminalSnapshot().has_value());
+                rig.Finish(*runtime, 0);
+                const auto terminal = runtime->TerminalSnapshot();
+                REQUIRE(terminal.has_value());
+                CHECK(terminal->state == (control == AudioVoiceControl::Stop ? AudioVoiceState::Stopped : AudioVoiceState::Cancelled));
+            }
+        }
     }
 
     TEST_CASE("Virtual stream advances during preparation and catches up without callback decode", "[audio][virtualization][stream]") {
@@ -346,6 +477,9 @@ namespace Horo::Tests::VoiceRenderFixture {
         CHECK(actualFrames == 8);
         CHECK(terminal);
         CHECK(runtime->Render(1).input.samples.planes[0][0] == 0.0F);
+        REQUIRE(staging.StageSceneUnload(Scope.scene).status == AudioCommandStagingStatus::Ok);
+        REQUIRE(runtime->Apply(ConsumePublished(staging)) == nullptr);
+        CHECK_FALSE(runtime->Render(1).terminal);
         rig.Finish(*runtime);
     }
 }  // namespace Horo::Tests::VoiceRenderFixture

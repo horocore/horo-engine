@@ -44,7 +44,8 @@ namespace Horo::Audio {
         Sha256Digest configurationDigest;
         Sha256Digest toolchainDigest;
         Sha256Digest payloadDigest;
-        AudioAnalysisMetadata analysis; /**< Cook-published analysis; inspection never re-decodes the source. */
+        AudioAnalysisMetadata analysis;     /**< Cook-published analysis; inspection never re-decodes the source. */
+        std::vector<AudioLoopRegion> loops; /**< Source-authored half-open frames; PCM anchors need no delay, padding or preroll. */
         bool operator==(const AudioCookManifest &) const = default;
     };
 

@@ -130,6 +130,7 @@ namespace Horo::Vfx::SpawnDetail {
                                  : Render::VfxPrimitiveTopology::CameraFacingBillboard;
             asset.emitter = source.particles->Data().emitter;
             asset.requiredGameplay = source.simulation.requiredGameplay;
+            asset.photosensitiveFlash = source.particles->Data().photosensitiveFlash;
             if (auto copied = CopySchema(asset, source); copied.HasError())
                 return Result<Detail::VfxSpawnAsset>::Failure(copied.ErrorValue());
             if (auto ready = PrepareInstances(asset, source, scene, KernelReservation(source)); ready.HasError())

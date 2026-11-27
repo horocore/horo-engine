@@ -17,6 +17,7 @@ namespace Horo::Runtime {
         const RuntimeScene &scene;
         RuntimeSceneStorage &candidate;
         StructuralCommitResult &result;
+        CommitPurpose purpose;
 
         Result<void> operator()(const SceneCommandBuffer::CreateCommand &create) const {
             const Result<EntityRef> created = scene.CreateEntity(candidate, create.info);
@@ -394,9 +395,9 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        /** @brief New animation components use the same structural owner transaction even outside a prefab group. */
-        static bool NeedsOwnerPreparation(const Slot &slot) noexcept {
-            return slot.groupResources || slot.components.animation.has_value();
+        /** @brief Includes exact ordinary AI agents only when the Scene has a corresponding typed owner. */
+        static bool NeedsOwnerPreparation(const Slot &slot, const bool hasAiOwner) noexcept {
+            return slot.groupResources || slot.components.animation.has_value() || (hasAiOwner && slot.components.aiAgent.has_value());
         }
 
         /** @brief Selects only genuinely new active entity incarnations from the detached candidate. */
@@ -406,7 +407,7 @@ namespace Horo::Runtime {
                                    scene.storage_.slots[index].generation != slot.generation);
         }
 
-        /** @brief Borrows exact candidate fields; ordinary animation entities have no fabricated group resources. */
+        /** @brief Borrows exact candidate fields; ordinary owner-bearing entities have no fabricated group resources. */
         RuntimeEntityView OwnerEntity(std::size_t index) const {
             const auto &slot = candidate.slots[index];
             const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
@@ -428,32 +429,32 @@ namespace Horo::Runtime {
         }
 
         /** @brief Detects exact retired owner-bearing entities without treating a recycled slot as the old entity. */
-        bool IsRetiredOwnerSlot(std::size_t index) const noexcept {
+        bool IsRetiredOwnerSlot(std::size_t index, const bool hasAiOwner) const noexcept {
             const auto &old = scene.storage_.slots[index];
-            return old.active && NeedsOwnerPreparation(old) &&
+            return old.active && NeedsOwnerPreparation(old, hasAiOwner) &&
                    (!candidate.slots[index].active || candidate.slots[index].generation != old.generation);
         }
 
         /** @brief Projects additions and retirements through the existing sole owner transaction. */
-        bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed) const {
+        bool ProjectResourceGroup(std::vector<RuntimeEntityView> &created, std::vector<EntityRef> &destroyed, const bool hasAiOwner) const {
             created.reserve(candidate.slots.size());
             for (std::size_t index = 0; index < candidate.slots.size(); ++index)
-                if (IsCreatedSlot(index) && NeedsOwnerPreparation(candidate.slots[index]))
+                if (IsCreatedSlot(index) && NeedsOwnerPreparation(candidate.slots[index], hasAiOwner))
                     created.push_back(OwnerEntity(index));
             for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index)
-                if (IsRetiredOwnerSlot(index))
+                if (IsRetiredOwnerSlot(index, hasAiOwner))
                     destroyed.emplace_back(scene.runtimeId_,
                                            EntityId{static_cast<std::uint32_t>(index), scene.storage_.slots[index].generation});
             return !created.empty() || !destroyed.empty();
         }
 
-        /** @brief Native Navigation has only whole-Scene activation today; structural work must never silently omit that owner. */
-        static bool HasEnabledNavigation(const RuntimeComponentSet &components) {
+        /** @brief Navigation topology still belongs to whole-Scene preparation. */
+        static bool HasEnabledNavigationTopology(const RuntimeComponentSet &components) {
             const auto enabled = [](const auto &value) {
                 return value && value->enabled;
             };
             return enabled(components.navigationSurface) || enabled(components.navigationRegion) ||
-                   enabled(components.navigationModifier) || enabled(components.navigationLink) || enabled(components.navigationAgent);
+                   enabled(components.navigationModifier) || enabled(components.navigationLink);
         }
 
         /** @brief One closed component-to-owner predicate shared by created and destroyed entity evidence. */
@@ -468,6 +469,8 @@ namespace Horo::Runtime {
                     return components.aiAgent.has_value() || components.aiController.has_value();
                 case Animation:
                     return components.animation.has_value();
+                case Navigation:
+                    return components.navigationAgent && components.navigationAgent->enabled;
             }
             return false;
         }
@@ -477,10 +480,10 @@ namespace Horo::Runtime {
                                     const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) const {
             if (std::ranges::any_of(created,
                                     [](const auto &entity) {
-                return HasEnabledNavigation(*entity.components);
+                return HasEnabledNavigationTopology(*entity.components);
             }) ||
                 std::ranges::any_of(destroyed, [&](const auto &entity) {
-                return HasEnabledNavigation(scene.storage_.slots[entity.entity.index].components);
+                return HasEnabledNavigationTopology(scene.storage_.slots[entity.entity.index].components);
             }))
                 return Result<void>::Failure(MakeError(SceneErrors::NavigationStructuralUnsupported));
             const auto needs = [&](SceneStructuralOwner owner) {
@@ -491,10 +494,12 @@ namespace Horo::Runtime {
                 });
             };
             for (const auto owner : {SceneStructuralOwner::Physics, SceneStructuralOwner::Gameplay, SceneStructuralOwner::AI,
-                                     SceneStructuralOwner::Animation}) {
+                                     SceneStructuralOwner::Animation, SceneStructuralOwner::Navigation}) {
                 if (needs(owner) && !std::ranges::any_of(participants, [owner](const auto &participant) {
                     return participant->Owner() == owner;
                 })) {
+                    if (owner == SceneStructuralOwner::Navigation)
+                        return Result<void>::Failure(MakeError(SceneErrors::NavigationStructuralUnsupported));
                     const bool hasBaseline = std::ranges::any_of(candidate.slots, [](const auto &slot) {
                         return slot.active && slot.baselineOwner.has_value();
                     });
@@ -613,7 +618,15 @@ namespace Horo::Runtime {
             for (const auto &participant : participants) {
                 if (participant->PreparationPhase() != phase)
                     continue;
-                auto prepared = participant->Prepare(scene.View(), created, destroyed);
+                const SceneStructuralHierarchyView hierarchy{this,
+                                                             [](const void *context,
+                                                                const EntityRef entity) -> std::optional<RuntimeEntityView> {
+                    const auto &applier = *static_cast<const CommandApplier *>(context);
+                    if (!applier.scene.IsValid(applier.candidate, entity))
+                        return std::nullopt;
+                    return applier.OwnerEntity(entity.entity.index);
+                }};
+                auto prepared = participant->PrepareWithHierarchy(scene.View(), created, destroyed, hierarchy);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 if (!prepared.Value())
@@ -638,7 +651,10 @@ namespace Horo::Runtime {
                 return characters;
             if (const auto valid = ValidateGroupReferences(); valid.HasError())
                 return valid;
-            resourceGroup = ProjectResourceGroup(created, destroyed);
+            const bool hasAiOwner = std::ranges::any_of(participants, [](const auto &participant) {
+                return participant->Owner() == SceneStructuralOwner::AI;
+            });
+            resourceGroup = ProjectResourceGroup(created, destroyed, hasAiOwner);
             return ValidateOwners(created, destroyed, participants);
         }
 
@@ -680,7 +696,7 @@ namespace Horo::Runtime {
         /** @brief Reuses the existing command admission and exact resource validator without introducing another policy. */
         static Result<void> ValidateResourceAdmission(const SceneCommandBuffer &commands, SceneRuntimeId runtime,
                                                       const Assets::AssetRegistry *registry, CommitPurpose purpose) {
-            if (purpose == CommitPurpose::Ordinary && commands.HasRestoreGroups())
+            if (purpose != CommitPurpose::RestoreMaterialization && commands.HasRestoreGroups())
                 return Result<void>::Failure(
                     MakeError(SceneErrors::InvalidCandidate, "Private restore groups cannot enter ordinary commit."));
             const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
@@ -723,7 +739,12 @@ namespace Horo::Runtime {
         Result<void> operator()(const SceneCommandBuffer::SetLocalTransformCommand &transform) const {
             if (!scene.IsValid(candidate, transform.entity) || transform.localTransform.TryToMatrix().HasError())
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity, "Deferred transform target or value is invalid."));
-            candidate.slots[transform.entity.entity.index].localTransform = transform.localTransform;
+            auto &slot = candidate.slots[transform.entity.entity.index];
+            const auto &character = slot.components.characterController;
+            if (purpose == CommitPurpose::ReplicaTransforms && character && character->enabled)
+                slot.replicaPresentationTransform = transform.localTransform;
+            else
+                slot.localTransform = transform.localTransform;
             ++result.transformsUpdated;
             return Result<void>::Success();
         }

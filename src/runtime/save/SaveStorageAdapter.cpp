@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveStorageAdapter.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "Horo/Runtime/Save/SaveThumbnailArchive.h"
@@ -193,6 +194,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveStorageValue> ExecuteProvider(ISaveStorageProvider &provider, const SaveStorageRequest &request,
                                                                const CancellationToken &cancellation) {
             try {
+                const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
                 return provider.Execute(request, cancellation);
             } catch (const std::bad_alloc &) {
                 return Result<SaveStorageValue>::Failure(MakeError(SaveErrors::StorageAllocationFailed));

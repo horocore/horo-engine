@@ -164,6 +164,45 @@ namespace Horo::Runtime::Ui {
         return Result<UiReloadLease>::Success(UiReloadLease{storage_->current});
     }
 
+    /** @copydoc UiHotReload::Inspect */
+    Result<UiCanvasInspectionSnapshot> UiHotReload::Inspect(const UiReloadLease &lease, const UiCanvasId canvas,
+                                                            const UiCanvasInspectionLimits &limits,
+                                                            const std::optional<UiRouteInstanceId> route) const {
+        using Snapshot = UiCanvasInspectionSnapshot;
+        const auto *generation = OverlayCurrent();
+        if (!generation)
+            return Failure<Snapshot>(UiErrors::InstanceStateInvalid);
+        if (!IsCurrent(lease))
+            return Failure<Snapshot>(UiErrors::RevisionStale);
+        const auto canvases = generation->Canvases();
+        const auto found = std::ranges::find(canvases, canvas, &UiReloadCanvas::id);
+        if (found == canvases.end())
+            return Failure<Snapshot>(UiErrors::CanvasReferenceInvalid);
+
+        const auto *router = found->actions ? &*found->actions : nullptr;
+        if (route) {
+            router = found->routes ? found->routes->Actions(*route) : nullptr;
+            if (!router)
+                return Failure<Snapshot>(UiErrors::RouteOperationStale);
+        }
+        if (router && !UiReloadDetail::MatchesActionOwner(router->Owner(), found->tree))
+            return Failure<Snapshot>(UiErrors::ActionSourceStale);
+        Snapshot snapshot{found->tree.Canvas(), found->tree.Revision(), route};
+        if (found->bindings) {
+            auto rows = found->bindings->Inspect(found->tree, limits.providers, limits.bindings);
+            if (rows.HasError())
+                return Result<Snapshot>::Failure(rows.ErrorValue());
+            snapshot.bindings = std::move(rows).Value();
+        }
+        if (router) {
+            auto rows = router->Inspect(router->Owner(), limits.actions);
+            if (rows.HasError())
+                return Result<Snapshot>::Failure(rows.ErrorValue());
+            snapshot.actions = std::move(rows).Value();
+        }
+        return Result<Snapshot>::Success(std::move(snapshot));
+    }
+
     /** @copydoc UiHotReload::Current */
     UiReloadGeneration *UiHotReload::Current() noexcept {
         return storage_ && !storage_->stopped && !storage_->collecting ? storage_->current.get() : nullptr;

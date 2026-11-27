@@ -882,6 +882,18 @@ codec/packet negotiation, encryption, peer/session routing, jitter/reorder/loss,
 bitrate, QoS, mute/block and moderation. Audio never receives sockets, packet
 headers, credentials or remote peer authority.
 
+SDL capture exposes a purpose-scoped read for one host-admitted network voice
+generation. It returns interleaved PCM with the capture clock and overrun
+evidence. Withdrawing the grant retires the generation and drops its queued
+samples. Recording and speech readers cannot consume that generation.
+
+After peer and playback admission, the host can submit decoded PCM to a
+nonseekable live stream. Audio charges its ring against the normal streaming
+budget and renders it through an ordinary scene-bound voice and mixer bus.
+The host supplies PCM in playout order. Audio rejects an entire block when
+space runs out, renders silence when the ring runs dry, and retires queued
+samples when the host stops the stream, including on mute or disconnect.
+
 Delivery policies:
 
 - **UnreliableUnordered**: Fast state updates (e.g. high-frequency physics/transform telemetry); latest packet overwrites previous.
@@ -1193,6 +1205,27 @@ admission, send, terminal state, or replication authority.
 The new observer parameters on existing network factories default to null;
 existing callers keep their behavior and need no migration. Hosts opting in
 must enforce the documented owner and shutdown order.
+
+### Full updates after confirmed initial state
+
+Hosts using world binding may opt in to `NetworkStateUpdatePolicy` and supply
+an `INetworkStateUpdateHost` in the same composition. Existing world bindings
+keep their current behavior without those additions. Opted-in hosts register a
+distinct required feature and codec on the exact configured
+`UnreliableUnordered` Snapshot channel. The per-connection message and wire
+allowances must fit the project profile. The route's sequence and burst
+accounting are independent of reliable Control. Excess Snapshot packets are
+dropped for that tick without retiring the admitted session.
+
+The authority only sends full Update records after receiving the exact initial
+receipt for that session and world. Updates retain the initial recipient,
+descriptor generation and object ownership, and resolve the exact current
+object generation and schema before sending. The client prepares its
+incremental receiver before initial publication and retains it only if initial
+application succeeds. Snapshot decoding only stages state. The structural
+commit phase applies it through the selected owner, and world retirement
+revokes the receiver before mapping teardown. This route does not grant a
+baseline or send state for occurrences absent from the confirmed initial cohort.
 
 ### Per-connection acknowledgement and snapshot history
 

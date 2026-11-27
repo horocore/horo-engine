@@ -48,6 +48,7 @@ namespace Horo::SceneCook {
                     .light = source.light,
                     .audioSource = source.audioSource,
                     .audioListener = source.audioListener,
+                    .uiCanvas = source.uiCanvas,
                     .navigationSurface = source.navigationSurface,
                     .navigationRegion = source.navigationRegion,
                     .navigationModifier = source.navigationModifier,
@@ -71,8 +72,6 @@ namespace Horo::SceneCook {
 
         /** @brief Encodes one supported source-free runtime entity using existing typed scalar/component codecs. */
         Result<Json> EncodeEntity(const Runtime::RuntimeEntityDefinition &entity) {
-            if (entity.components.uiCanvas)
-                return Result<Json>::Failure(MakeError(SceneCookErrors::Unsupported));
             return Result<Json>::Success(
                 {{"id", entity.object.value},
                  {"parent", entity.parent ? Json(entity.parent->value) : Json(nullptr)},
@@ -138,6 +137,12 @@ namespace Horo::SceneCook {
 
         /** @brief Selects only the schema required by the complete typed component inventory. */
         std::string_view FormatFor(const Runtime::RuntimeSceneDefinition &definition) {
+            if (!definition.ChildScenes().empty())
+                return ChildSceneCookedSceneFormat;
+            if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+                return entity.components.uiCanvas.has_value();
+            }))
+                return UiCanvasCookedSceneFormat;
             const bool animation = std::ranges::any_of(definition.Entities(), [](const auto &entity) {
                 return entity.components.animation.has_value();
             });
@@ -146,11 +151,16 @@ namespace Horo::SceneCook {
 
         /** @brief Checks exact top-level members and closed format spelling before indexed payload reads. */
         bool ValidEnvelopeShape(const Json &root) {
-            if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies", "triggerMigration"}) ||
+            if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies", "triggerMigration"},
+                                              {"childScenes"}) ||
                 !root["format"].is_string())
                 return false;
             const auto &format = root["format"].get_ref<const Json::string_t &>();
-            return format == CookedSceneFormat || format == AnimationCookedSceneFormat;
+            const auto children = root.find("childScenes");
+            if (format == ChildSceneCookedSceneFormat)
+                return children != root.end() && children->is_array() && !children->empty();
+            return children == root.end() &&
+                   (format == CookedSceneFormat || format == AnimationCookedSceneFormat || format == UiCanvasCookedSceneFormat);
         }
 
         /** @brief Preserves exact selected Scene/revision identity and typed collection admission. */
@@ -198,6 +208,31 @@ namespace Horo::SceneCook {
             return Result<void>::Success();
         }
 
+        /** @brief Admits each v6 occurrence against the canonical stable child asset and exact embedded revision. */
+        Result<void> ReadChildScenes(Runtime::SceneDefinitionBuilder &builder, const Json &values) {
+            for (const auto &value : values) {
+                if (!Foundation::HasAllowedFields(value, {"instanceId", "asset", "scene", "revision", "payload", "mode"}) ||
+                    !value["instanceId"].is_number_unsigned() || !value["asset"].is_string() || !value["payload"].is_string() ||
+                    !value["scene"].is_number_unsigned() || !value["revision"].is_number_unsigned() || !value["mode"].is_string())
+                    return Result<void>::Failure(MakeError(SceneCookErrors::Invalid));
+                if (value["mode"].get_ref<const Json::string_t &>() != kActivatedSceneMode)
+                    return Result<void>::Failure(MakeError(SceneCookErrors::Unsupported));
+                const auto asset = Assets::AssetId::Parse(value["asset"].get_ref<const Json::string_t &>());
+                const auto digest = ParseSha256(value["payload"].get_ref<const Json::string_t &>());
+                if (asset.HasError() || digest.HasError() || !asset.Value().IsValid() ||
+                    SceneDefinitionIdForAsset(asset.Value()).value != value["scene"].get<std::uint64_t>())
+                    return Result<void>::Failure(MakeError(SceneCookErrors::Invalid));
+                const Runtime::SceneChildDefinitionReference child{{value["instanceId"].get<std::uint64_t>()},
+                                                                   asset.Value(),
+                                                                   {value["scene"].get<std::uint64_t>()},
+                                                                   {value["revision"].get<std::uint64_t>()},
+                                                                   digest.Value()};
+                if (auto required = builder.RequireChildScene(child); required.HasError())
+                    return required;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Validates and commits all entity and dependency values through the containing-scene owner. */
         Result<Runtime::RuntimeSceneDefinition> DecodeDocument(const Json &root, const Runtime::SceneDefinitionId scene,
                                                                const Runtime::SceneDefinitionRevision revision,
@@ -209,6 +244,13 @@ namespace Horo::SceneCook {
                 root["triggerMigration"].size() > root["entities"].size())
                 return Return::Failure(MakeError(SceneCookErrors::TooLarge));
             Runtime::SceneDefinitionBuilder builder{scene, revision};
+            if (const auto children = root.find("childScenes"); children != root.end()) {
+                if (children->size() > Runtime::MaximumActivatedSceneInstances ||
+                    children->size() > limits.maximumDependencies - root["dependencies"].size())
+                    return Return::Failure(MakeError(SceneCookErrors::TooLarge));
+                if (auto admitted = ReadChildScenes(builder, *children); admitted.HasError())
+                    return Return::Failure(admitted.ErrorValue());
+            }
             if (auto entities = ReadEntities(builder, root["entities"]); entities.HasError())
                 return Return::Failure(entities.ErrorValue());
             if (auto dependencies = ReadDependencies(builder, root["dependencies"]); dependencies.HasError())
@@ -223,8 +265,10 @@ namespace Horo::SceneCook {
     /** @copydoc EncodeCookedSceneDefinition */
     Result<std::vector<std::uint8_t>> EncodeCookedSceneDefinition(const Runtime::RuntimeSceneDefinition &definition,
                                                                   const CookedSceneLimits &limits) {
-        if (!WithinLimits(definition.Entities().size(), definition.AssetDependencies().size(), limits))
-            return Result<std::vector<std::uint8_t>>::Failure(MakeError(SceneCookErrors::TooLarge));
+        using Outcome = Result<std::vector<std::uint8_t>>;
+        if (!WithinLimits(definition.Entities().size(), definition.AssetDependencies().size(), limits) ||
+            definition.ChildScenes().size() > limits.maximumDependencies - definition.AssetDependencies().size())
+            return Outcome::Failure(MakeError(SceneCookErrors::TooLarge));
         Json entities = Json::array();
         for (const auto &entity : definition.Entities()) {
             auto encoded = EncodeEntity(entity);
@@ -251,11 +295,23 @@ namespace Horo::SceneCook {
                                  {"revision", binding.materialSourceRevision},
                                  {"payload", FormatSha256(binding.materialPayloadDigest)}});
         }
-        const std::string encoded =
-            Json{{"format", FormatFor(definition)}, {"scene", definition.Id().value},          {"revision", definition.Revision().value},
-                 {"entities", std::move(entities)}, {"dependencies", std::move(dependencies)}, {"triggerMigration", std::move(migration)}}
-                .dump() +
-            '\n';
+        Json root{{"format", FormatFor(definition)}, {"scene", definition.Id().value},          {"revision", definition.Revision().value},
+                  {"entities", std::move(entities)}, {"dependencies", std::move(dependencies)}, {"triggerMigration", std::move(migration)}};
+        if (!definition.ChildScenes().empty()) {
+            auto children = Json::array();
+            for (const auto &child : definition.ChildScenes()) {
+                if (child.definition != SceneDefinitionIdForAsset(child.asset))
+                    return Outcome::Failure(MakeError(SceneCookErrors::Invalid));
+                children.push_back({{"instanceId", child.occurrence.value},
+                                    {"asset", child.asset.ToString()},
+                                    {"scene", child.definition.value},
+                                    {"revision", child.revision.value},
+                                    {"payload", FormatSha256(child.payloadDigest)},
+                                    {"mode", kActivatedSceneMode}});
+            }
+            root["childScenes"] = std::move(children);
+        }
+        const std::string encoded = root.dump() + '\n';
         if (encoded.size() > limits.maximumBytes)
             return Result<std::vector<std::uint8_t>>::Failure(MakeError(SceneCookErrors::TooLarge));
         return Result<std::vector<std::uint8_t>>::Success({encoded.begin(), encoded.end()});
@@ -304,5 +360,25 @@ namespace Horo::SceneCook {
                                                                                   const Runtime::SceneDefinitionId expectedScene,
                                                                                   const CookedSceneLimits &limits) {
         return DecodePayload(bytes, expectedScene, std::nullopt, limits);
+    }
+
+    /** @copydoc DecodeCookedChildScene */
+    Result<Runtime::RuntimeSceneDefinition> DecodeCookedChildScene(const std::span<const std::uint8_t> bytes,
+                                                                   const Runtime::SceneChildDefinitionReference &reference,
+                                                                   const CookedSceneLimits &limits) {
+        using Outcome = Result<Runtime::RuntimeSceneDefinition>;
+        if (reference.mode != Runtime::SceneInstanceMode::Activated)
+            return Outcome::Failure(MakeError(SceneCookErrors::Unsupported));
+        if (!reference.occurrence.IsValid() || !reference.asset.IsValid() || reference.revision.value == 0 ||
+            reference.definition != SceneDefinitionIdForAsset(reference.asset) || reference.payloadDigest == Sha256Digest{})
+            return Outcome::Failure(MakeError(SceneCookErrors::Invalid));
+        if (bytes.empty() || bytes.size() > limits.maximumBytes)
+            return Outcome::Failure(MakeError(SceneCookErrors::TooLarge));
+        if (ComputeSha256(std::as_bytes(bytes)) != reference.payloadDigest)
+            return Outcome::Failure(MakeError(SceneCookErrors::Invalid, "The child Scene payload does not match the parent reference."));
+        auto decoded = DecodeCookedSceneDefinition(bytes, reference.definition, reference.revision, limits);
+        if (decoded.HasValue() && !decoded.Value().ChildScenes().empty())
+            return Outcome::Failure(MakeError(SceneCookErrors::Unsupported, "An Activated child must be a direct leaf."));
+        return decoded;
     }
 }  // namespace Horo::SceneCook

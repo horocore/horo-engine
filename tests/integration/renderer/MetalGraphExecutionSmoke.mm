@@ -93,49 +93,63 @@ namespace Horo::Render::Detail {
     TEST_CASE("Metal graph color clear and load preserve actual tracked heap contents", "[integration][renderer][metal][gpu]") {
         MetalResourceRuntime runtime;
         id<MTLCommandQueue> queue = InitializeSmokeRuntime(runtime);
-        const RenderTextureDescriptor descriptor{.extent = {1, 1},
+        const RenderTextureDescriptor descriptor{.extent = {8, 5},
                                                  .format = RenderTextureFormat::Rgba8Unorm,
                                                  .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::CopySource};
         const auto textureCost = runtime.QueryTextureMemoryCost(descriptor);
         REQUIRE(textureCost.HasValue());
         const auto texture = runtime.CreateTexture(descriptor, {}, TestSupport::PlacementFor(textureCost.Value(), 1, 1));
         REQUIRE(texture.HasValue());
-        const RenderBufferDescriptor readbackDescriptor{.byteSize = 256,
+        constexpr RenderGraphResourceId textureId{{1}, 1};
+        constexpr RenderGraphResourceId stagingId{{1}, 2};
+        constexpr RenderGraphColorReadback crop{textureId, stagingId, 2, 1, {3, 2}};
+        const RenderBufferDescriptor readbackDescriptor{.byteSize = crop.PackedBytes(),
                                                         .usage = RenderBufferUsage::CopyDestination,
                                                         .access = RenderBufferAccess::HostVisible};
         const auto readbackCost = runtime.QueryBufferMemoryCost(readbackDescriptor);
         REQUIRE(readbackCost.HasValue());
         const auto readback = runtime.CreateBuffer(readbackDescriptor, {}, TestSupport::PlacementFor(readbackCost.Value(), 2, 2));
         REQUIRE(readback.HasValue());
-        const RenderGraphResourceId textureId{{1}, 1};
-        const std::array resources{RenderGraphResourceInstance{textureId, texture.Value()}};
+        const std::array resources{RenderGraphResourceInstance{textureId, texture.Value()},
+                                   RenderGraphResourceInstance{stagingId, readback.Value()}};
         id<MTLCommandBuffer> commands = [queue commandBuffer];
         const RenderGraphWorkload clear = RenderGraphColorAttachment{textureId, {.clearColor = {1, 0, 0, 1}}};
         const RenderGraphWorkload load = RenderGraphColorAttachment{textureId, {.loadOperation = AttachmentLoadOperation::Load}};
         REQUIRE(runtime.ExecuteGraphWorkload((__bridge void *)commands, clear, resources).HasValue());
         REQUIRE(runtime.ExecuteGraphWorkload((__bridge void *)commands, load, resources).HasValue());
         auto *resident = reinterpret_cast<MetalTextureInstance *>(static_cast<std::uintptr_t>(texture.Value()));
-        auto *destination = reinterpret_cast<MetalBufferInstance *>(static_cast<std::uintptr_t>(readback.Value()));
         CHECK(resident->texture.hazardTrackingMode == MTLHazardTrackingModeTracked);
-        id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
-        REQUIRE(blit != nil);
-        [blit copyFromTexture:resident->texture
-                         sourceSlice:0
-                         sourceLevel:0
-                        sourceOrigin:MTLOriginMake(0, 0, 0)
-                          sourceSize:MTLSizeMake(1, 1, 1)
-                            toBuffer:destination->buffer
-                   destinationOffset:0
-              destinationBytesPerRow:256
-            destinationBytesPerImage:256];
-        [blit endEncoding];
+        auto outside = crop;
+        outside.x = descriptor.extent.width;
+        CHECK(runtime.ValidateGraphWorkload(outside, resources).HasError());
+        CHECK(runtime.CaptureGraphOperation(crop, resources, commands, nil).HasError());
+        REQUIRE(runtime.ExecuteGraphWorkload((__bridge void *)commands, crop, resources).HasValue());
+        std::array<std::byte, crop.PackedBytes()> pixels{};
+        const auto pending = runtime.ReadCompletedColor(readback.Value(), pixels);
+        REQUIRE(pending.HasValue());
+        CHECK_FALSE(pending.Value());
+        SECTION("abandoned copy produces no receipt") {
+            runtime.FinishGraphCommands((__bridge void *)commands, false);
+            commands = nil;
+            const auto aborted = runtime.ReadCompletedColor(readback.Value(), pixels);
+            REQUIRE(aborted.HasValue());
+            CHECK_FALSE(aborted.Value());
+            runtime.Shutdown();
+            return;
+        }
         [commands commit];
+        runtime.FinishGraphCommands((__bridge void *)commands, true);
         RequireNativeCompletion(commands);
-        const auto *pixel = static_cast<const unsigned char *>(destination->buffer.contents);
-        CHECK(pixel[0] == 255);
-        CHECK(pixel[1] == 0);
-        CHECK(pixel[2] == 0);
-        CHECK(pixel[3] == 255);
+        CHECK(runtime.ReadCompletedColor(readback.Value(), std::span{pixels}.first(1)).HasError());
+        const auto completed = runtime.ReadCompletedColor(readback.Value(), pixels);
+        REQUIRE(completed.HasValue());
+        REQUIRE(completed.Value());
+        constexpr std::array red{std::byte{255}, std::byte{}, std::byte{}, std::byte{255}};
+        for (std::size_t offset = 0; offset < pixels.size(); offset += red.size())
+            CHECK(std::memcmp(pixels.data() + offset, red.data(), red.size()) == 0);
+        const auto consumed = runtime.ReadCompletedColor(readback.Value(), pixels);
+        REQUIRE(consumed.HasValue());
+        CHECK_FALSE(consumed.Value());
         runtime.Shutdown();
     }
 

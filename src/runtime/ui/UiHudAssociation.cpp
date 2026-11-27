@@ -4,9 +4,14 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
+#include <span>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
+    /** @brief Marks one exact association lifetime without retaining Scene state. */
+    struct UiHudSuppressionIssuer final {};
+
     namespace {
         template <typename T> Result<T> Failure(const ErrorCodeDescriptor &reason) {
             return Result<T>::Failure(MakeError(reason));
@@ -144,17 +149,34 @@ namespace Horo::Runtime::Ui {
             return Result<UiHudAssociation>::Failure(lease.ErrorValue());
         if (auto valid = Validate(*lease.Value().Get(), descriptor); valid.HasError())
             return Result<UiHudAssociation>::Failure(valid.ErrorValue());
-        return Result<UiHudAssociation>::Success(UiHudAssociation{descriptor, std::move(lease).Value()});
+        try {
+            auto issuer = std::make_shared<const UiHudSuppressionIssuer>();
+            return Result<UiHudAssociation>::Success(UiHudAssociation{descriptor, std::move(lease).Value(), std::move(issuer)});
+        } catch (const std::bad_alloc &) {
+            return Failure<UiHudAssociation>(UiErrors::CapacityExceeded);
+        }
     }
 
+    /** @brief Retains only a weak marker and the issued sequence. */
+    UiHudSuppressionToken::UiHudSuppressionToken(std::weak_ptr<const UiHudSuppressionIssuer> issuer, const std::uint64_t sequence) noexcept
+        : issuer_(std::move(issuer)), sequence_(sequence) {}
+
     /** @copydoc UiHudAssociation::UiHudAssociation */
-    UiHudAssociation::UiHudAssociation(UiHudAssociationDescriptor descriptor, UiReloadLease generation) noexcept
-        : descriptor_(std::move(descriptor)), generation_(std::move(generation)) {}
+    UiHudAssociation::UiHudAssociation(UiHudAssociationDescriptor descriptor, UiReloadLease generation,
+                                       std::shared_ptr<const UiHudSuppressionIssuer> suppressionIssuer) noexcept
+        : descriptor_(std::move(descriptor)), generation_(std::move(generation)), suppressionIssuer_(std::move(suppressionIssuer)) {}
 
     /** @copydoc UiHudAssociation::UiHudAssociation */
     UiHudAssociation::UiHudAssociation(UiHudAssociation &&other) noexcept
-        : descriptor_(other.descriptor_), generation_(std::move(other.generation_)), revision_(other.revision_),
-          presented_(other.presented_), active_(std::exchange(other.active_, false)) {}
+        : descriptor_(other.descriptor_), generation_(std::move(other.generation_)),
+          suppressionIssuer_(std::move(other.suppressionIssuer_)), suppressions_(other.suppressions_),
+          suppressionCount_(std::exchange(other.suppressionCount_, 0)), suppressionSequence_(other.suppressionSequence_),
+          revision_(other.revision_), presented_(other.presented_), active_(std::exchange(other.active_, false)) {}
+
+    /** @copydoc UiHudAssociation::CanPresent */
+    bool UiHudAssociation::CanPresent() const noexcept {
+        return descriptor_.enabled && descriptor_.visible && suppressionCount_ == 0;
+    }
 
     /** @brief Checks exact publisher identity, including independently created publishers with identical authored IDs. */
     bool UiHudAssociation::Current(UiHotReload &publisher) const noexcept {
@@ -163,8 +185,8 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Requires the exact association revision and generation before admitting renderer completion. */
     bool UiHudAssociation::Matches(UiHotReload &publisher, const UiHudFrame &frame) const noexcept {
-        return Current(publisher) && descriptor_.enabled && descriptor_.visible && frame.revision_ == revision_ &&
-               frame.association_.id == descriptor_.id && publisher.IsCurrent(frame.generation_);
+        return Current(publisher) && CanPresent() && frame.revision_ == revision_ && frame.association_.id == descriptor_.id &&
+               publisher.IsCurrent(frame.generation_);
     }
 
     /** @brief Invalidates all historical frame tickets without wrapping association evidence. */
@@ -235,6 +257,42 @@ namespace Horo::Runtime::Ui {
         return Reassociate(replacement, publisher);
     }
 
+    /** @copydoc UiHudAssociation::BeginSuppression */
+    Result<UiHudSuppressionToken> UiHudAssociation::BeginSuppression(UiHotReload &publisher) {
+        using Token = UiHudSuppressionToken;
+        if (!Current(publisher))
+            return Failure<Token>(UiErrors::HandleStale);
+        if (suppressionCount_ == suppressions_.size())
+            return Failure<Token>(UiErrors::CapacityExceeded);
+        if (suppressionSequence_ == std::numeric_limits<std::uint64_t>::max())
+            return Failure<Token>(UiErrors::GenerationExhausted);
+        if (suppressionCount_ == 0) {
+            if (const auto advanced = Advance(); advanced.HasError())
+                return Result<Token>::Failure(advanced.ErrorValue());
+            CancelCapture(publisher);
+        }
+        suppressions_[suppressionCount_++] = ++suppressionSequence_;
+        return Result<Token>::Success(Token{suppressionIssuer_, suppressionSequence_});
+    }
+
+    /** @copydoc UiHudAssociation::EndSuppression */
+    Result<void> UiHudAssociation::EndSuppression(UiHotReload &publisher, const UiHudSuppressionToken &token) {
+        if (!active_ || !publisher.Retains(generation_))
+            return Failure<void>(UiErrors::HandleStale);
+        if (token.issuer_.lock() != suppressionIssuer_)
+            return Failure<void>(UiErrors::HandleOwnerMismatch);
+        const auto active = std::span(suppressions_).first(suppressionCount_);
+        const auto found = std::ranges::find(active, token.sequence_);
+        if (found == active.end())
+            return Failure<void>(UiErrors::HandleStale);
+        if (suppressionCount_ == 1) {
+            if (const auto advanced = Advance(); advanced.HasError())
+                return advanced;
+        }
+        *found = suppressions_[--suppressionCount_];
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiHudAssociation::ResolveCanvas */
     Result<UiResolvedScreenCanvas> UiHudAssociation::ResolveCanvas(UiHotReload &publisher) const {
         if (!Current(publisher))
@@ -244,7 +302,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiHudAssociation::PrepareFrame */
     Result<UiHudFrame> UiHudAssociation::PrepareFrame(UiHotReload &publisher, UiRenderSnapshotRevision snapshot) const {
-        if (!descriptor_.enabled || !descriptor_.visible)
+        if (!CanPresent())
             return Failure<UiHudFrame>(UiErrors::InstanceStateInvalid);
         if (!snapshot.IsValid())
             return Failure<UiHudFrame>(UiErrors::RevisionInvalid);
@@ -280,7 +338,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiHudAssociation::InputEligible */
     bool UiHudAssociation::InputEligible(UiHotReload &publisher) const {
-        return descriptor_.interactive && descriptor_.enabled && descriptor_.visible && presented_ && Current(publisher) &&
+        return descriptor_.interactive && CanPresent() && presented_ && Current(publisher) &&
                PrepareFrame(publisher, UiRenderSnapshotRevision::Create(1).Value()).HasValue() &&
                publisher.InputEligible(descriptor_.canvas, descriptor_.view);
     }
@@ -296,6 +354,8 @@ namespace Horo::Runtime::Ui {
         CancelCapture(publisher);
         active_ = false;
         presented_ = false;
+        suppressionCount_ = 0;
+        suppressionIssuer_.reset();
         generation_ = {};
         return Result<void>::Success();
     }

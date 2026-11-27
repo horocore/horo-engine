@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <utility>
 
 namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteParameter */
@@ -66,16 +67,214 @@ namespace Horo::Editor {
         return WriteParameter(layout, bytes, {20}, baseColor);
     }
 
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareSource */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::PrepareSource(const EditorViewportMotionSource source) {
+        source_ = {};
+        if (source.objects.size() > sourceIds_.size() || (!source.sceneDomain && !source.objects.empty()))
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        std::ranges::copy(source.objects, sourceIds_.begin());
+        source_ = {source.sceneDomain, std::span{sourceIds_}.first(source.objects.size())};
+        return Result<void>::Success();
+    }
+
+    /** @brief Compares the projection parameters used by both guide passes. */
+    [[nodiscard]] static bool SameMotionProjection(const Render::RenderProjectionDescriptor &left,
+                                                   const Render::RenderProjectionDescriptor &right) noexcept {
+        if (left.kind != right.kind || left.nearPlane != right.nearPlane || left.farPlane != right.farPlane)
+            return false;
+        return left.kind == Render::RenderProjectionKind::Perspective ? left.verticalFovRadians == right.verticalFovRadians
+                                                                      : left.orthographicHeight == right.orthographicHeight;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::BeginMotion */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::BeginMotion(const Render::FrameToken frame,
+                                                                                  const Render::StaticMeshPassDescriptor &pass,
+                                                                                  const Math::Mat4 &viewProjection) {
+        using namespace Render;
+        if (!source_.sceneDomain)
+            return Result<void>::Success();
+        const auto images = owner.resources_.TemporalImages();
+        if (!images || pending_)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto samples = BuildEditorViewportMotionSamples({.instances = pass.scene.instances, .motion = source_}, samples_);
+        if (samples.HasError())
+            return Result<void>::Failure(samples.ErrorValue());
+
+        projection_ = pass.scene.camera.projection;
+        auto attempted = history_.BeginFrame({.compatibility = Compatibility(pass.extent, source_.sceneDomain),
+                                              .frameId = frame.value,
+                                              .predecessorFrameId = lastAcceptedFrame_,
+                                              .camera = {viewProjection, JitterUv()},
+                                              .disocclusion = {images->linearDepth.texture, images->motion.texture},
+                                              .invalidation = {.cameraCut = ProjectionChanges(projection_)},
+                                              .objects = samples.Value()});
+        if (attempted.HasError())
+            return Result<void>::Failure(attempted.ErrorValue());
+        pending_ = std::move(attempted).Value();
+        pendingJitter_ = reconstructionPlan.has_value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Compatibility */
+    Render::TemporalHistoryCompatibility EditorViewportRendererVulkan::TemporalGuidePrograms::Compatibility(
+        const Render::FramebufferExtent output, const std::uint64_t scene) const {
+        const auto color = owner.resources_.ColorTexture();
+        const auto surfaceGeneration = (std::uint64_t{color.slot} << 32) | color.generation;
+        // This owner admits one immutable desktop guide recipe and subpixel sequence.
+        constexpr std::uint64_t desktopGuideContract = 1;
+        return {
+            .view = owner.LightingViewIdentity(),
+            .provider = {desktopGuideContract},
+            .mode = {desktopGuideContract},
+            .renderExtent = owner.resources_.SceneExtent(),
+            .targetExtent = output,
+            .providerGeneration = desktopGuideContract,
+            .modeGeneration = desktopGuideContract,
+            .surfaceGeneration = surfaceGeneration,
+            .rasterGeneration = desktopGuideContract,
+            .colorGeneration = desktopGuideContract,
+            .exposureGeneration = desktopGuideContract,
+            .inputSchemaGeneration = desktopGuideContract,
+            .deviceGeneration = owner.frontend_.Capabilities().support.deviceIncarnation,
+            .projectionGeneration = desktopGuideContract,
+            .jitterGeneration = desktopGuideContract,
+            .sceneOriginGeneration = scene,
+            .motionGeneration = desktopGuideContract,
+            .recipeGeneration = desktopGuideContract,
+        };
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::ProjectionChanges */
+    bool EditorViewportRendererVulkan::TemporalGuidePrograms::ProjectionChanges(
+        const Render::RenderProjectionDescriptor &projection) const noexcept {
+        return !SameMotionProjection(projection, acceptedProjection_);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::JitterUv */
+    Math::Vec2 EditorViewportRendererVulkan::TemporalGuidePrograms::JitterUv() const noexcept {
+        if (!reconstructionPlan)
+            return {};
+        const auto &sample = reconstructionPlan->dispatch.constants.sample;
+        return {sample[0], sample[1]};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded */
+    void EditorViewportRendererVulkan::TemporalGuidePrograms::Recorded(const Render::RenderTimelinePoint signal) noexcept {
+        if (pending_)
+            signal_ = signal;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Finish */
+    void EditorViewportRendererVulkan::TemporalGuidePrograms::Finish(const bool presented) noexcept {
+        source_ = {};
+        const bool jittered = std::exchange(pendingJitter_, false);
+        if (!pending_) {
+            if (presented)
+                lastAcceptedFrame_ = 0;
+            return;
+        }
+        const auto signal = std::exchange(signal_, {});
+        if (const auto *port = owner.bridge_.Port(); signal.IsValid() && port) {
+            const auto accepted = port->WasSubmissionAccepted(signal, pending_->compatibility.deviceGeneration);
+            if (accepted.HasValue() && accepted.Value() && history_.Publish(*pending_).HasValue()) {
+                lastAcceptedFrame_ = pending_->frameId;
+                acceptedProjection_ = projection_;
+                if (jittered) {
+                    acceptedJitter_ = pending_->camera.currentJitterUv;
+                    nextJitterPhase_ = (nextJitterPhase_ + 1) % EditorVulkanTemporalJitterPhases;
+                }
+                pending_.reset();
+                return;
+            }
+        }
+        static_cast<void>(history_.Abandon(*pending_));
+        pending_.reset();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::MotionForDraw */
+    Render::RenderMotionObjectPair EditorViewportRendererVulkan::TemporalGuidePrograms::MotionForDraw(
+        const std::size_t index, const Math::Mat4 &localToWorld) const noexcept {
+        if (pending_ && index < source_.objects.size()) {
+            const auto id = source_.objects[index];
+            const auto found = std::ranges::lower_bound(pending_->objects, id, {}, &Render::RenderMotionObjectPair::object);
+            if (found != pending_->objects.end() && found->object == id)
+                return *found;
+        }
+        return {.currentLocalToWorld = localToWorld};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::Upload */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::Upload(const Render::FrameToken frame, const std::uint32_t slot,
+                                                                             const Render::StaticMeshPassDescriptor &pass,
+                                                                             const bool displayDepth) {
+        const auto &instances = pass.scene.instances;
+        if (slot >= draws.size() || instances.size() > draws[slot].size())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        const auto &camera = pass.scene.camera;
+        const auto view = Math::TryLookAt(camera.position, camera.target, camera.up);
+        if (view.HasError())
+            return Result<void>::Failure(view.ErrorValue());
+        const auto aspect = static_cast<float>(pass.extent.width) / static_cast<float>(pass.extent.height);
+        const auto projection = BuildRenderMvp(camera, Math::Mat4::Identity(), aspect, Math::ClipDepthRange::ZeroToOne);
+        if (projection.HasError())
+            return Result<void>::Failure(projection.ErrorValue());
+        if (const auto tracked = BeginMotion(frame, pass, projection.Value()); tracked.HasError())
+            return tracked;
+        const auto cameraPair =
+            pending_ ? pending_->camera : Render::RenderMotionCameraPair{.currentUnjitteredViewProjection = projection.Value()};
+        for (std::size_t index = 0; index < instances.size(); ++index)
+            if (const auto uploaded = UploadDraw(frame, draws[slot][index], view.Value(), cameraPair,
+                                                 MotionForDraw(index, instances[index].localToWorld), displayDepth);
+                uploaded.HasError())
+                return uploaded;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDraw */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDraw(const Render::FrameToken frame, const GuideDraw &draw,
+                                                                                 const Math::Mat4 &view,
+                                                                                 const Render::RenderMotionCameraPair &camera,
+                                                                                 const Render::RenderMotionObjectPair &object,
+                                                                                 const bool displayDepth) const {
+        const auto &localToWorld = object.currentLocalToWorld;
+        const auto unjittered = Math::Multiply(camera.currentUnjitteredViewProjection, localToWorld);
+        const auto raster = EditorVulkanRasterProjection(unjittered, camera.currentJitterUv);
+        const auto localToView = Math::Multiply(view, localToWorld);
+        if (const auto depth = UploadDepth(frame, draw.linearDepth, raster, localToView); depth.HasError())
+            return depth;
+        if (displayDepth) {
+            const auto overlay = UploadDepth(frame, draw.displayDepth, EditorVulkanRasterProjection(unjittered, {}), localToView);
+            if (overlay.HasError())
+                return overlay;
+        }
+        std::array<std::byte, MaximumUniformBytes> motionBytes{};
+        const auto motionBlock = std::span{motionBytes}.first(motion.uniformBytes);
+        if (const auto packed = PackEditorVulkanTemporalMotion(motion.layout, raster, camera, object, motionBlock); packed.HasError())
+            return Result<void>::Failure(packed.ErrorValue());
+        return owner.bridge_.Port()->WriteFrameBuffer(frame, draw.motion.instance, motionBlock);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDepth */
+    Result<void> EditorViewportRendererVulkan::TemporalGuidePrograms::UploadDepth(const Render::FrameToken frame, const DrawSlot &draw,
+                                                                                  const Math::Mat4 &raster,
+                                                                                  const Math::Mat4 &localToView) const {
+        std::array<std::byte, MaximumUniformBytes> storage{};
+        const auto bytes = std::span{storage}.first(linearDepth.uniformBytes);
+        if (const auto packed = PackEditorVulkanTemporalDepth(linearDepth.layout, raster, localToView, bytes); packed.HasError())
+            return Result<void>::Failure(packed.ErrorValue());
+        return owner.bridge_.Port()->WriteFrameBuffer(frame, draw.instance, bytes);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ProgramResources::WriteDraw */
     Result<void> EditorViewportRendererVulkan::ProgramResources::WriteDraw(
         const Render::Detail::VulkanEditorGraphicsBridge &bridge, const ShaderResources &program, const EditorViewportExtent extent,
         const Render::FrameToken frame, const DrawSlot &slot, const Render::RenderStaticMeshInstance &instance,
-        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow) {
+        const Render::RenderSceneView &scene, const Render::DirectionalShadowFrame *shadow, const Math::Vec2 jitterUv) {
         auto mvp = BuildRenderMvp(scene.camera, instance.localToWorld, static_cast<float>(extent.width) / extent.height,
                                   Math::ClipDepthRange::ZeroToOne);
         if (mvp.HasError())
             return Result<void>::Failure(mvp.ErrorValue());
-        Math::Mat4 clipFromLocal = std::move(mvp).Value();
+        auto clipFromLocal = EditorVulkanRasterProjection(std::move(mvp).Value(), jitterUv);
         const auto inverse = Math::TryInverseAffine(instance.localToWorld);
         if (inverse.HasError())
             return Result<void>::Failure(inverse.ErrorValue());
@@ -83,9 +282,10 @@ namespace Horo::Editor {
         for (std::size_t row = 0; row < 4; ++row)
             for (std::size_t column = 0; column < 4; ++column)
                 normal.values[column * 4 + row] = inverse.Value().values[row * 4 + column];
-        // Vulkan's positive-height viewport has top-left framebuffer origin; flip only the clip-space Y component.
-        for (std::size_t column = 0; column < 4; ++column)
-            clipFromLocal.values[column * 4 + 1] *= -1;
+        // DXC lowers the HLSL viewport MVP to a transposed SPIR-V matrix. Pack that matrix before reflecting its native strides.
+        for (std::size_t row = 0; row < 4; ++row)
+            for (std::size_t column = row + 1; column < 4; ++column)
+                std::swap(clipFromLocal.values[column * 4 + row], clipFromLocal.values[row * 4 + column]);
         const auto &presentation = instance.presentation;
         const std::array tint{presentation.tint.x, presentation.tint.y, presentation.tint.z, presentation.tintStrength};
         const std::array camera{0.0F, 0.0F, 0.0F, static_cast<float>(scene.lights.size())};

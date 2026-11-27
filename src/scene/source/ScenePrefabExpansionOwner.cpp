@@ -1,6 +1,7 @@
 #include "Horo/Scene/ScenePrefabExpansionOwner.h"
 
 #include "ScenePrefabProjectionContext.h"
+#include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <new>
@@ -126,6 +127,8 @@ namespace Horo::SceneSource {
 
         /** @brief Preserves codec validation and the exact wire-byte ceiling using allocation-safe structural encoding. */
         Result<void> ValidateDocumentEncoding(const SceneSourceDocument &document) {
+            if (!document.childScenes.empty())
+                return Result<void>::Failure(MakeError(Detail::SceneChildReferencesUnsupported));
             if (!AdmitDocument(document))
                 return Result<void>::Failure(MakeError(Prefab::PrefabErrors::PayloadTooLarge));
             try {

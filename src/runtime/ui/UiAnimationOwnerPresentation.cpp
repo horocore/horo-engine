@@ -4,7 +4,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAnimationOwner::ApplyPresentation */
     Result<bool> UiAnimationOwner::ApplyPresentation(const UiPresentationReceipt &receipt) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id() || storage_->lifecycle.stopped ||
-            storage_->lifecycle.draining || storage_->candidate.admitted || !storage_->currentFrame.has_value())
+            storage_->lifecycle.draining || storage_->lifecycle.pointerDispatching || storage_->candidate.admitted ||
+            !storage_->currentFrame.has_value())
             return Result<bool>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (!AttachmentInputEligible(*storage_, receipt.view))
             return Result<bool>::Failure(MakeError(UiErrors::PresentationProfileSourceStale));

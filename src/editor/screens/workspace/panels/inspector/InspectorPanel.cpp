@@ -3,7 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "InspectorContributionView.h"
+#include "contributions/InspectorContributionView.h"
 #include "add_component/AddComponentMenu.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
@@ -60,6 +60,11 @@ namespace Horo::Editor {
         m_navigationSession.Clear();
         m_inputRouter = nullptr;
         m_workspaceInputContext = nullptr;
+    }
+
+    /** @copydoc InspectorPanel::OnPresentationHidden */
+    void InspectorPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &) {
+        m_nameInputContext.Reset();
     }
 
     void InspectorPanel::DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, const ImU32 color) {

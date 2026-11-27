@@ -58,7 +58,11 @@ namespace Horo::Cli {
     CliInvocationStopController::CliInvocationStopController(const std::chrono::milliseconds timeout, CancellationToken parent)
         : parent_(std::move(parent)), cancellation_(parent_) {
         if (timeout > std::chrono::milliseconds::zero()) {
-            const auto deadline = std::chrono::steady_clock::now() + timeout;
+            const auto now = std::chrono::steady_clock::now();
+            const auto available =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::time_point::max() - now);
+            const auto deadline = timeout >= available ? std::chrono::steady_clock::time_point::max() : now + timeout;
+            deadline_ = deadline;
             deadlineWorker_ = std::jthread([this, deadline](const std::stop_token stop) {
                 std::unique_lock lock(deadlineMutex_);
                 deadlineWake_.wait_until(lock, stop, deadline, [] {
@@ -103,6 +107,11 @@ namespace Horo::Cli {
     CliStopReason CliInvocationStopController::Reason() const noexcept {
         const CliStopReason reason = reason_.load();
         return reason == CliStopReason::None && parent_.IsCancellationRequested() ? CliStopReason::ParentCancelled : reason;
+    }
+
+    /** @copydoc CliInvocationStopController::Deadline */
+    std::optional<std::chrono::steady_clock::time_point> CliInvocationStopController::Deadline() const noexcept {
+        return deadline_;
     }
 
     /** @copydoc CliProgressMailbox::Report */

@@ -1,4 +1,5 @@
 #include "Horo/Runtime/RuntimeLifecycle.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "SaveAutosaveTestUtils.h"
 
 #include <catch2/generators/catch_generators.hpp>
@@ -130,7 +131,9 @@ namespace Horo::Runtime {
             Fixture fixture;
             SECTION("Typed adapter cause") {
                 fixture.callback = [](const CanonicalCaptureContext &, ICanonicalCaptureSink &) {
-                    return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
+                    return Result<CanonicalCaptureDisposition>::Failure(
+                        WithCause(MakeError(SaveErrors::CaptureBudgetExceeded, "private slot display"),
+                                  MakeError(SaveErrors::ArchiveChunkHashMismatch, "private payload")));
                 };
             }
             SECTION("Arbitrary adapter exception") {
@@ -141,7 +144,16 @@ namespace Horo::Runtime {
             fixture.Sample(100);
             const auto failed = fixture.Poll();
             REQUIRE(failed.HasError());
-            CHECK(fixture.arbiter.Snapshot(91)->operation.terminalError->code.Value() == failed.ErrorValue().code.Value());
+            const auto terminal = fixture.arbiter.Snapshot(91);
+            REQUIRE(terminal);
+            REQUIRE(terminal->operation.terminalError);
+            CHECK(terminal->operation.terminalError->code.Value() == failed.ErrorValue().code.Value());
+            for (const Error *error = &failed.ErrorValue(); error; error = error->cause.Get()) {
+                CHECK(error->message.find("private") == std::string::npos);
+                CHECK(error->diagnostics.empty());
+            }
+            for (const Error *error = &*terminal->operation.terminalError; error; error = error->cause.Get())
+                CHECK(error->message.find("private") == std::string::npos);
             CHECK(fixture.Snapshot().blocked);
             CHECK(fixture.Snapshot().pending);
             fixture.Sample(1'000'000);
@@ -151,6 +163,41 @@ namespace Horo::Runtime {
             fixture.callback = {};
             REQUIRE(fixture.scheduler->Resume().HasValue());
             fixture.Capture(92);
+        }
+
+        TEST_CASE("Autosave can terminalize with classified evidence when redaction allocation fails", "[unit][save][autosave]") {
+            Fixture fixture;
+            fixture.Sample(100);
+            fixture.Capture();
+            const auto privateError =
+                WrapError(SaveErrors::StoragePermanentIo, MakeError(SaveErrors::ArchiveChunkHashMismatch), "private provider details");
+            std::size_t argumentAllocations{};
+            {
+                const Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+                const Error argument(privateError);
+                argumentAllocations = measurement.Snapshot().requests;
+            }
+            std::size_t projectionAllocations{};
+            {
+                const Horo::Tests::AllocationProbe::ScopedMeasurement measurement;
+                const Error projection = RedactSaveDiagnosticError(privateError);
+                projectionAllocations = measurement.Snapshot().requests;
+            }
+            REQUIRE(projectionAllocations > 0);
+            const bool failLate = GENERATE(false, true);
+            const auto failureOffset = argumentAllocations + (failLate ? projectionAllocations - 1 : 0);
+            bool published{};
+            {
+                const Horo::Tests::AllocationProbe::ScopedFailure allocation{failureOffset};
+                published = fixture.arbiter.Fail(91, privateError).HasValue();
+            }
+            REQUIRE(published);
+            const auto terminal = fixture.arbiter.Snapshot(91);
+            REQUIRE(terminal);
+            REQUIRE(terminal->operation.terminalError);
+            CHECK(terminal->operation.terminalError->code.Value() == SaveErrors::OperationAllocationFailed.code.Value());
+            CHECK(terminal->operation.terminalError->message.find("private provider details") == std::string::npos);
+            CHECK_FALSE(fixture.arbiter.ActiveOperation());
         }
 
         TEST_CASE("Autosave deferred timeout retains bounded intent and exact barrier evidence", "[unit][save][autosave]") {

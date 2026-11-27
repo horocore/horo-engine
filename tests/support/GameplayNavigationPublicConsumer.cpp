@@ -1,8 +1,19 @@
+#include "Horo/Gameplay/GameplayFormation.h"
+#include "Horo/Gameplay/GameplayFormationMovement.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 
 #include <type_traits>
 static_assert(std::is_copy_constructible_v<Horo::Gameplay::GameplayNavigationHandle>);
 static_assert(!std::is_constructible_v<Horo::Gameplay::GameplayNavigationHandle>);
+static_assert(std::is_copy_constructible_v<Horo::Gameplay::GameplayFormationPlan>);
+static_assert(!std::is_copy_constructible_v<Horo::Gameplay::GameplayFormationMovement>);
+
+/** @brief Native modules cannot derive a grant for an arbitrary Scene actor. */
+template <typename Context>
+concept HasPublicBehaviorAgentDerivation =
+    requires(const Context &scope, Horo::Navigation::NavigationAgentOwner owner) { scope.ForBehaviorEntity(owner); };
+
+static_assert(!HasPublicBehaviorAgentDerivation<Horo::Gameplay::GameplayNavigationContext>);
 
 int main() {
     using namespace Horo::Gameplay;

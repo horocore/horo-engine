@@ -186,6 +186,7 @@ jobs:
         run: |
           cmake --build build/ci --target HoroEditor HoroEditorVulkanShaderCook \
             HoroShaderReflectionCookTests HoroEditorVulkanPresentationSmoke \
+            HoroEditorVulkanShaderAssetsTests HoroRuntimeUiPaintHostTests \
             HoroRenderFrontendPublicHeaderConsumer HoroRenderApiPublicHeaderConsumer --parallel 2
           python3 - <<'PYCODE'
           import json
@@ -208,12 +209,19 @@ jobs:
         uses: ./.github/actions/cook-vulkan-viewport
         with:
           asset-root: ${{ github.workspace }}/build/ci/native-editor-assets
+          qualification-root: ${{ runner.temp }}/viewport-qualification
       - name: Produce private canonical UI Metal qualification handoff
         if: runner.os == 'Linux'
         run: >-
           python3 .github/scripts/ui_paint_fixture.py produce
           --root "$RUNNER_TEMP/ui-paint-msl"
           --tools-root "$RUNNER_TEMP/viewport-cook-tools"
+      - name: Verify packaged Vulkan canvas interfaces and scale rollback
+        if: runner.os == 'Linux'
+        run: >-
+          env HORO_VULKAN_UI_PAINT_ASSET_ROOT="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
+          ctest --test-dir build/ci --no-tests=error --output-on-failure
+          -R '(Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds|A rejected Camera canvas scale preserves)'
       - name: Retain same-run UI Metal qualification inputs
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -228,9 +236,10 @@ jobs:
           asset_root="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
           editor_asset_root="$(cat build/ci/apps/HoroEditorAssetRoot-Debug.txt)"
           cmake -E copy_directory "$asset_root" "$editor_asset_root"
+          cp "$RUNNER_TEMP/viewport-qualification"/viewport-cross-fade-vulkan.{horoshdr,reflection.json} \
+            "$editor_asset_root/shaders/editor/"
           printf 'HORO_EDITOR_VULKAN_ASSET_ROOT=%s\n' "$editor_asset_root" >> "$GITHUB_ENV"
       - name: Build Vulkan command smoke
-        if: runner.os == 'Linux'
         run: cmake --build build/ci --target HoroVulkanCommandExecutionSmoke --parallel 2
       - name: Report shader compiler cache statistics
         run: |
@@ -272,11 +281,24 @@ jobs:
           HORO_VULKAN_VERTEX_FIXTURE="$RUNNER_TEMP/preparation.vert.spv" \
           HORO_VULKAN_FRAGMENT_FIXTURE="$RUNNER_TEMP/preparation.frag.spv" \
           build/ci/tests/HoroRenderVulkanTests '[native-smoke]' --reporter junit --out build/ci/vulkan-shaders.xml
+      - name: Qualify stereo coverage pixels and reduction on lavapipe
+        if: runner.os == 'Linux'
+        run: |
+          coverage_root="$RUNNER_TEMP/viewport-qualification"
+          HORO_NATIVE_MULTIVIEW_PAYLOAD="$coverage_root/multiview.horoshdr" \
+          HORO_NATIVE_MULTIVIEW_REFLECTION="$coverage_root/multiview.reflection.json" \
+          HORO_NATIVE_COVERAGE_PAYLOAD="$coverage_root/coverage.horoshdr" \
+          HORO_NATIVE_COVERAGE_REFLECTION="$coverage_root/coverage.reflection.json" \
+          HORO_NATIVE_MOTION_PAYLOAD="$coverage_root/motion.horoshdr" \
+          HORO_NATIVE_MOTION_REFLECTION="$coverage_root/motion.reflection.json" \
+          HORO_NATIVE_REDUCTION_PAYLOAD="$coverage_root/reduction.horoshdr" \
+          HORO_NATIVE_REDUCTION_REFLECTION="$coverage_root/reduction.reflection.json" \
+          build/ci/tests/HoroRenderVulkanTests '[vulkan][multiview][coverage][native-smoke]'
       - name: Test Vulkan commands on lavapipe
         if: runner.os == 'Linux'
         run: >-
           ctest --test-dir build/ci --no-tests=error --output-on-failure
-          --timeout 90 -R '^HoroVulkanCommandExecutionSmoke$' --output-junit vulkan-commands.xml
+          --timeout 90 -R '^(HoroVulkanCommandExecutionSmoke|HoroVulkanVfxGpuParity)$' --output-junit vulkan-commands.xml
       - name: Qualify the real Vulkan GUI and WSI pair
         if: runner.os == 'Linux'
         run: |
@@ -284,6 +306,7 @@ jobs:
           mkdir -p build/ci/vulkan-editor-evidence
           vulkaninfo --summary > build/ci/vulkan-editor-evidence/driver.txt
           cp "$RUNNER_TEMP/viewport-cook-tools/catalog.tsv" build/ci/vulkan-editor-evidence/
+          export HORO_VULKAN_UI_PAINT_ASSET_ROOT="$HORO_EDITOR_VULKAN_ASSET_ROOT"
           xvfb-run -a ctest --test-dir build/ci --no-tests=error --verbose --parallel 1 --timeout 30 \
             -R '^(HoroEditorVulkanPresentationSmoke::|HoroShaderReflectionCookTests::)' \
             --output-junit vulkan-editor.xml 2>&1 | tee build/ci/vulkan-editor-evidence/native.log
@@ -438,7 +461,7 @@ jobs:
 
       - name: Verify Windows CTest fixture isolation
         if: runner.os == 'Windows'
-        timeout-minutes: 2
+        timeout-minutes: 5
         run: |
           "$HORO_QUALIFICATION_PYTHON" -m pip install --no-cache-dir --only-binary=:all: pytest==9.0.3
           "$HORO_QUALIFICATION_PYTHON" -m pytest tests/python/test_ci_test_isolation.py \
@@ -576,7 +599,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests HoroPrefabMetricsTests
+        run: cmake --build --preset ci-audio-release --parallel 4 --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroSceneDocumentTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroNavigationDataQualificationTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroFoundationJsonTests HoroGameplayRuntimeTests HoroPrefabPersistenceTests HoroPrefabMetricsTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -775,9 +798,34 @@ jobs:
           -BinaryName HoroSourceFileOpenServiceTests.exe -EvidenceName source-edit-stack
           -TestCase 'HoroSourceFileOpenServiceTests::Cancelled and allocation-failed source operations do not publish partial roots' -CaptureSymbolEvidence
 
+      - name: Qualify Clangd source intelligence on macOS
+        if: ${{ runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 2
+        run: |
+          clangd="$(xcrun --find clangd)"
+          test -x "$clangd"
+          "$clangd" --version
+          HORO_TEST_CLANGD="$clangd" ctest --test-dir build/ci --no-tests=error --output-on-failure \
+            -R 'HoroSourceLanguageSessionTests::.*Clangd'
+
       - name: Test Debug
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         run: ctest --preset "${{ matrix.preset }}"
+
+      - name: Report accessibility contrast coverage scope
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        run: |
+          {
+            echo '### Accessibility contrast evidence scope'
+            echo 'Numeric sRGB contrast cases and staged consumers are selected in the native Debug composition. Use the CTest results for actual outcomes.'
+            if [ "$RUNNER_OS" = 'Windows' ]; then
+              echo 'The Windows headless composition does not configure editor theme-pair tests. GUI/theme interaction coverage remains unqualified.'
+            else
+              echo 'The GUI-enabled composition also registers display-independent primary-text theme-pair cases in HoroEditorPresentationTests. These cover only the explicitly tested opaque pairs.'
+            fi
+            echo 'These checks do not qualify native screen-reader interoperability, every UI state, complete editor WCAG conformance, or product/platform certification.'
+            echo 'Scope and remaining evidence: docs/guides/accessibility-editor-qualification.md.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test Release audio checks
         if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
@@ -854,6 +902,10 @@ jobs:
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --test-output-size-passed 16384 --output-junit "navigation-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/dev.py qualify-scene --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
+
+      - name: Test Windows Release Navigation data allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        run: ctest --test-dir build/ci-audio-release --output-on-failure --no-tests=error --timeout 90 -R "^HoroNavigationDataQualificationTests::Every observed definition allocation failure"
 
       - name: Test Windows Release Collision settings allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -1112,10 +1164,20 @@ jobs:
           mode: Debug
           max-size: 2G
       - name: Configure reference SDK host
-        run: >-
-          cmake --preset ci-macos-debug
-          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
-          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
+        run: |
+          configure_log="$(mktemp)"
+          trap 'rm -f "$configure_log"' EXIT
+          for attempt in 1 2 3; do
+            if cmake --preset ci-macos-debug \
+              -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk" \
+              -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON 2>&1 | tee "$configure_log"; then
+              exit 0
+            fi
+            if [[ "$attempt" == 3 ]] || ! grep -Eq 'The requested URL returned error: (502|503|504)([^0-9]|$)' "$configure_log"; then
+              exit 1
+            fi
+            sleep "$((5 * attempt))"
+          done
       - name: Build actual SDK consumers and native host
         run: >-
           cmake --build --preset ci-macos-debug --parallel 2 --target

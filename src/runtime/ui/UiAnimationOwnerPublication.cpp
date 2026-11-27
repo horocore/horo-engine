@@ -64,6 +64,7 @@ namespace Horo::Runtime::Ui {
         // inactive frame pin cannot destroy a generation, snapshot slot or external provider during this publication.
         frame.styles.emplace(storage_->resolver.PublishValidated(std::move(*candidate.styles)));
         frame.layout.emplace(canvas->layoutEngine->PublishValidated(std::move(*candidate.layout)));
+        frame.primaryView = canvas->presentations.empty() ? UiRenderViewId{} : canvas->presentations.front().View();
         if (candidate.clipping) {
             frame.clipped.emplace(canvas->clipping->PublishValidated(std::move(*candidate.clipping)));
             canvas->clipped = *frame.clipped;

@@ -1,6 +1,7 @@
 #include "SaveOperationArbiterState.h"
 
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -115,6 +116,11 @@ namespace Horo::Runtime {
             return Result<bool>::Failure(MakeError(SaveErrors::ArbiterInvalid));
         const auto outcome = failure.commitOutcome;
         if (ConflictsWithTransientCategory(failure)) {
+            try {
+                ProjectArbiterFailure(found->request.mode, failure.nativeCause);
+            } catch (const std::bad_alloc &) {
+                return Result<bool>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
+            }
             const auto finished = FinishRetryFailure(*state_, *found, std::move(failure.nativeCause), outcome, now);
             if (finished.HasValue())
                 state_->retryClock = monotonicMilliseconds;
@@ -129,12 +135,18 @@ namespace Horo::Runtime {
         static_cast<void>(found->controller.ObserveCancellation(now));
         if (SynchronizeTerminal(*state_, *found))
             return Result<bool>::Success(false);
-        found->retry.lastError = decision.Value().ErrorValue();
+        try {
+            auto publishedError = decision.Value().ErrorValue();
+            ProjectArbiterFailure(found->request.mode, publishedError);
+            found->retry.lastError = std::move(publishedError);
+        } catch (const std::bad_alloc &) {
+            return Result<bool>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
+        }
         if (!CanDefer(*found, decision.Value()))
-            return FinishRetryFailure(*state_, *found, decision.Value().ErrorValue(), outcome, now);
+            return FinishRetryFailure(*state_, *found, *found->retry.lastError, outcome, now);
         const auto eligible = RetryEligibleAt(*found, monotonicMilliseconds);
         if (!eligible.has_value())
-            return FinishRetryFailure(*state_, *found, decision.Value().ErrorValue(), outcome, now);
+            return FinishRetryFailure(*state_, *found, *found->retry.lastError, outcome, now);
         found->retry.eligibleAtMilliseconds = *eligible;
         found->state = SaveArbiterState::WaitingForRetry;
         ++found->revision;

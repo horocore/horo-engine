@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Gameplay/BehaviorTypes.h"
+#include "Horo/Gameplay/GameplayAssistPreferences.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 
 #include <cstddef>
@@ -18,11 +19,16 @@ namespace Horo::Runtime::Ui {
     class RuntimeUiClient;
 }
 
+namespace Horo::Accessibility {
+    class IColorAccessibilityQuery;
+}
+
 namespace Horo::Gameplay {
     class GameplayPhysicsContext;
     class GameplayCharacterContext;
     class GameplayNavigationContext;
     class GameplayVfxContext;
+    class GameplayAnimationContext;
     class GameplayPrefabContext;
     inline constexpr std::size_t MaximumBehaviorReloadStateBytes = 1024U * 1024U;
     inline constexpr std::size_t MaximumBehaviorReloadSnapshotBytes = 16U * 1024U * 1024U;
@@ -150,6 +156,16 @@ namespace Horo::Gameplay {
             [[nodiscard]] virtual std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept {
                 return {};
             }
+
+            /** @brief Returns the host-granted animation scope for this behavior's module. */
+            [[nodiscard]] virtual std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept {
+                return {};
+            }
+
+            /** @brief Returns the immutable desired visual preferences retained for this callback. */
+            [[nodiscard]] virtual const Accessibility::IColorAccessibilityQuery *ColorAccessibility() const noexcept {
+                return nullptr;
+            }
         };
     }  // namespace Detail
 
@@ -157,6 +173,27 @@ namespace Horo::Gameplay {
     class BehaviorContext final {
     public:
         explicit BehaviorContext(Detail::IBehaviorContextBackend &backend) noexcept : backend_(&backend) {}
+
+        /** @brief Binds preferences retained by the host for this exact fixed dispatch.
+         * @param backend Callback-scoped Scene adapter.
+         * @param assists Borrowed desired preferences, valid for the complete callback, or null when withheld.
+         */
+        BehaviorContext(Detail::IBehaviorContextBackend &backend, const GameplayAssistPreferences *assists) noexcept
+            : backend_(&backend), assists_(assists) {}
+
+        /** @brief Reads the fixed-dispatch preferences without obtaining simulation authority.
+         * @return A copy of the preferences, or empty when the host withheld them or outside fixed dispatch.
+         */
+        [[nodiscard]] std::optional<GameplayAssistPreferences> AssistPreferences() const noexcept {
+            return assists_ ? std::optional{*assists_} : std::nullopt;
+        }
+
+        /** @brief Reads desired color accessibility preferences synchronously.
+         * @return A snapshot query borrowed for this callback, or null when no view was supplied.
+         */
+        [[nodiscard]] const Accessibility::IColorAccessibilityQuery *ColorAccessibility() const noexcept {
+            return backend_->ColorAccessibility();
+        }
 
         [[nodiscard]] GameplayEntityRef Entity() const noexcept {
             return backend_->Entity();
@@ -194,6 +231,11 @@ namespace Horo::Gameplay {
             return backend_->VfxContext();
         }
 
+        /** @brief Accesses the explicit Scene animation grant. @return Module scope or empty when withheld. */
+        [[nodiscard]] std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept {
+            return backend_->AnimationContext();
+        }
+
         [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept {
             return backend_->NavigationContext();
         }
@@ -222,6 +264,7 @@ namespace Horo::Gameplay {
 
     private:
         Detail::IBehaviorContextBackend *backend_{};
+        const GameplayAssistPreferences *assists_{};
     };
 
     /** @brief Scene-scoped gameplay behavior lifecycle implemented by native code or a script adapter. */

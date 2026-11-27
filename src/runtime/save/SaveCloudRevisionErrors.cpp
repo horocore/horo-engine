@@ -21,4 +21,7 @@ namespace Horo::Runtime::SaveErrors {
                                                             "Cloud revision metadata could not be allocated.",
                                                             "Keep the prior catalog pair and retry after reducing memory pressure.",
                                                             true};
+    const ErrorCodeDescriptor CloudArchiveRejected{kDomain, ErrorCode{"save.cloud_archive.rejected"}, kError,
+                                                   "The downloaded save archive failed validation.",
+                                                   "Keep the selected local save and inspect the download validation error."};
 }  // namespace Horo::Runtime::SaveErrors

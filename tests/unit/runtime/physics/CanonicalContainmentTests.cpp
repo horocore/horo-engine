@@ -1,5 +1,5 @@
-#include "CanonicalPhysicsRuntimeInternal.h"
 #include "PhysicsTestUtils.h"
+#include "canonical/runtime/CanonicalPhysicsRuntimeInternal.h"
 
 #include <Jolt/Physics/StateRecorderImpl.h>
 #include <bit>

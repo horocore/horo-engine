@@ -347,6 +347,33 @@ namespace Horo::Physics {
         REQUIRE(world->DestroyQueryFixture(second).HasValue());
     }
 
+    TEST_CASE("Resident scene shape overlap uses the authored compound origin", "[physics][query][native][scene-overlap]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const auto identity = PhysicsWorldId::Create(731).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+        const auto child = world->CreateSceneShape(PhysicsBoxShape{{0.5F, 0.5F, 0.5F}});
+        REQUIRE(child.HasValue());
+        const std::array children{PhysicsSceneShapeInstance{child.Value(), {{0, 0, -5}, Math::Quaternion::Identity()}},
+                                  PhysicsSceneShapeInstance{child.Value(), {{0, 0, -9}, Math::Quaternion::Identity()}}};
+        const auto source = world->CreateSceneCompoundShape(children);
+        REQUIRE(source.HasValue());
+        const auto target = world->CreateQueryFixture(QueryFixture({0, 0, -9.25F})).Value();
+        AdvanceOneTick(*world);
+
+        auto descriptor = QueryDescriptor(identity, PhysicsOverlapQuery{source.Value(), {}}, PhysicsQueryCollection::All, 4);
+        std::array<PhysicsQueryHit, 4> hits{};
+        const auto result = world->Query(descriptor, hits);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().hitCount == 1);
+        CHECK(hits[0].body == target.body);
+        CHECK(hits[0].penetrationDepthMeters > 0.0F);
+        std::get<PhysicsOverlapQuery>(descriptor.geometry).pose.translation.x = 20.0F;
+        const auto separated = world->Query(descriptor, hits);
+        REQUIRE(separated.HasValue());
+        CHECK(separated.Value().hitCount == 0);
+    }
+
     TEST_CASE("Canonical compound queries return stable child metadata through local transforms", "[physics][query][compound][native]") {
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();

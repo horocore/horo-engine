@@ -311,6 +311,29 @@ namespace Horo::Runtime::Ui {
             expectInvalid(invalid);
         }
 
+        TEST_CASE("Generated extension binding schemas preserve admitted ownership on malformed replacement",
+                  "[runtime_ui][binding][fuzz]") {
+            const std::array initial{HealthProperty()};
+            const auto baseline = UiBindingProviderSchema::Create(Provider(initial));
+            REQUIRE(baseline.HasValue());
+            const auto *const retained = baseline.Value().Find(initial.front().id);
+            REQUIRE(retained != nullptr);
+            for (std::uint16_t value = 0; value < 128; ++value) {
+                CAPTURE(value);
+                auto property = initial.front();
+                if (value % 2 == 0)
+                    property.flags = static_cast<UiBindingPropertyFlags>(0x8000U | value);
+                else
+                    property.privacy = static_cast<UiBindingPrivacyClass>(128U + value);
+                const std::array malformed{property};
+                const auto rejected = UiBindingProviderSchema::Create(Provider(malformed));
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == UiErrors::BindingSchemaInvalid.code.Value());
+                CHECK(baseline.Value().Find(initial.front().id) == retained);
+            }
+            CHECK(UiBindingProviderSchema::Create(Provider(initial)).Value().Version() == baseline.Value().Version());
+        }
+
         TEST_CASE("Provider schema validation copies borrowed contributions before their lifetime ends",
                   "[runtime_ui][binding][ownership]") {
             const auto schema = MakeSchema();

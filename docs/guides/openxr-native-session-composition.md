@@ -101,6 +101,23 @@ the narrow host header boundary. Deterministic dispatch is not physical-device
 evidence; device/runtime/OS/renderer tuple qualification remains `NotRun` until
 performed on suitable hardware.
 
+## Packaged runtime compatibility
+
+| Product host | Loader distribution | Runtime selection | Evidence |
+| --- | --- | --- | --- |
+| Current Linux desktop Vulkan composition | One first-party loader in the signed installed component, with signed externally supplied OS ABI dependencies | Official loader selects an externally installed runtime | Run XR Setup's session test against the installed product. Device qualification consumes its sealed runtime preflight. |
+| Windows, macOS, Android and other packaged compositions | No qualified loader distribution implemented in this host | The application rejects native packaged loading on these targets | Build and scripted-dispatch tests are separate evidence. |
+
+The probe validates opaque stereo, view/local reference spaces, the selected
+Vulkan binding, and baseline projection and clock dispatch on the actual private
+test session. The runtime compatibility row records the loader's accepted API
+and the vendor implementation version separately. Optional extension evidence
+records availability without promising provider or device support. The session
+must retire before the row becomes available. A failed later probe, runtime
+loss, stale trust or a replacement graphics device invalidates the previous
+qualification prerequisite. Hardware, controllers and compositor coverage require
+the separate device smoke protocol.
+
 ## Explicit CI qualification
 
 The existing Linux/GCC, macOS/Clang and Windows/MSVC CI matrix explicitly

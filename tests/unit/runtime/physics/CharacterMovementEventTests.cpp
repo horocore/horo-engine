@@ -1,9 +1,9 @@
 #include "AllocationProbe.h"
-#include "CharacterFastPathStorage.h"
 #include "CharacterFoundationQualificationTestHelpers.h"
 #include "CharacterReferenceSceneCorpusTestHelpers.h"
 #include "Horo/Physics/CharacterCapability.h"
 #include "Horo/Physics/PhysicsMaterialAsset.h"
+#include "character/controller/CharacterFastPathStorage.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>

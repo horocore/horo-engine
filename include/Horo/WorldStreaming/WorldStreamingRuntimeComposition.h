@@ -5,10 +5,13 @@
  * @brief Explicit runtime service composition and scheduler ownership for World Streaming.
  */
 
+#include "Horo/WorldStreaming/OriginRebaseTransaction.h"
 #include "Horo/WorldStreaming/StreamingSchedulerAdmission.h"
 
 #include <compare>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -23,6 +26,8 @@ namespace Horo::WorldStreaming {
         /** @brief Tag separating composition revisions from service and source revisions. */
         struct StreamingRuntimeCompositionRevisionTag;
     }  // namespace Detail
+
+    class WorldPartitionRegistry;
 
     /** @brief Stable host-composed runtime service identity. */
     using StreamingRuntimeServiceId =
@@ -95,6 +100,7 @@ namespace Horo::WorldStreaming {
      * @brief Unique explicit composition of planner, asset, Scene and feature services with one owned scheduler ledger.
      * @details Service instances are borrowed and must outlive their active revision plus every scheduler reservation.
      *          Mutating calls are confined to StreamingAuthorityRole and perform no global discovery or registration.
+     *          Origin participants do not re-enter the composition from preparation, publication or rollback callbacks.
      */
     class WorldStreamingRuntimeComposition final {
     public:
@@ -117,7 +123,64 @@ namespace Horo::WorldStreaming {
                                                                              std::span<const StreamingRuntimeServiceBinding> services);
 
         /**
-         * @brief Transactionally replace all borrowed services while no scheduler work is retained.
+         * @brief Create a mounted composition that owns its one canonical runtime origin frame.
+         * @param config Exact runtime owner, revision and scheduler admission facts.
+         * @param services Complete explicit service bindings.
+         * @param registry Active registry with a validated publication for this exact mount.
+         * @param initial Host-authorized canonical frame with a unique identity for this mounted lifetime.
+         * @return Complete mounted composition or a typed failure without publication.
+         * @details The host retires the composition before unmounting its registry. The immutable grid anchor does not set the runtime
+         * origin.
+         */
+        [[nodiscard]] static Result<WorldStreamingRuntimeComposition> CreateWithOrigin(
+            const WorldStreamingRuntimeCompositionConfig &config, std::span<const StreamingRuntimeServiceBinding> services,
+            const WorldPartitionRegistry &registry, OriginFrame initial);
+
+        /**
+         * @brief Read the mounted frame owner's observer interface on the authority lane.
+         * @return Borrow valid while this composition lives, or null if the mount has no active origin.
+         * @details Consumers retain leases to observe a generation. The composition owns every publication.
+         */
+        [[nodiscard]] const OriginFrameOwner *Origin() const noexcept;
+
+        /**
+         * @brief Prepare one canonical rebase against the exact mounted origin and composition revision.
+         * @param owner Exact active mounted owner.
+         * @param revision Exact active composition revision.
+         * @param context Authorized decision, monotonically increasing transaction ID, active frame and participant ceiling.
+         * @param required Complete required participant manifest.
+         * @param participants Actual host-owned participants; prepared receipts remain owned by the composition.
+         * @return Success or typed rejection with no active frame or participant mutation.
+         */
+        [[nodiscard]] Result<void> PrepareOriginRebase(const StreamingRuntimeOwnerToken &owner,
+                                                       StreamingRuntimeCompositionRevision revision,
+                                                       const OriginRebaseTransactionContext &context,
+                                                       std::span<const OriginRebaseParticipantRequirement> required,
+                                                       std::span<IOriginRebaseParticipant *const> participants);
+
+        /**
+         * @brief Publish the exact prepared rebase on the host's canonical post-simulation safe point.
+         * @param owner Exact active mounted owner.
+         * @param revision Exact active composition revision.
+         * @param transaction Exact staged transaction identity.
+         * @param point Safe point observed by the host.
+         * @return Success or typed failure. A wrong safe point leaves the transaction available for retry.
+         */
+        [[nodiscard]] Result<void> CommitOriginRebase(const StreamingRuntimeOwnerToken &owner, StreamingRuntimeCompositionRevision revision,
+                                                      OriginRebaseTransactionId transaction, OriginRebaseCommitPoint point);
+
+        /**
+         * @brief Roll back a prepared transaction without changing the active origin.
+         * @param owner Exact active mounted owner.
+         * @param revision Exact active composition revision.
+         * @param transaction Exact staged transaction identity.
+         * @return Success or typed stale rejection without affecting another transaction.
+         */
+        [[nodiscard]] Result<void> CancelOriginRebase(const StreamingRuntimeOwnerToken &owner, StreamingRuntimeCompositionRevision revision,
+                                                      OriginRebaseTransactionId transaction);
+
+        /**
+         * @brief Transactionally replace all borrowed services while no scheduler work or origin transaction is retained.
          * @param owner Exact active owner lifetime.
          * @param revision Strictly newer complete composition revision.
          * @param services Complete replacement set under the original feature-adapter ceiling.
@@ -165,5 +228,8 @@ namespace Horo::WorldStreaming {
         StreamingSchedulerAdmissionLedger scheduler_;
         std::vector<StreamingRuntimeServiceBinding> services_;
         WorldStreamingRuntimeCompositionState state_{WorldStreamingRuntimeCompositionState::Active};
+        std::unique_ptr<OriginFrameOwner> origin_;
+        OriginRebaseTransactionId lastOriginTransaction_{};
+        std::optional<OriginRebaseTransaction> pendingOrigin_;
     };
 }  // namespace Horo::WorldStreaming

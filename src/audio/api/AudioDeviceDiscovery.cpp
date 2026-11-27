@@ -1,6 +1,9 @@
 #include "Horo/Audio/AudioDeviceDiscovery.h"
 
+#include "Horo/Audio/AudioErrors.h"
+
 #include <algorithm>
+#include <new>
 
 namespace Horo::Audio {
     namespace {  // NOSONAR - internal-linkage validation helpers must not enter the public audio namespace.
@@ -20,14 +23,14 @@ namespace Horo::Audio {
         }
 
         /** @brief Matches the complete generation, not a reused slot or presentation name. */
-        bool Contains(const AudioDeviceSnapshot &snapshot, const AudioDeviceId &id) noexcept {
+        bool Contains(const auto &snapshot, const auto &id) noexcept {
             return std::ranges::any_of(snapshot.devices, [&id](const auto &device) {
                 return device.id == id;
             });
         }
 
         /** @brief Missing default roles are valid; present roles must name an enumerated endpoint. */
-        bool ValidDefault(const AudioDeviceSnapshot &snapshot, const std::optional<AudioDeviceId> &id) noexcept {
+        bool ValidDefault(const auto &snapshot, const auto &id) noexcept {
             return !id || Contains(snapshot, *id);
         }
 
@@ -37,14 +40,25 @@ namespace Horo::Audio {
             using enum AudioDeviceClass;
             if (backend == NullAudio)
                 return deviceClass == Headless;
-            return deviceClass == Physical || deviceClass == Virtual;
+            return deviceClass == Physical || deviceClass == Virtual || (backend == PipeWire && deviceClass == Unknown);
+        }
+
+        /** @brief SDL capture inventory does not disclose physical-versus-virtual provenance. */
+        bool ValidClass(const AudioCaptureDeviceSnapshot &snapshot, const AudioDeviceClass deviceClass) noexcept {
+            return ValidClass(snapshot.backend, deviceClass) ||
+                   (snapshot.backend == AudioBackendKind::SDL3Audio && deviceClass == AudioDeviceClass::Unknown);
+        }
+
+        /** @brief Retains the playback classification contract. */
+        bool ValidClass(const AudioDeviceSnapshot &snapshot, const AudioDeviceClass deviceClass) noexcept {
+            return ValidClass(snapshot.backend, deviceClass);
         }
 
         /** @brief Resolves a role without inventing cross-role or enumeration-order fallback. */
-        AudioDeviceResolution ResolveDefault(const AudioDeviceSnapshot &snapshot, const AudioDefaultDeviceRole role) noexcept {
+        template <class Resolution> Resolution ResolveDefault(const auto &snapshot, const AudioDefaultDeviceRole role) noexcept {
             using enum AudioDefaultDeviceRole;
             using enum AudioDeviceResolutionStatus;
-            const std::optional<AudioDeviceId> *binding{};
+            const decltype(snapshot.defaults.console) *binding{};
             switch (role) {
                 case Console:
                     binding = &snapshot.defaults.console;
@@ -64,11 +78,11 @@ namespace Horo::Audio {
         }
 
         /** @brief Checks endpoint shape and prevents simultaneous generations of one registry slot. */
-        bool ValidDevices(const AudioDeviceSnapshot &snapshot) noexcept {
+        bool ValidDevices(const auto &snapshot) noexcept {
             for (std::size_t index = 0; index < snapshot.devices.size(); ++index) {
                 const auto &device = snapshot.devices[index];
                 if (!device.id.IsValid() || device.id.owner != snapshot.owner || device.displayName.size() > 256 ||
-                    !ValidClass(snapshot.backend, device.deviceClass))
+                    !ValidClass(snapshot, device.deviceClass))
                     return false;
                 for (std::size_t previous = 0; previous < index; ++previous) {
                     if (snapshot.devices[previous].id.slot == device.id.slot)
@@ -77,29 +91,98 @@ namespace Horo::Audio {
             }
             return true;
         }
+
+        /** @brief Checks the shared shape of a playback or capture catalog before using any endpoint. */
+        bool ValidCatalog(const auto &snapshot) noexcept {
+            if (snapshot.contractVersion != 1 || !snapshot.owner.IsValid() || snapshot.revision == 0 || !KnownBackend(snapshot.backend) ||
+                snapshot.devices.size() > MaximumAudioDiscoveredDevices)
+                return false;
+            return ValidDevices(snapshot) && ValidDefault(snapshot, snapshot.defaults.console) &&
+                   ValidDefault(snapshot, snapshot.defaults.multimedia) && ValidDefault(snapshot, snapshot.defaults.communications);
+        }
+
+        /** @brief A refresh compares successive complete observations of the same owner and backend. */
+        bool ValidCaptureTransition(const AudioCaptureDeviceSnapshot &before, const AudioCaptureDeviceSnapshot &after) noexcept {
+            return before.owner == after.owner && before.backend == after.backend && before.revision < after.revision &&
+                   ValidateAudioCaptureDeviceSnapshot(before) && ValidateAudioCaptureDeviceSnapshot(after);
+        }
+
+        /** @brief Appends added endpoints and changes to retained generations in current catalog order. */
+        void AppendCurrentCaptureChanges(const AudioCaptureDeviceSnapshot &before, const AudioCaptureDeviceSnapshot &after,
+                                         std::vector<AudioCaptureDeviceChange> &changes) {
+            for (const auto &device : after.devices) {
+                if (const auto previous = std::ranges::find(before.devices, device.id, &AudioDiscoveredCaptureDevice::id);
+                    previous == before.devices.end())
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::Added, device.id, after.revision);
+                else if (*previous != device)
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::MetadataChanged, device.id, after.revision);
+            }
+        }
+
+        /** @brief Keeps explicit selection fenced to this catalog's exact owner and generation. */
+        template <class Resolution, class DeviceId>
+        Resolution ResolveSelection(const auto &snapshot, const std::variant<DeviceId, AudioDefaultDeviceRole> &selection) noexcept {
+            using enum AudioDeviceResolutionStatus;
+            if (const auto *explicitDevice = std::get_if<DeviceId>(&selection)) {
+                if (!explicitDevice->IsValid() || explicitDevice->owner != snapshot.owner)
+                    return {.status = InvalidSelection};
+                if (!Contains(snapshot, *explicitDevice))
+                    return {.status = Unavailable};
+                return {.status = Resolved, .device = *explicitDevice, .revision = snapshot.revision};
+            }
+            return ResolveDefault<Resolution>(snapshot, std::get<AudioDefaultDeviceRole>(selection));
+        }
     }  // namespace
 
     /** @copydoc ValidateAudioDeviceSnapshot */
     bool ValidateAudioDeviceSnapshot(const AudioDeviceSnapshot &snapshot) noexcept {
-        if (snapshot.contractVersion != 1 || !snapshot.owner.IsValid() || snapshot.revision == 0 || !KnownBackend(snapshot.backend) ||
-            snapshot.devices.size() > MaximumAudioDiscoveredDevices)
-            return false;
-        return ValidDevices(snapshot) && ValidDefault(snapshot, snapshot.defaults.console) &&
-               ValidDefault(snapshot, snapshot.defaults.multimedia) && ValidDefault(snapshot, snapshot.defaults.communications);
+        return ValidCatalog(snapshot);
     }
 
     /** @copydoc ResolveAudioDevice */
     AudioDeviceResolution ResolveAudioDevice(const AudioDeviceSnapshot &snapshot, const AudioDeviceSelection &selection) noexcept {
-        using enum AudioDeviceResolutionStatus;
         if (!ValidateAudioDeviceSnapshot(snapshot))
             return {};
-        if (const auto *explicitDevice = std::get_if<AudioDeviceId>(&selection)) {
-            if (!explicitDevice->IsValid() || explicitDevice->owner != snapshot.owner)
-                return {.status = InvalidSelection};
-            if (!Contains(snapshot, *explicitDevice))
-                return {.status = Unavailable};
-            return {.status = Resolved, .device = *explicitDevice, .revision = snapshot.revision};
+        return ResolveSelection<AudioDeviceResolution>(snapshot, selection);
+    }
+
+    /** @copydoc ValidateAudioCaptureDeviceSnapshot */
+    bool ValidateAudioCaptureDeviceSnapshot(const AudioCaptureDeviceSnapshot &snapshot) noexcept {
+        return ValidCatalog(snapshot) && snapshot.permission <= AudioCapturePermission::Denied &&
+               std::ranges::all_of(snapshot.devices, [](const AudioDiscoveredCaptureDevice &device) {
+            return !device.preferredFormat || ValidateAudioProcessingFormat(*device.preferredFormat);
+        });
+    }
+
+    /** @copydoc ResolveAudioCaptureDevice */
+    AudioCaptureDeviceResolution ResolveAudioCaptureDevice(const AudioCaptureDeviceSnapshot &snapshot,
+                                                           const AudioCaptureDeviceSelection &selection) noexcept {
+        if (!ValidateAudioCaptureDeviceSnapshot(snapshot))
+            return {};
+        return ResolveSelection<AudioCaptureDeviceResolution>(snapshot, selection);
+    }
+
+    /** @copydoc DescribeAudioCaptureDeviceChanges */
+    Result<std::vector<AudioCaptureDeviceChange>> DescribeAudioCaptureDeviceChanges(const AudioCaptureDeviceSnapshot &before,
+                                                                                    const AudioCaptureDeviceSnapshot &after) {
+        using Output = Result<std::vector<AudioCaptureDeviceChange>>;
+        if (!ValidCaptureTransition(before, after))
+            return Output::Failure(MakeError(AudioErrors::IdentityInvalid));
+        try {
+            std::vector<AudioCaptureDeviceChange> changes;
+            for (const auto &device : before.devices) {
+                const auto current = std::ranges::find_if(after.devices, [&device](const auto &candidate) {
+                    return candidate.id.slot == device.id.slot;
+                });
+                if (current != after.devices.end() && current->id.generation < device.id.generation)
+                    return Output::Failure(MakeError(AudioErrors::IdentityInvalid));
+                if (current == after.devices.end() || current->id != device.id)
+                    changes.emplace_back(AudioCaptureDeviceChangeKind::Removed, device.id, after.revision);
+            }
+            AppendCurrentCaptureChanges(before, after, changes);
+            return Output::Success(std::move(changes));
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
         }
-        return ResolveDefault(snapshot, std::get<AudioDefaultDeviceRole>(selection));
     }
 }  // namespace Horo::Audio

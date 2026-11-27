@@ -77,15 +77,31 @@ Executable-specific adapters and composition live with their host:
 
 - `apps/HoroEditor/composition/` owns Editor Play/Save adaptation, project Scene
   composition, presentation, shader hot reload, terrain preparation and XR host
-  wiring. The shared Save format, capture barrier and Physics restore remain
-  owned by their Runtime/Physics libraries under `src/`.
+  wiring. The Scene product host uses the Editor Services implementation of
+  the default initial Play Scene admission path. The shared Save format,
+  capture barrier and Physics restore remain owned by their Runtime/Physics
+  libraries under `src/`.
 - `apps/HoroEditor/tools/shader_cook/` owns the graphical product's offline tool
   authentication and package publication helpers.
 - `apps/horo-engine/composition/` owns terminal/headless network and Scene
-  composition and module-script package admission.
+  composition and module-script package admission. `HoroNetworkProductHost`
+  selects the standalone World mount through the shared application adapter.
+  For project-backed network gameplay it uses `HoroProjectSettings` to validate
+  the root's network policy before composing Runtime services.
+  It uses `HoroPlatform` for native secure randomness when staging a replay
+  artifact for durable publication.
 - `apps/shared/` contains only composition used by multiple executable hosts:
   module activation, package sessions, host signatures, navigation preparation,
-  Scene/Physics lifetime adaptation and animation owner identities. Keep each
+  Scene/Physics lifetime adaptation, animation owner identities and committed
+  World mounting. The non-installed `HoroMountedWorldHostInternal` adapter uses
+  `HoroWorldStreaming` for partition and origin authority,
+  `HoroSceneCellPayload` for exact cooked cell admission through the Scene
+  service, and `HoroSceneRenderExtraction` for optional CPU geometry capture.
+  The selected OpenXR application host consumes the renderer's origin-relative
+  view through the Editor Play composition port.
+  The standalone and Editor hosts choose their own startup scope and own
+  the mount lifetime. GPU execution, windows and presentation stay with the
+  graphical host. Keep each
   family in its own directory and expose only its existing non-installed target
   contract.
 

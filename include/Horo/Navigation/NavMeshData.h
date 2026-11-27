@@ -162,13 +162,14 @@ namespace Horo::Navigation {
 
     /** @brief Provider-neutral generated grounded transition between two exact polygons. */
     struct NavMeshOffMeshLink final {
-        Math::Vec3 start{};           /**< Canonical-metre start point. */
-        Math::Vec3 end{};             /**< Canonical-metre destination point. */
-        float radiusMeters{};         /**< Positive finite endpoint acceptance radius. */
-        std::uint32_t startPolygon{}; /**< Global polygon index owned by the declaring tile. */
-        std::uint32_t endPolygon{};   /**< Global destination polygon index. */
-        NavigationAreaId area;        /**< Stable traversal-area semantics. */
-        bool bidirectional{};         /**< Whether traversal is admitted in both directions. */
+        Math::Vec3 start{};            /**< Canonical-metre start point. */
+        Math::Vec3 end{};              /**< Canonical-metre destination point. */
+        float radiusMeters{};          /**< Positive finite endpoint acceptance radius. */
+        std::uint32_t startPolygon{};  /**< Global polygon index owned by the declaring tile. */
+        std::uint32_t endPolygon{};    /**< Global destination polygon index. */
+        NavigationAreaId area;         /**< Stable traversal-area semantics. */
+        bool bidirectional{};          /**< Whether traversal is admitted in both directions. */
+        NavigationLinkId authoredLink; /**< Stable authored authority. Generated and legacy records have an invalid ID. */
 
         [[nodiscard]] constexpr auto operator<=>(const NavMeshOffMeshLink &) const noexcept = default;
     };

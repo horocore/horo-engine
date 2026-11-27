@@ -5,7 +5,9 @@
  * @brief Session-owned mapping between replicated-object occurrences and runtime-scene entities.
  */
 
+#include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkObjectIdentity.h"
 #include "Horo/Network/ReplicationIdentity.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -13,11 +15,13 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 
 namespace Horo::Network {
+    inline constexpr std::size_t MaximumNetworkPrefabIntentBytes = 4096;
     /** @brief Explicit owner-thread lifecycle of one session-owned mapping. */
     enum class NetworkObjectMappingState : std::uint8_t {
         Active,
@@ -26,20 +30,64 @@ namespace Horo::Network {
         Count
     };
 
+    /** @brief Identity of the verified cooked template used to prepare a replicated group. */
+    struct NetworkPrefabTemplateIdentity final {
+        Assets::AssetId asset;
+        Sha256Digest artifactDigest; /**< Digest of the canonical cooked envelope selected for the spawn. */
+        std::uint32_t entityCount{}; /**< Complete prepared group size, including local-only entities. */
+
+        /** @brief Checks the source and group size. @return Whether all required evidence is present. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return asset != Assets::AssetId{} && artifactDigest != Sha256Digest{} && entityCount != 0;
+        }
+
+        constexpr auto operator<=>(const NetworkPrefabTemplateIdentity &) const noexcept = default;
+    };
+
+    /** @brief Position of a replicated member in the verified, prepared recipe order. */
+    struct NetworkPrefabMemberSource final {
+        NetworkPrefabTemplateIdentity recipe;
+        std::uint32_t entitySlot{}; /**< Zero-based slot in prepared order, including local-only entities. */
+
+        /** @brief Checks the template and the member bounds. @return Whether the member is representable. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return recipe.IsValid() && entitySlot < recipe.entityCount;
+        }
+
+        constexpr auto operator<=>(const NetworkPrefabMemberSource &) const noexcept = default;
+    };
+
+    /** @brief Cooked member evidence linked to one generation-qualified authority spawn. */
+    struct NetworkPrefabMemberProvenance final {
+        NetworkPrefabMemberSource source;
+        NetworkObjectId occurrence; /**< First mapped member's authority identity, shared by the whole group. */
+
+        /** @brief Checks the source and occurrence. @return Whether all required evidence is present. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return source.IsValid() && occurrence.IsValid();
+        }
+
+        constexpr auto operator<=>(const NetworkPrefabMemberProvenance &) const noexcept = default;
+    };
+
     /**
      * @brief Stable declaration provenance kept separate from a session occurrence identity.
      *
-     * An authored object is optional because runtime-spawned objects have no authored SceneObjectId. Neither field is used as
-     * NetworkObjectId, ECS storage identity, or mapping lookup precedence.
+     * An object may have authored Scene or dynamic Prefab provenance. The schema and origin do not select the mapping.
      */
     struct NetworkObjectProvenance final {
         ReplicationSchemaId schema;
         ReplicationSchemaVersion schemaVersion;
         std::optional<Runtime::SceneObjectId> authoredObject;
+        std::optional<NetworkPrefabMemberProvenance> prefab;
 
         /** @brief Validates stable schema and optional authored identity. @return Whether all present identities are valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return schema.IsValid() && schemaVersion.IsValid() && (!authoredObject.has_value() || authoredObject->IsValid());
+            if (!schema.IsValid() || !schemaVersion.IsValid())
+                return false;
+            if (authoredObject)
+                return authoredObject->IsValid() && !prefab;
+            return !prefab || prefab->IsValid();
         }
 
         constexpr auto operator<=>(const NetworkObjectProvenance &) const noexcept = default;
@@ -47,11 +95,12 @@ namespace Horo::Network {
 
     /** @brief Complete live association copied into immutable diagnostic evidence. */
     struct NetworkObjectMappingEntry final {
-        NetworkObjectId object;             /**< Exact authority-epoch-scoped occurrence. */
-        Runtime::EntityRef entity;          /**< Exact scene and ECS slot generation. */
-        NetworkObjectProvenance provenance; /**< Stable schema/authored origin, never lookup identity. */
+        NetworkObjectId object;                                     /**< Exact authority-epoch-scoped occurrence. */
+        Runtime::EntityRef entity;                                  /**< Exact scene and ECS slot generation. */
+        NetworkObjectProvenance provenance;                         /**< Stable schema/authored origin, never lookup identity. */
+        std::shared_ptr<const std::vector<std::byte>> prefabIntent; /**< Owned serving evidence on the occurrence anchor only. */
 
-        constexpr auto operator<=>(const NetworkObjectMappingEntry &) const noexcept = default;
+        auto operator<=>(const NetworkObjectMappingEntry &) const noexcept = default;
     };
 
     /** @brief Owned immutable diagnostic projection detached from later mapping mutation or destruction. */
@@ -168,6 +217,22 @@ namespace Horo::Network {
         NetworkObjectMapping &operator=(const NetworkObjectMapping &) = delete;
 
     private:
+        friend class ReplicationWorldLifecycle;
+        enum class RegistrationSequence {
+            ExactSuccessor,
+            NewerReplica
+        };
+
+        /** @brief Clones live indexes and tombstones into detached capacity for an owner transaction. */
+        [[nodiscard]] Result<NetworkObjectMapping> CloneForPublication() const;
+        /** @brief Adds one dynamic association using the first available slot and its exact next generation. */
+        [[nodiscard]] Result<void> RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance,
+                                                   std::shared_ptr<const std::vector<std::byte>> prefabIntent);
+        /** @brief Retires only a live dynamic association found through its exact Scene entity. */
+        [[nodiscard]] Result<void> RetireDynamic(Runtime::EntityRef entity);
+        /** @brief Selects a reusable tombstone or the first unused slot within the mapping budget. */
+        [[nodiscard]] Result<NetworkObjectId> NextDynamicObject() const;
+
         struct SlotRecord final {
             std::uint64_t slot{};
             std::uint32_t generation{};
@@ -187,7 +252,10 @@ namespace Horo::Network {
         [[nodiscard]] std::vector<EntityRecord>::iterator LowerBound(Runtime::EntityRef entity) noexcept;
         [[nodiscard]] std::vector<EntityRecord>::const_iterator LowerBound(Runtime::EntityRef entity) const noexcept;
         [[nodiscard]] Result<void> ValidateRegistration(const NetworkObjectMappingEntry &entry) const;
-        [[nodiscard]] Result<void> ReconcileSlot(const NetworkObjectMappingEntry &entry);
+        /** @brief Applies the exact authority generation even when unsent intermediate occurrences were skipped. */
+        [[nodiscard]] Result<void> RegisterReplica(const NetworkObjectMappingEntry &entry);
+        [[nodiscard]] Result<void> RegisterWithSequence(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence);
+        [[nodiscard]] Result<void> ReconcileSlot(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence);
         [[nodiscard]] Result<void> RequireActive() const;
 
         ReplicationAuthorityEpoch epoch_;

@@ -8,6 +8,32 @@ add_library(HoroFoundation STATIC ${HORO_FOUNDATION_SOURCES})
 
 add_library(HoroEngine::Foundation ALIAS HoroFoundation)
 
+add_library(HoroCaptionTransport INTERFACE)
+add_library(HoroEngine::CaptionTransport ALIAS HoroCaptionTransport)
+target_compile_features(HoroCaptionTransport INTERFACE cxx_std_20)
+
+add_library(HoroVisualAccessibility STATIC
+        runtime/accessibility/VisualAccessibility.cpp
+        runtime/accessibility/VisualAccessibilitySettings.cpp
+        runtime/accessibility/VisualSafetySettings.cpp
+        runtime/accessibility/Contrast.cpp
+)
+add_library(HoroEngine::VisualAccessibility ALIAS HoroVisualAccessibility)
+target_compile_features(HoroVisualAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroVisualAccessibility PUBLIC HoroEngine::Foundation)
+
+add_library(HoroGameplayAccessibility STATIC gameplay/accessibility/GameplayAccessibility.cpp)
+add_library(HoroEngine::GameplayAccessibility ALIAS HoroGameplayAccessibility)
+target_compile_features(HoroGameplayAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayAccessibility PUBLIC HoroEngine::Foundation HoroEngine::GameplayApi)
+
+# Optional adapter boundary; the baseline Platform target acquires no UI dependency.
+add_library(HoroPlatformAccessibility STATIC platform/NullAccessibilityBridge.cpp platform/AccessibilitySettings.cpp)
+add_library(HoroEngine::PlatformAccessibility ALIAS HoroPlatformAccessibility)
+target_compile_features(HoroPlatformAccessibility PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformAccessibility PUBLIC HoroEngine::Foundation HoroEngine::RuntimeUi)
+add_subdirectory(runtime/console)
+
 target_compile_features(HoroFoundation PUBLIC cxx_std_20)
 target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=$<BOOL:${HORO_ENABLE_TELEMETRY}>)
 target_include_directories(HoroFoundation
@@ -57,6 +83,7 @@ add_library(HoroCliHost STATIC
         cli/CliExecutionLifecycle.cpp
         cli/CliErrors.cpp
         cli/CliOptionParser.cpp
+        cli/CliInputValidation.cpp
         cli/CliOutputPresenter.cpp
 )
 add_library(HoroEngine::CliHost ALIAS HoroCliHost)
@@ -67,6 +94,7 @@ target_link_libraries(HoroCliHost
 )
 
 add_library(HoroMcpSession STATIC
+        mcp/McpAuditTelemetry.cpp
         mcp/McpAuthorization.cpp
         mcp/McpErrors.cpp
         mcp/McpJsonBounds.cpp
@@ -188,12 +216,47 @@ add_library(HoroModelProvider STATIC editor/agent/ModelProvider.cpp)
 add_library(HoroEngine::ModelProvider ALIAS HoroModelProvider)
 target_compile_features(HoroModelProvider PUBLIC cxx_std_20)
 
+add_library(HoroEditorAgentTurnInternal STATIC editor/agent/AgentTurn.cpp editor/agent/AgentContext.cpp)
+target_compile_features(HoroEditorAgentTurnInternal PUBLIC cxx_std_20)
+set(_horo_agent_turn_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_agent_turn_headers")
+file(MAKE_DIRECTORY "${_horo_agent_turn_headers}")
+configure_file(editor/agent/AgentTurn.h "${_horo_agent_turn_headers}/AgentTurn.h" COPYONLY)
+configure_file(editor/agent/AgentContext.h "${_horo_agent_turn_headers}/AgentContext.h" COPYONLY)
+configure_file(editor/agent/AgentBackgroundTurn.h "${_horo_agent_turn_headers}/AgentBackgroundTurn.h" COPYONLY)
+target_include_directories(HoroEditorAgentTurnInternal INTERFACE "${_horo_agent_turn_headers}")
+target_link_libraries(HoroEditorAgentTurnInternal PUBLIC HoroEngine::ModelProvider HoroEngine::ProjectCodeQuery HoroEngine::Security)
+
+if(HORO_BUILD_EDITOR_GUI OR BUILD_TESTING)
+    add_library(HoroEditorAgentHistoryInternal STATIC
+        editor/agent/AgentConversationStore.cpp editor/agent/AgentHistorySession.cpp editor/agent/AgentHistoryReview.cpp)
+    target_compile_features(HoroEditorAgentHistoryInternal PUBLIC cxx_std_20)
+    set(_horo_agent_history_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_agent_history_headers")
+    file(MAKE_DIRECTORY "${_horo_agent_history_headers}")
+    configure_file(editor/agent/AgentConversationStore.h "${_horo_agent_history_headers}/AgentConversationStore.h" COPYONLY)
+    configure_file(editor/agent/AgentHistorySession.h "${_horo_agent_history_headers}/AgentHistorySession.h" COPYONLY)
+    configure_file(editor/agent/AgentHistoryReview.h "${_horo_agent_history_headers}/AgentHistoryReview.h" COPYONLY)
+    target_include_directories(HoroEditorAgentHistoryInternal INTERFACE "${_horo_agent_history_headers}")
+    target_link_libraries(HoroEditorAgentHistoryInternal
+        PUBLIC HoroEngine::Foundation HoroEngine::Security
+        PRIVATE HoroEngine::Assets HoroThirdParty::SQLite nlohmann_json::nlohmann_json)
+endif()
+
+add_library(HoroMcpEditorAgentToolsInternal STATIC editor/agent/AgentTurnMcp.cpp editor/agent/AgentLocalSceneTurn.cpp
+    editor/agent/AgentLocalDiagnostics.cpp)
+target_compile_features(HoroMcpEditorAgentToolsInternal PUBLIC cxx_std_20)
+configure_file(editor/agent/AgentTurnMcp.h "${_horo_agent_turn_headers}/AgentTurnMcp.h" COPYONLY)
+configure_file(editor/agent/AgentLocalSceneTurn.h "${_horo_agent_turn_headers}/AgentLocalSceneTurn.h" COPYONLY)
+target_include_directories(HoroMcpEditorAgentToolsInternal INTERFACE "${_horo_agent_turn_headers}")
+target_link_libraries(HoroMcpEditorAgentToolsInternal
+    PUBLIC HoroEditorAgentTurnInternal HoroEngine::McpSession
+    PRIVATE HoroEngine::McpController HoroEngine::McpProjectCodeQuery HoroEngine::ModelProviderAdapters)
+
 add_library(HoroModelProviderAdapters STATIC editor/agent/ReferenceModelProviders.cpp editor/agent/ReferenceModelStream.cpp)
 add_library(HoroEngine::ModelProviderAdapters ALIAS HoroModelProviderAdapters)
 target_compile_features(HoroModelProviderAdapters PUBLIC cxx_std_20)
 target_link_libraries(HoroModelProviderAdapters
         PUBLIC HoroEngine::ModelProvider
-        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl)
+        PRIVATE HoroEngine::Security nlohmann_json::nlohmann_json CURL::libcurl)
 
 set(HORO_PLATFORM_FILE_API_PATH_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/platform_file_api_path_headers")
 file(MAKE_DIRECTORY "${HORO_PLATFORM_FILE_API_PATH_HEADERS}")
@@ -222,9 +285,10 @@ if (WIN32)
             platform/file_storage/PublicationFileNativeWindows.cpp
             platform/windows/DynamicLibrary_Windows.cpp
             platform/windows/ExternalProcess_Windows.cpp
+            platform/windows/NativeCredentialBackend_Windows.cpp
             platform/windows/SecureRandom_Windows.cpp)
     target_compile_definitions(HoroPlatform PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-    target_link_libraries(HoroPlatform PRIVATE bcrypt)
+    target_link_libraries(HoroPlatform PRIVATE advapi32 bcrypt)
 else ()
     target_sources(HoroPlatform PRIVATE
             platform/file_storage/PublicationFileNativePosix.cpp
@@ -232,6 +296,21 @@ else ()
             platform/posix/ExternalProcess_Posix.cpp
             platform/posix/SecureRandom_Posix.cpp)
     target_link_libraries(HoroPlatform PRIVATE dl)
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(PkgConfig QUIET)
+        if (PkgConfig_FOUND)
+            pkg_check_modules(HORO_LIBSECRET QUIET IMPORTED_TARGET libsecret-1>=0.18)
+        endif ()
+    endif ()
+    if (TARGET PkgConfig::HORO_LIBSECRET)
+        target_sources(HoroPlatform PRIVATE platform/linux/NativeCredentialBackend_Linux.cpp)
+        target_link_libraries(HoroPlatform PRIVATE PkgConfig::HORO_LIBSECRET)
+    elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        target_sources(HoroPlatform PRIVATE platform/macos/NativeCredentialBackend_MacOS.cpp)
+        target_link_libraries(HoroPlatform PRIVATE "-framework CoreFoundation")
+    else ()
+        target_sources(HoroPlatform PRIVATE platform/posix/NativeCredentialBackend_Posix.cpp)
+    endif ()
     if (APPLE)
         target_link_libraries(HoroPlatform PRIVATE "-framework Security")
     endif ()
@@ -276,6 +355,7 @@ target_include_directories(HoroPlatform PRIVATE
         "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
 add_library(HoroPlatformServices STATIC
+        platform_services/PlatformDiagnostics.cpp
         platform_services/AchievementDefinitionRegistry.cpp
         platform_services/PlatformCloudObjects.cpp
         platform_services/PlatformAchievementCoordinator.cpp
@@ -283,14 +363,19 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformOfflineQueueAdmission.cpp
         platform_services/PlatformOfflineQueueErrors.cpp
         platform_services/PlatformOfflineQueueLifecycle.cpp
+        platform_services/PlatformOfflineQueueRetry.cpp
         platform_services/PlatformDefinitionErrors.cpp
         platform_services/PlatformDefinitionRegistries.cpp
         platform_services/PlatformPresenceCoordinator.cpp
+        platform_services/PlatformFriendsCoordinator.cpp
         platform_services/PlatformOfflineQueueStorageErrors.cpp
         platform_services/PlatformOfflineQueueStorage.cpp
         platform_services/PlatformProgressionErrors.cpp
         platform_services/PlatformProgressionIdempotency.cpp
+        platform_services/PlatformProgressionCoalescer.cpp
+        platform_services/PlatformProgressionReplay.cpp
         platform_services/PlatformProjectConfiguration.cpp
+        platform_services/PlatformProjectSettings.cpp
         platform_services/PlatformProviderManifestCook.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestCompletion.cpp
@@ -301,21 +386,40 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformServicesNullBackend.cpp
         platform_services/PlatformServicesComposition.cpp
         platform_services/PlatformSessionObserver.cpp
+        platform_services/PlatformSessionBinding.cpp
         platform_services/PlatformServicesMetrics.cpp
         platform_services/PlatformStatCacheErrors.cpp
         platform_services/PlatformStatCacheCoordinator.cpp
         platform_services/PlatformStableIdRegistry.cpp
+        platform_services/PlatformStableIdRegistryEncoding.cpp
         platform_services/PlatformUserSession.cpp
 )
 add_library(HoroEngine::PlatformServices ALIAS HoroPlatformServices)
 target_compile_features(HoroPlatformServices PUBLIC cxx_std_20)
-target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform)
+target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroPlatformServicesAuthoring STATIC
+    application/project/PlatformServicesLedgerCodec.cpp
+    application/project/PlatformServicesDefinitionCodec.cpp
+    application/project/PlatformServicesProjectInitialization.cpp
+    application/project/PlatformServicesProjectSources.cpp
+    application/project/PlatformServicesProjectCook.cpp
+)
+add_library(HoroEngine::PlatformServicesAuthoring ALIAS HoroPlatformServicesAuthoring)
+target_compile_features(HoroPlatformServicesAuthoring PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformServicesAuthoring PUBLIC HoroEngine::PlatformServices HoroEngine::Application HoroEngine::Assets PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroProgressionApplication STATIC application/ProgressionUseCases.cpp)
+add_library(HoroEngine::ProgressionApplication ALIAS HoroProgressionApplication)
+target_compile_features(HoroProgressionApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroProgressionApplication PUBLIC HoroEngine::PlatformServices)
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp
         packages/cache/PackageCachePublisherEnvelope.cpp
         packages/resolver/PackageDependencyResolver.cpp
         packages/resolver/PackageLockfile.cpp
+        packages/resolver/PackageMigration.cpp
         packages/resolver/PackageRequest.cpp
         packages/validation/PackagePath.cpp
         packages/validation/PackageArchive.cpp
@@ -376,9 +480,18 @@ target_include_directories(HoroApplication
 target_link_libraries(HoroApplication PUBLIC HoroEngine::ProjectVersion)
 target_link_libraries(HoroApplication
         PUBLIC HoroEngine::Foundation
-        PRIVATE nlohmann_json::nlohmann_json
+        PRIVATE HoroEngine::Security nlohmann_json::nlohmann_json
 )
 add_dependencies(HoroApplication HoroProjectCompatibilityCatalog)
+
+add_library(HoroSaveCloudTransport STATIC
+        application/cloud_save/CloudSaveMutationJournal.cpp
+        application/cloud_save/CloudSaveTransport.cpp
+        application/cloud_save/CloudSaveUpload.cpp)
+target_compile_features(HoroSaveCloudTransport PUBLIC cxx_std_20)
+target_include_directories(HoroSaveCloudTransport PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/application/cloud_save/include>")
+target_link_libraries(HoroSaveCloudTransport PUBLIC HoroEngine::Runtime HoroEngine::PlatformServices)
 
 add_library(HoroReleaseProcess STATIC
         application/release/ReleaseProcess.cpp
@@ -467,6 +580,7 @@ target_compile_features(HoroUserStateMigration PUBLIC cxx_std_20)
 target_link_libraries(HoroUserStateMigration PUBLIC HoroEngine::Platform)
 
 add_library(HoroProjectMigrations STATIC
+        application/project_migrations/PrefabSourceMigrationPlan.cpp
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
         ${HORO_PROJECT_MIGRATION_SOURCES}
 )
@@ -477,17 +591,18 @@ target_include_directories(HoroProjectMigrations
         PRIVATE ${PROJECT_SOURCE_DIR} ${HORO_GENERATED_DIR}
 )
 target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
-        PRIVATE HoroEngine::ProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
+        PRIVATE HoroEngine::ProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::NavigationApi HoroEngine::Assets HoroEngine::PlatformServicesAuthoring nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
 add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp
+        application/project/ProjectAiSettings.cpp
         application/project/NavigationProjectSettingsStore.cpp
         application/project/NavigationProjectSettings.cpp
         application/project/NavigationProjectSettingsCodec.cpp)
 add_library(HoroEngine::ProjectSettings ALIAS HoroProjectSettings)
 target_compile_features(HoroProjectSettings PUBLIC cxx_std_20)
 target_link_libraries(HoroProjectSettings PRIVATE nlohmann_json::nlohmann_json)
-target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets)
+target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets HoroEngine::AI)
 
 add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp
@@ -538,6 +653,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveSlotLifecycleRecovery.cpp
         runtime/save/SaveSlotLifecycleArchive.cpp
         runtime/save/SaveSlotLifecycleCatalog.cpp
+        runtime/save/SaveSlotLifecycleCloud.cpp
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
@@ -722,6 +838,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
+        runtime/ui/UiCaptions.cpp
+        runtime/ui/UiCaptionRenderer.cpp
+        runtime/ui/UiCaptionSettings.cpp
+        runtime/ui/UiVisualAccessibility.cpp
         runtime/ui/UiElementPresentation.cpp
         runtime/ui/UiElementAuthoringProjection.cpp
         runtime/ui/UiStyleAssetValidation.cpp
@@ -745,6 +865,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiDiagnosticDescriptors.cpp
         runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityReview.cpp
         runtime/ui/UiAccessibilityReading.cpp
         runtime/ui/UiAccessibilityInteraction.cpp
         runtime/ui/UiAccessibilityChanges.cpp
@@ -879,7 +1000,7 @@ target_link_libraries(HoroUiAnimationIntegrationInternal INTERFACE HoroEngine::R
 
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
-target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets
+target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::SceneIdentity HoroEngine::Foundation HoroEngine::Assets HoroEngine::CaptionTransport
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz HoroThirdParty::Unicode)
 target_include_directories(HoroRuntimeUi PRIVATE
         $<TARGET_PROPERTY:HoroRationalDurationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
@@ -948,6 +1069,7 @@ target_link_libraries(HoroUiTemplateHost PUBLIC HoroEngine::UiTemplateInstances 
 
 add_library(HoroGameplayApi STATIC
         gameplay/api/NativeDecisionNode.cpp
+        gameplay/api/NativePerceptionSense.cpp
         gameplay/api/PersistenceRegistration.cpp
         gameplay/api/GameEventRegistry.cpp
         gameplay/api/BehaviorTypes.cpp
@@ -984,7 +1106,8 @@ add_library(HoroGameplayApi STATIC
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayApi PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi HoroEngine::SaveApi HoroEngine::AI)
+target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi HoroEngine::SaveApi HoroEngine::AI
+        HoroEngine::VisualAccessibility)
 target_compile_definitions(HoroGameplayApi PRIVATE
         HORO_GAMEPLAY_SDK_FINGERPRINT="${HORO_GAMEPLAY_SDK_FINGERPRINT}"
 )
@@ -1010,6 +1133,8 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/RuntimeSceneCommandApplier.h
         runtime/scene/RuntimeSceneBaseline.cpp
         runtime/scene/RuntimeSceneBaselineCommands.cpp
+        runtime/scene/SceneInstances.cpp
+        runtime/scene/ActivatedSceneInstances.cpp
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneServicePublication.cpp
@@ -1032,11 +1157,20 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkModeComposition.cpp
         runtime/networking/NetworkModeTravel.cpp
         runtime/networking/NetworkWorldBinding.cpp
+        runtime/networking/NetworkPrefabLifecycle.cpp
+        runtime/networking/NetworkAuthoredScenePage.cpp
+        runtime/networking/NetworkInitialStateStream.cpp
         runtime/networking/NetworkWorldBindingController.cpp
         runtime/networking/NetworkWorldBindingPeer.cpp
+        runtime/networking/NetworkWorldBindingAuthored.cpp
+        runtime/networking/NetworkWorldBindingInitial.cpp
+        runtime/networking/NetworkWorldBindingStateUpdate.cpp
+        runtime/networking/NetworkWorldBindingPrefab.cpp
         runtime/networking/NetworkWorldBindingTravel.cpp
         runtime/networking/NetworkWorldOccurrenceIssuer.cpp
         runtime/networking/NetworkModeWorldState.cpp
+        runtime/networking/NetworkModeWorldAuthored.cpp
+        runtime/networking/NetworkModeWorldInitial.cpp
         runtime/networking/TransportBackendComposition.cpp
         runtime/networking/TransportTargetComposition.cpp
         runtime/networking/NetworkDiagnostics.cpp
@@ -1050,6 +1184,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/ReplicationCapturePreparation.cpp
         runtime/networking/ReplicationCaptureWriter.cpp
         runtime/networking/ReplicationStateCodec.cpp
+        runtime/networking/ReplicationInitialState.cpp
         runtime/networking/ReplicationSnapshotHistory.cpp
         runtime/networking/ReplicationStateEncode.cpp
         runtime/networking/ReplicationStateDecode.cpp
@@ -1063,7 +1198,8 @@ add_library(HoroNetworkRuntime STATIC
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
-target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime HoroEngine::Security)
+target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngine::RuntimeScene HoroEngine::Runtime HoroEngine::Security
+    HoroEngine::Assets)
 
 # Host composition sees only these two non-installed headers, never the source root.
 set(HORO_NETWORK_MODE_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/network_mode_host_headers")
@@ -1088,7 +1224,11 @@ add_library(HoroEngine::NetworkDebuggerApplication ALIAS HoroNetworkDebuggerAppl
 target_compile_features(HoroNetworkDebuggerApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkDebuggerApplication PUBLIC HoroEngine::NetworkApi)
 
-add_library(HoroGameplayNavigationIntegration STATIC gameplay/runtime/GameplayNavigationContext.cpp)
+add_library(HoroGameplayNavigationIntegration STATIC
+        gameplay/runtime/GameplayFormation.cpp
+        gameplay/runtime/GameplayFormationMovement.cpp
+        gameplay/runtime/GameplayFormationResolution.cpp
+        gameplay/runtime/GameplayNavigationContext.cpp)
 add_library(HoroEngine::GameplayNavigationIntegration ALIAS HoroGameplayNavigationIntegration)
 target_compile_features(HoroGameplayNavigationIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroGameplayNavigationIntegration PUBLIC HoroEngine::NavigationRuntime)
@@ -1131,9 +1271,11 @@ target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/i
 target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayLua STATIC
+    gameplay/lua/LuaPerceptionSense.cpp
     gameplay/lua/LuaDecisionNode.cpp
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaVfxBinding.cpp
+        gameplay/lua/LuaAnimationBinding.cpp
         gameplay/lua/LuaBehaviorSandbox.cpp
         gameplay/lua/LuaBehaviorSandbox.h
         gameplay/lua/LuaBehaviorMetadata.cpp
@@ -1171,6 +1313,7 @@ add_library(HoroGameplayBuild STATIC
         application/gameplay/GameplayBuildInputs.cpp
         application/gameplay/GameplayBuildInvocation.cpp
         application/gameplay/GameplayBuildService.cpp
+        application/gameplay/GameplayTestService.cpp
 )
 add_library(HoroEngine::GameplayBuild ALIAS HoroGameplayBuild)
 target_compile_features(HoroGameplayBuild PUBLIC cxx_std_20)
@@ -1246,9 +1389,9 @@ target_include_directories(HoroPhysicsReferenceValidationInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/scene/physics_validation>)
 
 add_library(HoroPhysicsModel STATIC
-        physics/SurfaceMaterial.cpp
-        physics/PhysicsErrors.cpp
-        physics/PhysicsFilterIdentity.cpp
+        physics/model/surfaces/SurfaceMaterial.cpp
+        physics/model/diagnostics/PhysicsErrors.cpp
+        physics/model/identity/PhysicsFilterIdentity.cpp
         runtime/scene/PhysicsSceneComponents.cpp
         runtime/scene/CharacterSceneComponents.cpp
 )
@@ -1281,6 +1424,8 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoder.cpp
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioStreamingService.cpp
+        audio/api/AudioStreamPcm.cpp
+        audio/api/AudioStreamRenderPort.cpp
         audio/api/AudioStreamPosition.cpp
         audio/api/AudioStreamState.h
         audio/api/AudioConcurrencyGroup.cpp
@@ -1323,6 +1468,14 @@ target_include_directories(HoroAudioBackendContract INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/include>")
 target_link_libraries(HoroAudioBackendContract INTERFACE HoroEngine::AudioApi)
 
+add_library(HoroAudioCaptureBuffer STATIC
+        audio/capture/AudioCaptureBuffer.cpp
+        audio/capture/AudioCaptureMonitor.cpp)
+target_compile_features(HoroAudioCaptureBuffer PUBLIC cxx_std_20)
+target_include_directories(HoroAudioCaptureBuffer PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/capture/include>")
+target_link_libraries(HoroAudioCaptureBuffer PUBLIC HoroEngine::AudioApi PRIVATE HoroEngine::Security)
+
 # Build-tree-only hook boundary shared by backend callback scopes and Horo-owned audio operations.
 add_library(HoroAudioSafetyHooks STATIC
         audio/safety/AudioCallbackSafetyHooks.cpp
@@ -1337,6 +1490,27 @@ add_library(HoroAudioWatchdog STATIC
 target_compile_features(HoroAudioWatchdog PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioWatchdog PUBLIC HoroAudioBackendContract HoroAudioSafetyHooks)
 
+if(HORO_BUILD_AUDIO_PIPEWIRE)
+    add_library(HoroAudioNativeRuntime STATIC
+            audio/backend/native/NativeAudioBackend.cpp
+            audio/backend/native/NativeAudioNegotiation.cpp)
+    target_compile_features(HoroAudioNativeRuntime PUBLIC cxx_std_20)
+    target_include_directories(HoroAudioNativeRuntime PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/native/include>")
+    target_link_libraries(HoroAudioNativeRuntime PUBLIC HoroAudioBackendContract PRIVATE HoroAudioWatchdog)
+
+    find_package(Threads REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(HORO_PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3>=1.0)
+    add_library(HoroAudioPipeWire STATIC audio/backend/pipewire/PipeWireAudioBackend.cpp)
+    target_compile_features(HoroAudioPipeWire PUBLIC cxx_std_20)
+    target_compile_definitions(HoroAudioPipeWire PRIVATE _GNU_SOURCE)
+    target_include_directories(HoroAudioPipeWire PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/pipewire/include>")
+    target_link_libraries(HoroAudioPipeWire PUBLIC HoroAudioNativeRuntime PRIVATE
+            PkgConfig::HORO_PIPEWIRE nlohmann_json::nlohmann_json Threads::Threads)
+endif()
+
 add_library(HoroAudioNull STATIC
         audio/backend/null/NullAudioBackend.cpp
 )
@@ -1349,14 +1523,27 @@ target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::
 if(HORO_BUILD_AUDIO_SDL3)
     add_library(HoroAudioSdl3 STATIC
             audio/backend/sdl3/Sdl3AudioBackend.cpp
+            audio/backend/sdl3/Sdl3CaptureStream.cpp
     )
     add_library(HoroEngine::AudioSdl3 ALIAS HoroAudioSdl3)
     target_compile_features(HoroAudioSdl3 PUBLIC cxx_std_20)
     target_include_directories(HoroAudioSdl3 PUBLIC
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/sdl3/include>")
     target_link_libraries(HoroAudioSdl3
-            PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands
-            PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
+            PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands HoroAudioCaptureBuffer
+            PRIVATE HoroAudioWatchdog HoroEngine::Security ${HORO_SDL3_TARGET})
+    if(WIN32)
+        target_sources(HoroAudioSdl3 PRIVATE audio/backend/sdl3/Sdl3WindowsCaptureDefaults.cpp)
+        target_link_libraries(HoroAudioSdl3 PRIVATE ole32)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        set(_HORO_SDL3_MAC_CAPTURE_SOURCE audio/backend/sdl3/Sdl3MacCapturePermission.mm)
+        set_source_files_properties(${_HORO_SDL3_MAC_CAPTURE_SOURCE} PROPERTIES
+                LANGUAGE CXX COMPILE_OPTIONS "-x;objective-c++")
+        target_sources(HoroAudioSdl3 PRIVATE ${_HORO_SDL3_MAC_CAPTURE_SOURCE})
+        target_compile_definitions(HoroAudioSdl3 PRIVATE HORO_SDL3_MAC_CAPTURE_PERMISSION=1)
+        target_link_libraries(HoroAudioSdl3 PRIVATE "-framework AVFoundation" "-framework Security")
+    endif()
 endif()
 
 add_library(HoroAudioDsp STATIC
@@ -1426,7 +1613,26 @@ add_library(HoroAudioVoiceRender STATIC
         audio/playback/AudioVoiceRenderState.h)
 add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
 target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
+target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer PRIVATE HoroEngine::Security)
+
+add_library(HoroAudioOffline STATIC
+        audio/backend/offline/OfflineAudioRender.cpp
+        audio/backend/offline/OfflineMixerSession.cpp)
+target_compile_features(HoroAudioOffline PUBLIC cxx_std_20)
+target_include_directories(HoroAudioOffline PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/offline/include>")
+target_link_libraries(HoroAudioOffline PUBLIC HoroAudioBackendContract HoroEngine::AudioVoiceRender)
+
+add_library(HoroApplicationAudioExport STATIC
+        application/audio_export/OfflineAudioExport.cpp
+        application/audio_export/WaveEncoding.cpp
+        application/audio_export/AudioRecording.cpp)
+target_compile_features(HoroApplicationAudioExport PUBLIC cxx_std_20)
+target_include_directories(HoroApplicationAudioExport PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/application/audio_export/include>")
+target_link_libraries(HoroApplicationAudioExport
+        PUBLIC HoroAudioOffline HoroAudioCaptureBuffer HoroEngine::Foundation HoroEngine::ProjectAssetImportApplication
+        PRIVATE HoroEngine::AudioImport HoroEngine::Security)
 
 add_library(HoroAudioFrontend STATIC
         audio/frontend/AudioFrontend.cpp
@@ -1455,83 +1661,84 @@ target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
 
 add_library(HoroPhysics STATIC
-        physics/PhysicsWorldBindingValidation.h
-        physics/CharacterEventProjectionInternal.h
-        physics/CharacterEventProjection.cpp
-        physics/CharacterSurfaceInternal.h
-        physics/CharacterWorldEvents.cpp
-        physics/CharacterClearanceQuery.cpp
-        physics/CharacterControllerContracts.cpp
-        physics/CharacterQueryContext.cpp
-        physics/CharacterDebugSnapshot.cpp
-        physics/CharacterDebugStorageInternal.h
-        physics/CharacterPhysicsQueryAdapter.cpp
-        physics/CharacterPlatformAttachmentValidation.cpp
-        physics/CharacterPlatformAttachmentValidation.h
-        physics/CharacterDiagnostics.cpp
-        physics/CharacterErrors.cpp
-        physics/CharacterMetrics.cpp
-        physics/CharacterControllerRegistry.h
-        physics/CharacterFastPathStorage.h
-        physics/CharacterCapability.cpp
-        physics/CharacterCapabilityInternal.h
-        physics/CharacterWorld.cpp
-        physics/CharacterWorldCommandPipeline.cpp
-        physics/CharacterWorldCommandInternal.h
-        physics/CharacterWorldMovementInternal.h
-        physics/CharacterWorldSweepInternal.h
-        physics/CharacterWorldStepInternal.h
-        physics/CharacterWorldPlatformInternal.h
-        physics/CharacterWorldCarryInternal.h
-        physics/CharacterSweepPlanesInternal.h
-        physics/CharacterWorldInternal.h
-        physics/CharacterWorldPlacementInternal.h
-        physics/CharacterWorldShapeInternal.h
-        physics/CharacterWorldSettings.cpp
-        physics/GenerationalSlotStorage.h
-        physics/PhysicsBodyDescriptor.cpp
-        physics/PhysicsBodyDynamics.cpp
-        physics/PhysicsCapabilities.cpp
-        physics/PhysicsCollisionSchema.cpp
-        physics/PhysicsCollisionCooker.cpp
-        physics/PhysicsCollisionArtifact.cpp
-        physics/PhysicsConstraintDescriptor.cpp
-        physics/PhysicsCompoundArtifact.cpp
-        physics/PhysicsCompoundCook.cpp
-        physics/PhysicsConvexHullCook.cpp
-        physics/PhysicsConvexHullArtifact.cpp
-        physics/PhysicsTriangleMeshCook.cpp
-        physics/PhysicsTriangleMeshArtifact.cpp
-        physics/PhysicsHeightFieldCook.cpp
-        physics/PhysicsHeightFieldArtifact.cpp
-        physics/PhysicsCookedShapeCache.cpp
-        physics/PhysicsCookedShapeDescriptor.cpp
-        physics/PhysicsDiagnostics.cpp
-        physics/PhysicsDebugSnapshot.cpp
-        physics/PhysicsDeterminismPolicy.cpp
-        physics/PhysicsEventProjection.cpp
-        physics/PhysicsEventProjection.h
-        physics/PhysicsHandleRegistry.h
-        physics/PhysicsIdentity.cpp
-        physics/PhysicsMetrics.cpp
-        physics/PhysicsMaterialAsset.cpp
-        physics/PhysicsMassProperties.cpp
-        physics/PhysicsPose.cpp
-        physics/PhysicsQuery.cpp
-        physics/PhysicsSaturatingAdd.h
-        physics/PhysicsShapeDescriptor.cpp
-        physics/PhysicsStepPolicy.cpp
-        physics/PhysicsTransformAuthority.cpp
-        physics/PhysicsTransformContracts.cpp
+        physics/world/settings/PhysicsWorldBindingValidation.h
+        physics/character/events/CharacterEventProjectionInternal.h
+        physics/character/events/CharacterEventProjection.cpp
+        physics/character/query/CharacterSurfaceInternal.h
+        physics/character/events/CharacterWorldEvents.cpp
+        physics/character/query/CharacterClearanceQuery.cpp
+        physics/character/controller/CharacterControllerContracts.cpp
+        physics/character/query/CharacterQueryContext.cpp
+        physics/character/diagnostics/CharacterDebugSnapshot.cpp
+        physics/character/diagnostics/CharacterDebugStorageInternal.h
+        physics/character/query/CharacterPhysicsQueryAdapter.cpp
+        physics/character/platform/CharacterPlatformAttachmentValidation.cpp
+        physics/character/platform/CharacterPlatformAttachmentValidation.h
+        physics/character/diagnostics/CharacterDiagnostics.cpp
+        physics/character/controller/CharacterErrors.cpp
+        physics/character/diagnostics/CharacterMetrics.cpp
+        physics/character/controller/CharacterControllerRegistry.h
+        physics/character/controller/CharacterFastPathStorage.h
+        physics/character/controller/CharacterCapability.cpp
+        physics/character/controller/CharacterCapabilityInternal.h
+        physics/character/runtime/CharacterWorld.cpp
+        physics/character/runtime/CharacterWorldCommandPipeline.cpp
+        physics/character/runtime/CharacterWorldCommandInternal.h
+        physics/character/movement/CharacterWorldMovementInternal.h
+        physics/character/movement/CharacterWorldSweepInternal.h
+        physics/character/movement/CharacterWorldStepInternal.h
+        physics/character/platform/CharacterWorldPlatformInternal.h
+        physics/character/platform/CharacterWorldCarryInternal.h
+        physics/character/query/CharacterSweepPlanesInternal.h
+        physics/character/runtime/CharacterWorldInternal.h
+        physics/character/movement/CharacterWorldPlacementInternal.h
+        physics/character/movement/CharacterWorldShapeInternal.h
+        physics/character/controller/CharacterWorldSettings.cpp
+        physics/model/identity/GenerationalSlotStorage.h
+        physics/model/body/PhysicsBodyDescriptor.cpp
+        physics/model/body/PhysicsBodyDynamics.cpp
+        physics/model/identity/PhysicsCapabilities.cpp
+        physics/collision/PhysicsCollisionSchema.cpp
+        physics/collision/PhysicsCollisionCooker.cpp
+        physics/collision/PhysicsCollisionArtifact.cpp
+        physics/model/body/PhysicsConstraintDescriptor.cpp
+        physics/collision/polyhedral/PhysicsCompoundArtifact.cpp
+        physics/collision/polyhedral/PhysicsCompoundCook.cpp
+        physics/collision/polyhedral/PhysicsConvexHullCook.cpp
+        physics/collision/polyhedral/PhysicsConvexHullArtifact.cpp
+        physics/collision/surfaces/PhysicsTriangleMeshCook.cpp
+        physics/collision/surfaces/PhysicsTriangleMeshArtifact.cpp
+        physics/collision/surfaces/PhysicsHeightFieldCook.cpp
+        physics/collision/surfaces/PhysicsHeightFieldArtifact.cpp
+        physics/collision/PhysicsCookedShapeCache.cpp
+        physics/collision/PhysicsCookedShapeDescriptor.cpp
+        physics/scene/publication/PhysicsStaticTileAdmission.cpp
+        physics/model/diagnostics/PhysicsDiagnostics.cpp
+        physics/model/diagnostics/PhysicsDebugSnapshot.cpp
+        physics/model/identity/PhysicsDeterminismPolicy.cpp
+        physics/events/PhysicsEventProjection.cpp
+        physics/events/PhysicsEventProjection.h
+        physics/model/identity/PhysicsHandleRegistry.h
+        physics/model/identity/PhysicsIdentity.cpp
+        physics/model/diagnostics/PhysicsMetrics.cpp
+        physics/model/surfaces/PhysicsMaterialAsset.cpp
+        physics/model/body/PhysicsMassProperties.cpp
+        physics/model/body/PhysicsPose.cpp
+        physics/world/query/PhysicsQuery.cpp
+        physics/model/diagnostics/PhysicsSaturatingAdd.h
+        physics/model/body/PhysicsShapeDescriptor.cpp
+        physics/world/settings/PhysicsStepPolicy.cpp
+        physics/world/settings/PhysicsTransformAuthority.cpp
+        physics/world/settings/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
-        physics/PhysicsWorldQuery.cpp
-        physics/PhysicsQueryEventCapability.cpp
+        physics/world/query/PhysicsWorldQuery.cpp
+        physics/world/query/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
-        physics/PhysicsWorldScene.cpp
-        physics/PhysicsWorldTickHelpers.h
-        physics/PhysicsWorldBudgets.cpp
-        physics/PhysicsWorldDescriptor.cpp
-        physics/PhysicsWorldSettings.cpp
+        physics/world/lifecycle/PhysicsWorldScene.cpp
+        physics/world/lifecycle/PhysicsWorldTickHelpers.h
+        physics/world/settings/PhysicsWorldBudgets.cpp
+        physics/world/settings/PhysicsWorldDescriptor.cpp
+        physics/world/settings/PhysicsWorldSettings.cpp
 )
 add_library(HoroEngine::Physics ALIAS HoroPhysics)
 target_compile_features(HoroPhysics PUBLIC cxx_std_20)
@@ -1553,46 +1760,46 @@ target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayCharact
 target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayCharacterIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
-        physics/CanonicalPhysicsRuntime.cpp
-        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
-        physics/CanonicalPhysicsRuntimeBodyCreation.cpp
-        physics/CanonicalPhysicsRuntimeSceneBatch.cpp
-        physics/CanonicalPhysicsRuntimeDebug.cpp
-        physics/CanonicalPhysicsRuntimeContainment.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeEvents.cpp
-        physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
-        physics/CanonicalPhysicsRuntimeQueryResident.cpp
-        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
-        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
-        physics/CanonicalPhysicsRuntimeReadback.cpp
-        physics/CanonicalPhysicsRuntimeScene.cpp
-        physics/CanonicalSolver.cpp
-        physics/CanonicalWorldSettings.cpp)
+        physics/canonical/runtime/CanonicalPhysicsRuntime.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeContinuousCollision.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeBodyCreation.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeSceneBatch.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDebug.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeContainment.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeEvents.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQuery.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryAuthority.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeReadback.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeScene.cpp
+        physics/canonical/solver/CanonicalSolver.cpp
+        physics/canonical/solver/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
-        physics/CanonicalPhysicsRuntime.cpp
-        physics/CanonicalPhysicsRuntimeContinuousCollision.cpp
-        physics/CanonicalPhysicsRuntimeBodyCreation.cpp
-        physics/CanonicalPhysicsRuntimeSceneBatch.cpp
-        physics/CanonicalPhysicsRuntimeDebug.cpp
-        physics/CanonicalPhysicsRuntimeContainment.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeEvents.cpp
-        physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQueryFrame.cpp
-        physics/CanonicalPhysicsRuntimeQueryResident.cpp
-        physics/CanonicalPhysicsRuntimeQueryAuthority.cpp
-        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
-        physics/CanonicalPhysicsRuntimeReadback.cpp
-        physics/CanonicalPhysicsRuntimeScene.cpp
-        physics/CanonicalSolver.cpp
-        physics/CanonicalWorldSettings.cpp
+        physics/canonical/runtime/CanonicalPhysicsRuntime.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeContinuousCollision.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeBodyCreation.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeSceneBatch.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDebug.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeContainment.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeEvents.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQuery.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryFrame.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryResident.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryAuthority.cpp
+        physics/canonical/query/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/canonical/diagnostics/CanonicalPhysicsRuntimeReadback.cpp
+        physics/canonical/scene/CanonicalPhysicsRuntimeScene.cpp
+        physics/canonical/solver/CanonicalSolver.cpp
+        physics/canonical/solver/CanonicalWorldSettings.cpp
         PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/GR-;/EHs-c->;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-rtti;-fno-exceptions>")
 else()
-    target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
+    target_sources(HoroPhysics PRIVATE physics/canonical/runtime/CanonicalPhysicsRuntimeOmitted.cpp physics/canonical/solver/CanonicalSolverOmitted.cpp)
 endif()
 
 # Portable Project catalogue authority; solver activation remains outside this target.
@@ -1629,14 +1836,14 @@ target_include_directories(HoroCharacterScenePlacementInternal INTERFACE "$<BUIL
 target_link_libraries(HoroCharacterScenePlacementInternal INTERFACE HoroEngine::Physics)
 
 add_library(HoroPhysicsSceneIntegration STATIC
-        physics/PhysicsCellAttachments.cpp
+        physics/scene/publication/PhysicsCellAttachments.cpp
         physics/PhysicsSceneActivation.cpp
-        physics/PhysicsSceneStructural.cpp
-        physics/PhysicsSceneActivationPlan.cpp
-        physics/PhysicsSceneSurfaceProjection.cpp
-        physics/CharacterSceneActivationPlan.cpp
-        physics/PhysicsSceneActivationCapabilities.cpp
-        physics/PhysicsSceneActivationLifecycle.cpp)
+        physics/scene/publication/PhysicsSceneStructural.cpp
+        physics/scene/activation/PhysicsSceneActivationPlan.cpp
+        physics/scene/publication/PhysicsSceneSurfaceProjection.cpp
+        physics/scene/activation/CharacterSceneActivationPlan.cpp
+        physics/scene/activation/PhysicsSceneActivationCapabilities.cpp
+        physics/scene/activation/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload
@@ -1658,6 +1865,7 @@ target_link_libraries(HoroCharacterInput PUBLIC HoroEngine::Input HoroEngine::Ph
 
 add_library(HoroAI STATIC
         runtime/ai/compile/DecisionActionAdapter.cpp
+        runtime/ai/compile/DecisionBlackboardRetarget.cpp
         runtime/ai/compile/DecisionCallAdapter.cpp
         runtime/ai/compile/DecisionClosureLayout.cpp
         runtime/ai/compile/DecisionCompilationBuilder.cpp
@@ -1665,19 +1873,28 @@ add_library(HoroAI STATIC
         runtime/ai/compile/DecisionEnvironmentIdentity.cpp
         runtime/ai/compile/DecisionGraphCompiler.cpp
         runtime/ai/compile/DecisionGraphInstance.cpp
+    runtime/ai/compile/DecisionGraphReservation.cpp
         runtime/ai/compile/DecisionGraphLowering.cpp
         runtime/ai/compile/DecisionMemoryMeasure.cpp
         runtime/ai/compile/DecisionProviderAdmission.cpp
         runtime/ai/compile/DecisionSourceCodec.cpp
         runtime/ai/compile/DecisionSourceMachine.cpp
+        runtime/ai/compile/DecisionSourceUtility.cpp
+        runtime/ai/compile/DecisionSourceProvider.cpp
+        runtime/ai/compile/DecisionUtilityLowering.cpp
+        runtime/ai/compile/UtilityDecision.cpp
+        runtime/ai/compile/DecisionUtilityRuntime.cpp
         runtime/ai/compile/DecisionSourceReachability.cpp
         runtime/ai/compile/DecisionSourceTree.cpp
         runtime/ai/compile/DecisionSourceValues.cpp
+        runtime/ai/compile/AICanonicalStateRecord.cpp
+        runtime/ai/compile/BlackboardSchemaSourceCodec.cpp
         runtime/ai/api/DecisionNodeRegistration.cpp
         runtime/ai/api/DecisionNodeExecutor.cpp
         runtime/ai/api/AICapabilityDescriptors.cpp
         runtime/ai/api/AICanonicalErrors.cpp
         runtime/ai/api/AICanonicalState.cpp
+        runtime/ai/api/AIReplayEvidence.cpp
         runtime/ai/api/BlackboardCanonicalState.cpp
         runtime/ai/api/AIErrors.cpp
         runtime/ai/api/AISceneComponents.cpp
@@ -1687,6 +1904,10 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskContinuation.cpp
         runtime/ai/api/AITaskJobService.cpp
         runtime/ai/api/AITaskScheduler.cpp
+        runtime/ai/api/AiReducedPopulation.cpp
+        runtime/ai/api/SymbolicPlanning.cpp
+        runtime/ai/api/LocalLearnedPolicy.cpp
+        runtime/ai/api/NpcDialogue.cpp
         runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BehaviorTreeExecutionPlan.cpp
         runtime/ai/api/BehaviorTreeInstance.cpp
@@ -1699,10 +1920,17 @@ add_library(HoroAI STATIC
         runtime/ai/api/StateMachinePlan.cpp
         runtime/ai/api/StateMachineInstance.cpp
         runtime/ai/api/EnvironmentQueryAsset.cpp
+        runtime/ai/compile/EnvironmentQuerySourceCodec.cpp
         runtime/ai/api/EnvironmentQueryErrors.cpp
         runtime/ai/api/EnvironmentQueryRegistry.cpp
+    runtime/ai/api/EnvironmentQueryScoring.cpp
+    runtime/ai/api/UtilitySelector.cpp
         runtime/ai/api/NullAIRuntime.cpp
+        runtime/ai/api/AiDecisionTaskReservation.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
+        runtime/ai/api/PerceptionSenseErrors.cpp
+        runtime/ai/registration/PerceptionSenseGeneration.cpp
+        runtime/ai/registration/PerceptionSenseInstance.cpp
         runtime/ai/api/PerceptionEventRouting.cpp
         runtime/ai/api/PerceptionErrors.cpp
         runtime/ai/api/PerceptionFiltering.cpp
@@ -1715,6 +1943,8 @@ target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroDecisionCookHost STATIC
+        application/ai/BlackboardUsageReview.cpp
+        application/ai/BlackboardUsageSceneSources.cpp
         application/ai/DecisionAssetCookHost.cpp
         application/ai/DecisionCookCapture.cpp
         application/ai/DecisionCookCatalog.cpp
@@ -1723,36 +1953,65 @@ add_library(HoroDecisionCookHost STATIC
 )
 add_library(HoroEngine::DecisionCookHost ALIAS HoroDecisionCookHost)
 target_compile_features(HoroDecisionCookHost PUBLIC cxx_std_20)
-target_link_libraries(HoroDecisionCookHost PUBLIC HoroEngine::AI HoroEngine::Assets)
+target_link_libraries(HoroDecisionCookHost
+        PUBLIC HoroEngine::AI HoroEngine::Assets HoroEngine::SceneSourceModel
+        PRIVATE HoroEngine::ProjectMutationGuard HoroEngine::SceneSource HoroEngine::SceneRuntimeConversion HoroEngine::PrefabAuthoring
+                HoroEngine::Application HoroEngine::PrefabProjectSettings
+)
 
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AIRuntimeCapability.cpp
         runtime/ai/integration/AISceneActivation.cpp
         runtime/ai/integration/AISceneStructural.cpp
         runtime/ai/integration/AISceneRestore.cpp
+        runtime/ai/integration/AISceneDecisionReservation.cpp
+        runtime/ai/integration/AISceneInspection.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
+        runtime/ai/integration/PerceptionSenseScene.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp
+    runtime/ai/integration/EnvironmentQueryGenerators.cpp
+    runtime/ai/integration/EnvironmentQueryExecution.cpp
+    runtime/ai/integration/DecisionQueryTask.cpp
+    runtime/ai/integration/EnvironmentQueryCache.cpp
+    runtime/ai/integration/EnvironmentQueryOwnerSource.cpp
+    runtime/ai/integration/EnvironmentQueryPerception.cpp
         runtime/ai/integration/PerceptionSpatialBroadphase.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
 
+add_library(HoroAISaveIntegration STATIC runtime/ai/save/AISaveCapture.cpp)
+add_library(HoroEngine::AISaveIntegration ALIAS HoroAISaveIntegration)
+target_compile_features(HoroAISaveIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISaveIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Runtime)
+
 # Explicit gameplay composition above the AI scene owner; core AI never depends on Gameplay or Extensions.
-add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp)
+add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp gameplay/TacticalCover.cpp)
 add_library(HoroEngine::GameplayAiIntegration ALIAS HoroGameplayAiIntegration)
 target_compile_features(HoroGameplayAiIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration)
+target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration HoroEngine::GameplayAnimationApi)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAiIntegration)
 
-add_library(HoroAISightIntegration STATIC runtime/ai/integration/PerceptionSight.cpp)
+add_library(HoroAISightIntegration STATIC
+    runtime/ai/integration/PerceptionSight.cpp
+    runtime/ai/integration/EnvironmentQueryPhysics.cpp)
 add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
 target_compile_features(HoroAISightIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Physics)
 
+# Explicit tactical Navigation composition keeps the AI core independent of Navigation owners.
+add_library(HoroAINavigationIntegration STATIC
+    runtime/ai/integration/EnvironmentQueryNavigation.cpp
+    runtime/ai/integration/AINavigationIntentDispatch.cpp
+    runtime/ai/integration/AINavigationMovementTask.cpp)
+add_library(HoroEngine::AINavigationIntegration ALIAS HoroAINavigationIntegration)
+target_compile_features(HoroAINavigationIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAINavigationIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NavigationRuntime)
+
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)
 target_compile_features(HoroGameplayPerceptionIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime)
+target_link_libraries(HoroGameplayPerceptionIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::NetworkRuntime HoroEngine::Runtime)
 
 add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationActionValidation.cpp
@@ -1840,7 +2099,8 @@ add_library(HoroAnimationRuntime STATIC
         runtime/animation/runtime/AnimationParameterCurve.cpp
         runtime/animation/runtime/AnimationGraphInstance.cpp
         runtime/animation/runtime/AnimationPoseComposition.cpp
-        runtime/animation/runtime/AnimationGraphExecution.cpp)
+        runtime/animation/runtime/AnimationGraphExecution.cpp
+        runtime/animation/runtime/AnimationGraphRootMotion.cpp)
 add_library(HoroEngine::AnimationRuntime ALIAS HoroAnimationRuntime)
 target_compile_features(HoroAnimationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationRuntime PUBLIC HoroEngine::AnimationApi)
@@ -1923,6 +2183,7 @@ add_library(HoroAnimationSceneIntegration STATIC
         runtime/animation/scene/SceneAnimationState.cpp
         runtime/animation/scene/SceneAnimationParticipants.cpp
         runtime/animation/scene/SceneAnimationFixed.cpp
+        runtime/animation/scene/SceneAnimationRootMotion.cpp
         runtime/animation/scene/SceneAnimationRuntime.cpp)
 add_library(HoroEngine::AnimationSceneIntegration ALIAS HoroAnimationSceneIntegration)
 target_compile_features(HoroAnimationSceneIntegration PUBLIC cxx_std_20)
@@ -1931,6 +2192,17 @@ target_link_libraries(HoroAnimationSceneIntegration
         PRIVATE HoroEngine::AnimationCookedAssets HoroAnimationGraphCommitInternal
                 HoroAnimationClipProgramInternal HoroAnimationClipPayloadBindingInternal)
 
+add_library(HoroGameplayAnimationApi INTERFACE)
+add_library(HoroEngine::GameplayAnimationApi ALIAS HoroGameplayAnimationApi)
+target_link_libraries(HoroGameplayAnimationApi INTERFACE HoroEngine::GameplayApi HoroEngine::AnimationApi)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayAnimationApi)
+target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAnimationApi)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayAnimationApi)
+
+add_library(HoroGameplayAnimationScene STATIC gameplay/GameplayAnimationScene.cpp)
+add_library(HoroEngine::GameplayAnimationScene ALIAS HoroGameplayAnimationScene)
+target_compile_features(HoroGameplayAnimationScene PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayAnimationScene PUBLIC HoroEngine::GameplayAnimationApi HoroEngine::AnimationSceneIntegration)
 
 add_library(HoroPCG STATIC
         runtime/pcg/api/PCGNodeCatalog.cpp
@@ -2159,6 +2431,7 @@ add_library(HoroCinematicRuntime STATIC
         runtime/cinematic/player/EventSession.cpp
         runtime/cinematic/player/PropertyTrackRuntime.cpp
         runtime/cinematic/player/SequenceEvaluation.cpp
+        runtime/cinematic/player/SequenceFrameCameraValidation.h
         runtime/cinematic/player/SequenceFrameBlend.cpp
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
         runtime/cinematic/player/SequencePlayer.cpp
@@ -2197,7 +2470,6 @@ target_link_libraries(HoroCinematicCameraRuntime PUBLIC HoroEngine::CinematicRun
 
 add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavMeshData.cpp
-        runtime/navigation/api/NavigationTileDescriptor.cpp
         runtime/navigation/api/NavigationAreas.cpp
         runtime/navigation/api/NavigationAgentProfiles.cpp
         runtime/navigation/api/NavigationBakeFingerprint.cpp
@@ -2233,6 +2505,10 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationBakeJobs.cpp
+        runtime/navigation/runtime/NavigationCrowdBatch.cpp
+        runtime/navigation/runtime/NavigationCrowdDiagnostics.cpp
+        runtime/navigation/runtime/NavigationCrowdOverload.cpp
+        runtime/navigation/runtime/NavigationCrowdRelevance.cpp
         runtime/navigation/runtime/NavigationCrowdSnapshot.cpp
         runtime/navigation/runtime/NavigationCrowdSnapshotGather.cpp
         runtime/navigation/runtime/NavigationCrowdSnapshotPartition.cpp
@@ -2241,6 +2517,8 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
         runtime/navigation/runtime/NavigationObstacleOverlay.cpp
         runtime/navigation/runtime/NavigationAgentRegistry.cpp
+        runtime/navigation/runtime/NavigationTraversalReservations.cpp
+        runtime/navigation/runtime/NavigationTraversalCatalog.cpp
         runtime/navigation/runtime/NavigationMovement.cpp
         runtime/navigation/runtime/NavigationMovementUpdate.cpp
         runtime/navigation/runtime/NavigationVelocityPipeline.cpp
@@ -2248,6 +2526,8 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationCoordinator.cpp
         runtime/navigation/runtime/NavigationCoordinatorState.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
+        runtime/navigation/runtime/NavigationRuntimeRebuildJobs.cpp
+        runtime/navigation/runtime/NavigationRuntimeTileRebuild.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
 add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)
@@ -2317,6 +2597,10 @@ add_library(HoroXRApi STATIC
         runtime/xr/api/XRLoaderPreflight.cpp
         runtime/xr/api/XRSpacePose.cpp
         runtime/xr/api/XRHandTracking.cpp
+        runtime/xr/api/XRInteraction.cpp
+        runtime/xr/api/XRLightProjection.cpp
+        runtime/xr/api/XRPlaneTracking.cpp
+        runtime/xr/api/XRSpatialHitTest.cpp
         runtime/xr/api/XRTrackingSnapshot.cpp
         runtime/xr/api/XRViewRenderPlan.cpp
         runtime/xr/api/XRMultiviewScene.cpp
@@ -2324,6 +2608,13 @@ add_library(HoroXRApi STATIC
 add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
+
+add_library(HoroNavigationCellContent STATIC
+        runtime/navigation/integration/NavigationCellTileSelection.cpp
+)
+add_library(HoroEngine::NavigationCellContent ALIAS HoroNavigationCellContent)
+target_compile_features(HoroNavigationCellContent PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCellContent PUBLIC HoroEngine::NavigationApi HoroEngine::Assets)
 
 add_library(HoroNavigationAssetSceneIntegration STATIC
         runtime/navigation/integration/NavMeshAssetLoading.cpp
@@ -2349,14 +2640,21 @@ add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRFakeRuntime.cpp
         runtime/xr/runtime/XRFakeRuntimeHostComposition.cpp
         runtime/xr/runtime/XRFrameLifecycle.cpp
+        runtime/xr/runtime/XRReprojection.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
         runtime/xr/runtime/XRSessionLifecycle.cpp
+        runtime/xr/runtime/XRSpatialAnchors.cpp
         runtime/xr/runtime/XRSessionHostControl.cpp
         runtime/xr/runtime/XRTrackingPublication.cpp
 )
 add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
 target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
+
+add_library(HoroXRAnchorSaveIntegration STATIC runtime/xr/runtime/XRAnchorPersistence.cpp)
+add_library(HoroEngine::XRAnchorSaveIntegration ALIAS HoroXRAnchorSaveIntegration)
+target_compile_features(HoroXRAnchorSaveIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroXRAnchorSaveIntegration PUBLIC HoroEngine::XRRuntime HoroEngine::Runtime)
 
 # Backend-neutral runtime publication is available only to explicit, non-installed host composition.
 set(_horo_xr_runtime_host_headers "${CMAKE_CURRENT_BINARY_DIR}/xr_runtime_host_headers")
@@ -2377,6 +2675,14 @@ add_library(HoroXRInputBindings STATIC runtime/xr/input/XRActionBindings.cpp run
 add_library(HoroEngine::XRInputBindings ALIAS HoroXRInputBindings)
 target_compile_features(HoroXRInputBindings PUBLIC cxx_std_20)
 target_link_libraries(HoroXRInputBindings PUBLIC HoroEngine::XRApi HoroEngine::Input)
+
+add_library(HoroXRCharacterLocomotion STATIC
+    runtime/xr/locomotion/XRCharacterLocomotion.cpp
+    runtime/xr/locomotion/XRLocomotionPolicy.cpp
+)
+add_library(HoroEngine::XRCharacterLocomotion ALIAS HoroXRCharacterLocomotion)
+target_compile_features(HoroXRCharacterLocomotion PUBLIC cxx_std_20)
+target_link_libraries(HoroXRCharacterLocomotion PUBLIC HoroEngine::XRApi HoroEngine::Input HoroEngine::Physics HoroEngine::Runtime)
 
 # Headset-free development is explicit composition above canonical XR and Input owners.
 add_library(HoroXRSimulator STATIC
@@ -2412,20 +2718,46 @@ if(HORO_BUILD_XR_OPENXR)
         HoroEngine::XRRuntime HoroEngine::XRInputBindings HoroEngine::Platform HoroOpenXRHeaders)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
+    if(HORO_BUILD_XR_META_QUEST)
+        add_library(HoroXRMetaQuestInternal OBJECT runtime/xr/openxr/modules/meta_quest/MetaQuestPassthrough.cpp)
+        target_link_libraries(HoroXRMetaQuestInternal PRIVATE HoroXROpenXRHostInterface)
+    endif()
+
     add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRNativePreparation.cpp
         runtime/xr/openxr/OpenXRNativeRetirement.cpp
         runtime/xr/openxr/OpenXRNativeCensus.cpp
+        runtime/xr/openxr/OpenXRLightEstimation.cpp
+        runtime/xr/openxr/OpenXRSpatialAnchors.cpp
+        runtime/xr/openxr/OpenXRSpatialAnchorStore.cpp
+        runtime/xr/openxr/OpenXRPlaneSnapshot.cpp
+        runtime/xr/openxr/OpenXRPlaneCapture.cpp
+        runtime/xr/openxr/OpenXRHandTracking.cpp
         runtime/xr/openxr/OpenXRActionBindings.cpp
         runtime/xr/openxr/OpenXRActionSampling.cpp
         runtime/xr/openxr/OpenXRActionPreparation.cpp
+        runtime/xr/openxr/OpenXRHaptics.cpp
         runtime/xr/openxr/OpenXRTrackingActions.cpp
         runtime/xr/openxr/OpenXRTrackingSpaces.cpp
         runtime/xr/openxr/OpenXRPoseSampling.cpp
         runtime/xr/openxr/OpenXRSwapchain.cpp runtime/xr/openxr/OpenXRFrameCompositor.cpp
+        runtime/xr/openxr/OpenXRFrameTelemetry.cpp
         runtime/xr/openxr/OpenXRSessionEvents.cpp)
+    if(ANDROID)
+        target_sources(HoroXROpenXR PRIVATE runtime/xr/openxr/OpenXRAndroidDiscovery.cpp)
+    endif()
+    if(TARGET HoroXRMetaQuestInternal)
+        target_link_libraries(HoroXROpenXR PRIVATE HoroXRMetaQuestInternal)
+    else()
+        target_sources(HoroXROpenXR PRIVATE runtime/xr/openxr/OpenXRPassthroughUnavailable.cpp)
+    endif()
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
+
+    add_library(HoroXROpenXRAnchorSaveHost STATIC runtime/xr/openxr/OpenXRProtectedAnchorStore.cpp)
+    target_link_libraries(HoroXROpenXRAnchorSaveHost PUBLIC HoroXROpenXRHostInterface HoroEngine::XRAnchorSaveIntegration
+        PRIVATE HoroXROpenXR)
+    target_compile_features(HoroXROpenXRAnchorSaveHost PRIVATE cxx_std_20)
 endif()
 
 add_library(HoroTerrainApi STATIC
@@ -2535,7 +2867,9 @@ target_compile_features(HoroNavigationRecastDetour PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRecastDetour PUBLIC HoroEngine::NavigationApi)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationRecastDetour PRIVATE
+            runtime/navigation/backends/recast_detour/RecastDetourAuthoredTraversal.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProvider.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourCookedTileJoin.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderEndpoint.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h
             runtime/navigation/backends/recast_detour/RecastDetourProviderQueries.cpp
@@ -2562,14 +2896,25 @@ else()
     )
 endif()
 
+add_library(HoroNavigationCrowdGeometryInternal STATIC
+        runtime/navigation/backends/crowd_geometry/NavigationCrowdGeometry.cpp)
+target_compile_features(HoroNavigationCrowdGeometryInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNavigationCrowdGeometryInternal PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime/navigation/backends/crowd_geometry)
+target_link_libraries(HoroNavigationCrowdGeometryInternal PUBLIC HoroEngine::NavigationRuntime)
+
+add_library(HoroNavigationCrowdDeterministic STATIC
+        runtime/navigation/backends/deterministic/DeterministicCrowdProvider.cpp)
+add_library(HoroEngine::NavigationCrowdDeterministic ALIAS HoroNavigationCrowdDeterministic)
+target_compile_features(HoroNavigationCrowdDeterministic PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCrowdDeterministic PUBLIC HoroEngine::NavigationRuntime PRIVATE HoroNavigationCrowdGeometryInternal)
+
 add_library(HoroNavigationCrowdDetour STATIC)
 add_library(HoroEngine::NavigationCrowdDetour ALIAS HoroNavigationCrowdDetour)
 target_compile_features(HoroNavigationCrowdDetour PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationCrowdDetour PUBLIC HoroEngine::NavigationRuntime)
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationCrowdDetour PRIVATE
-            runtime/navigation/backends/recast_detour/RecastDetourCrowdGeometry.cpp
-            runtime/navigation/backends/recast_detour/RecastDetourCrowdGeometry.h
             runtime/navigation/backends/recast_detour/RecastDetourCrowdProvider.cpp
     )
     target_compile_definitions(HoroNavigationCrowdDetour PRIVATE DT_POLYREF64 RC_DISABLE_ASSERTS)
@@ -2577,7 +2922,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/DetourCrowd/Include
             ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/Detour/Include
     )
-    target_link_libraries(HoroNavigationCrowdDetour PRIVATE HoroThirdPartyDetourCrowd)
+    target_link_libraries(HoroNavigationCrowdDetour PRIVATE HoroThirdPartyDetourCrowd HoroNavigationCrowdGeometryInternal)
 else()
     target_sources(HoroNavigationCrowdDetour PRIVATE
             runtime/navigation/backends/recast_detour/RecastDetourCrowdOmitted.cpp
@@ -2691,7 +3036,8 @@ add_library(HoroWorldCookIntegration STATIC
         world_cook/WorldCookPublication.cpp)
 add_library(HoroEngine::WorldCookIntegration ALIAS HoroWorldCookIntegration)
 target_compile_features(HoroWorldCookIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroWorldCookIntegration PUBLIC HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::Assets)
+target_link_libraries(HoroWorldCookIntegration PUBLIC HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::Assets
+    HoroEngine::NavigationCellContent)
 
 # Narrow non-installed wire helper: neither a repository-wide include root nor a public API.
 add_library(HoroJsonEncodingInternal INTERFACE)
@@ -2778,8 +3124,13 @@ target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthoring HoroEngine::RuntimeScene)
 
 add_library(HoroInput STATIC
+        runtime/input/InputAccessibility.cpp
+        runtime/input/InputAccessibilityRouter.cpp
+        runtime/input/InputAccessibilityProfile.cpp
+        runtime/input/InputGyroscope.cpp
         runtime/input/RawInputCollector.cpp
         runtime/input/Input.cpp
+        runtime/input/InputBindingCapture.cpp
         runtime/input/InputCollection.cpp
         runtime/input/InputPresentation.cpp
         runtime/input/InputErrors.cpp
@@ -2819,7 +3170,7 @@ target_include_directories(HoroRenderApi
 target_include_directories(HoroRenderApi PRIVATE
         $<TARGET_PROPERTY:HoroFoundationJsonInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 add_dependencies(HoroRenderApi HoroFoundationJsonInternal)
-target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData
+target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation HoroEngine::VfxSimulationData HoroEngine::VisualAccessibility
         PRIVATE nlohmann_json::nlohmann_json)
 
 # Portable normalization of actual tool evidence; runtime value/identity consumers remain in RenderApi.
@@ -2982,6 +3333,9 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontendVfxResources.cpp
         runtime/renderer/frontend/LightCullingPreparation.cpp
         runtime/renderer/frontend/ExposureGpuPreparation.cpp
+        runtime/renderer/frontend/NativeReconstructionPreparation.cpp
+        runtime/renderer/frontend/NativeReconstructionViewHistory.cpp
+        runtime/renderer/frontend/ImageProviderRegistry.cpp
         runtime/renderer/frontend/VfxPreparation.cpp
         runtime/renderer/frontend/VfxGpuInventoryLease.cpp
         runtime/renderer/frontend/VfxGpuPreparation.cpp
@@ -3071,10 +3425,12 @@ target_compile_features(HoroTerrainRenderIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainRenderIntegration PUBLIC
         HoroEngine::TerrainCook HoroEngine::TerrainRender HoroEngine::RenderFrontend HoroEngine::WorldStreaming)
 
-add_library(HoroSceneRenderExtraction STATIC runtime/renderer/frontend/LightSceneExtraction.cpp)
+add_library(HoroSceneRenderExtraction STATIC
+    runtime/renderer/frontend/LightSceneExtraction.cpp
+    runtime/renderer/frontend/RenderOriginScene.cpp)
 add_library(HoroEngine::SceneRenderExtraction ALIAS HoroSceneRenderExtraction)
 target_compile_features(HoroSceneRenderExtraction PUBLIC cxx_std_20)
-target_link_libraries(HoroSceneRenderExtraction PUBLIC HoroEngine::RuntimeScene HoroEngine::RenderApi)
+target_link_libraries(HoroSceneRenderExtraction PUBLIC HoroEngine::RuntimeScene HoroEngine::RenderApi HoroEngine::WorldStreaming)
 
 add_library(HoroSceneModel STATIC
         runtime/scene/PropertyBindingErrors.cpp
@@ -3303,12 +3659,18 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanMaterialResources.cpp
             runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandTiming.cpp
             runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
         runtime/renderer/modules/vulkan/VulkanGuiPreparation.cpp
         runtime/renderer/modules/vulkan/VulkanGuiCommands.cpp
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanStereoCoverageRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanReconstructionRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanUiPaintKernel.cpp
+            runtime/renderer/modules/vulkan/VulkanUiPaintCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialGraph.cpp
             runtime/renderer/modules/vulkan/VulkanVfxCommands.cpp
             runtime/renderer/modules/vulkan/VulkanMultiviewEncoding.cpp
             runtime/renderer/modules/vulkan/VulkanMultiviewPreparation.cpp
@@ -3415,9 +3777,12 @@ target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
 # Non-installed exact-header contract shared by pure editor model, host services and GUI adapters.
 add_library(HoroPrefabHierarchyInternal INTERFACE)
 set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
-file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
 foreach(header IN ITEMS
-        PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabCreation.h PrefabAssetPreview.h)
+        hierarchy/PrefabHierarchyProjection.h
+        hierarchy/PrefabHierarchyCommand.h
+        hierarchy/PrefabHierarchySources.h
+        assets/PrefabCreation.h
+        assets/PrefabAssetPreview.h)
     configure_file("editor/screens/workspace/prefab/${header}"
         "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
 endforeach()
@@ -3437,8 +3802,8 @@ add_library(HoroEditorModel STATIC
         editor/document/WorldLayerCommands.cpp
         editor/document/PartitionedWorldResidency.cpp
         editor/document/PartitionedWorldObjectInspection.cpp
-        editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
-        editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
+        editor/screens/workspace/prefab/hierarchy/PrefabHierarchyProjection.cpp
+        editor/screens/workspace/prefab/hierarchy/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
@@ -3458,6 +3823,7 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/SceneDocumentHistoryCommands.cpp
         editor/document/SceneDocumentPrefabValueCommands.cpp
+        editor/document/PrefabApplyPreparation.cpp
         editor/document/RuntimeSceneConversion.cpp
         editor/project_model/EditorModelErrors.cpp
         editor/project_model/EditorSelectionModel.cpp
@@ -3543,6 +3909,7 @@ target_link_libraries(HoroEditorViewportScene PUBLIC HoroEngine::EditorModel)
 
 add_library(HoroEditorViewportResources STATIC
         editor/renderer/EditorViewportResources.cpp
+        editor/renderer/EditorGraphViewportImageCapture.cpp
 )
 add_library(HoroEngine::EditorViewportResources ALIAS HoroEditorViewportResources)
 
@@ -3555,6 +3922,7 @@ target_link_libraries(HoroEditorViewportResources
         PUBLIC
         HoroEngine::EditorViewportScene
         HoroEngine::RenderFrontend
+        PRIVATE HoroRenderFrontendResourceAccessInternal
 )
 
 # Editor color behavior owns frontend resources, but never selects a native backend.
@@ -3591,7 +3959,7 @@ add_library(HoroEditorRenderExtraction STATIC
         editor/document/EditorViewportScenePreview.cpp
         editor/document/EditorXrSceneGeometry.cpp
         editor/document/EditorViewportPicking.cpp
-        editor/screens/workspace/AssetSceneDrop.cpp
+        editor/screens/workspace/assets/AssetSceneDrop.cpp
 )
 add_library(HoroEngine::EditorRenderExtraction ALIAS HoroEditorRenderExtraction)
 target_sources(HoroEditorRenderExtraction PRIVATE editor/xr/EditorSimulatorSceneSource.cpp)
@@ -3697,9 +4065,8 @@ target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::Runt
 
 add_library(HoroPrefabDocumentSessionInternal INTERFACE)
 set(_horo_prefab_document_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_document_internal")
-file(MAKE_DIRECTORY "${_horo_prefab_document_headers}/editor/screens/workspace/prefab")
-configure_file(editor/screens/workspace/prefab/PrefabDocumentSession.h
-    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/PrefabDocumentSession.h" COPYONLY)
+configure_file(editor/screens/workspace/prefab/document/PrefabDocumentSession.h
+    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/document/PrefabDocumentSession.h" COPYONLY)
 target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_INTERFACE:${_horo_prefab_document_headers}>")
 target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
 
@@ -3711,7 +4078,7 @@ foreach(header EditorPlayState.h EditorPlayXrHost.h)
 endforeach()
 add_library(HoroEditorPlayXrHostInterface INTERFACE)
 target_include_directories(HoroEditorPlayXrHostInterface INTERFACE "${_horo_editor_play_xr_headers}")
-target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input)
+target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input HoroEngine::SceneIdentity)
 target_compile_features(HoroEditorPlayXrHostInterface INTERFACE cxx_std_20)
 
 # Simulator controls and copied presentation state stay usable without the GUI.
@@ -3720,26 +4087,34 @@ add_library(HoroEngine::EditorXRSimulatorModel ALIAS HoroEditorXRSimulatorModel)
 target_compile_features(HoroEditorXRSimulatorModel PUBLIC cxx_std_20)
 target_link_libraries(HoroEditorXRSimulatorModel PUBLIC HoroEngine::XRSimulator)
 
+add_library(HoroEditorLanguageProtocolInternal STATIC
+        editor/language/LspLifecycle.cpp
+        editor/language/LspProtocol.cpp)
+target_include_directories(HoroEditorLanguageProtocolInternal PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/editor/language>)
+target_link_libraries(HoroEditorLanguageProtocolInternal PUBLIC HoroEngine::Foundation HoroFoundationJsonInternal)
+
 add_library(HoroEditorServices STATIC
         editor/navigation/NavigationBakeWorkspace.cpp
         editor/document/WorkspaceReadSources.cpp
         editor/navigation/NavigationViewportSnapshot.cpp
-        editor/screens/workspace/prefab/PrefabHierarchySources.cpp
-        editor/screens/workspace/prefab/PrefabCreation.cpp
-        editor/screens/workspace/prefab/PrefabCreationPublication.cpp
-        editor/screens/workspace/prefab/PrefabDocumentSession.cpp
-        editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
-        editor/screens/workspace/prefab/PrefabDocumentStage.cpp
+        editor/screens/workspace/prefab/hierarchy/PrefabHierarchySources.cpp
+        editor/screens/workspace/prefab/assets/PrefabCreation.cpp
+        editor/screens/workspace/prefab/assets/PrefabCreationPublication.cpp
+        editor/screens/workspace/prefab/assets/PrefabApplyTransaction.cpp
+        editor/screens/workspace/prefab/document/PrefabDocumentSession.cpp
+        editor/screens/workspace/prefab/document/PrefabDocumentPersistence.cpp
+        editor/screens/workspace/prefab/document/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
-        editor/physics/ProjectCollisionTemplate.cpp
-        editor/physics/CollisionIdentityGeneration.cpp
+        editor/physics/project/ProjectCollisionTemplate.cpp
+        editor/physics/project/CollisionIdentityGeneration.cpp
         editor/physics/CollisionProjectSettingsSession.cpp
         editor/physics/CollisionProjectSettingsCommands.cpp
         editor/physics/CollisionProjectSettingsErrors.cpp
-        editor/physics/CollisionReferenceReview.cpp
-        editor/physics/CollisionReviewFreshness.cpp
-        editor/physics/CollisionSourceInventory.cpp
-        editor/physics/NativeAssetRegistrySource.cpp
+        editor/physics/review/CollisionReferenceReview.cpp
+        editor/physics/review/CollisionReviewFreshness.cpp
+        editor/physics/review/CollisionSourceInventory.cpp
+        editor/physics/review/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
         editor/pcg/PCGGraphAuthoring.cpp
         editor/pcg/PCGGraphDocument.cpp
@@ -3751,28 +4126,45 @@ add_library(HoroEditorServices STATIC
         editor/audio/MixerAssetDocument.cpp
         editor/animation/AnimationGraphDocument.cpp
         editor/animation/AnimationGraphDocumentBounds.cpp
+        editor/ai/BlackboardSchemaDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
         editor/data_bus/EditorEngineEventBridge.cpp
         editor/data_bus/EditorSurfaceEventContext.cpp
         editor/EditorSurfaceIdentity.cpp
-        editor/SourceFileOpenService.cpp
-        editor/SourceDocumentService.cpp
+        editor/source_document/services/SourceFileOpenService.cpp
+        editor/source_document/SourceDocumentService.cpp
+        editor/source_document/services/SourceLanguageSession.cpp
+        editor/language/LspConnection.cpp
+        editor/language/LspDocumentSync.cpp
+        editor/language/LspProcess.cpp
+        editor/language/LspRequests.cpp
+        editor/language/LspResultProjection.cpp
+        editor/language/ProjectLanguageWorkspace.cpp
+        editor/language/ClangdProvider.cpp
+        editor/language/HoroScriptSyntax.cpp
+        editor/source_editor/SourceSyntax.cpp
+        editor/source_editor/HoroScriptModuleLanguage.cpp
+        editor/source_editor/HoroScriptAuthoringConfig.cpp
         editor/proposals/ProposedChangeSet.cpp
         editor/proposals/ProposedChangeSetCodec.cpp
-        editor/SourceDocumentChanges.cpp
-        editor/SourceEditingCommands.cpp
-        editor/SourceDocumentSave.cpp
-        editor/SourceDocumentSnapshot.cpp
-        editor/SourceDocumentText.cpp
+        editor/proposals/ProposedUnifiedPatch.cpp
+        editor/proposals/WorkspaceEditPlan.cpp
+        editor/proposals/ReviewDecisions.cpp
+        editor/source_document/SourceDocumentChanges.cpp
+        editor/source_document/SourceDocumentBatchDisk.cpp
+        editor/source_document/services/SourceEditingCommands.cpp
+        editor/source_document/SourceDocumentSave.cpp
+        editor/source_document/SourceDocumentSnapshot.cpp
+        editor/source_document/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
         editor/ui/UiCanvasPreview.cpp
         editor/ui/UiInspectorDraft.cpp
         editor/ui/UiInspectorResources.cpp
-        editor/UiCanvasDocumentCommands.cpp
-        editor/UiCanvasDocument.cpp
-        editor/UiCanvasDocumentSerialization.cpp
+        editor/ui/canvas/UiCanvasDocumentCommands.cpp
+        editor/ui/canvas/UiCanvasDocument.cpp
+        editor/ui/canvas/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceScene.cpp
@@ -3785,9 +4177,9 @@ add_library(HoroEditorServices STATIC
         editor/gameplay/EditorPlaySessionController.cpp
         editor/gameplay/EditorPlaySessionControllerFixed.cpp
         editor/gameplay/EditorPlaySaveRetirement.cpp
-        editor/screens/workspace/ContentBrowserModel.cpp
-        editor/screens/workspace/prefab/PrefabAssetPreview.cpp
-        editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
+        editor/screens/workspace/assets/browser/ContentBrowserModel.cpp
+        editor/screens/workspace/prefab/assets/PrefabAssetPreview.cpp
+        editor/screens/workspace/gameplay/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp
         editor/project_model/ProjectCreationService.cpp
@@ -3798,6 +4190,7 @@ add_library(HoroEditorServices STATIC
         editor/project_model/ProjectMetadata.cpp
         editor/project_model/RendererAvailability.cpp
         editor/settings/EditorConfiguration.cpp
+        editor/settings/ConfigurationSettingsSession.cpp
         editor/settings/PrefabProjectSettingsSession.cpp
         editor/settings/EditorSettingsService.cpp
         editor/navigation/NavigationProjectSettingsSession.cpp
@@ -3810,12 +4203,12 @@ add_library(HoroEditorServices STATIC
         editor/NotificationService.cpp
         editor/input/EditorInputActions.cpp
         editor/modals/EditorModalHost.cpp
-        editor/screens/workspace/WorkspaceLayout.cpp
-        editor/screens/workspace/WorkspacePanelHost.cpp
-        editor/screens/workspace/WorkspaceLayoutFileStore.cpp
-        editor/screens/workspace/WorkspaceLayoutPersistence.cpp
-        editor/screens/workspace/ActivityBarLayout.cpp
-        editor/screens/workspace/WorkspaceSplitterInteraction.cpp
+        editor/screens/workspace/layout/WorkspaceLayout.cpp
+        editor/screens/workspace/docking/WorkspacePanelHost.cpp
+        editor/screens/workspace/layout/WorkspaceLayoutFileStore.cpp
+        editor/screens/workspace/layout/WorkspaceLayoutPersistence.cpp
+        editor/screens/workspace/layout/ActivityBarLayout.cpp
+        editor/screens/workspace/layout/WorkspaceSplitterInteraction.cpp
 )
 
 add_library(HoroPCGSceneBake STATIC editor/pcg/PCGSceneBake.cpp)
@@ -3823,11 +4216,11 @@ add_library(HoroEngine::PCGSceneBake ALIAS HoroPCGSceneBake)
 target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
-target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/PrefabDocumentLayers.cpp)
+target_sources(HoroEditorServices PRIVATE editor/screens/workspace/prefab/document/PrefabDocumentLayers.cpp)
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
 target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::PrefabProjectSettings HoroEngine::PlatformServicesAuthoring)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::AnimationGraphSourceCodec HoroEngine::AI)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -3870,7 +4263,11 @@ target_link_libraries(HoroEditorServices
         HoroEngine::ProjectMigrations
         PRIVATE
         HoroFoundationJsonInternal
+        HoroEditorLanguageProtocolInternal
+        HoroThirdParty::Lua
+        HoroEngine::Security
         HoroEditorPlaySceneHostInternal
+        HoroEngine::GameplayAccessibility
         HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
         HoroSceneSourceCodecInternal
@@ -3929,6 +4326,11 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/SdlVulkanPresentationPort.cpp
         editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
         editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
+        editor/renderer/vulkan/EditorViewportVulkanRasterGraph.cpp
+        editor/renderer/vulkan/EditorViewportVulkanCanvas.cpp
+        editor/renderer/vulkan/EditorViewportVulkanCanvasProjection.cpp
+        editor/renderer/vulkan/EditorViewportVulkanColor.cpp
+        editor/renderer/vulkan/EditorViewportVulkanDynamicResolution.cpp
         editor/renderer/vulkan/EditorViewportVulkanShadows.cpp
         editor/renderer/vulkan/EditorViewportVulkanLighting.cpp
         editor/renderer/vulkan/EditorViewportVulkanXr.cpp
@@ -3940,7 +4342,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
     target_include_directories(HoroEditorVulkanGuiInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(HoroEditorVulkanGuiInternal
         PUBLIC HoroRenderVulkanHostInterface HoroEngine::RenderFrontend HoroEditorVulkanShaderInternal HoroEngine::EditorViewportResources
-        PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderGraphTemplateInterface HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroRenderGraphTemplateInterface HoroEditorViewportColorInternal HoroColorOutputPackageInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
     set(_horo_editor_vulkan_xr_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_vulkan_xr_host_headers")
     file(MAKE_DIRECTORY "${_horo_editor_vulkan_xr_headers}")
     # Forward this deliberate internal contract so source and App consumers share
@@ -3960,6 +4362,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
             editor/renderer/opengl/OpenGLViewportResourceBridge.cpp
             editor/renderer/opengl/OpenGLStateSnapshot.cpp
             editor/renderer/opengl/EditorViewportRendererOpenGL.cpp
+            editor/renderer/opengl/OpenGLViewportImageCapture.cpp
             editor/renderer/opengl/EditorViewportPreparedFrameOpenGL.cpp
     )
     add_library(HoroEngine::EditorViewportOpenGL ALIAS HoroEditorViewportOpenGL)
@@ -3998,7 +4401,12 @@ if (HORO_BUILD_INPUT_SDL3)
 endif ()
 
 if (HORO_BUILD_EDITOR_GUI)
+    # Non-installed, narrow observation seam; source IDs and framework hooks stay inside GUI composition/tests.
+    add_library(HoroEditorControlMetadataInternal INTERFACE)
+    target_include_directories(HoroEditorControlMetadataInternal INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/editor/accessibility")
+    target_link_libraries(HoroEditorControlMetadataInternal INTERFACE HoroEngine::RuntimeUi)
     add_library(HoroGui STATIC
+            editor/accessibility/EditorControlMetadata.cpp
             editor/xr/EditorXRSimulatorPanel.cpp
             editor/design_system/components/EditorUiComponents.cpp
             editor/design_system/components/EditorUiCustomResources.cpp
@@ -4010,6 +4418,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp
+            editor/modals/settings/SettingsModalConfiguration.cpp
             editor/modals/settings/SettingsModalExtensions.cpp
             editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
@@ -4018,6 +4427,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalCollisionDefinitions.cpp
             editor/modals/settings/SettingsModalCollisionFiltering.cpp
             editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalMicrophoneMonitor.cpp
             editor/modals/settings/SettingsModalNavigationProject.cpp
             editor/modals/settings/SettingsModalNavigationPolicy.cpp
             editor/modals/settings/SettingsModalPrefab.cpp
@@ -4047,66 +4457,71 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_creation/ProjectCreationScreen.cpp
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrain.cpp
-            editor/screens/workspace/EditorWorkspaceViewTerrain.cpp
-            editor/screens/workspace/terrain/TerrainSculptProducer.cpp
-            editor/screens/workspace/terrain/TerrainViewportPicking.cpp
-            editor/screens/workspace/terrain/TerrainAssetFormat.cpp
-            editor/screens/workspace/terrain/TerrainDocumentHost.cpp
-            editor/screens/workspace/terrain/TerrainDocumentResources.cpp
-            editor/screens/workspace/terrain/TerrainDocumentPublication.cpp
-            editor/screens/workspace/terrain/TerrainDocumentTools.cpp
-            editor/screens/workspace/terrain/TerrainPaintProducer.cpp
+            editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrain.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceViewTerrain.cpp
+            editor/screens/workspace/terrain/brushes/TerrainSculptProducer.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportPicking.cpp
+            editor/screens/workspace/terrain/assets/TerrainAssetFormat.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentHost.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentResources.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentPublication.cpp
+            editor/screens/workspace/terrain/document/TerrainDocumentTools.cpp
+            editor/screens/workspace/terrain/brushes/TerrainPaintProducer.cpp
             editor/screens/workspace/terrain/TerrainBrushGeometry.cpp
-            editor/screens/workspace/terrain/FoliagePaintProducer.cpp
-            editor/screens/workspace/terrain/FoliagePaletteModel.cpp
-            editor/screens/workspace/terrain/FoliageSelectionModel.cpp
-            editor/screens/workspace/terrain/FoliagePaletteTab.cpp
-            editor/screens/workspace/terrain/TerrainViewportProjection.cpp
-            editor/screens/workspace/terrain/TerrainViewportToolGesture.cpp
-            editor/screens/workspace/terrain/TerrainViewportToolControls.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrainTools.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrainCook.cpp
-            editor/screens/workspace/EditorWorkspaceControllerTerrainAssets.cpp
-            editor/screens/workspace/EditorWorkspaceScreenTerrain.cpp
-            editor/screens/workspace/terrain/TerrainAssetCreationModal.cpp
-            editor/screens/workspace/terrain/TerrainViewportTool.cpp
-            editor/screens/workspace/panels/viewport/ViewportTerrainSource.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
-            editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
-            editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
-            editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
+            editor/screens/workspace/terrain/brushes/FoliagePaintProducer.cpp
+            editor/screens/workspace/terrain/foliage/FoliagePaletteModel.cpp
+            editor/screens/workspace/terrain/foliage/FoliageSelectionModel.cpp
+            editor/screens/workspace/terrain/foliage/FoliagePaletteTab.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportProjection.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportToolGesture.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportToolControls.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainTools.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainCook.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceControllerTerrainAssets.cpp
+            editor/screens/workspace/terrain/workspace/EditorWorkspaceScreenTerrain.cpp
+            editor/screens/workspace/terrain/assets/TerrainAssetCreationModal.cpp
+            editor/screens/workspace/terrain/viewport/TerrainViewportTool.cpp
+            editor/screens/workspace/panels/viewport/sources/ViewportTerrainSource.cpp
+            editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
+            editor/screens/workspace/panels/hierarchy/prefab/HierarchyPrefabDragDrop.cpp
+            editor/screens/workspace/panels/hierarchy/prefab/HierarchyPrefabContext.cpp
+            editor/screens/workspace/panels/hierarchy/prefab/HierarchyPrefabRows.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyEditSession.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
-            editor/screens/workspace/panels/inspector/InspectorPrefabSelection.cpp
-            editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorCharacterEditSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorContributionView.cpp
-            editor/screens/workspace/panels/inspector/InspectorContributionProjection.cpp
-            editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorPrefabSelection.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorEditSession.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorCharacterEditSession.cpp
+            editor/screens/workspace/panels/inspector/contributions/InspectorContributionView.cpp
+            editor/screens/workspace/panels/inspector/contributions/InspectorContributionProjection.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorAudioEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
-            editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
+            editor/screens/workspace/panels/inspector/component_fields/InspectorPanelComponentWidgets.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/navigation/NavigationInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/navigation/InspectorPanelNavigation.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysics.cpp
             editor/screens/workspace/panels/inspector/add_component/AddComponentRegistry.cpp
             editor/screens/workspace/panels/inspector/add_component/BuiltinAddComponentDefinitions.cpp
             editor/screens/workspace/panels/inspector/add_component/AddComponentMenu.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp
-            editor/screens/workspace/panels/inspector/PhysicsInspectorSession.cpp
-            editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.cpp
-            editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
-            editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysicsBody.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysicsCollider.cpp
+            editor/screens/workspace/panels/inspector/physics/InspectorPanelPhysicsConstraint.cpp
+            editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/physics/editing/PhysicsInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/edits/InspectorAudioEditSession.cpp
+            editor/screens/workspace/panels/inspector/component_fields/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
+            editor/screens/workspace/panels/input_mapping/InputMappingAccessibility.cpp
+            editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.cpp
+            editor/screens/workspace/panels/accessibility/AccessibilityContrastPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
+            editor/screens/workspace/panels/game/GameAgentInspection.cpp
             editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
-            editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
-            editor/screens/workspace/panels/viewport/WorldSourceShapeControls.cpp
+            editor/screens/workspace/panels/viewport/ViewportPlayCaptions.cpp
+            editor/screens/workspace/panels/viewport/sources/WorldSourceViewportTool.cpp
+            editor/screens/workspace/panels/viewport/sources/WorldSourceShapeControls.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/ViewportStreamingPreview.cpp
             editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
@@ -4118,17 +4533,17 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.cpp
             editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.cpp
-            editor/screens/workspace/WorkspacePanelRegistry.cpp
+            editor/screens/workspace/docking/WorkspacePanelRegistry.cpp
             editor/navigation/NavigationTab.cpp
             editor/navigation/NavigationBakeCancelModal.cpp
-            editor/screens/workspace/DefaultWorkspacePanels.cpp
+            editor/screens/workspace/docking/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserActions.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.cpp
-            editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserGrid.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserActions.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserCards.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/commands/AssetBrowserDialogs.cpp
+            editor/screens/workspace/panels/global_dock/panes/asset_browser/grid/AssetBrowserInteractionSession.cpp
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.cpp
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/audio/GlobalDockAudioPane.cpp
@@ -4137,77 +4552,104 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/console/GlobalDockConsolePane.cpp
             editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.cpp
             editor/screens/workspace/panels/global_dock/panes/network/GlobalDockNetworkPane.cpp
+            editor/screens/workspace/panels/global_dock/panes/platform/PlatformDiagnosticsPane.cpp
             editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.cpp
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
-        editor/screens/workspace/EditorWorkspaceControllerAudio.cpp
-        editor/screens/workspace/EditorWorkspaceControllerCollision.cpp
-        editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
-        editor/screens/workspace/EditorWorkspaceControllerPrefabSettings.cpp
-            editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
-            editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
-            editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerDockCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSceneAssets.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSceneRecovery.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSceneProjection.cpp
-            editor/screens/workspace/EditorWorkspaceControllerCamera.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPlay.cpp
-            editor/screens/workspace/EditorWorkspaceControllerCommandRouting.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSourcePersistence.cpp
-            editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
-            editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
-        editor/screens/workspace/EditorWorkspaceControllerNavigationInspector.cpp
-        editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
-            editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
-            editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
-            editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
-            editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
-            editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
-            editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
-            editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
-            editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldStreaming.cpp
-            editor/screens/workspace/EditorWorkspaceControllerWorldBake.cpp
+        editor/screens/workspace/project_settings/EditorWorkspaceControllerAudio.cpp
+        editor/screens/workspace/project_settings/EditorWorkspaceControllerCollision.cpp
+        editor/screens/workspace/navigation/EditorWorkspaceControllerNavigationSettings.cpp
+        editor/screens/workspace/prefab/workspace/EditorWorkspaceControllerPrefabSettings.cpp
+            editor/screens/workspace/scene/EditorWorkspaceControllerScenePersistence.cpp
+            editor/screens/workspace/viewport/EditorWorkspaceControllerViewportEditing.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldSources.cpp
+            editor/screens/workspace/assets/EditorWorkspaceControllerAssetInstantiation.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserCommands.cpp
+            editor/screens/workspace/docking/EditorWorkspaceControllerDockCommands.cpp
+            editor/screens/workspace/assets/EditorWorkspaceControllerSceneAssets.cpp
+            editor/screens/workspace/scene/EditorWorkspaceControllerSceneRecovery.cpp
+            editor/screens/workspace/inspection/EditorWorkspaceControllerSceneProjection.cpp
+            editor/screens/workspace/viewport/EditorWorkspaceControllerCamera.cpp
+            editor/screens/workspace/gameplay/EditorWorkspaceControllerPlay.cpp
+            editor/screens/workspace/inspection/EditorWorkspaceControllerDebugCapture.cpp
+            editor/screens/workspace/commands/routing/EditorWorkspaceControllerCommandRouting.cpp
+            editor/screens/workspace/source/EditorWorkspaceControllerSourcePersistence.cpp
+            editor/screens/workspace/source/EditorSourcePresentation.cpp
+            editor/screens/workspace/source/EditorWorkspaceControllerSourceCommands.cpp
+            editor/screens/workspace/source/EditorWorkspaceControllerSourceLanguage.cpp
+            editor/screens/workspace/commands/routing/EditorWorkspaceControllerCommands.cpp
+            editor/screens/workspace/scene/EditorWorkspaceControllerComponentCommands.cpp
+            editor/screens/workspace/extensions/EditorWorkspaceControllerInspectorContributions.cpp
+            editor/screens/workspace/extensions/EditorWorkspaceControllerInspectorApproval.cpp
+        editor/screens/workspace/navigation/EditorWorkspaceControllerNavigationInspector.cpp
+        editor/screens/workspace/project_settings/EditorWorkspaceControllerPhysics.cpp
+            editor/screens/workspace/viewport/EditorWorkspaceControllerViewportCommands.cpp
+            editor/screens/workspace/assets/browser/EditorWorkspaceControllerContentBrowser.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserGameplay.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
+            editor/screens/workspace/assets/browser/commands/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
+            editor/screens/workspace/sequence/EditorWorkspaceControllerSequence.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQuery.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQueryDocument.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQueryExternal.cpp
+            editor/screens/workspace/ai/queries/EditorWorkspaceEnvironmentQueryRecovery.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceDecisionGraph.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceDecisionGraphRecovery.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceDecisionGraphConflict.cpp
+            editor/screens/workspace/ai/decisions/graph/EditorWorkspaceViewDecisionGraph.cpp
+            editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvasModel.cpp
+            editor/screens/workspace/ai/decisions/graph/DecisionGraphLayout.cpp
+            editor/screens/workspace/ai/decisions/DecisionSaveJournal.cpp
+            editor/screens/workspace/ai/decisions/panels/DecisionTreeSubtreeCatalog.cpp
+            editor/screens/workspace/ai/decisions/graph/DecisionGraphCanvas.cpp
+            editor/screens/workspace/ai/decisions/EditorWorkspaceUtilityGraph.cpp
+            editor/screens/workspace/ai/blackboard/EditorWorkspaceControllerBlackboard.cpp
+            editor/screens/workspace/ai/blackboard/EditorWorkspaceBlackboardRecovery.cpp
+            editor/screens/workspace/pcg/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/ui_canvas/UiInspectorAuthoringWidgets.cpp
+            editor/screens/workspace/panels/inspector/ui_canvas/UiCanvasInspectorPanel.cpp
+            editor/screens/workspace/ui_canvas/EditorWorkspaceViewUiCanvas.cpp
+            editor/screens/workspace/ui_canvas/EditorWorkspaceControllerUiCanvas.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldComposition.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldStreaming.cpp
+            editor/screens/workspace/world/EditorWorkspaceControllerWorldBake.cpp
             editor/source_editor/SourceWidgetPlatform.cpp
             editor/source_editor/SourceWidgetDisplay.cpp
             editor/source_editor/SourceWidgetText.cpp
             editor/source_editor/SourceEditorSession.cpp
             editor/source_editor/SourceEditorTools.cpp
             editor/source_editor/SourceEditorWidget.cpp
-            editor/source_editor/SourceSyntax.cpp
+            editor/source_editor/SourceReviewOverlay.cpp
+            editor/source_editor/SourceReviewApplication.cpp
+            editor/source_editor/SourceReviewHistory.cpp
             editor/source_editor/SourceSyntaxProjection.cpp
             editor/source_editor/SourceEditorTheme.cpp
-            editor/screens/workspace/EditorWorkspaceInputRouting.cpp
-            editor/screens/workspace/EditorWorkspaceControllerPCGPreview.cpp
-            editor/screens/workspace/PCGPreviewSandbox.cpp
-            editor/screens/workspace/PCGPreviewView.cpp
-            editor/screens/workspace/PCGWorkspace.cpp
-            editor/screens/workspace/PCGEditorCatalog.cpp
-            editor/screens/workspace/EditorWorkspaceViewPCG.cpp
+            editor/screens/workspace/screen/EditorWorkspaceInputRouting.cpp
+            editor/screens/workspace/pcg/EditorWorkspaceControllerPCGPreview.cpp
+            editor/screens/workspace/pcg/preview/PCGPreviewSandbox.cpp
+            editor/screens/workspace/pcg/preview/PCGPreviewView.cpp
+            editor/screens/workspace/pcg/PCGWorkspace.cpp
+            editor/screens/workspace/pcg/PCGEditorCatalog.cpp
+            editor/screens/workspace/pcg/EditorWorkspaceViewPCG.cpp
             editor/pcg/PCGAuthoringInspector.cpp
-            editor/screens/workspace/EditorWorkspaceViewSequence.cpp
-            editor/screens/workspace/WorldLayerOutliner.cpp
+            editor/screens/workspace/sequence/EditorWorkspaceViewSequence.cpp
+            editor/screens/workspace/ai/blackboard/EditorWorkspaceViewBlackboard.cpp
+            editor/screens/workspace/world/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp
+            editor/modals/xr_setup/XrSetupModal.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
-            editor/screens/workspace/ExtensionRecoveryView.cpp
-            editor/screens/workspace/ExtensionActivityView.cpp
-            editor/screens/workspace/ExtensionActivityPlot.cpp
+            editor/screens/workspace/extensions/ExtensionRecoveryView.cpp
+            editor/screens/workspace/extensions/activity/ExtensionActivityView.cpp
+            editor/screens/workspace/extensions/activity/ExtensionActivityPlot.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
-            editor/screens/workspace/EditorWorkspaceScreenXr.cpp
-            editor/screens/workspace/EditorWorkspaceScreenActions.cpp
-            editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
-            editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenXr.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenActions.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/project_settings/EditorWorkspaceScreenProjectSettings.cpp
+            editor/screens/workspace/project_settings/PlatformProjectSettingsOwner.cpp
+            editor/screens/workspace/screen/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
             editor/screens/GuiScreenFixedDispatch.cpp
@@ -4219,8 +4661,13 @@ if (HORO_BUILD_EDITOR_GUI)
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
     target_link_libraries(HoroGui PUBLIC HoroEngine::Runtime)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformServices HoroEngine::DecisionCookHost
+        HoroEngine::AISceneIntegration HoroEngine::AISightIntegration)
     target_link_libraries(HoroGui PUBLIC HoroEngine::EditorXRSimulatorModel)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
+    target_link_libraries(HoroGui PRIVATE HoroFoundationJsonInternal)
+    target_link_libraries(HoroGui PRIVATE HoroEditorControlMetadataInternal)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::RuntimeUi)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)
     target_include_directories(HoroGui
@@ -4249,6 +4696,8 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
             HoroThirdParty::ImGui
             PRIVATE
             HoroEngine::EditorRenderExtraction
+            HoroEngine::VisualAccessibility
+            HoroThirdParty::ImGuiNodeEditor
             nlohmann_json::nlohmann_json
     )
 
@@ -4262,6 +4711,7 @@ target_link_libraries(HoroGui PUBLIC HoroEditorPlayXrHostInterface)
         target_link_libraries(HoroGui PRIVATE "-framework AppKit")
     endif ()
     target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformDesktop)
+    include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorRuntimeConsole.cmake")
 endif ()
 
 add_library(HoroExtensions STATIC
@@ -4437,6 +4887,32 @@ add_library(HoroEngine::McpNavigationAdapters ALIAS HoroMcpNavigationAdapters)
 target_compile_features(HoroMcpNavigationAdapters PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpNavigationAdapters PUBLIC HoroEngine::McpRegistry HoroEngine::NavigationBakeAutomation)
 
+add_library(HoroMcpEditorCommandsInternal STATIC
+    mcp/EditorCommandMcpSession.cpp mcp/EditorMcpWorkspaceHost.cpp mcp/EditorSourceMcpTools.cpp mcp/EditorOperationMcpTools.cpp
+    mcp/EditorInspectionMcpTools.cpp mcp/EditorDebugCaptureMcpTools.cpp mcp/EditorViewportMcpTools.cpp)
+target_compile_features(HoroMcpEditorCommandsInternal PUBLIC cxx_std_20)
+set(_horo_mcp_editor_command_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_command_headers")
+foreach(command IN ITEMS Source Build Test Inspection)
+    configure_file("mcp/Editor${command}McpTools.h"
+        "${_horo_mcp_editor_command_headers}/Editor${command}McpTools.h" COPYONLY)
+    configure_file("editor/screens/workspace/commands/Editor${command}CommandEndpoint.h"
+        "${_horo_mcp_editor_command_headers}/Editor${command}CommandEndpoint.h" COPYONLY)
+endforeach ()
+configure_file(mcp/EditorCommandMcpSession.h "${_horo_mcp_editor_command_headers}/EditorCommandMcpSession.h" COPYONLY)
+configure_file(mcp/EditorDebugCaptureMcpTools.h "${_horo_mcp_editor_command_headers}/EditorDebugCaptureMcpTools.h" COPYONLY)
+configure_file(editor/screens/workspace/inspection/EditorDebugCapture.h "${_horo_mcp_editor_command_headers}/EditorDebugCapture.h" COPYONLY)
+configure_file(editor/renderer/EditorViewportImageCapture.h
+    "${_horo_mcp_editor_command_headers}/editor/renderer/EditorViewportImageCapture.h" COPYONLY)
+configure_file(mcp/EditorMcpWorkspaceHost.h "${_horo_mcp_editor_command_headers}/EditorMcpWorkspaceHost.h" COPYONLY)
+configure_file(editor/screens/workspace/commands/EditorWorkspaceCommandAccess.h
+    "${_horo_mcp_editor_command_headers}/EditorWorkspaceCommandAccess.h" COPYONLY)
+configure_file(editor/screens/workspace/commands/EditorInspectionMath.h
+    "${_horo_mcp_editor_command_headers}/EditorInspectionMath.h" COPYONLY)
+target_include_directories(HoroMcpEditorCommandsInternal PUBLIC "$<BUILD_INTERFACE:${_horo_mcp_editor_command_headers}>")
+target_link_libraries(HoroMcpEditorCommandsInternal
+    PUBLIC HoroEngine::McpRegistry HoroEngine::EditorServices HoroEngine::GameplayBuild
+    PRIVATE HoroEngine::McpController)
+
 add_library(HoroCliPackageAdapters STATIC cli/PackageCommands.cpp)
 add_library(HoroEngine::CliPackageAdapters ALIAS HoroCliPackageAdapters)
 target_compile_features(HoroCliPackageAdapters PUBLIC cxx_std_20)
@@ -4487,18 +4963,36 @@ endif ()
 
 # Apply the build-tree public/private include contract only after every optional
 # production target has been declared.
+# Deliberate app/test composition seam for built-in, headless asset capabilities.
+set(HORO_BUILTIN_COOKER_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/internal/builtin-cookers")
+file(MAKE_DIRECTORY "${HORO_BUILTIN_COOKER_HOST_HEADERS}")
+configure_file(runtime/assets/cooker/builtin/HeadlessMeshCooker.h "${HORO_BUILTIN_COOKER_HOST_HEADERS}/HeadlessMeshCooker.h" COPYONLY)
+add_library(HoroBuiltinAssetCookerHostInternal INTERFACE)
+target_include_directories(HoroBuiltinAssetCookerHostInternal INTERFACE "${HORO_BUILTIN_COOKER_HOST_HEADERS}")
+target_link_libraries(HoroBuiltinAssetCookerHostInternal INTERFACE HoroEngine::Assets)
+
+# Deliberate build-only seam to the existing v1/v2 UI Canvas authoring codec.
+set(HORO_UI_CANVAS_SOURCE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/internal/ui-canvas-source")
+file(MAKE_DIRECTORY "${HORO_UI_CANVAS_SOURCE_HEADERS}")
+configure_file(editor/ui/canvas/UiCanvasDocumentSerialization.h "${HORO_UI_CANVAS_SOURCE_HEADERS}/UiCanvasDocumentSerialization.h" COPYONLY)
+add_library(HoroUiCanvasSourceHostInternal INTERFACE)
+target_include_directories(HoroUiCanvasSourceHostInternal INTERFACE "${HORO_UI_CANVAS_SOURCE_HEADERS}")
+target_link_libraries(HoroUiCanvasSourceHostInternal INTERFACE HoroEngine::EditorServices HoroEngine::RuntimeUi)
+
 add_library(HoroPrefabCookHost STATIC
+        application/assets/UiDocumentCooker.cpp
         application/assets/PrefabCookSchemaContext.cpp
         application/assets/PrefabCookSemanticInputs.cpp
         application/assets/PrefabSceneCookHost.cpp
+        application/assets/PrefabReleaseContent.cpp
         application/assets/PrefabSceneCookCapture.cpp
         application/assets/PrefabSceneCookCatalog.cpp
         application/assets/PrefabTemplateCookCatalog.cpp
         application/assets/PrefabSceneCookState.h)
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)
-target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings)
-target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::AnimationAssetCook)
+target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSettings)
+target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::AnimationAssetCook HoroUiCanvasSourceHostInternal)
 target_link_libraries(HoroPrefabCookHost
         PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook
@@ -4539,7 +5033,7 @@ target_sources(HoroEditorServices PRIVATE
     editor/gameplay/EditorPlayModuleRecovery.cpp)
 target_link_libraries(HoroEditorServices PUBLIC HoroScriptModuleHostInternal)
 if(TARGET HoroGui)
-    target_sources(HoroGui PRIVATE editor/screens/workspace/EditorWorkspaceControllerModuleScripts.cpp)
+    target_sources(HoroGui PRIVATE editor/screens/workspace/gameplay/EditorWorkspaceControllerModuleScripts.cpp)
     target_link_libraries(HoroGui PRIVATE HoroScriptModuleHostInternal)
 endif()
 

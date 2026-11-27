@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Mcp/McpAuthorization.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "McpAuditTelemetry.h"
 #include "McpJsonBounds.h"
 
 #include <algorithm>
@@ -237,7 +238,9 @@ namespace Horo::Mcp {
         record->handle = handle;
         record->admission = std::move(admission);
         record->cancellation = CancellationSource{record->admission.authority->Cancellation()};
+        const auto principal = record->admission.authority->AuditIdentity();
         state_->sessions.try_emplace(handle.id, std::move(record));
+        EmitMcpAudit({.event = "session.opened", .principal = principal, .session = handle});
         return Result<McpSessionHandle>::Success(handle);
     }
 
@@ -308,6 +311,11 @@ namespace Horo::Mcp {
         record.cancellation.RequestCancellation();
         record.cancellation = std::move(replacement);
         record.admission.projectIdentity = std::move(projectIdentity);
+        if (record.admission.authority)
+            EmitMcpAudit({.event = "session.retired",
+                          .principal = record.admission.authority->AuditIdentity(),
+                          .session = session,
+                          .status = "project_changed"});
         record.admission.authority.reset();
         ++record.handle.generation;
         return Result<McpSessionHandle>::Success(record.handle);
@@ -319,6 +327,8 @@ namespace Horo::Mcp {
         const auto found = state_->sessions.find(session.id);
         if (found != state_->sessions.end() && found->second->handle == session) {
             found->second->cancellation.RequestCancellation();
+            if (const auto &authority = found->second->admission.authority)
+                EmitMcpAudit({.event = "session.retired", .principal = authority->AuditIdentity(), .session = session, .status = "closed"});
             state_->sessions.erase(found);
         }
     }
@@ -330,6 +340,11 @@ namespace Horo::Mcp {
         for (const auto &[id, session] : state_->sessions) {
             static_cast<void>(id);
             session->cancellation.RequestCancellation();
+            if (const auto &authority = session->admission.authority)
+                EmitMcpAudit({.event = "session.retired",
+                              .principal = authority->AuditIdentity(),
+                              .session = session->handle,
+                              .status = "shutdown"});
         }
         state_->sessions.clear();
         if (!state_->drained.wait_for(lock, state_->limits.shutdownDrainTimeout, [this] {

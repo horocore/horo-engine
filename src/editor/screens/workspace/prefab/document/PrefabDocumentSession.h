@@ -1,0 +1,363 @@
+#pragma once
+/** @file PrefabDocumentSession.h @brief Persistent prefab source authority and disposable runtime stage. */
+#include "EditorPlaySceneHost.h"
+#include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Editor/DocumentRecoveryService.h"
+#include "Horo/Editor/SemanticDocumentHistory.h"
+#include "Horo/Prefab/PrefabSourceResolver.h"
+#include "Horo/Prefab/PrefabValueOverrides.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
+
+#include <cstddef>
+#include <span>
+#include <string>
+#include <thread>
+#include <variant>
+
+namespace Horo::Editor {
+    /** @brief Exact source command admission; preview generations never authorize edits. */
+    struct PrefabDocumentFence final {
+        Assets::AssetId owner;
+        DocumentInstanceId instance;
+        std::uint64_t revision{};
+    };
+
+    /** @brief Semantic name edit of one source-owned local object. */
+    struct RenamePrefabObject final {
+        Prefab::LocalObjectId object;
+        std::string name;
+    };
+
+    /** @brief Semantic local transform edit; derived scene IDs never enter source history. */
+    struct TransformPrefabObject final {
+        Prefab::LocalObjectId object;
+        Math::Transform transform;
+    };
+
+    using PrefabSourceEdit = std::variant<RenamePrefabObject, TransformPrefabObject>;
+
+    /** @brief Exact matching Scene history state for one cross-document source edit. */
+    struct PrefabApplyHistoryGroup final {
+        Assets::AssetId sceneOwner;
+        std::uint64_t sceneOpening{};
+        std::uint64_t sceneState{};
+        auto operator<=>(const PrefabApplyHistoryGroup &) const noexcept = default;
+    };
+
+    /** @brief Stable source-local member difference between a retained draft and one exact disk revision. */
+    enum class PrefabExternalChange : std::uint8_t {
+        DraftOnly,
+        DiskOnly,
+        Modified
+    };
+
+    /** @brief One local member's compared labels and modified field categories. */
+    struct PrefabExternalMemberDifference final {
+        Prefab::LocalObjectId object;
+        PrefabExternalChange change;
+        std::string draftName;
+        std::string diskName;
+        bool parentChanged{};
+        bool transformChanged{};
+        bool payloadChanged{};
+    };
+
+    /** @brief Immutable comparison captured without publishing either side as authoritative. */
+    struct PrefabExternalComparison final {
+        Assets::AssetSourceIdentity observed;
+        std::vector<PrefabExternalMemberDifference> members;
+        std::optional<Error> diskError; /**< Deleted, malformed or unreadable external source. */
+        bool compositionChanged{};
+    };
+
+    /** @brief One immutable inspection request, independent of the live workspace and document lifetime. */
+    struct PrefabExternalInspection final {
+        std::filesystem::path root;
+        std::filesystem::path path;
+        PrefabDocumentFence fence;
+        Assets::AssetSourceIdentity accepted;
+        std::shared_ptr<const Prefab::PrefabDocument> draft;
+        Prefab::PrefabLimitProfile limits;
+        std::shared_ptr<const PrefabExternalComparison> previous;
+    };
+
+    /** @brief Reads and compares a bounded exact disk source on the existing project I/O lane. */
+    [[nodiscard]] Result<std::shared_ptr<const PrefabExternalComparison>> ComparePrefabExternal(const PrefabExternalInspection &request,
+                                                                                                const CancellationToken &cancellation = {});
+
+    /** @brief Immutable source/session projection; dirty/saved/recovery and runtime state are independent. */
+    struct PrefabDocumentSnapshot final {
+        DocumentIdentity identity;
+        PrefabDocumentFence fence;
+        std::shared_ptr<const Prefab::PrefabDocument> source;
+        Prefab::PrefabSourceRevision sourceRevision;
+        Assets::AssetSourceIdentity acceptedSource;
+        Sha256Digest savedState;
+        std::uint64_t recoveryRevision{};
+        std::uint64_t previewRevision{};
+        bool dirty{};
+        bool externalConflict{};
+        bool canUndo{};
+        bool canRedo{};
+        bool stageActive{};
+        std::shared_ptr<const PrefabExternalComparison> externalComparison;
+        bool keepExternalDraft{};
+    };
+
+    /** @brief Detached immutable source and exact recovery metadata owned until its I/O attempt settles. */
+    struct PrefabRecoveryCheckpoint final {
+        DocumentRecoveryRecord record;
+        std::shared_ptr<const Prefab::PrefabDocument> source;
+        Prefab::PrefabLimitProfile limits;
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+    };
+
+    /** @brief Encodes and persists only the captured recovery slot, without borrowing a live document session.
+     * @return Exact durable record for owner-lane presentation, or typed failure.
+     */
+    [[nodiscard]] Result<std::shared_ptr<const DocumentRecoveryRecord>> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint,
+                                                                                            DocumentRecoveryService &recovery,
+                                                                                            const CancellationToken &cancellation = {});
+
+    /** @brief Owner-thread session. Source edits use exact semantic history; the stage owns no save authority.
+     * @details Load/command time only. Caller serializes requests on the creating thread. The shared
+     * project lease and canonical source publisher protect persistence. Destruction only releases preview
+     * and memory; explicit recovery/close decisions happen before destruction. No gameplay callbacks run.
+     */
+    class PrefabDocumentSession final {
+        class ConstructionKey final {
+            friend class PrefabDocumentSession;
+            ConstructionKey() = default;
+        };
+
+    public:
+        /** @brief Adopt an accepted next-operation project policy without changing source, history or active stage.
+         * @param limits Complete validated profile. @return Current-source validation outcome; saves/edits use the new profile. */
+        [[nodiscard]] Result<void> UpdateLimitProfile(const Prefab::PrefabLimitProfile &limits);
+        /** @brief Internal factory construction; only Open can create the admission key.
+         * @param root Canonical project root. @param path Canonical source. @param identity Shared identity.
+         * @param owner Workspace incarnation. @param limits Validated policy. */
+        PrefabDocumentSession(const ConstructionKey &, std::filesystem::path root, std::filesystem::path path, DocumentIdentity identity,
+                              Assets::AssetId owner, const Prefab::PrefabLimitProfile &limits);
+        /** @brief Cancels pending preparation and retires all isolated native resources. */
+        ~PrefabDocumentSession();
+        /** @brief Opens a validated canonical source without mutation.
+         * @param root Canonical project root. @param path Canonical contained source path.
+         * @param asset Registry-authoritative identity. @param identity Shared document registry identity.
+         * @param owner Never-reused workspace incarnation. @param limits Captured prefab policy.
+         * @return Session or typed path/parser/identity error.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<PrefabDocumentSession>> Open(const std::filesystem::path &root,
+                                                                                 const std::filesystem::path &path, Assets::AssetId asset,
+                                                                                 DocumentIdentity identity, Assets::AssetId owner,
+                                                                                 const Prefab::PrefabLimitProfile &limits);
+        /** @brief Captures immutable presentation state. @return Owned source lease and distinct revisions. */
+        [[nodiscard]] PrefabDocumentSnapshot Snapshot() const;
+
+        /** @brief Reads session-local instance identity without copying a source path. @return Shared registry-issued identity. */
+        [[nodiscard]] DocumentInstanceId Instance() const noexcept {
+            return identity_.instance;
+        }
+
+        /** @brief Reports whether a workspace tab currently presents this owner. */
+        [[nodiscard]] bool HasPresentation() const noexcept {
+            return presented_;
+        }
+
+        /** @brief Checks dirty state without copying the shared document projection. */
+        [[nodiscard]] bool IsDirty() const noexcept {
+            return state_ != saved_;
+        }
+
+        /** @brief Tests whether a retained group still needs the source owner after closing its tab. */
+        [[nodiscard]] bool HasApplyHistory() const noexcept;
+        /** @brief Suspends only workspace presentation, keeping the clean source and its existing paired history. */
+        void SuspendPresentation() noexcept;
+        /** @brief Attaches a fresh registry-issued identity for the same authorized source key. */
+        void ResumePresentation(DocumentIdentity identity) noexcept;
+
+        /** @brief Applies one semantic transaction. @param fence Exact source admission. @param edit Source-owned edit.
+         * @return Success or zero-mutation validation/history/stale error. */
+        [[nodiscard]] Result<void> Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit);
+        /** @brief Prepares a variant or exact nested-placement delta through the canonical resolver, then records one source transaction.
+         * @param fence Exact owner/document revision. @param placement Null selects variant, otherwise an existing nested placement.
+         * @param sources Actual captured dependency authority. @param edit Typed assignment/revert/rebase or component topology intent.
+         * @param cancellation Cooperative preparation token. @return Complete accepted source or zero document/history mutation. */
+        [[nodiscard]] Result<void> ExecuteLayer(const PrefabDocumentFence &fence, std::optional<Prefab::LocalObjectId> placement,
+                                                const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                const std::variant<Prefab::PrefabValueEdit, Prefab::PrefabComponentEdit> &edit,
+                                                const CancellationToken &cancellation = {});
+
+        /** @brief Replays exact semantic values. @param fence Current source admission. @param redo Replay direction.
+         * @return Success or zero-mutation rejection. */
+        [[nodiscard]] Result<void> Replay(const PrefabDocumentFence &fence, bool redo);
+        /** @brief Returns an exact source-side coordinated replay candidate, if one is next. */
+        [[nodiscard]] std::optional<PrefabApplyHistoryGroup> NextApplyGroup(bool redo) const noexcept;
+        /** @brief Saves through the existing project and asset publication authorities.
+         * @param fence Current source admission. @param mutations Shared project writer. @param files Native durable service.
+         * @return Tracked publication; uncertain durability retains dirty state and raises conflict. */
+        [[nodiscard]] Result<Assets::AssetSourcePublication> Save(const PrefabDocumentFence &fence,
+                                                                  const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Observes external bytes without changing source/history. @return Capture result. */
+        [[nodiscard]] Result<void> InspectExternal();
+        /** @brief Captures read-only observation inputs from the current owner without any filesystem work. */
+        [[nodiscard]] PrefabExternalInspection CaptureExternalInspection() const;
+        /** @brief Adopts current external evidence without changing draft, saved state or history. */
+        [[nodiscard]] bool ObserveExternal(const PrefabExternalInspection &request,
+                                           std::shared_ptr<const PrefabExternalComparison> comparison);
+        /** @brief Acknowledges keeping the draft for the exact compared conflict without accepting a new save base. */
+        [[nodiscard]] Result<void> KeepExternalDraft(const PrefabDocumentFence &fence, const PrefabExternalComparison &expected);
+
+        /** @brief Replaces accepted source only after explicit dirty-state decision and complete validation.
+         * @param fence Exact admission. @param discardDirty Explicit discard decision.
+         * @param expectedDisk Exact disk comparison accepted by the user when supplied.
+         * @return Success or retained session. */
+        [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty,
+                                          std::optional<Assets::AssetSourceIdentity> expectedDisk = std::nullopt);
+        /** @brief Writes dirty source to shared recovery storage, never canonical source.
+         * @param mutations Shared writer. @param files Native durable service. @return Durable recovery or retained prior record. */
+        [[nodiscard]] Result<void> Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Explicitly accepts an exact shared recovery candidate only against its unchanged source base.
+         * @param fence Exact admission. @param record User-inspected candidate. @param mutations Shared writer.
+         * @param files Native durable service. @return Success or zero-mutation conflict/corruption error. */
+        [[nodiscard]] Result<void> Recover(const PrefabDocumentFence &fence, const DocumentRecoveryRecord &record,
+                                           const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Discards only this session's recovery record or its explicitly accepted exact candidate.
+         * @param mutations Shared writer. @param files Durable service. @return Success or retained candidate on failure.
+         */
+        [[nodiscard]] Result<void> DiscardOwnedRecovery(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Freezes recovery inputs on the owner thread without formatting source or accessing files.
+         * @return Immutable dirty checkpoint, absence for a clean/already checkpointed revision, or a typed owner error. */
+        [[nodiscard]] Result<std::optional<PrefabRecoveryCheckpoint>> CaptureRecovery() const;
+        /** @brief Acknowledges completed recovery only for the exact owner, source authority and still-relevant revision. */
+        bool AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept;
+
+        /** @brief Discards an exact inspected candidate after an explicit user decision, including a foreign/stale session.
+         * @param fence Current source admission. @param record Exact displayed candidate, never a guessed record path.
+         * @param mutations Shared writer. @param files Durable service.
+         * @return Success or stale/authority failure preserving newer records; source/history/dirty state never changes.
+         */
+        [[nodiscard]] Result<void> DiscardRecoveryCandidate(const PrefabDocumentFence &fence, const DocumentRecoveryRecord &record,
+                                                            const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Resolves current in-memory source, projects typed components and creates a real isolated runtime scene.
+         * @param registry Pinned registry. @param dependencies Canonical captured dependency sources, root replaced by this session.
+         * @param runtimeId Host-reserved unique runtime incarnation. @param factory Explicit native/assets composition or assetless tests.
+         * @return Accepted complete preparation or typed zero-publication failure.
+         */
+        [[nodiscard]] Result<void> ActivateStage(const Assets::AssetRegistrySnapshot &registry,
+                                                 const Prefab::PrefabSourceResolverSnapshot &dependencies,
+                                                 Runtime::SceneRuntimeId runtimeId, const EditorPlaySceneFactory &factory = {});
+        /** @brief Advances one bounded owner-lane preparation frame without simulation/gameplay callbacks.
+         * @return Whether a complete runtime scene is ready, or typed preparation failure.
+         */
+        [[nodiscard]] Result<bool> AdvanceStage();
+        /** @brief Borrows the completely activated stage. @return Current view or no ready stage. */
+        [[nodiscard]] std::optional<Runtime::RuntimeSceneView> StageView() const noexcept;
+
+        /** @brief Reports pending/active resource ownership. @return Whether a stage is owned. */
+        [[nodiscard]] bool HasStage() const noexcept {
+            return preview_.scene || preview_.host;
+        }
+
+        /** @brief Releases every preview/runtime resource without changing source, history or saved/recovery state. */
+        void ReleaseStage() noexcept;
+
+        /** @brief Borrows active runtime for immediate extraction. @return Stage or null. */
+        [[nodiscard]] const Runtime::RuntimeScene *Stage() const noexcept {
+            return preview_.scene.get();
+        }
+
+        /** @brief Closes after explicit dirty decision. @param fence Exact admission. @param discardDirty User decision.
+         * @return Success or retained live session. */
+        [[nodiscard]] Result<void> Close(const PrefabDocumentFence &fence, bool discardDirty);
+
+    private:
+        friend class PrefabApplyTransaction;
+
+        /** @brief Materializes bounded parser characters from typed bytes; allocation failure is a typed error. */
+        [[nodiscard]] static Result<std::string> ReadSourceText(std::span<const std::byte> bytes);
+
+        /** @brief Prepares source history inside the public layer operation's allocation-failure boundary. */
+        [[nodiscard]] Result<void> ExecuteLayerImpl(const PrefabDocumentFence &fence, std::optional<Prefab::LocalObjectId> placement,
+                                                    const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                    const std::variant<Prefab::PrefabValueEdit, Prefab::PrefabComponentEdit> &edit,
+                                                    const CancellationToken &cancellation);
+
+        /** @brief Exact reversible source-layer state; only canonical preparation constructs a forward replacement. */
+        struct LayerReplacement final {
+            std::optional<Prefab::LocalObjectId> placement;
+            Prefab::PrefabSourceRevision revision;
+            std::optional<Prefab::PrefabValueOverrideSet> overrides;
+        };
+
+        using SourceReplacement = std::shared_ptr<const Prefab::PrefabDocument>;
+        using Edit = std::variant<RenamePrefabObject, TransformPrefabObject, LayerReplacement, SourceReplacement>;
+        [[nodiscard]] Result<LayerReplacement> Layer(std::optional<Prefab::LocalObjectId> placement) const;
+        [[nodiscard]] Result<Edit> Before(const Edit &edit) const;
+        [[nodiscard]] Result<std::size_t> EditBytes(const Edit &before, const Edit &after) const;
+        [[nodiscard]] Result<void> CommitEdit(const Edit &edit);
+
+        struct Delta final {
+            Edit before;
+            Edit after;
+            std::size_t bytes{};
+            std::optional<PrefabApplyHistoryGroup> applyGroup;
+        };
+
+        /** @brief Detached complete source and its already reserved semantic history. */
+        struct PreparedApply final {
+            SourceReplacement source;
+            Sha256Digest state;
+            std::unique_ptr<SemanticDocumentHistory<Delta>> history;
+        };
+
+        /** @brief Prepares the exact source-side state and history for a coordinated instance promotion. */
+        [[nodiscard]] Result<PreparedApply> PrepareApply(const PrefabDocumentFence &fence, Prefab::PrefabDocument source,
+                                                         PrefabApplyHistoryGroup group) const;
+        /** @brief Reserves exact source replay for the same coordinated Scene history group. */
+        [[nodiscard]] Result<PreparedApply> PrepareApplyReplay(const PrefabDocumentFence &fence, PrefabApplyHistoryGroup group,
+                                                               bool redo) const;
+        /** @brief Publishes durable source evidence and its previously reserved owner state without callbacks. */
+        void PublishApply(PreparedApply &prepared, Assets::AssetSourceIdentity durable) noexcept;
+
+        [[nodiscard]] Result<void> Admit(const PrefabDocumentFence &fence) const;
+        [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const Edit &edit) const;
+        [[nodiscard]] Result<void> Replace(const Assets::AssetSourceCapture &capture);
+        /** @brief Installs only a complete definition, retaining the old stage on preparation rejection. */
+        [[nodiscard]] Result<void> InstallStage(Runtime::RuntimeSceneDefinition definition, Runtime::SceneRuntimeId id,
+                                                const EditorPlaySceneFactory &factory);
+        std::filesystem::path root_;
+        std::filesystem::path path_;
+        DocumentIdentity identity_;
+        Assets::AssetId owner_;
+        Prefab::PrefabLimitProfile limits_;
+        std::thread::id thread_{std::this_thread::get_id()};
+        std::shared_ptr<const Prefab::PrefabDocument> source_;
+        Assets::AssetSourceIdentity accepted_;
+        Sha256Digest state_;
+        Sha256Digest saved_;
+        SemanticDocumentHistory<Delta> history_;
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery_;
+
+        /** @brief Owns one preview incarnation while retaining its successful publication counter across retirement. */
+        struct PreviewState final {
+            std::unique_ptr<Runtime::RuntimeScene> scene;
+            std::unique_ptr<EditorPlaySceneHost> host;
+            CancellationSource cancellation;
+            std::uint64_t frame{};
+            std::uint64_t revision{};
+            bool published{};
+        };
+
+        PreviewState preview_;
+
+        std::uint64_t revision_{1};
+        std::uint64_t recoveryRevision_{};
+        bool presented_{true};
+        bool conflict_{};
+        std::shared_ptr<const PrefabExternalComparison> externalComparison_;
+        bool keepExternalDraft_{};
+        bool closed_{};
+        bool busy_{};
+    };
+}  // namespace Horo::Editor

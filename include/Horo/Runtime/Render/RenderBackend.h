@@ -33,6 +33,8 @@
 #include <vector>
 
 namespace Horo::Render {
+    struct CookedNativeReconstructionKernel;
+    class IResidentNativeReconstructionKernel;
     struct RenderGraphExecutionRequest;
     struct NativeUiPaintFrameUpdate;
     struct NativeVfxFrameUpdate;
@@ -610,6 +612,13 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
 
+        /** @brief Realizes one closed offline-cooked native reconstruction entry outside frame recording.
+         * @param kernel Exact typed entry, target descriptor and digest-bound cook artifact.
+         * @return Resident native lease or typed unsupported/original preparation failure.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &kernel);
+
         /** @brief Realizes the complete cooked GPU particle compute/direct-draw family at a cold owner boundary.
          * @param programs Exact canonical artifacts and final-target reflection, never runtime source.
          * @return Native family lease or typed unsupported/original validation failure.
@@ -742,6 +751,14 @@ namespace Horo::Render {
 
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;
+
+        /** @brief Observes the selected backend's exact queue acceptance without polling GPU completion or presentation.
+         * @param signal The already issued exact submission point. @param deviceIncarnation Expected selected device.
+         * @return True for accepted, false for known unissued, or empty when this backend cannot prove either.
+         * @details Owner-thread only, immediately after a native submission/presentation attempt. No native wait or new submission.
+         */
+        [[nodiscard]] virtual std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                                                   std::uint64_t deviceIncarnation) const noexcept;
 
         /** @brief Observes one exact frontend-issued queue timeline without changing submission authority.
          * @param wait Zero-time Poll, or an explicitly authorized positive finite readback/test/recovery wait.

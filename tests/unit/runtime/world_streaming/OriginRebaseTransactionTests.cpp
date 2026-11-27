@@ -1,6 +1,9 @@
 #include "Horo/WorldStreaming/OriginRebaseTransaction.h"
+#include "Horo/WorldStreaming/WorldPartitionRegistry.h"
+#include "Horo/WorldStreaming/WorldStreamingRuntimeComposition.h"
 #include "WorldStreamingTestUtils.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 #include <memory>
@@ -141,7 +144,124 @@ namespace Horo::WorldStreaming {
                 participants.push_back(std::make_unique<TestParticipant>(requirement, log));
             return participants;
         }
+
+        [[nodiscard]] WorldStreamingRuntimeCompositionConfig MountConfig() {
+            return {.owner = TestSupport::WorldOwner(),
+                    .revision = IdentityFrom<StreamingRuntimeCompositionRevision>(1),
+                    .schedulerOwner = IdentityFrom<StreamingSchedulerLedgerId>(11),
+                    .schedulerLimits = {.concurrentOperations = 1,
+                                        .capacityUnits = 1,
+                                        .concurrency = {.profile = WorldPartitionProjectProfile::Editor,
+                                                        .revision = IdentityFrom<StreamingConcurrencyRevision>(1),
+                                                        .loads = 1,
+                                                        .activations = 1,
+                                                        .retirements = 1}},
+                    .maximumFeatureAdapters = 1};
+        }
+
+        void PublishMount(WorldPartitionRegistry &registry, WorldPartitionId world) {
+            const auto anchor = Math::WorldCoordinate64::FromMillimeters(0, 0, 0);
+            const auto end = Math::WorldCoordinate64::FromMillimeters(999, 999, 999);
+            const auto grid = WorldCellQuantizationPolicy::Create(anchor, 1'000, {0, 0, 0, 0, 0, 0}, 1).Value();
+            const auto layer = TestSupport::Layer();
+            const std::array layers{WorldLayerDescriptor{layer, "base", WorldLayerOwnership::WorldStreaming, WorldLayerFlags::None}};
+            const std::array cells{WorldPartitionCellDescriptor{{0, 0, 0, 0, layer}, {TestSupport::Asset(1)}}};
+            auto worldDescription = WorldPartitionDescriptor::Create({}, world, {anchor, end}, grid, layers, cells, {1, 1, 16});
+            REQUIRE(worldDescription.HasValue());
+            REQUIRE(registry.Publish(std::move(worldDescription).Value(), IdentityFrom<WorldPartitionRegistryRevision>(1)).HasValue());
+        }
     }  // namespace
+
+    TEST_CASE("Mounted composition owns rebase publication and retires exact observations",
+              "[unit][world_streaming][origin_rebase][mounted_origin]") {
+        const auto config = MountConfig();
+        auto registry = WorldPartitionRegistry::Create(IdentityFrom<WorldPartitionRegistryId>(1), config.owner, {1, 1}).Value();
+        const std::array serviceInstances{1, 2, 3, 4};
+        constexpr std::array roles{StreamingRuntimeServiceRole::Planner, StreamingRuntimeServiceRole::AssetProvider,
+                                   StreamingRuntimeServiceRole::SceneRuntime, StreamingRuntimeServiceRole::FeatureAdapter};
+        std::array<StreamingRuntimeServiceBinding, roles.size()> services{};
+        for (std::size_t index = 0; index < roles.size(); ++index)
+            services[index] = {IdentityFrom<StreamingRuntimeServiceId>(index + 1), IdentityFrom<StreamingRuntimeServiceRevision>(1),
+                               roles[index], &serviceInstances[index]};
+
+        const auto active = Frame();
+        auto legacy = WorldStreamingRuntimeComposition::Create(config, services).Value();
+        CHECK(legacy.Origin() == nullptr);
+        RequireError(WorldStreamingRuntimeComposition::CreateWithOrigin(config, services, *registry, active),
+                     WorldStreamingErrors::PartitionRegistryUnavailable);
+        PublishMount(*registry, config.owner.partition);
+        auto foreign = config;
+        foreign.owner.epoch = IdentityFrom<PartitionEpoch>(2);
+        RequireError(WorldStreamingRuntimeComposition::CreateWithOrigin(foreign, services, *registry, active),
+                     WorldStreamingErrors::RuntimeCompositionRevisionStale);
+
+        ParticipantLog log;
+        const std::vector required{Requirement(10)};
+        auto participants = Participants(required, log);
+        const auto pointers = ParticipantPointers(participants);
+        auto composition = WorldStreamingRuntimeComposition::CreateWithOrigin(config, services, *registry, active).Value();
+        REQUIRE(composition.Origin() != nullptr);
+        const auto oldLease = composition.Origin()->Lease().Value();
+        CHECK(oldLease.Get().Value() == active);
+
+        const auto context = Context(active);
+        const auto nextRevision = IdentityFrom<StreamingRuntimeCompositionRevision>(2);
+        RequireError(composition.PrepareOriginRebase(foreign.owner, config.revision, context, required, pointers),
+                     WorldStreamingErrors::RuntimeCompositionRevisionStale);
+        CHECK(log.prepared.empty());
+        RequireError(composition.PrepareOriginRebase(config.owner, config.revision, context, required,
+                                                     std::span<IOriginRebaseParticipant *const>{}),
+                     WorldStreamingErrors::OriginRebaseIncomplete);
+        REQUIRE(composition.PrepareOriginRebase(config.owner, config.revision, context, required, pointers).HasValue());
+        REQUIRE(oldLease.Get().HasValue());
+        CHECK(log.applied.empty());
+        const auto unknown = IdentityFrom<OriginRebaseTransactionId>(99);
+        RequireError(composition.CancelOriginRebase(config.owner, config.revision, unknown), WorldStreamingErrors::OriginRebaseStale);
+        RequireError(composition.CommitOriginRebase(config.owner, nextRevision, context.transaction,
+                                                    OriginRebaseCommitPoint::PostSimulation),
+                     WorldStreamingErrors::RuntimeCompositionRevisionStale);
+        RequireError(composition.Replace(config.owner, nextRevision, services),
+                     WorldStreamingErrors::RuntimeCompositionLifecycleUnavailable);
+        RequireError(composition.CommitOriginRebase(config.owner, config.revision, context.transaction,
+                                                    OriginRebaseCommitPoint::PreSimulation),
+                     WorldStreamingErrors::OriginRebaseSafePointUnavailable);
+        REQUIRE(oldLease.Get().HasValue());
+
+        const auto *const observer = composition.Origin();
+        auto mounted = std::move(composition);
+        CHECK(composition.Origin() == nullptr);
+        REQUIRE(mounted.Origin() == observer);
+        REQUIRE(mounted.CommitOriginRebase(config.owner, config.revision, context.transaction, OriginRebaseCommitPoint::PostSimulation)
+                    .HasValue());
+        CHECK(oldLease.Get().HasError());
+        CHECK(log.applied == std::vector<std::uint64_t>{10});
+        const auto currentLease = observer->Lease().Value();
+        const auto current = currentLease.Get().Value();
+        CHECK(current.Origin() == context.decision.targetOrigin);
+        CHECK(current.Binding().generation == IdentityFrom<OriginGeneration>(9));
+        REQUIRE(mounted.Replace(config.owner, nextRevision, services).HasValue());
+
+        auto second = Context(current);
+        second.decision.targetOrigin = Math::WorldCoordinate64::FromMillimeters(14'000, -20'000, 30'000);
+        RequireError(mounted.PrepareOriginRebase(config.owner, nextRevision, second, required, pointers),
+                     WorldStreamingErrors::OriginRebaseStale);
+        second.transaction = IdentityFrom<OriginRebaseTransactionId>(62);
+        REQUIRE(mounted.PrepareOriginRebase(config.owner, nextRevision, second, required, pointers).HasValue());
+        REQUIRE(mounted.CancelOriginRebase(config.owner, nextRevision, second.transaction).HasValue());
+        REQUIRE(currentLease.Get().HasValue());
+        CHECK(log.rolledBack == std::vector<std::uint64_t>{10});
+
+        second.transaction = IdentityFrom<OriginRebaseTransactionId>(63);
+        REQUIRE(mounted.PrepareOriginRebase(config.owner, nextRevision, second, required, pointers).HasValue());
+        REQUIRE(mounted.RequestCancellation(config.owner, nextRevision).HasValue());
+        CHECK(mounted.Origin() == nullptr);
+        CHECK(currentLease.Get().HasError());
+        CHECK(log.rolledBack.size() == 2);
+        RequireError(mounted.CommitOriginRebase(config.owner, nextRevision, second.transaction, OriginRebaseCommitPoint::PostSimulation),
+                     WorldStreamingErrors::OriginRebaseLifecycleUnavailable);
+        REQUIRE(mounted.BeginShutdown(config.owner).HasValue());
+        registry->Shutdown();
+    }
 
     TEST_CASE("Origin rebase gathers and atomically publishes every participant in canonical order",
               "[unit][world_streaming][origin_rebase]") {

@@ -2,6 +2,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
+#include "support/OwnedTestDirectory.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -38,9 +39,42 @@ namespace {
     };
 }  // namespace
 
+TEST_CASE("Explicit Theme Roots Accept Unicode And Commented Resources But Reject Hostile JSON", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Tests::OwnedTestDirectory directory{"theme unicode"};
+    const auto root = directory.Path() / std::filesystem::path{u8"Türkçe temalar"};
+    REQUIRE(std::filesystem::create_directory(root));
+    const auto path = root / std::filesystem::path{u8"Özel.json"};
+    const auto encodedRoot = root.u8string();
+    const auto encodedPath = path.u8string();
+    const std::string rootText{encodedRoot.begin(), encodedRoot.end()};
+    const std::string pathText{encodedPath.begin(), encodedPath.end()};
+    const auto write = [&](const std::string_view document) {
+        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+        stream << document;
+        REQUIRE(stream.good());
+    };
+    write(R"({/* supported resource comment */ "colors":{"WindowBg":"#112233"}})");
+    Theme::RefreshThemeList(nullptr, rootText.c_str());
+    REQUIRE(Theme::GetThemeList().size() == 4);
+    Theme::ThemeEntry candidate;
+    REQUIRE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    CHECK(candidate.name == std::string{"\xc3\x96zel"});
+    const auto originalColors = candidate.colors;
+    write(R"({"colors":{"WindowBg":"#112233","WindowBg":"#445566"}})");
+    CHECK_FALSE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    CHECK(candidate.colors.size() == originalColors.size());
+    write(std::string{"{\"ignored\":"} + std::string(32, '[') + "0" + std::string(32, ']') + "}");
+    CHECK_FALSE(Theme::LoadThemeFromJson(pathText.c_str(), candidate));
+    Theme::RefreshThemeList();
+    CHECK(Theme::GetThemeList().size() == 3);
+    Theme::SelectThemeByIndex(0);
+}
+
 TEST_CASE("Theme candidates are fenced to the selected source and bounded before parsing", "[unit][editor][gui][theme][reload]") {
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
     Theme::RefreshThemeList(directory.Path().string().c_str());
@@ -57,11 +91,125 @@ TEST_CASE("Theme candidates are fenced to the selected source and bounded before
     CHECK(Theme::Bg0().x == 17.0F / 255.0F);
 }
 
+TEST_CASE("Visual accessibility stays active across theme reload and restores both authored palettes", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    const Horo::Tests::OwnedTestDirectory directory{"theme accessibility"};
+    const auto path = directory.Path() / "theme.json";
+    const auto write = [&path](std::string_view contents) {
+        std::ofstream stream{path, std::ios::binary | std::ios::trunc};
+        stream << contents;
+        REQUIRE(stream.good());
+    };
+    write(R"({"colors":{"WindowBg":"#112233","Text":"#999999"}})");
+    Theme::Apply(ImGui::GetStyle(), nullptr, directory.Path().string().c_str());
+    Theme::SelectThemeByIndex(static_cast<int>(Theme::GetThemeList().size() - 1U));
+    const auto &style = ImGui::GetStyle();
+    REQUIRE(Theme::Bg0().x == 17.0F / 255.0F);
+    Theme::ApplyVisualPreferences({.highContrast = true, .reduceMotion = true, .suppressFlash = true});
+    CHECK(Theme::GetVisualPreferences().suppressFlash);
+    CHECK(Theme::GetActiveTokens().motion.reduceMotion);
+    CHECK(Theme::Bg0().x == 0.0F);
+    CHECK(Theme::Text().x == 1.0F);
+    CHECK(style.Colors[ImGuiCol_WindowBg].x == Theme::Bg0().x);
+    CHECK(style.Colors[ImGuiCol_Text].x == Theme::Text().x);
+    CHECK(style.Colors[ImGuiCol_TextDisabled].x < style.Colors[ImGuiCol_Text].x);
+    CHECK(style.Colors[ImGuiCol_ButtonActive].z > style.Colors[ImGuiCol_Button].z);
+
+    write(R"({"colors":{"WindowBg":"#773355","Text":"#AABBCC"}})");
+    Theme::ThemeEntry candidate;
+    REQUIRE(Theme::LoadThemeFromJson(path.string().c_str(), candidate));
+    REQUIRE(Theme::ApplyReloadedTheme(std::move(candidate)));
+    CHECK(Theme::Bg0().x == 0.0F);
+    CHECK(style.Colors[ImGuiCol_WindowBg].x == 0.0F);
+
+    Theme::ApplyVisualPreferences({});
+    CHECK_FALSE(Theme::GetActiveTokens().motion.reduceMotion);
+    CHECK(Theme::Bg0().x == 119.0F / 255.0F);
+    CHECK(style.Colors[ImGuiCol_WindowBg].x == Theme::Bg0().x);
+    CHECK(style.Colors[ImGuiCol_Text].x == 170.0F / 255.0F);
+}
+
+TEST_CASE("Editor scale follows logical DPI without rescaling the framebuffer or compounding theme metrics", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    auto &style = ImGui::GetStyle();
+    auto &io = ImGui::GetIO();
+    Theme::Apply(style);
+    io.DisplayFramebufferScale = {2.0F, 2.0F};
+    const float originalPadding = style.FramePadding.x;
+    const float originalCursorScale = style.MouseCursorScale;
+    const float originalLabel = Theme::TextPx::Label();
+    Theme::ApplyUiScale(125, 1.2F);
+    CHECK(Theme::GetActiveTokens().sizes.uiScale == 1.5F);
+    CHECK(Theme::TextPx::Label() == originalLabel * 1.5F);
+    CHECK(style.FramePadding.x == originalPadding * 1.5F);
+    CHECK(style.MouseCursorScale == originalCursorScale * 1.5F);
+    CHECK(io.DisplayFramebufferScale.x == 2.0F);
+    Theme::SelectThemeByIndex(2);
+    CHECK(style.FramePadding.x == originalPadding * 1.5F);
+    CHECK(style.MouseCursorScale == originalCursorScale * 1.5F);
+
+    imgui.BeginFrame();
+    ImGui::Begin("scaled typography", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    {
+        const Theme::ScopedTextStyle text{imgui.Fonts().sans, Theme::TextPx::Label(), Theme::FontPx::Sans};
+        CHECK(ImGui::GetFontSize() == Theme::TextPx::Label());
+        {
+            const Theme::ScopedTextStyle title{imgui.Fonts().sans, Theme::TextPx::Title(), Theme::FontPx::Sans};
+            CHECK(ImGui::GetFontSize() == Theme::TextPx::Title());
+        }
+        CHECK(ImGui::GetFontSize() == Theme::TextPx::Label());
+    }
+    ImGui::End();
+    imgui.EndFrame();
+
+    Theme::ApplyUiScale(75, 1.0F);
+    CHECK(Theme::GetActiveTokens().sizes.uiScale == 0.75F);
+    CHECK(Theme::TextPx::Label() == 16.0F);
+    CHECK(io.FontDefault->FontSize * io.FontGlobalScale == 16.0F);
+    CHECK(style.MouseCursorScale == originalCursorScale * 0.75F);
+    Theme::ApplyUiScale(100, 1.0F);
+    CHECK(style.FramePadding.x == originalPadding);
+    CHECK(style.MouseCursorScale == originalCursorScale);
+    CHECK(Theme::TextPx::Label() == originalLabel);
+}
+
+TEST_CASE("Global visual scale follows editor display transitions in native style and design tokens", "[unit][editor][gui][theme]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    auto &style = ImGui::GetStyle();
+    auto &io = ImGui::GetIO();
+    Theme::Apply(style);
+    Theme::ApplyUiScale(100, 1.0F, 1.0F);
+    const auto basePadding = style.FramePadding.x;
+    const auto baseText = Theme::TextPx::Label();
+
+    io.DisplayFramebufferScale = {2.0F, 2.0F};
+    Theme::ApplyUiScale(125, 1.0F, 2.0F);
+    REQUIRE(Theme::GetActiveTokens().sizes.uiScale == 2.5F);
+    CHECK(style.FramePadding.x == basePadding * 2.5F);
+    CHECK(Theme::TextPx::Label() == baseText * 2.5F);
+
+    Theme::ApplyUiScale(125, 1.5F, 2.0F);
+    REQUIRE(Theme::GetActiveTokens().sizes.uiScale == 3.0F);
+    CHECK(style.FramePadding.x == basePadding * 3.0F);
+    CHECK(io.DisplayFramebufferScale.x == 2.0F);
+
+    Theme::ApplyUiScale(75, 1.0F, 0.5F);
+    REQUIRE(Theme::GetActiveTokens().sizes.uiScale == 0.5F);
+    CHECK(style.FramePadding.x == basePadding * 0.5F);
+    CHECK(Theme::TextPx::Label() == 16.0F);
+    Theme::ApplyUiScale(100, 1.0F, 0.0F);
+    CHECK(Theme::GetActiveTokens().sizes.uiScale == 0.5F);
+    Theme::ApplyUiScale(100, 1.0F, 1.0F);
+}
+
 TEST_CASE("Theme watcher publishes valid replacements and retains the last good theme after invalid saves",
           "[unit][editor][gui][theme][reload]") {
     using namespace Horo;
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     const auto path = directory.Path() / "theme.json";
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
@@ -121,7 +269,7 @@ TEST_CASE("Theme watcher publishes valid replacements and retains the last good 
 TEST_CASE("Switching to a built-in theme fences a pending background candidate", "[unit][editor][gui][theme][reload]") {
     using namespace Horo;
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("theme.json", R"({"colors":{"WindowBg":"#112233"}})");
     Theme::RefreshThemeList(directory.Path().string().c_str());
@@ -144,7 +292,7 @@ TEST_CASE("Switching to a built-in theme fences a pending background candidate",
 TEST_CASE("Built-in themes update active style and design tokens", "[unit][editor][gui][theme]") {
     using namespace Horo::Editor;
 
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     Theme::RefreshThemeList();
     REQUIRE(Theme::GetThemeList().size() >= 3);
 
@@ -187,7 +335,7 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
     REQUIRE(Theme::FontPx::SansCompact == 18.0F);
     REQUIRE(Theme::FontPx::Icon == 20.0F);
 
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("custom.json", R"({
         "name": "Ocean",
@@ -254,7 +402,7 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
 
 TEST_CASE("Custom source roles inherit the palette and reject malformed overrides", "[unit][editor][gui][theme][source]") {
     using namespace Horo::Editor;
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("syntax.json", R"({"name":"Source", "tokens":{"sourceSyntax":{
         "text":"#eeeeee", "keyword":"#aabbcc", "type":"#112233", "string":"#ddeeff",

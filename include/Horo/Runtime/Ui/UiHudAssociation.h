@@ -8,6 +8,7 @@
 #include "Horo/Runtime/Ui/UiOverlayLifecycle.h"
 
 #include <array>
+#include <memory>
 
 namespace Horo::Runtime::Ui {
     struct UiHudAssociationTag;
@@ -44,6 +45,19 @@ namespace Horo::Runtime::Ui {
     };
 
     class UiHudAssociation;
+    struct UiHudSuppressionIssuer;
+
+    /** @brief Bounded simultaneous suppressions admitted by a HUD association. */
+    inline constexpr std::size_t MaximumUiHudSuppressions = 16;
+
+    /** @brief Opaque receipt for one suppression, with no retained publisher or gameplay owner. */
+    class UiHudSuppressionToken final {
+    private:
+        friend class UiHudAssociation;
+        UiHudSuppressionToken(std::weak_ptr<const UiHudSuppressionIssuer> issuer, std::uint64_t sequence) noexcept;
+        std::weak_ptr<const UiHudSuppressionIssuer> issuer_;
+        std::uint64_t sequence_;
+    };
 
     /** @brief Immutable extraction ticket retaining the exact generation and layout used by the host renderer. */
     class UiHudFrame final {
@@ -135,6 +149,21 @@ namespace Horo::Runtime::Ui {
          * @return Success or lifecycle/revision failure; old captures are cancelled on a policy change.
          */
         [[nodiscard]] Result<void> SetPolicy(UiHotReload &publisher, bool enabled, bool visible);
+        /**
+         * @brief Hides this HUD until this and every other admitted suppression end.
+         * @param publisher Exact live publisher.
+         * @return One owner-issued receipt or a typed stale, capacity or revision failure.
+         * @note Owner thread only. The first suppression cancels captures and invalidates old presentation receipts.
+         */
+        [[nodiscard]] Result<UiHudSuppressionToken> BeginSuppression(UiHotReload &publisher);
+        /**
+         * @brief Ends one exact suppression without changing the host's underlying visibility policy.
+         * @param publisher Exact publisher, including during replacement of its published generation.
+         * @param token Receipt issued by this association. Receipts may end out of order.
+         * @return Success or typed stale, foreign or revision failure. A consumed receipt cannot be replayed.
+         * @note Release remains valid before Refresh during reload. Ending the last suppression requires a fresh presentation.
+         */
+        [[nodiscard]] Result<void> EndSuppression(UiHotReload &publisher, const UiHudSuppressionToken &token);
         /** @brief Resolves authored canvas policy against current copied viewport evidence, even while hidden/disabled.
          * @param publisher Exact current publisher. @return Allocation-free metrics or typed stale/contract failure.
          */
@@ -167,13 +196,20 @@ namespace Horo::Runtime::Ui {
         }
 
     private:
-        UiHudAssociation(UiHudAssociationDescriptor descriptor, UiReloadLease generation) noexcept;
+        UiHudAssociation(UiHudAssociationDescriptor descriptor, UiReloadLease generation,
+                         std::shared_ptr<const UiHudSuppressionIssuer> suppressionIssuer) noexcept;
+        /** @brief Checks copied visibility policy and active scopes without looking up their receipts. */
+        [[nodiscard]] bool CanPresent() const noexcept;
         [[nodiscard]] bool Current(UiHotReload &publisher) const noexcept;
         [[nodiscard]] bool Matches(UiHotReload &publisher, const UiHudFrame &frame) const noexcept;
         [[nodiscard]] Result<void> Advance();
         void CancelCapture(UiHotReload &publisher) const noexcept;
         UiHudAssociationDescriptor descriptor_;
         UiReloadLease generation_;
+        std::shared_ptr<const UiHudSuppressionIssuer> suppressionIssuer_;
+        std::array<std::uint64_t, MaximumUiHudSuppressions> suppressions_{};
+        std::size_t suppressionCount_{};
+        std::uint64_t suppressionSequence_{};
         std::uint64_t revision_{1};
         bool presented_{};
         bool active_{true};

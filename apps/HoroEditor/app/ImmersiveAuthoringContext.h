@@ -1,0 +1,342 @@
+#pragma once
+
+/** @file ImmersiveAuthoringContext.h @brief Editor-owned immersive planning generations. */
+
+#include "AgentTurn.h"
+#include "Horo/Editor/WorkspaceMcpControls.h"
+#include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Scene/SceneSourceModel.h"
+#include "Horo/XR/XRIdentity.h"
+
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+
+namespace Horo::Agent {
+    class McpPlanCatalog;
+}
+
+namespace Horo::Mcp {
+    class McpToolRegistry;
+}
+
+namespace Horo::Editor {
+    class EditorCommandMcpSession;
+    struct EditorInspectionCommandEndpoint;
+
+    enum class ImmersiveAuthoringMode : std::uint8_t {
+        Edit,
+        Simulate,
+        Play
+    };
+    enum class ImmersiveRequestKind : std::uint8_t {
+        Plan,
+        Diagnostics,
+        SpeechCapture
+    };
+    enum class ImmersiveAdmission : std::uint8_t {
+        Admitted,
+        StaleContext,
+        ModeDenied,
+        PermissionDenied,
+        InvalidRequest
+    };
+
+    /** @brief Values captured from the authenticated editor, document and XR owners. */
+    struct ImmersiveContextIdentity final {
+        std::uint64_t projectOpening{};
+        std::uint64_t documentOpening{};
+        std::uint64_t documentRevision{};
+        XR::XRSessionId xrSession;
+        XR::XRSpaceId referenceSpace; /**< Exact calibrated World space admitted for spatial evidence. */
+        std::uint64_t user{};
+        std::uint64_t conversation{};
+        std::uint64_t toolContext{};
+        XR::XRCapabilityRevision capabilities;
+        ImmersiveAuthoringMode mode{};
+        std::uint64_t worldGeneration{}; /**< Required for a disposable simulation or Play world. */
+        bool planningAllowed{};
+        bool diagnosticsAllowed{};
+        bool localSpeechOnly{};                /**< Local Play diagnostics. No model, conversation or tool authority. */
+        WorkspaceMcpSessionKey commandSession; /**< Exact authenticated Editor session for command-bound planning. */
+        bool operator==(const ImmersiveContextIdentity &) const noexcept = default;
+    };
+
+    struct ImmersiveContextEpoch;
+
+    /** @brief Immutable bounded capture. The epoch is only a revocation signal and contains no owner reference. */
+    class ImmersivePlanningContext final {
+    public:
+        static constexpr std::size_t MaximumSelection = 32;
+
+        [[nodiscard]] const ImmersiveContextIdentity &Identity() const & noexcept {
+            return identity_;
+        }
+
+        [[nodiscard]] const ImmersiveContextIdentity &Identity() const && = delete;
+
+        [[nodiscard]] std::uint64_t Generation() const noexcept {
+            return generation_;
+        }
+
+        [[nodiscard]] std::span<const SceneSource::SceneObjectId> Selection() const & noexcept {
+            return std::span{selection_}.first(selectionCount_);
+        }
+
+        [[nodiscard]] std::span<const SceneSource::SceneObjectId> Selection() const && = delete;
+        /** @brief Returns the upstream workspace lifetime captured with the selection. */
+        [[nodiscard]] CancellationToken SourceLifetime() const noexcept {
+            return sourceLifetime_;
+        }
+        [[nodiscard]] bool IsCurrent() const noexcept;
+
+        /** @brief Checks whether two snapshots were issued for the exact same owner and generation. */
+        [[nodiscard]] bool SharesGeneration(const ImmersivePlanningContext &other) const noexcept {
+            return epoch_ && epoch_ == other.epoch_ && generation_ == other.generation_;
+        }
+
+    private:
+        friend class ImmersiveAuthoringContext;
+        ImmersiveContextIdentity identity_;
+        std::array<SceneSource::SceneObjectId, MaximumSelection> selection_{};
+        std::size_t selectionCount_{};
+        std::uint64_t generation_{};
+        std::shared_ptr<const ImmersiveContextEpoch> epoch_;
+        CancellationToken sourceLifetime_;
+    };
+
+    /** @brief Exact catalog admission for one editor and XR planning generation. */
+    class ImmersiveMcpCatalog final {
+    private:
+        friend class ImmersiveAuthoringContext;
+        ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog,
+                            std::string project = {}, std::weak_ptr<const EditorInspectionCommandEndpoint> scene = {});
+        ImmersivePlanningContext context_;
+        std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
+        std::string project_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
+    };
+
+    /** @brief One reviewed Scene intent carried out of Simulate without staging or apply authority. */
+    class ImmersiveSceneCandidate final {
+    private:
+        friend class ImmersivePlanReview;
+        friend class ImmersiveAuthoringContext;
+        ImmersiveSceneCandidate(ImmersivePlanningContext source, Agent::ModelToolIntent intent, Agent::AgentPlanObjectScope scope,
+                                Agent::AgentTurnFreshness sourceAuthority, std::weak_ptr<const EditorInspectionCommandEndpoint> scene);
+        ImmersivePlanningContext source_;
+        Agent::ModelToolIntent intent_;
+        Agent::AgentPlanObjectScope scope_;
+        Agent::AgentTurnFreshness sourceAuthority_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
+    };
+
+    /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
+    class ImmersivePlanReview final {
+    public:
+        using TargetValidator = std::function<bool(const Agent::AgentPlanObjectScope &)>;
+
+        /** @brief Redacted failure metadata available for a manual retry. */
+        struct ProviderFailureInfo final {
+            Agent::ModelErrorCode code;
+            std::optional<std::chrono::seconds> retryAfter; /**< Provider hint for a throttled request. */
+        };
+
+        /** @brief Reports terminal status, including cancellation or stale scope after inference. */
+        [[nodiscard]] Agent::AgentTurnStatus Status() const noexcept;
+
+        /** @brief Returns the provider failure and optional retry hint without exposing a partial reply.
+         * @param current Editor-owned context at presentation time.
+         * @return Failure metadata only while the original request authority remains current.
+         */
+        [[nodiscard]] std::optional<ProviderFailureInfo> ProviderFailure(const ImmersivePlanningContext &current) const noexcept;
+
+        /** @brief Borrows the validated draft and effects for the exact current authoring generation.
+         * @param current Editor-owned context at presentation time.
+         * @param inspectTargets Current workspace admission on the owner lane, required for scoped tools.
+         * @return Plan while current and complete, or null after withdrawal or failure.
+         */
+        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current,
+                                                       const TargetValidator &inspectTargets = {}) const & noexcept;
+        [[nodiscard]] const Agent::AgentTurnPlan *Read(const ImmersivePlanningContext &current,
+                                                       const TargetValidator &inspectTargets = {}) const && = delete;
+
+        /** @brief Opens the existing viewport review for an explicitly selected, single batched Scene proposal.
+         * @param current Current Edit generation. Targets are revalidated by the captured workspace owner.
+         * @return Preview ID or rejection. The viewport owner requires separate approval before changing the document.
+         */
+        [[nodiscard]] Result<std::uint64_t> StageScenePreview(const ImmersivePlanningContext &current) const;
+
+        /** @brief Retains the exact Simulate Scene intent before its planning generation is retired.
+         * @param current Current authenticated Simulate context.
+         * @return An inert candidate without transcript or model reply text, or empty on rejection.
+         */
+        [[nodiscard]] std::optional<ImmersiveSceneCandidate> RetainSceneCandidate(const ImmersivePlanningContext &current) const;
+
+    private:
+        friend class ImmersiveAgentRequest;
+        ImmersivePlanReview(ImmersivePlanningContext context, Agent::AgentTurnPlan plan, std::stop_token stop,
+                            Agent::AgentTurnFreshness authority = {}, std::weak_ptr<const EditorInspectionCommandEndpoint> scene = {});
+
+        /** @brief Checks workspace, project, trust, deadline and catalog authority for this review. */
+        [[nodiscard]] bool HasCurrentAuthority() const noexcept;
+
+        ImmersivePlanningContext context_;
+        Agent::AgentTurnPlan plan_;
+        std::stop_token stop_;
+        Agent::AgentTurnFreshness authority_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
+    };
+
+    /** @brief An owner-admitted inference request that can move to a worker without borrowing editor state. */
+    class ImmersiveAgentRequest final {
+    public:
+        ImmersiveAgentRequest(ImmersiveAgentRequest &&) noexcept = default;
+        ImmersiveAgentRequest &operator=(ImmersiveAgentRequest &&) noexcept = default;
+
+        /** @brief The exact generation used to admit and dispatch the request. */
+        [[nodiscard]] std::uint64_t Generation() const noexcept {
+            return context_.Generation();
+        }
+
+        /** @brief Checks whether this request can still publish on the editor lane after worker completion. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+
+        /** @brief Runs bounded text inference with the existing Agent runtime and checks revocation during dispatch.
+         * @param provider Host-selected provider with separately admitted transport and payload.
+         * @param turnId Nonzero turn identity assigned by the host.
+         * @param stop Worker cancellation.
+         * @return Terminal outcome. The host must recheck IsCurrent() when adopting the result.
+         */
+        [[nodiscard]] Agent::AgentTurnResult Run(Agent::IModelProvider &provider, std::uint64_t turnId, std::stop_token stop = {});
+
+        /** @brief Runs an explicitly captured plan for review without any tool execution port.
+         * @param provider Host-selected provider. @param turnId Nonzero host-issued identity.
+         * @param limits Host draft budget. @param validateTool Host registry and policy check.
+         * @param stop Worker cancellation. @param approvedContext Optional consented context for the captured project.
+         * @return Inert draft or terminal rejection.
+         */
+        [[nodiscard]] ImmersivePlanReview Plan(Agent::IModelProvider &provider, std::uint64_t turnId, const Agent::AgentTurnLimits &limits,
+                                               const Agent::AgentPlanToolValidator &validateTool = {}, std::stop_token stop = {},
+                                               const Agent::AgentTurnContext *approvedContext = nullptr);
+
+    private:
+        friend class ImmersiveAuthoringContext;
+        ImmersiveAgentRequest(ImmersivePlanningContext context, Agent::ModelRequest request, bool reviewOnly = false,
+                              std::string projectIdentity = {});
+
+        ImmersivePlanningContext context_;
+        Agent::ModelRequest request_;
+        bool reviewOnly_{};
+        std::string projectIdentity_;
+        std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
+    };
+
+    /** @brief Cold owner-lane publication and admission for one Editor opening. */
+    class ImmersiveAuthoringContext final {
+    public:
+        ImmersiveAuthoringContext();
+        ~ImmersiveAuthoringContext();
+        ImmersiveAuthoringContext(const ImmersiveAuthoringContext &) = delete;
+        ImmersiveAuthoringContext &operator=(const ImmersiveAuthoringContext &) = delete;
+
+        /** @brief Publishes the current owner observation. Invalid observations revoke the last generation.
+         * @param identity Owner-issued XR and editor scope.
+         * @param selection Bounded selection copied from the document owner.
+         * @param sourceLifetime Optional upstream scope that can revoke the snapshot before the next owner update.
+         * @return The current snapshot or empty if the observation is invalid or already cancelled.
+         */
+        [[nodiscard]] std::optional<ImmersivePlanningContext> Publish(const ImmersiveContextIdentity &identity,
+                                                                      std::span<const SceneSource::SceneObjectId> selection,
+                                                                      const CancellationToken &sourceLifetime = {}) noexcept;
+        /** @brief Explicitly admits a matching Edit successor before retiring the live Simulate scope.
+         * An inadmissible Edit observation leaves the Simulate scope available for retry.
+         * @param source Current Simulate scope. @param identity Edit observation supplied by its owner.
+         * @param selection Fresh Edit selection. @param sourceLifetime Optional lifetime of the Edit observation.
+         * @return The new Edit generation, or empty if the source or destination is inadmissible.
+         */
+        [[nodiscard]] std::optional<ImmersivePlanningContext> TransitionToEdit(const ImmersivePlanningContext &source,
+                                                                               const ImmersiveContextIdentity &identity,
+                                                                               std::span<const SceneSource::SceneObjectId> selection,
+                                                                               const CancellationToken &sourceLifetime = {}) noexcept;
+
+        /** @brief Revokes all previously issued contexts before project, document or XR teardown. */
+        void Revoke() noexcept;
+        /** @brief Rechecks one captured request before any tool authority is consulted.
+         * Admitted planning is non-authoritative, including in Simulate. It grants no mutation or approval.
+         */
+        [[nodiscard]] ImmersiveAdmission Admit(const ImmersivePlanningContext &context, ImmersiveRequestKind kind) const noexcept;
+
+        /** @brief Binds a bounded text-only model request to the current admitted context before queueing.
+         * @param context Snapshot of the owner observation to use.
+         * @param kind Explicit planning or diagnostics intent from the host.
+         * @param request Provider payload without tools or tool results. Moved only on successful capture.
+         * @return Worker request, or empty for a stale, unadmitted or tool-bearing request.
+         */
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureRequest(const ImmersivePlanningContext &context,
+                                                                          ImmersiveRequestKind kind, Agent::ModelRequest &&request) const;
+        /** @brief Captures a bounded planning request with host-selected tools for inert review only.
+         * @param context Exact current Edit or Simulate context. @param request Host-authored model request without tool history.
+         * @param projectIdentity Exact host project identifier if the draft will include approved project context.
+         * @return One owned request or empty if mode, context, policy or payload cannot be admitted.
+         */
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlan(const ImmersivePlanningContext &context,
+                                                                       Agent::ModelRequest &&request,
+                                                                       std::string_view projectIdentity = {}) const;
+        /** @brief Admits the selected tools for the current Edit or Simulate generation.
+         * @param context Current editor and XR planning scope. @param registry Host-owned registry.
+         * @param capabilities Current host grants. @param approvedTools Exact tools approved for this scope.
+         * @param approvalLifetime Lifetime of those grants and tool approvals.
+         * @return An owned catalog bound to the captured scope or empty on rejection.
+         */
+        [[nodiscard]] std::optional<ImmersiveMcpCatalog> CaptureMcpCatalog(
+            const ImmersivePlanningContext &context, std::shared_ptr<const Mcp::McpToolRegistry> registry,
+            std::span<const std::string> capabilities, std::span<const std::string> approvedTools,
+            const CancellationToken &approvalLifetime) const;
+        /** @brief Admits review tools from the exact live editor MCP session for the current project.
+         * @param context Current Edit or Simulate generation. @param session Existing host-admitted command session.
+         * @param project Exact editor-owned project identity. @param approvedTools Tools separately approved for this plan.
+         * @param approvalLifetime Revocable lifetime of the tool selection.
+         * @return Inert catalog bound to project, session and authoring generation, or empty.
+         */
+        [[nodiscard]] std::optional<ImmersiveMcpCatalog> CaptureMcpCatalog(const ImmersivePlanningContext &context,
+                                                                           const EditorCommandMcpSession &session, std::string_view project,
+                                                                           std::span<const std::string> approvedTools,
+                                                                           const CancellationToken &approvalLifetime) const;
+        /** @brief Captures a text request with tool definitions and inspection from the same approved registry snapshot.
+         * @param context Current authoring scope. @param request Request without predeclared tools.
+         * @param catalog Exact approved MCP catalog. @param projectIdentity Optional consented project identifier.
+         * @return Owned inert planner or empty for invalid scope, stale catalog or payload.
+         */
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureMcpPlan(const ImmersivePlanningContext &context,
+                                                                          Agent::ModelRequest request, const ImmersiveMcpCatalog &catalog,
+                                                                          std::string_view projectIdentity = {}) const;
+
+        /** @brief Stages a retained Simulate candidate on the first matching Edit generation.
+         * @param current Exact Edit scope. @param catalog Fresh tool catalog for that scope.
+         * @param candidate Original candidate, still within its project, trust and deadline fences.
+         * @return Viewport review ID or rejection. Document mutation requires separate approval.
+         */
+        [[nodiscard]] Result<std::uint64_t> StageSceneCandidate(const ImmersivePlanningContext &current, const ImmersiveMcpCatalog &catalog,
+                                                                const ImmersiveSceneCandidate &candidate) const;
+
+    private:
+        /** @brief Publishes a validated owner observation, retiring any superseded generation. */
+        [[nodiscard]] std::optional<ImmersivePlanningContext> PublishValidated(const ImmersiveContextIdentity &identity,
+                                                                               std::span<const SceneSource::SceneObjectId> selection,
+                                                                               const CancellationToken &sourceLifetime) noexcept;
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlanRequest(const ImmersivePlanningContext &context,
+                                                                              Agent::ModelRequest &&request,
+                                                                              std::string_view projectIdentity) const;
+        std::shared_ptr<ImmersiveContextEpoch> epoch_;
+        std::optional<ImmersivePlanningContext> current_;
+        std::uint64_t editTransferSource_{}; /**< Simulate generation admitted by the current explicit transition. */
+        std::uint64_t generation_{};
+    };
+}  // namespace Horo::Editor

@@ -135,16 +135,16 @@ namespace {
     };
 }  // namespace
 
-TEST_CASE("Material retention admits the actual901draw aggregate and exact1024edge through its owning pool",
+TEST_CASE("Material retention admits the large draw aggregate and its exact capacity edge through the owning pool",
           "[renderer][material-retention][metadata-only]") {
-    const auto count = GENERATE(std::size_t{901}, std::size_t{1024});
+    const auto count = GENERATE(std::size_t{901}, RenderGraphMaterialRaster::MaximumRetainedDraws);
     Fixture fixture;
     fixture.SetDraws(count);
     const auto references = fixture.material.use_count();
     fixture.Retain(0);
     CHECK(fixture.material.use_count() == references + static_cast<long>(count));
     for (const auto &entry : fixture.workloads)
-        CHECK(std::get<RenderGraphMaterialRaster>(entry.workload).draws.size() <= 128);
+        CHECK(std::get<RenderGraphMaterialRaster>(entry.workload).draws.size() <= RenderGraphMaterialRaster::MaximumDraws);
     fixture.RetireGeometry();
     CHECK(fixture.registry.DrainRetirements() == 0);
     CHECK(fixture.released == 0);
@@ -154,19 +154,20 @@ TEST_CASE("Material retention admits the actual901draw aggregate and exact1024ed
     CHECK(fixture.released == 2);
 }
 
-TEST_CASE("Material retention rejects1025 with typed capacity and rolls back every material pin and occupied slot",
+TEST_CASE("Material retention rejects a draw beyond capacity and rolls back every material pin and occupied slot",
           "[renderer][material-retention][metadata-only]") {
     Fixture fixture;
-    fixture.SetDraws(1025);
+    constexpr auto capacity = RenderGraphMaterialRaster::MaximumRetainedDraws;
+    fixture.SetDraws(capacity + 1);
     const auto references = fixture.material.use_count();
     const auto denied = fixture.Acquire();
     Tests::RequireActionableError(denied, FrontendErrors::ResourceCapacityExhausted);
     CHECK(fixture.material.use_count() == references);
-    fixture.SetDraws(1024);
+    fixture.SetDraws(capacity);
     const auto retryReferences = fixture.material.use_count();
     for (std::size_t index = 0; index < fixture.active.size(); ++index)
         fixture.Retain(index);
-    CHECK(fixture.material.use_count() == retryReferences + 8 * 1024);
+    CHECK(fixture.material.use_count() == retryReferences + static_cast<long>(fixture.active.size() * capacity));
     Tests::RequireActionableError(fixture.Acquire(), FrontendErrors::ResourceCapacityExhausted);
     for (std::size_t index = 0; index < fixture.active.size(); ++index)
         fixture.Release(index);

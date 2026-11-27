@@ -22,7 +22,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload,
                                            std::span<const VulkanGraphResource> resources, VulkanResourceRuntime &registry,
                                            VulkanCommandRetention &retention);
-        /** @brief Records one fully admitted frame into the existing canonical command buffer, without submission or waiting. */
+        /** @brief Records one fully admitted pass into the existing canonical command buffer, without submission or waiting. */
         void Encode(VkCommandBuffer command) const noexcept;
         /** @brief Revokes scratch admission without destroying caller-owned native data or synchronization state. */
         void Reset() noexcept;
@@ -35,9 +35,13 @@ namespace Horo::Render::Detail {
             VkImageView depthArray{};
             VkImage colorImage{};
             VkImage depthImage{};
+            VkImageView predecessorView{};
+            VkImage predecessorImage{};
+            const VulkanGraphResourceState *predecessorState{};
             RenderTextureDescriptor colorDescriptor;
             RenderTextureDescriptor depthDescriptor;
             MultiviewRenderRectangle rectangle;
+            MultiviewRenderRectangle clearRectangle;
             std::uint32_t layer{};
             std::uint32_t depthLayer{};
         };
@@ -71,12 +75,15 @@ namespace Horo::Render::Detail {
                                                                RenderTextureAspect) const;
         [[nodiscard]] Result<void> PrepareTargets(const RenderGraphExecutionRequest &, const RenderGraphMultiview &,
                                                   std::span<const VulkanGraphResource>, const VulkanResourceRuntime &);
+        /** @brief Resolves the retained exact sampled layer of an initialized stereo D32 allocation. */
+        [[nodiscard]] Result<void> PrepareCoverageTarget(const RenderGraphExecutionRequest &, const MultiviewGraphTarget &,
+                                                         std::span<const VulkanGraphResource>, const VulkanResourceRuntime &, Target &);
         /** @brief Captures the actual mesh and validates its exact graph buffer dependencies and immutable ranges. */
         [[nodiscard]] Result<VulkanMaterialMesh> DrawMesh(const RenderGraphExecutionRequest &, const MultiviewGraphGeometry &,
                                                           RenderMeshHandle, std::span<const VulkanGraphResource>,
                                                           const VulkanResourceRuntime &, VulkanCommandRetention &) const;
         /** @brief Admits the existing native material lease against device, shader routing and every target tuple. */
-        [[nodiscard]] Result<void> PrepareMaterial(Draw &, const MultiviewGraphGeometry &) const;
+        [[nodiscard]] Result<void> PrepareMaterial(Draw &, const MultiviewGraphGeometry &, MultiviewOutput) const;
         [[nodiscard]] Result<void> PrepareDraws(const RenderGraphExecutionRequest &, const RenderGraphMultiview &,
                                                 std::span<const VulkanGraphResource>, VulkanResourceRuntime &, VulkanCommandRetention &);
         [[nodiscard]] bool CanRouteLayers() const noexcept;

@@ -4,18 +4,84 @@
  * @brief Explicit non-installed Editor Play application composition over the canonical Scene owner.
  */
 #include "CommittedSceneAssets.h"
+#include "CookedDecisionSceneAdmission.h"
+#include "EditorInspectionPhysics.h"
+#include "EditorMountedWorldViewport.h"
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayXrHost.h"
+#include "EnvironmentQueryPreviewNavigation.h"
+#include "EnvironmentQueryPreviewPhysics.h"
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/Gameplay/PerceptionEventSource.h"
 #include "Horo/Prefab/PrefabMetrics.h"
+#include "MountedWorldHost.h"
+#include "NpcDialogueProjectActivation.h"
+#include "NpcDialogueScenePresentation.h"
 #include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
 
+#include <functional>
 #include <optional>
 
 namespace Horo::Application::Internal {
     class RuntimeUiPaintProjectSources;
+    struct ProjectSceneNavigationRebuildCommand;
+
+    /** @brief An explicit committed World startup bound to one authorized native project root. */
+    struct EditorPlayWorldSelection final {
+        std::filesystem::path projectRoot;
+        CommittedWorldSelection committed;
+        std::optional<EditorMountedWorldViewportSelection> viewport;
+        Runtime::RuntimeDispatchSource dispatch; /**< Required for live cell work. */
+    };
+
+    /** @brief One explicitly disclosed Blackboard key in the selected cooked Play Scene. */
+    struct EditorPlayInspectionKey final {
+        AI::BlackboardSchemaId schema;
+        AI::BlackboardKeyId key;
+        bool operator==(const EditorPlayInspectionKey &) const noexcept = default;
+    };
+
+    /** @brief Play-only exact project, committed Scene and initial controller artifact choices. */
+    struct EditorPlayDecisionSelection final {
+        std::filesystem::path projectRoot;
+        Assets::AssetId scene;
+        std::vector<CookedDecisionSceneBinding> controllers;
+        std::vector<EditorPlayInspectionKey> inspectionKeys;
+        std::string perceptionPolicy;
+        Duration fixedStep{Duration::FromNanoseconds(16'666'667)};
+        bool decisionDebugGranted{};
+    };
+
+    using EditorPlayXrLocomotion =
+        std::function<Result<void>(ScenePhysicsHost &, const Runtime::RuntimeSceneView &, const Runtime::FixedStepContext &)>;
+
+    /** @brief Explicit Play input, dialogue catalog and HUD authority supplied by the host. */
+    struct EditorPlayNpcDialogueSelection final {
+        Gameplay::GameplayActionId action;
+        NpcDialogueTriggerId trigger;
+        std::vector<Runtime::Ui::LocalizedMessageRef> messages;
+        std::vector<App::NpcDialogueCaption> captions;
+        AI::NpcDialogueCueId fallback;
+        std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline; /**< Dedicated to the active Play Scene on the owner lane. */
+        Duration workerBudget;
+        std::uint64_t tickBudget{};
+        std::optional<App::NpcDialogueEndpointApproval> approval; /**< Absence selects the authored offline fallback. */
+    };
+
+    /** @brief Binds project-authored captions to an application-selected Play action and a dedicated HUD timeline. */
+    struct EditorPlayAuthoredNpcDialogue final {
+        Gameplay::GameplayActionId action;
+        std::shared_ptr<Runtime::Ui::CaptionTimeline> timeline;
+    };
+
+    /** @brief Captures an approved Gameplay window using the exact perception registry bound to the Play Scene.
+     * @details The Scene, AI, registry and spatial publication are borrowed for one synchronous sensing callback.
+     */
+    using EditorPlayPerceptionEventFactory = std::function<Result<std::optional<Gameplay::PerceptionEventSource>>(
+        const Runtime::RuntimeSceneView &, const AI::AiSceneRuntime &, const AI::PerceptionDescriptorRegistry &,
+        const AI::PerceptionSpatialBroadphase &, std::uint64_t)>;
 
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
@@ -28,15 +94,47 @@ namespace Horo::Application::Internal {
         std::optional<Error> saveError;    /**< Original cold host/storage error, surfaced by Manager without blocking ordinary Play. */
         EditorPlaySaveFactory saveFactory; /**< Explicit Play-only sandbox composition; prefab/preview policies leave it absent. */
         std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
+        AI::AiSceneRuntimeSettings aiSettings;                 /**< Explicit descriptor readiness policy for this host. */
         std::optional<SceneAnimationHostSelection> animation;
+        std::optional<Assets::AssetId> playNavigationScene; /**< Exact selected committed Scene UUID for Play-only Detour startup. */
         std::optional<Physics::PhysicsWorldSettings> physicsSettings; /**< Captured host override, never inferred from current occupancy.
             Canonical Save setup installs its explicit bounded default only when this field is absent. */
+        std::optional<EditorPlayWorldSelection> world;                /**< Play-only mount, scoped to its launch project. */
+        std::optional<EditorPlayDecisionSelection> decisions;
+        EditorPlayXrLocomotion xrLocomotion;
+        std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion;
+        std::function<void()> cancelXrLocomotion;
+        bool playNavigationRuntimeRebuild{}; /**< Explicit opt-in for authorized runtime changes in a resident Play Scene. */
+        std::optional<EditorPlayNpcDialogueSelection> npcDialogue; /**< Explicit host override for a pre-admitted caption catalog. */
+        std::optional<EditorPlayAuthoredNpcDialogue> authoredNpcDialogue;
+        EditorPlayPerceptionEventFactory perceptionEvents; /**< Optional approved Gameplay producer for Play sensing. */
     };
+
+    /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.
+     * @param host Live product Scene host on its owning lane.
+     * @return Revocable generation lease or absence before publication and after shutdown.
+     */
+    [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> ObserveEditorPlayMountedWorld(const Editor::EditorPlaySceneHost &host);
+
+    /** @brief Reads independent geometry and Navigation readiness for an exact live Play occurrence.
+     * @param host Active Editor Play Scene owner.
+     * @param occurrence Explicit streamed Scene occurrence.
+     * @return Exact visibility and readiness or the original stale-scope error.
+     */
+    [[nodiscard]] Result<MountedWorldCellReadiness> InspectEditorPlayMountedCell(const Editor::EditorPlaySceneHost &host,
+                                                                                 Runtime::SceneInstanceId occurrence);
+
+    /** @brief Submits a host-authorized immutable geometry change to an opted-in Editor Play Scene. */
+    [[nodiscard]] Result<void> QueueEditorPlayNavigationRebuild(Editor::EditorPlaySceneHost &host,
+                                                                ProjectSceneNavigationRebuildCommand command);
+
+    /** @brief Reads the terminal error of the last accepted rebuild, if the owner rejected it. */
+    [[nodiscard]] std::optional<Error> InspectEditorPlayNavigationRebuildError(const Editor::EditorPlaySceneHost &host);
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
      */
     void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                       WallClock &wallClock);
+                                       WallClock &wallClock, std::optional<EditorPlaySaveSupplement> supplement = {});
 
     /** @brief Keeps captured resources alive while RuntimeHost owns and schedules the sole preview Scene service.
      * @details Declare this bundle before RuntimeHost. Moving scenes into RuntimeHost transfers only its
@@ -46,6 +144,9 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Editor::EditorPlaySceneHost> owners;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         Physics::PhysicsRuntimeMode physicsMode; /**< Actual successfully created peer, never inferred from a schema file. */
+        Editor::EnvironmentQueryPreviewPhysics queryPreviewPhysics;
+        Editor::EnvironmentQueryPreviewNavigation queryPreviewNavigation;
+        Editor::EditorInspectionPhysics inspectionPhysics;
     };
 
     /** @brief Prepares explicit project preview resources without starting/publishing a Scene candidate.

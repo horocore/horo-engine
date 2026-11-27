@@ -1,3 +1,6 @@
+#include "../../support/OwnedTestDirectory.h"
+#include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Mcp/McpController.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
@@ -8,15 +11,89 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
 #include <mutex>
+#include <semaphore>
 #include <string>
 #include <thread>
+#include <utility>
 
 using namespace Horo;
 using namespace Horo::Mcp;
 
 namespace {
+#if HORO_ENABLE_TELEMETRY
+    /** @brief Holds the consumer outside the queue lock while the fixture submits audit events. */
+    class AuditDispatchGate final : public Telemetry::ISink {
+    public:
+        void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *) override {
+            if (record.subsystem == "fixture.mcp_audit") {
+                entered.release();
+                resume.acquire();
+            }
+        }
+
+        void Flush() override {}
+
+        std::binary_semaphore entered{0};
+        std::binary_semaphore resume{0};
+    };
+
+    struct AuditLog final {
+        Horo::Tests::OwnedTestDirectory directory{"horo-mcp-audit"};
+        std::shared_ptr<AuditDispatchGate> gate{std::make_shared<AuditDispatchGate>()};
+        std::shared_ptr<Log::StructuredLogStore> presentation{std::make_shared<Log::StructuredLogStore>(32)};
+        bool held{};
+
+        AuditLog() {
+            REQUIRE(Log::Logger::Init(Log::LoggerConfiguration{.logDirectory = directory.Path(),
+                                                               .baseName = "mcp-test",
+                                                               .queueCapacity = 64,
+                                                               .additionalSinks = {gate},
+                                                               .writeSessionMarkers = false,
+                                                               .echoToStderr = false}));
+            Log::Logger::SetStructuredLogStore(presentation);
+        }
+
+        ~AuditLog() {
+            Release();
+            Log::Logger::Shutdown();
+            Log::Logger::SetStructuredLogStore(nullptr);
+        }
+
+        void Hold() {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            do {
+                held = Telemetry::Runtime::EmitEvent("fixture.mcp_audit", "hold", Log::Level::Info, "Hold dispatcher for audit fixture");
+                if (!held)
+                    std::this_thread::yield();
+            } while (!held && std::chrono::steady_clock::now() < deadline);
+            REQUIRE(held);
+            REQUIRE(gate->entered.try_acquire_until(deadline));
+        }
+
+        void Release() {
+            if (std::exchange(held, false))
+                gate->resume.release();
+        }
+
+        std::vector<nlohmann::json> Read() {
+            Release();
+            REQUIRE(Log::Logger::Flush());
+            std::ifstream input(directory.Path() / "mcp-test.jsonl");
+            REQUIRE(input.is_open());
+            std::vector<nlohmann::json> rows;
+            for (std::string line; std::getline(input, line);) {
+                auto row = nlohmann::json::parse(line);
+                if (row.at("category") == "mcp.audit")
+                    rows.push_back(std::move(row));
+            }
+            return rows;
+        }
+    };
+#endif
+
     class Adapter final : public IMcpToolAdapter {
     public:
         std::atomic<unsigned> calls{};
@@ -135,6 +212,17 @@ namespace {
         REQUIRE(result.HasValue());
         return std::move(result).Value();
     }
+
+    /** @brief Sends a JSON-RPC request through the local transport and returns its successful result. */
+    nlohmann::json LocalResult(McpLocalTransport &transport, const McpRequest &request) {
+        const nlohmann::json wire{{"jsonrpc", "2.0"}, {"id", request.id}, {"method", request.method}, {"params", request.params}};
+        const auto framed = transport.Feed(wire.dump() + '\n');
+        REQUIRE(framed.HasValue());
+        REQUIRE(framed.Value().size() == 1);
+        const auto response = nlohmann::json::parse(framed.Value().front());
+        REQUIRE(response.at("id") == request.id);
+        return response.at("result");
+    }
 }  // namespace
 
 TEST_CASE("MCP calls execute only when their bound owner pumps and retain correlation", "[mcp][controller]") {
@@ -167,6 +255,106 @@ TEST_CASE("MCP calls execute only when their bound owner pumps and retain correl
     CHECK(final["result"] == nlohmann::json{{"ok", true}});
     CHECK(final["requestId"] == "corr-7");
 }
+
+#if HORO_ENABLE_TELEMETRY
+TEST_CASE("MCP audit persists only generated identities and registered operation metadata", "[mcp][controller][audit]") {
+    AuditLog log;
+    log.Hold();
+    const auto policy = Test::Authorization();
+    auto adapter = std::make_shared<Adapter>();
+    adapter->action = [](const McpRequestContext &) {
+        return Result<nlohmann::json>::Success({{"detail", "private-result-marker"}});
+    };
+    auto registration = Tool(adapter);
+    registration.descriptor.effect = McpToolEffect::Mutation;
+    registration.descriptor.inputSchema["properties"] = {{"detail", {{"type", "string"}, {"maxLength", 64}}}};
+    registration.descriptor.outputSchema = {{"type", "object"},
+                                            {"properties", {{"detail", {{"type", "string"}, {"maxLength", 64}}}}},
+                                            {"additionalProperties", false}};
+    const auto registry = std::make_shared<McpToolRegistry>(policy);
+    auto revision = registry->Publish({std::move(registration)});
+    REQUIRE(revision.HasValue());
+    auto controller = McpController::Create(registry, {}, policy);
+    REQUIRE(controller.HasValue());
+    REQUIRE(controller.Value()->BindOwner(McpOwnerContext::Editor).HasValue());
+    auto manager = McpSessionManager::Create(controller.Value(), {}, policy);
+    REQUIRE(manager.HasValue());
+    const auto admission = Test::Authenticate({.clientIdentity = "private-client-marker", .registryRevision = revision.Value()}, policy);
+    {
+        Log::LogContext ambient{"ambient.note", "private-context-marker"};
+        auto client = McpInProcessAdapter::Start(manager.Value(), admission);
+        REQUIRE(client.HasValue());
+        const McpRequestContext context{.session = client.Value()->Session(),
+                                        .clientIdentity = admission.clientIdentity,
+                                        .authorizationRevision = admission.authorizationRevision,
+                                        .registryRevision = admission.registryRevision,
+                                        .deadline = std::chrono::steady_clock::now() + std::chrono::minutes{1},
+                                        .authority = admission.authority,
+                                        .authorization = policy};
+        auto request = Call("private-request-marker");
+        request.params["arguments"]["detail"] = "private-argument-marker";
+        CHECK(client.Value()->Call(request).HasError());
+        const auto challenge = policy->Challenge(context, request, std::chrono::minutes{1});
+        REQUIRE(challenge.HasValue());
+        REQUIRE(policy->Decide(challenge.Value(), true).HasValue());
+        const auto accepted = client.Value()->Call(request);
+        REQUIRE(accepted.HasValue());
+        REQUIRE(controller.Value()->Pump(McpOwnerContext::Editor).HasValue());
+        CHECK(Get(*controller.Value(), context, accepted.Value().at("operationId").get<std::uint64_t>())["result"]["detail"] ==
+              "private-result-marker");
+        client.Value()->Disconnect();
+    }
+
+    const auto rows = log.Read();
+    const auto find = [&](const std::string_view name) -> const nlohmann::json & {
+        const auto row = std::ranges::find_if(rows, [name](const nlohmann::json &entry) {
+            return entry.at("message").get_ref<const std::string &>() == name;
+        });
+        REQUIRE(row != rows.end());
+        return row->at("fields");
+    };
+    CHECK(find("session.opened").at("principal_id") == admission.authority->AuditIdentity());
+    CHECK(find("operation.rejected").at("status") == "authorization_denied");
+    CHECK(find("approval.requested").at("approval_id") == find("approval.decided").at("approval_id"));
+    CHECK(find("approval.decided").at("status") == "approved");
+    CHECK(find("operation.queued").at("operation_id") == find("operation.finished").at("operation_id"));
+    CHECK(find("operation.finished").at("tool") == "test.call");
+    CHECK(find("operation.finished").at("status") == "succeeded");
+    CHECK(find("operation.finished").at("elapsed_ms").is_number_integer());
+    CHECK(find("session.retired").at("status") == "closed");
+    const nlohmann::json persisted = rows;
+    CHECK(persisted.dump().find("private-") == std::string::npos);
+    const auto live = log.presentation->SnapshotIfChanged(0);
+    REQUIRE(live);
+    const auto finished = std::ranges::find_if(live->records, [](const auto &row) {
+        return row->category == "mcp.audit" && row->message == "operation.finished";
+    });
+    REQUIRE(finished != live->records.end());
+    CHECK((*finished)->context.empty());
+    const auto &fields = (*finished)->fields;
+    const auto tool = std::ranges::find(fields, "tool", &Telemetry::Field::key);
+    REQUIRE(tool != fields.end());
+    CHECK(std::get<std::string>(tool->value) == "test.call");
+}
+
+TEST_CASE("An overflowing MCP audit queue cannot stop command execution or shutdown", "[mcp][controller][audit]") {
+    AuditLog log;
+    log.Hold();
+    for (int index = 0; index < 128; ++index)
+        static_cast<void>(Telemetry::Runtime::EmitEvent("fixture.queue", "fill", Log::Level::Info, "Fill the audit test queue"));
+    CHECK_FALSE(Telemetry::Runtime::EmitEvent("fixture.queue", "overflow", Log::Level::Info, "Verify queue saturation"));
+    auto adapter = std::make_shared<Adapter>();
+    auto controller = Controller(adapter);
+    const auto context = Context();
+    REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
+    const auto accepted = controller->Dispatch(Call(), context);
+    REQUIRE(accepted.HasValue());
+    REQUIRE(controller->Pump(McpOwnerContext::Editor).HasValue());
+    CHECK(Get(*controller, context, accepted.Value().at("operationId").get<std::uint64_t>())["status"] == "succeeded");
+    CHECK(adapter->calls == 1);
+    CHECK(controller->Shutdown().HasValue());
+}
+#endif
 
 TEST_CASE("MCP pending and active budgets reject excess without invoking adapters", "[mcp][controller]") {
     auto adapter = std::make_shared<Adapter>();
@@ -411,6 +599,54 @@ TEST_CASE("MCP error data retains typed causes while redacting private details",
     CHECK(data.dump().find("private") == std::string::npos);
 }
 
+TEST_CASE("Local and in-process MCP replies redact nested Save failure details", "[mcp][controller][save-privacy]") {
+    auto adapter = std::make_shared<Adapter>();
+    adapter->action = [](const McpRequestContext &) {
+        Error save{.code = ErrorCode{"save.archive.chunk_hash_mismatch"},
+                   .domain = ErrorDomainId{"horo.save"},
+                   .message = "private-fixture-slot-title"};
+        Error provider{.code = ErrorCode{"storage.read_failed"},
+                       .domain = ErrorDomainId{"horo.platform"},
+                       .message = "private-fixture-provider-detail"};
+        auto failure = WrapError(McpErrors::ControllerFailed, WithCause(std::move(save), std::move(provider)), "private-fixture-wrapper");
+        failure.diagnostics.push_back(
+            {.code = DiagnosticCode{"storage.integrity"}, .message = "private-fixture-payload", .path = "/private-fixture/recovery"});
+        return Result<nlohmann::json>::Failure(std::move(failure));
+    };
+    auto controller = Controller(adapter);
+    auto manager = McpSessionManager::Create(controller, {}, Test::Authorization());
+    REQUIRE(manager.HasValue());
+    const auto admission = Test::Authenticate({.clientIdentity = "test-client", .registryRevision = 1});
+    const auto embedded = McpInProcessAdapter::Start(manager.Value(), admission);
+    const auto local = McpLocalTransport::Start(manager.Value(), admission);
+    REQUIRE(embedded.HasValue());
+    REQUIRE(local.HasValue());
+    const auto embeddedCall = embedded.Value()->Call(Call("embedded-save"));
+    REQUIRE(embeddedCall.HasValue());
+    const auto localCall = LocalResult(*local.Value(), Call("local-save"));
+    REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
+    const auto pumped = controller->Pump(McpOwnerContext::Editor);
+    REQUIRE(pumped.HasValue());
+    REQUIRE(pumped.Value() == 2);
+
+    const auto embeddedStatus = embedded.Value()->Call(
+        {.id = "embedded-status", .method = "operations/get", .params = {{"operationId", embeddedCall.Value().at("operationId")}}});
+    REQUIRE(embeddedStatus.HasValue());
+    const auto localStatus =
+        LocalResult(*local.Value(),
+                    {.id = "local-status", .method = "operations/get", .params = {{"operationId", localCall.at("operationId")}}});
+    CHECK(localStatus.at("status") == "failed");
+    CHECK(embeddedStatus.Value().at("status") == "failed");
+    const auto &failure = localStatus.at("error");
+    CHECK(failure == embeddedStatus.Value().at("error"));
+    const auto expectedCauses = nlohmann::json::array({{{"domain", "horo.save"}, {"code", "save.archive.chunk_hash_mismatch"}},
+                                                       {{"domain", "horo.platform"}, {"code", "storage.read_failed"}}});
+    CHECK(failure.at("causes") == expectedCauses);
+    CHECK(failure.at("diagnostics").at(0).at("code") == "storage.integrity");
+    CHECK(localStatus.dump().find("private-fixture") == std::string::npos);
+    CHECK(embeddedStatus.Value().dump().find("private-fixture") == std::string::npos);
+}
+
 TEST_CASE("local and embedded MCP adapters share queued execution and request cancellation", "[mcp][controller]") {
     auto adapter = std::make_shared<Adapter>();
     auto controller = Controller(adapter);
@@ -423,11 +659,7 @@ TEST_CASE("local and embedded MCP adapters share queued execution and request ca
     REQUIRE(local.HasValue());
     const auto first = embedded.Value()->Call(Call("embedded"));
     REQUIRE(first.HasValue());
-    auto framed = local.Value()->Feed(R"({"jsonrpc":"2.0","id":"local","method":"tools/call","params":{"name":"test.call","arguments":{}}})"
-                                      "\n");
-    REQUIRE(framed.HasValue());
-    REQUIRE(framed.Value().size() == 1);
-    const auto second = nlohmann::json::parse(framed.Value()[0])["result"];
+    const auto second = LocalResult(*local.Value(), Call("local"));
     CHECK(first.Value()["status"] == "queued");
     CHECK(second["status"] == "queued");
     CHECK(adapter->calls == 0);
@@ -443,10 +675,9 @@ TEST_CASE("local and embedded MCP adapters share queued execution and request ca
         embedded.Value()->Call({.id = "status", .method = "operations/get", .params = {{"operationId", first.Value()["operationId"]}}});
     REQUIRE(firstStatus.HasValue());
     CHECK(firstStatus.Value()["status"] == "cancelled");
-    framed = local.Value()->Feed("{\"jsonrpc\":\"2.0\",\"id\":\"status\",\"method\":\"operations/get\",\"params\":{\"operationId\":" +
-                                 second["operationId"].dump() + "}}\n");
-    REQUIRE(framed.HasValue());
-    CHECK(nlohmann::json::parse(framed.Value()[0])["result"]["status"] == "cancelled");
+    const auto secondStatus =
+        LocalResult(*local.Value(), {.id = "status", .method = "operations/get", .params = {{"operationId", second.at("operationId")}}});
+    CHECK(secondStatus.at("status") == "cancelled");
 }
 
 TEST_CASE("MCP cancellation racing a running completion publishes one terminal result", "[mcp][controller]") {

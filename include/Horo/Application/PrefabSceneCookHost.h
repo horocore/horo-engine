@@ -4,6 +4,7 @@
  * @brief Explicit host composition of project compatibility, prefab expansion, AssetCook publication and release handoff.
  */
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Assets/AssetArchive.h"
 #include "Horo/Assets/AssetCookService.h"
 #include "Horo/Editor/ProjectMigrationTransaction.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
@@ -11,13 +12,37 @@
 #include "Horo/Packages/PackageRestore.h"
 #include "Horo/Prefab/PrefabLimits.h"
 #include "Horo/Prefab/PrefabMetrics.h"
+#include "Horo/Release/ReleaseArtifactManifest.h"
 #include "Horo/Release/ReleasePipelineExecutor.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "Horo/Scene/ScenePrefabExpansionOwner.h"
 
+#include <span>
 #include <vector>
 
 namespace Horo::Application {
+    /** @brief Player archive and its canonical per-artifact release manifest commitment. */
+    struct PreparedPrefabReleaseContent final {
+        std::vector<std::uint8_t> archive;           /**< Exact archive bytes for the host-owned private Package stage. */
+        Release::ReleaseManifestExtension extension; /**< Bounded evidence for the final release manifest. */
+    };
+
+    /** @brief Prepares release content from the Cook stage receipt, without recooking or reading the active selector.
+     * @param files Read-only filesystem operations borrowed through the synchronous package preparation.
+     * @param cooked Exact immutable generation root and manifest digest returned by the Cook stage.
+     * @param target Cook target frozen by the host.
+     * @param chunks Validated, complete player content membership for that generation.
+     * @param runtimePrefabRoots Exact declared spawnable template roots selected by the Cook stage.
+     * @param limits Host ceiling for archive and cooked member bytes.
+     * @param cancellation Cooperative package cancellation.
+     * @return Complete archive and manifest evidence, or a typed failure without any staging or publication.
+     * @details The caller stages these bytes and includes the extension in the existing verified release manifest.
+     */
+    [[nodiscard]] Result<PreparedPrefabReleaseContent> PreparePrefabReleaseContent(
+        const DurableFileSystem &files, const Release::ReleaseCookedPayload &cooked, const AssetCookTargetId &target,
+        const Assets::AssetChunkPlan &chunks, std::span<const Assets::AssetId> runtimePrefabRoots,
+        const Assets::AssetArchiveLimits &limits = {}, const CancellationToken &cancellation = {});
+
     namespace PrefabSceneCookErrors {
         /** @brief Host compatibility, required package evidence or source cook composition is invalid. */
         extern const ErrorCodeDescriptor Invalid;
@@ -86,6 +111,7 @@ namespace Horo::Application {
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Explicit project sensor/material capture. */
         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot>
             overrideSchemas; /**< Explicit value/topology permissions; never inferred from opaque component metadata. */
+        std::optional<Assets::AssetRecord> *failedSource{}; /**< Optional invocation-owned portable source evidence from preparation. */
     };
 
     /**
@@ -132,6 +158,8 @@ namespace Horo::Application {
                                                                            const CancellationToken &cancellation);
 
     private:
+        class PreparationDiagnostics;
+
         /** @brief Runs one operation with optional validated release semantics included in its immutable cache identity. */
         [[nodiscard]] Result<Assets::AssetCookReport> CookImpl(const PrefabSceneCookRequest &request, const CancellationToken &cancellation,
                                                                const Release::ReleaseExecutionPlan *releasePlan);
@@ -140,6 +168,7 @@ namespace Horo::Application {
          * @param limits Validated prefab bounds.
          * @param cancellation Cooperative stop token.
          * @param releasePlan Optional frozen release identity.
+         * @param diagnostics Progress and failure evidence for host preparation.
          * @param projectLease Owned mutation authority; released only after cook completion or unwinding.
          * @return Committed report or typed failure preserving prior authority.
          */
@@ -147,6 +176,7 @@ namespace Horo::Application {
                                                                            const Prefab::PrefabLimitProfile &limits,
                                                                            const CancellationToken &cancellation,
                                                                            const Release::ReleaseExecutionPlan *releasePlan,
+                                                                           PreparationDiagnostics &diagnostics,
                                                                            Editor::ProjectMutationLease projectLease);
         JobSystem &jobs_;
         std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog_;

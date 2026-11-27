@@ -49,5 +49,7 @@ namespace Horo::Application::Internal {
         void ReceiveMetadata(Duration now);
         [[nodiscard]] Result<void> RetireCurrent();
         [[nodiscard]] Result<void> ComposePrepared();
+        /** @brief Advances the live session and invalidates old metadata sampling after a removal commits. */
+        [[nodiscard]] Result<void> PumpCurrent(Packages::PackageActivationBoundary boundary);
     };
 }  // namespace Horo::Application::Internal

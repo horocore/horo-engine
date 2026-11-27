@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -19,7 +21,9 @@ namespace Horo::Navigation {
             NavigationWorldActivationDescriptor descriptor;
             std::unique_ptr<INavigationQueryBackend> backend;
             CancellationSource cancellation;
-            std::atomic<bool> revoked{false};
+            std::atomic<NavigationWorldRevocation> revocation{NavigationWorldRevocation::None};
+            std::weak_ptr<const void> traversalCatalog;     /**< Owner-lane admission witness. Never pins a catalog or provider. */
+            std::uint64_t lastTraversalCatalogGeneration{}; /**< Owner-lane counter within this exact topology. */
         };
     }  // namespace Detail
 
@@ -33,6 +37,18 @@ namespace Horo::Navigation {
             return std::ranges::any_of(records, [world](const auto &record) {
                 return record->descriptor.world == world;
             });
+        }
+
+        /** @brief Validate identity continuity for an immutable topology replacement within the active world. */
+        [[nodiscard]] Result<void> ValidateTopologyReplacement(const NavigationWorldActivationDescriptor &active,
+                                                               const NavigationWorldActivationDescriptor &candidate) {
+            if (candidate.scene != active.scene || candidate.sceneGeneration != active.sceneGeneration)
+                return Failure<void>(NavigationErrors::InvalidWorld);
+            if (candidate.topology == active.topology)
+                return Failure<void>(NavigationErrors::InvalidWorld);
+            if (candidate.topology < active.topology)
+                return Failure<void>(NavigationErrors::StaleSnapshot);
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -78,7 +94,12 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationWorldReadLease::IsRevoked */
     bool NavigationWorldReadLease::IsRevoked() const noexcept {
-        return record_->revoked.load();
+        return Revocation() != NavigationWorldRevocation::None;
+    }
+
+    /** @copydoc NavigationWorldReadLease::Revocation */
+    NavigationWorldRevocation NavigationWorldReadLease::Revocation() const noexcept {
+        return record_ ? record_->revocation.load() : NavigationWorldRevocation::None;
     }
 
     /** @copydoc NavigationWorldLifecycle::NavigationWorldLifecycle(std::uint32_t,
@@ -90,7 +111,7 @@ namespace Horo::Navigation {
     /** @copydoc NavigationWorldLifecycle::NavigationWorldLifecycle(NavigationWorldLifecycle&&) */
     NavigationWorldLifecycle::NavigationWorldLifecycle(NavigationWorldLifecycle &&other) noexcept
         : maximumRetiredWorlds_(other.maximumRetiredWorlds_), staged_(std::move(other.staged_)), active_(std::move(other.active_)),
-          retired_(std::move(other.retired_)), state_(other.state_) {
+          retired_(std::move(other.retired_)), lastStagedTopology_(other.lastStagedTopology_), state_(other.state_) {
         other.maximumRetiredWorlds_ = 0;
         other.state_ = NavigationWorldLifecycleState::Closed;
     }
@@ -116,19 +137,119 @@ namespace Horo::Navigation {
     /** @copydoc NavigationWorldLifecycle::Stage */
     Result<void> NavigationWorldLifecycle::Stage(const NavigationWorldActivationDescriptor &descriptor,
                                                  std::unique_ptr<INavigationQueryBackend> backend) {
+        return StageCandidate(descriptor, std::move(backend), false);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::StageCandidate */
+    Result<void> NavigationWorldLifecycle::StageCandidate(const NavigationWorldActivationDescriptor &descriptor,
+                                                          std::unique_ptr<INavigationQueryBackend> backend, bool emptyAllowed) {
         using enum NavigationWorldLifecycleState;
         if (state_ == ShuttingDown || state_ == Closed || staged_)
             return Failure<void>(NavigationErrors::CapabilityUnavailable);
-        if (!descriptor.IsValid() || !backend || !ValidateNavigationProviderCapabilities(backend->Capabilities()))
+        if (!descriptor.IsValid() || (backend ? !ValidateNavigationProviderCapabilities(backend->Capabilities()) : !emptyAllowed))
             return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
-        if ((active_ && active_->descriptor.world == descriptor.world) || ContainsWorld(retired_, descriptor.world))
+        const bool replacesTopology = active_ && active_->descriptor.world == descriptor.world;
+        if (replacesTopology) {
+            if (const auto valid = ValidateTopologyReplacement(active_->descriptor, descriptor); valid.HasError())
+                return valid;
+            if (descriptor.topology <= lastStagedTopology_)
+                return Failure<void>(NavigationErrors::StaleSnapshot);
+        } else if (ContainsWorld(retired_, descriptor.world)) {
             return Failure<void>(NavigationErrors::InvalidWorld);
+        }
         try {
             staged_ = std::make_shared<Detail::NavigationWorldRecord>(descriptor, std::move(backend));
+            if (replacesTopology)
+                lastStagedTopology_ = descriptor.topology;
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Failure<void>(NavigationErrors::CapacityExceeded);
         }
+    }
+
+    /** @copydoc NavigationWorldLifecycle::StageTopology */
+    Result<void> NavigationWorldLifecycle::StageTopology(const NavigationWorldActivationDescriptor &expectedActive,
+                                                         NavigationGeneration nextTopology,
+                                                         std::unique_ptr<INavigationQueryBackend> backend) {
+        if (!IsCurrentTopology(expectedActive))
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        auto candidate = expectedActive;
+        candidate.topology = nextTopology;
+        return Stage(candidate, std::move(backend));
+    }
+
+    /** @copydoc NavigationWorldLifecycle::StageEmptyTopology */
+    Result<void> NavigationWorldLifecycle::StageEmptyTopology(const NavigationWorldActivationDescriptor &expectedActive,
+                                                              NavigationGeneration nextTopology) {
+        if (!IsCurrentTopology(expectedActive))
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        auto candidate = expectedActive;
+        candidate.topology = nextTopology;
+        return StageCandidate(candidate, {}, true);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::StageInitialEmptyTopology */
+    Result<void> NavigationWorldLifecycle::StageInitialEmptyTopology(const NavigationWorldActivationDescriptor &descriptor) {
+        if (state_ != NavigationWorldLifecycleState::Empty)
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        return StageCandidate(descriptor, {}, true);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::IsCurrentTopology */
+    bool NavigationWorldLifecycle::IsCurrentTopology(const NavigationWorldActivationDescriptor &expected) const noexcept {
+        return active_ && active_->descriptor == expected && active_->revocation.load() == NavigationWorldRevocation::None;
+    }
+
+    /** @copydoc NavigationWorldLifecycle::IsStagedTopology */
+    bool NavigationWorldLifecycle::IsStagedTopology(const NavigationWorldActivationDescriptor &candidate) const noexcept {
+        return active_ && staged_ && staged_->descriptor == candidate && candidate.world == active_->descriptor.world;
+    }
+
+    /** @copydoc NavigationWorldLifecycle::DiscardStagedTopology */
+    Result<void> NavigationWorldLifecycle::DiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate) {
+        return TryDiscardStagedTopology(candidate) ? Result<void>::Success() : Failure<void>(NavigationErrors::StaleSnapshot);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::TryDiscardStagedTopology */
+    bool NavigationWorldLifecycle::TryDiscardStagedTopology(const NavigationWorldActivationDescriptor &candidate) noexcept {
+        if (!IsStagedTopology(candidate))
+            return false;
+        Revoke(staged_, NavigationWorldRevocation::WorldRetired);
+        staged_.reset();
+        return true;
+    }
+
+    /** @copydoc NavigationWorldLifecycle::CommitStagedTopology */
+    Result<void> NavigationWorldLifecycle::CommitStagedTopology(const NavigationWorldActivationDescriptor &candidate) {
+        if (auto valid = ValidateStagedTopology(candidate); valid.HasError())
+            return valid;
+        PublishStaged();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::ValidateStagedTopology */
+    Result<void> NavigationWorldLifecycle::ValidateStagedTopology(const NavigationWorldActivationDescriptor &candidate) const {
+        if (!IsStagedTopology(candidate))
+            return Failure<void>(NavigationErrors::StaleSnapshot);
+        if (!CanRetireActive())
+            return Failure<void>(NavigationErrors::CapacityExceeded);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::PublishValidatedTopology */
+    void NavigationWorldLifecycle::PublishValidatedTopology(const NavigationWorldActivationDescriptor &candidate,
+                                                            NavigationTopologyChange change) noexcept {
+        assert(IsStagedTopology(candidate) && CanRetireActive());
+        (void)candidate;
+        const auto reason = change == NavigationTopologyChange::ForcedCellEviction ? NavigationWorldRevocation::TileEvicted
+                                                                                   : NavigationWorldRevocation::TopologyReplaced;
+        PublishStaged(/*deferCancellation=*/true, reason);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::NotifyRetired */
+    void NavigationWorldLifecycle::NotifyRetired(const NavigationWorldReadLease &predecessor) noexcept {
+        if (predecessor.IsRevoked())
+            predecessor.record_->cancellation.RequestCancellation();
     }
 
     /** @copydoc NavigationWorldLifecycle::CommitAtSafePoint */
@@ -142,11 +263,19 @@ namespace Horo::Navigation {
         if (!CanRetireActive())
             return Failure<void>(NavigationErrors::CapacityExceeded);
 
-        if (active_)
-            RetireActive();
-        active_ = std::move(staged_);
-        state_ = Active;
+        PublishStaged();
         return Result<void>::Success();
+    }
+
+    /** @copydoc NavigationWorldLifecycle::PublishStaged */
+    void NavigationWorldLifecycle::PublishStaged(bool deferCancellation, NavigationWorldRevocation topologyReason) noexcept {
+        using enum NavigationWorldLifecycleState;
+        const bool replacesTopology = active_ && active_->descriptor.world == staged_->descriptor.world;
+        const bool keepPaused = state_ == Paused && replacesTopology;
+        RetireActive(replacesTopology ? topologyReason : NavigationWorldRevocation::WorldRetired, deferCancellation);
+        active_ = std::move(staged_);
+        lastStagedTopology_ = active_->descriptor.topology;
+        state_ = keepPaused ? Paused : Active;
     }
 
     /** @copydoc NavigationWorldLifecycle::Pause */
@@ -181,10 +310,11 @@ namespace Horo::Navigation {
         if (!CanRetireActive())
             return Failure<void>(NavigationErrors::CapacityExceeded);
         if (staged_) {
-            Revoke(staged_);
+            Revoke(staged_, NavigationWorldRevocation::WorldRetired);
             staged_.reset();
         }
-        RetireActive();
+        RetireActive(NavigationWorldRevocation::WorldRetired);
+        lastStagedTopology_ = {};
         state_ = Empty;
         return Result<void>::Success();
     }
@@ -196,13 +326,13 @@ namespace Horo::Navigation {
             return;
         state_ = ShuttingDown;
         if (staged_) {
-            Revoke(staged_);
+            Revoke(staged_, NavigationWorldRevocation::WorldRetired);
             staged_.reset();
         }
         if (active_)
-            Revoke(active_);
+            Revoke(active_, NavigationWorldRevocation::WorldRetired);
         for (const auto &record : retired_)
-            Revoke(record);
+            Revoke(record, NavigationWorldRevocation::WorldRetired);
         static_cast<void>(CollectRetired());
     }
 
@@ -225,8 +355,10 @@ namespace Horo::Navigation {
             return Failure<NavigationWorldReadLease>(NavigationErrors::NoNavigationData);
         if (active_->descriptor.world != world)
             return Failure<NavigationWorldReadLease>(NavigationErrors::InvalidWorld);
-        if (state_ != NavigationWorldLifecycleState::Active || active_->revoked.load())
+        if (state_ != NavigationWorldLifecycleState::Active || active_->revocation.load() != NavigationWorldRevocation::None)
             return Failure<NavigationWorldReadLease>(NavigationErrors::CapabilityUnavailable);
+        if (!active_->backend)
+            return Failure<NavigationWorldReadLease>(NavigationErrors::NoNavigationData);
         return Result<NavigationWorldReadLease>::Success(NavigationWorldReadLease{active_});
     }
 
@@ -235,6 +367,19 @@ namespace Horo::Navigation {
         if (!active_)
             return Failure<NavigationWorldActivationDescriptor>(NavigationErrors::NoNavigationData);
         return Result<NavigationWorldActivationDescriptor>::Success(active_->descriptor);
+    }
+
+    /** @copydoc NavigationWorldLifecycle::ClaimTraversalCatalog */
+    Result<std::uint64_t> NavigationWorldLifecycle::ClaimTraversalCatalog(const NavigationWorldActivationDescriptor &expected,
+                                                                          std::weak_ptr<const void> owner) {
+        if (!active_ || active_->descriptor != expected || owner.expired())
+            return Failure<std::uint64_t>(NavigationErrors::StaleSnapshot);
+        if (!active_->traversalCatalog.expired())
+            return Failure<std::uint64_t>(NavigationErrors::AdmissionRejected);
+        if (active_->lastTraversalCatalogGeneration == std::numeric_limits<std::uint64_t>::max())
+            return Failure<std::uint64_t>(NavigationErrors::GenerationExhausted);
+        active_->traversalCatalog = std::move(owner);
+        return Result<std::uint64_t>::Success(++active_->lastTraversalCatalogGeneration);
     }
 
     /** @copydoc NavigationWorldLifecycle::State */
@@ -258,16 +403,23 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationWorldLifecycle::Revoke */
-    void NavigationWorldLifecycle::Revoke(const std::shared_ptr<Detail::NavigationWorldRecord> &record) noexcept {
-        record->revoked.store(true);
-        record->cancellation.RequestCancellation();
+    void NavigationWorldLifecycle::Revoke(const std::shared_ptr<Detail::NavigationWorldRecord> &record,
+                                          NavigationWorldRevocation reason) noexcept {
+        auto current = NavigationWorldRevocation::None;
+        if (record->revocation.compare_exchange_strong(current, reason))
+            record->cancellation.RequestCancellation();
     }
 
     /** @copydoc NavigationWorldLifecycle::RetireActive */
-    void NavigationWorldLifecycle::RetireActive() noexcept {
+    void NavigationWorldLifecycle::RetireActive(NavigationWorldRevocation reason, bool deferCancellation) noexcept {
         if (!active_)
             return;
-        Revoke(active_);
+        if (deferCancellation) {
+            auto current = NavigationWorldRevocation::None;
+            active_->revocation.compare_exchange_strong(current, reason);
+        } else {
+            Revoke(active_, reason);
+        }
         if (active_.use_count() > 1)
             retired_.push_back(active_);
         active_.reset();

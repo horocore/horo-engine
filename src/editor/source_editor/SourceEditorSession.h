@@ -10,6 +10,17 @@
 #include <map>
 
 namespace Horo::Editor {
+    namespace Language {
+        struct LanguageResult;
+        struct LanguageSourceFocus;
+    }  // namespace Language
+
+    /** @brief Error and warning counts for the exact current source behind a review. */
+    struct SourceReviewDiagnosticCounts final {
+        std::size_t errors{};
+        std::size_t warnings{};
+    };
+
     /** @brief One independent source presentation; no document or language authority. */
     struct SourceEditorView final {
         explicit SourceEditorView(SourceEditingViewId identity) : widget(identity) {}
@@ -17,15 +28,27 @@ namespace Horo::Editor {
         /** @brief Reconciles one publication into independent interaction and lexical projections.
          * @param source Current authoritative source publication.
          */
-        void Publish(const SourceDocumentSnapshot &source) {
-            widget.Publish(source);
-            if (syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
-                static_cast<void>(widget.Highlight(source.Revision(), syntax.Syntax()));
-        }
+        void Publish(const SourceDocumentSnapshot &source);
+        /** @brief Presents diagnostics for the exact source publication, or clears retired decorations. */
+        void PublishDiagnostics(const SourceDocumentSnapshot &source, std::shared_ptr<const Language::LanguageResult> result);
+        /** @brief Returns read-only counts for the supplied current source.
+         * @param source The current authoritative source publication.
+         * @return Counts when that exact revision has language evidence.
+         */
+        [[nodiscard]] std::optional<SourceReviewDiagnosticCounts> CurrentDiagnostics(const SourceDocumentSnapshot &source) const;
+        /** @brief Selects an exact language destination once in this presentation. */
+        [[nodiscard]] bool ApplyLanguageFocus(const SourceDocumentSnapshot &source,
+                                              const std::shared_ptr<const Language::LanguageSourceFocus> &focus);
 
         SourceEditorWidget widget;
         SourceEditorTools tools;
         SourceSyntaxCache syntax;
+        std::shared_ptr<const SourceReviewOverlay> pendingReview;
+        std::shared_ptr<const Language::LanguageResult> diagnostics;
+        std::weak_ptr<const Language::LanguageSourceFocus> lastLanguageFocus;
+
+    private:
+        std::optional<SourceReviewDiagnosticCounts> diagnosticCounts_;
     };
 
     /** @brief Project-owner-scoped presentations with a monotonic host-lifetime identity allocator. */
@@ -38,6 +61,10 @@ namespace Horo::Editor {
          * @return Presentation, or null when its typed identity is inert or view IDs are exhausted.
          */
         [[nodiscard]] SourceEditorView *Acquire(DocumentInstanceId instance);
+        /** @brief Queues a prepared overlay for the source tab's next presentation. */
+        [[nodiscard]] bool StageReview(std::shared_ptr<const SourceReviewOverlay> overlay);
+        /** @brief Observes a range in an existing widget only. No presentation is created on a miss. */
+        [[nodiscard]] std::optional<SourceContextRange> ReadSelection(const SourceDocumentSnapshot &snapshot) const;
         /** @brief Removes only explicitly closed document presentations. @param tabs Current host-owned tab inventory. */
         void Retain(std::span<const WorkspaceDocumentTab> tabs);
         /** @brief Releases an old owner's widgets, tools and focus without reusing any allocated view IDs. */
