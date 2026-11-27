@@ -172,6 +172,22 @@ def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(re
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize("specialized", ["displayEnumeration", "renderTiming"])
+def test_specialized_capture_cannot_replace_input_observation_from_the_same_run(release, specialized):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    receipt = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
+    capture = json.loads((evidence / record["checks"][specialized]["evidenceSha256"]).read_bytes())
+    receipt["artifactSha256"] = store(evidence, json.dumps(capture, indent=2).encode())
+    record["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(receipt).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Physical observation refers to a specialized XR capture" in result.stderr
+
+
 @pytest.mark.parametrize(("substitute", "reason"), [
     ("buildSha256", "Physical observation refers to a product build or package receipt"),
     ("packageReceiptSha256", "Physical observation refers to a product build or package receipt"),

@@ -170,7 +170,8 @@ setup, input, comfort, lifecycle, recovery and any required haptics receipts
 against their SHA-256-named observation files. The checker verifies each receipt
 against the declared tuple and the same smoke run. It also rejects check
 receipts used as observations and JSON observations with another tuple or run.
-Display, timing and MR keep their dedicated capture options.
+Display, timing and MR captures satisfy their dedicated checks only. A separate
+redacted observation may support several checks when it records each outcome.
 For PCVR, `--desktop-preflight` validates the exact stdout receipt from
 `horo-engine --probe-xr-package ... --connection tethered` or
 `--connection wireless-streaming`, matching the tuple. Save the version 2

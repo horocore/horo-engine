@@ -55,6 +55,12 @@ SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR
 PHYSICAL_CHECK_RECEIPT_FIELDS = {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"}
 OBSERVATION_IDENTITY_FIELDS = {"schemaVersion", "tuple", "provenance"}
 SMOKE_RECORD_FIELDS = OBSERVATION_IDENTITY_FIELDS | {"category", "evidenceLevel", "status", "checks", "display"}
+DISPLAY_CAPTURE_FIELDS = OBSERVATION_IDENTITY_FIELDS | {"refreshMilliHertz", "viewExtents"}
+RENDER_TIMING_CAPTURE_FIELDS = OBSERVATION_IDENTITY_FIELDS | {
+    "targetRefreshMilliHertz", "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines", "swapchainFailures",
+}
+MIXED_REALITY_CAPTURE_FIELDS = OBSERVATION_IDENTITY_FIELDS | {"evidenceLevel", "capabilities"}
+SPECIALIZED_CAPTURE_FIELDS = (DISPLAY_CAPTURE_FIELDS, RENDER_TIMING_CAPTURE_FIELDS, MIXED_REALITY_CAPTURE_FIELDS)
 MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
 
 
@@ -213,8 +219,7 @@ def check_display_capture(data: bytes, record: dict) -> None:
     display = record["display"]
     require(len(data) <= MAX_RECORD_BYTES, "Display capture exceeds the size limit")
     require(hashlib.sha256(data).hexdigest() == display["evidenceSha256"], "Display capture digest does not match")
-    capture = fields(decode_record(data), {"schemaVersion", "tuple", "provenance", "refreshMilliHertz", "viewExtents"},
-                     "display capture")
+    capture = fields(decode_record(data), DISPLAY_CAPTURE_FIELDS, "display capture")
     require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported display capture schema")
     validate_identity(capture["tuple"], complete=True)
     validate_provenance(capture["provenance"], capture["tuple"], observed=True)
@@ -236,9 +241,7 @@ def check_render_timing(data: bytes, record: dict, limits: dict) -> None:
     require(len(data) <= MAX_RECORD_BYTES, "Render timing capture exceeds the size limit")
     digest = record["checks"]["renderTiming"]["evidenceSha256"]
     require(hashlib.sha256(data).hexdigest() == digest, "Render timing capture digest does not match")
-    capture = fields(decode_record(data), {"schemaVersion", "tuple", "provenance", "targetRefreshMilliHertz",
-                                           "durationNs", "frameCount", "peakFrameIntervalNs", "missedDeadlines",
-                                           "swapchainFailures"}, "render timing capture")
+    capture = fields(decode_record(data), RENDER_TIMING_CAPTURE_FIELDS, "render timing capture")
     require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported render timing capture schema")
     require(capture["tuple"] == record["tuple"], "Render timing capture is from a different product tuple")
     require(capture["provenance"] == record["provenance"], "Render timing capture is from a different smoke run")
@@ -360,8 +363,7 @@ def check_mixed_reality_capture(data: bytes, record: dict, capabilities: list[st
         document = decode_record(data)
     except (ValueError, RecursionError) as error:
         raise ValueError("Invalid mixed reality capture JSON") from error
-    capture = fields(document, {"schemaVersion", "evidenceLevel", "tuple", "provenance", "capabilities"},
-                     "mixed reality capture")
+    capture = fields(document, MIXED_REALITY_CAPTURE_FIELDS, "mixed reality capture")
     require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported mixed reality capture schema")
     require(capture["evidenceLevel"] == "PhysicalDeviceQualification", "Mixed reality capture requires physical headset evidence")
     require(capture["tuple"] == record["tuple"], "Mixed reality capture is from a different product tuple")
@@ -452,6 +454,7 @@ def verify_physical_observations(root: Path, record: dict, observations: set[str
                 "Physical observation must identify physical evidence")
         require(capture["tuple"] == record["tuple"] and capture["provenance"] == record["provenance"],
                 "Physical observation capture is from a different product tuple or smoke run")
+        require(capture.keys() not in SPECIALIZED_CAPTURE_FIELDS, "Physical observation refers to a specialized XR capture")
 
 
 def verify_physical_checks(root: Path, record: dict, optional: set[str]) -> None:
