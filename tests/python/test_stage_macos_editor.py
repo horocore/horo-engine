@@ -59,6 +59,22 @@ class StageMacEditorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "audio-input"):
                 stage.stage_editor(Path("build/release"), self.destination, "-")
 
+    def test_refuses_to_sign_a_bundle_left_by_an_earlier_install(self):
+        self.run_tool(["cmake", "--install"])
+        previous = self.bundle / "Contents/MacOS/HoroEditor"
+        previous.write_bytes(b"older editor")
+
+        def no_new_install(command, **options):
+            if command[0] == "cmake":
+                return subprocess.CompletedProcess(command, 0)
+            return self.run_tool(command, **options)
+
+        with patch.object(stage.subprocess, "run", side_effect=no_new_install) as run:
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                stage.stage_editor(Path("build/release"), self.destination, "-")
+            run.assert_not_called()
+        self.assertEqual(previous.read_bytes(), b"older editor")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2432,7 +2432,8 @@ mix input. The detached voice owner scrubs its render scratch before release.
 The macOS SDL3 editor bundle carries microphone and speech usage descriptions.
 Xcode uses the editor capture entitlements file when signing. The Ninja release
 job stages the complete `HoroEditor.app` through the Editor install component
-and applies the same entitlements to the staged bundle. It verifies the bundle
+in a destination without an existing editor bundle and applies the same
+entitlements to the newly installed bundle. It verifies the bundle
 signature and the embedded audio-input entitlement before creating the archive.
 The job uses an ad-hoc signature. Developer ID distribution and notarization
 require their own signing identity and release workflow.

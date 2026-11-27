@@ -19,11 +19,13 @@ ENTITLEMENTS = (
 def stage_editor(build_dir: Path, destination: Path, identity: str) -> Path:
     if not identity.strip():
         raise ValueError("A signing identity is required.")
+    bundle = destination / "HoroEditor.app"
+    if bundle.is_symlink() or bundle.exists():
+        raise ValueError("HoroEditor.app already exists in the staging directory.")
     subprocess.run(
         ["cmake", "--install", str(build_dir), "--component", "Editor", "--prefix", str(destination)],
         check=True,
     )
-    bundle = destination / "HoroEditor.app"
     metadata = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
     for field in USAGE_FIELDS:
         value = metadata.get(field) if isinstance(metadata, dict) else None
