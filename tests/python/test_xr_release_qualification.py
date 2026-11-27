@@ -173,12 +173,17 @@ def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(re
 
 
 @pytest.mark.parametrize("specialized", ["displayEnumeration", "renderTiming"])
-def test_specialized_capture_cannot_replace_input_observation_from_the_same_run(release, specialized):
+@pytest.mark.parametrize("wrapper", ["unwrapped", "array", "object"])
+def test_specialized_capture_cannot_replace_input_observation_from_the_same_run(release, specialized, wrapper):
     matrix, evidence = release
     row = matrix["tuples"][0]
     record = json.loads((evidence / row["recordSha256"]).read_bytes())
     receipt = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
     capture = json.loads((evidence / record["checks"][specialized]["evidenceSha256"]).read_bytes())
+    if wrapper == "array":
+        capture = [capture]
+    elif wrapper == "object":
+        capture = {"observations": [capture]}
     receipt["artifactSha256"] = store(evidence, json.dumps(capture, indent=2).encode())
     record["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(receipt).encode())
     row["recordSha256"] = store(evidence, json.dumps(record).encode())

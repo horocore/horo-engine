@@ -122,12 +122,15 @@ def verify_artifact(path: Path, digest: str, *, bounded_json: bool = False) -> b
     hasher = hashlib.sha256()
     size = 0
     first_content = b""
+    last_content = b""
     record_bytes = bytearray()
     with path.open("rb") as source:
         while chunk := source.read(1024 * 1024):
             if bounded_json and not first_content:
                 prefix = chunk if size else chunk.removeprefix(UTF8_BOM)
                 first_content = prefix.lstrip()[:1]
+            if first_content == b"[":
+                last_content = chunk.rstrip()[-1:] or last_content
             size += len(chunk)
             require(size <= MAX_ARTIFACT_BYTES, f"Artifact exceeds the size budget: {digest}")
             if first_content == b"{":
@@ -135,6 +138,8 @@ def verify_artifact(path: Path, digest: str, *, bounded_json: bool = False) -> b
             hasher.update(chunk)
             if size <= MAX_RECORD_BYTES:
                 record_bytes.extend(chunk)
+    require(first_content != b"[" or last_content != b"]" or size <= MAX_RECORD_BYTES,
+            "Physical observation JSON exceeds the size limit")
     require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
     return bytes(record_bytes) if size <= MAX_RECORD_BYTES else None
 
@@ -423,6 +428,46 @@ def physical_check_evidence(root: Path, record: dict, optional: set[str]) -> tup
     return receipt_digests, observations
 
 
+def observation_records(data: bytes) -> Iterator[dict]:
+    """Read every object in a bounded structured observation."""
+    array = data.startswith(b"[")
+    if not array and not data.startswith(b"{"):
+        return
+    try:
+        document = decode_record(data)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        if array:
+            return  # Plain logs can start with a bracketed category.
+        raise ValueError("Invalid physical observation JSON") from error
+    except (ValueError, RecursionError) as error:
+        raise ValueError("Invalid physical observation JSON") from error
+
+    pending = [document]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            yield item
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
+def verify_observation_record(capture: dict, record: dict) -> None:
+    """Check any embedded XR qualification claim before accepting the observation."""
+    require(not ANDROID_RECEIPT_FIELDS <= capture.keys(), "Physical observation refers to an XR preflight receipt")
+    if {"tuple", "provenance", "evidenceLevel"}.isdisjoint(capture):
+        return
+    require(not PHYSICAL_CHECK_RECEIPT_FIELDS <= capture.keys(), "Physical observation refers to a physical check receipt")
+    require(not SMOKE_RECORD_FIELDS <= capture.keys(), "Physical observation refers to a smoke summary")
+    require(OBSERVATION_IDENTITY_FIELDS <= capture.keys(), "Physical observation is missing qualification identity")
+    require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, "Unsupported physical observation schema")
+    require(capture.get("evidenceLevel", record["evidenceLevel"]) == record["evidenceLevel"],
+            "Physical observation must identify physical evidence")
+    require(capture["tuple"] == record["tuple"] and capture["provenance"] == record["provenance"],
+            "Physical observation capture is from a different product tuple or smoke run")
+    require(capture.keys() not in SPECIALIZED_CAPTURE_FIELDS, "Physical observation refers to a specialized XR capture")
+
+
 def verify_physical_observations(root: Path, record: dict, observations: set[str]) -> None:
     """Validate direct observations, including embedded qualification identities."""
     product_artifacts = {record["tuple"]["buildSha256"], record["tuple"]["packageReceiptSha256"]}
@@ -434,27 +479,8 @@ def verify_physical_observations(root: Path, record: dict, observations: set[str
         candidate = data.removeprefix(UTF8_BOM).lstrip()
         require(candidate.partition(b" ")[0] not in DESKTOP_PREFLIGHT_MARKERS,
                 "Physical observation refers to an XR preflight receipt")
-        if not candidate.startswith(b"{"):
-            continue
-        try:
-            capture = decode_record(candidate)
-        except (ValueError, RecursionError) as error:
-            raise ValueError("Invalid physical observation JSON") from error
-        require(not ANDROID_RECEIPT_FIELDS <= capture.keys(),
-                "Physical observation refers to an XR preflight receipt")
-        if {"tuple", "provenance", "evidenceLevel"}.isdisjoint(capture):
-            continue
-        require(not PHYSICAL_CHECK_RECEIPT_FIELDS <= capture.keys(),
-                "Physical observation refers to a physical check receipt")
-        require(not SMOKE_RECORD_FIELDS <= capture.keys(), "Physical observation refers to a smoke summary")
-        require(OBSERVATION_IDENTITY_FIELDS <= capture.keys(), "Physical observation is missing qualification identity")
-        require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1,
-                "Unsupported physical observation schema")
-        require(capture.get("evidenceLevel", record["evidenceLevel"]) == record["evidenceLevel"],
-                "Physical observation must identify physical evidence")
-        require(capture["tuple"] == record["tuple"] and capture["provenance"] == record["provenance"],
-                "Physical observation capture is from a different product tuple or smoke run")
-        require(capture.keys() not in SPECIALIZED_CAPTURE_FIELDS, "Physical observation refers to a specialized XR capture")
+        for capture in observation_records(candidate):
+            verify_observation_record(capture, record)
 
 
 def verify_physical_checks(root: Path, record: dict, optional: set[str]) -> None:

@@ -128,7 +128,8 @@ checkers reject a JSON check receipt used as an observation, including receipts
 outside the declared check set. JSON observations must fit the 64 KiB record
 limit. An observation with a qualification identity must use schema version 1
 and identify the same product tuple and smoke run. If it declares an evidence
-level, use `PhysicalDeviceQualification`.
+level, use `PhysicalDeviceQualification`. Those checks also apply to records
+embedded in a JSON object or array.
 The product build, package receipt, smoke summary, and Android or Desktop XR
 preflight receipts cannot serve as physical observations. Use the dedicated
 preflight fields for those receipts.

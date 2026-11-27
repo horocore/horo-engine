@@ -132,9 +132,14 @@ def test_identified_physical_observation_requires_matching_level_and_schema(tmp_
     (b'\xef\xbb\xbf{"tuple":', "Invalid physical observation JSON"),
     (b'{"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification"}', "missing qualification identity"),
     (b'{"data": "redacted observation"}', None),
+    (b'[{"data": "redacted observation"}]', None),
+    (b'[input] redacted observation\n', None),
     pytest.param(b' ' * (1024 * 1024) + b'{"tuple": {}}', "Physical observation JSON exceeds the size limit",
                  id="oversized-json"),
+    pytest.param(b'[' + b' ' * xr.MAX_RECORD_BYTES + b'{}]', "Physical observation JSON exceeds the size limit",
+                 id="oversized-json-array"),
     pytest.param(b'redacted log\n' * xr.MAX_RECORD_BYTES, None, id="large-opaque-log"),
+    pytest.param(b'[input] redacted log\n' * xr.MAX_RECORD_BYTES, None, id="large-bracketed-log"),
 ])
 def test_observation_preserves_opaque_data_and_validates_structured_evidence(tmp_path, smoke, data, error):
     digest = hashlib.sha256(data).hexdigest()
