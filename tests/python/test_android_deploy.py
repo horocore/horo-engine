@@ -539,6 +539,30 @@ class AndroidDeployTests(unittest.TestCase):
         for private in (LAUNCH_NONCE, "startTicks", "private-data"):
             self.assertNotIn(private, json.dumps(report))
 
+    def test_openxr_revalidates_the_target_before_publishing_an_early_crash(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        application = profile["applicationId"]
+        log = log_line(LAUNCH_MARKER) + log_line(LAUNCH_CRASH_MARKER, stamp=END)
+        for command, change, error in (
+            (("shell", "toybox", "sha256sum", PACKAGE),
+             [f"{DIGEST}  {PACKAGE}", f"{'f' * 64}  {PACKAGE}"], "installed_artifact_stale"),
+            (DEVICE_BUILD_QUERY, [DEVICE_BUILD, "changed/private-device-build"], "device_build_changed"),
+            (("shell", "am", "get-current-user"), ["10"] * 3 + ["11"], "device_user_changed"),
+            (DEVICE_BOOT_QUERY, [DEVICE_BOOT] * 4 + ["btime 1795000001"] * 2, "device_boot_changed"),
+        ):
+            with self.subTest(error=error):
+                status, report, commands = self.execute(
+                    {("shell", "pidof", application): (1, ""), QUALIFICATION_LOGCAT: log, command: change},
+                    OPENXR_OPTIONS, name)
+                self.assertEqual((status, report["error"]), (1, error))
+                self.assertNotIn("observed", report)
+                self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
+                self.assertFalse(any("force-stop" in cmd for cmd in commands))
+                if error == "device_boot_changed":
+                    self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": error})
+                self.assertNotIn("changed/private-device-build", json.dumps(report))
+
     def test_openxr_retired_crash_requires_matching_ordered_launch_and_crash_receipts(self):
         _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
         application = profile["applicationId"]
@@ -717,6 +741,31 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertNotIn("observed", report)
         self.assertEqual(report["qualification"]["runtime"]["status"], "not_observed")
         self.assertNotIn("private-replacement-device", json.dumps(report))
+
+    def test_openxr_rechecks_process_incarnation_after_cleanup_target_admission(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        status, report, commands = self.execute({
+            LOGCAT: log_line(OPENXR),
+            STAT_QUERY: [proc_stat()] * 8 + [proc_stat(123457)],
+        }, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report.get("error")), (1, "application_stop_unconfirmed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "application_process_changed"})
+        self.assertNotIn("observed", report)
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+        self.assertNotIn("123457", json.dumps(report))
+
+    def test_openxr_accepts_natural_exit_during_the_final_cleanup_check(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        application = profile["applicationId"]
+        absent = (1, "")
+        status, report, commands = self.execute({
+            LOGCAT: log_line(OPENXR),
+            ("shell", "pidof", application): [absent] * 2 + ["123"] * 5 + [absent],
+        }, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"]), (0, "diagnostic_complete"))
+        self.assertEqual(report["cleanup"], {"status": "already_exited"})
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
     def test_openxr_discards_discovery_when_transport_changes_before_publication(self):
         status, report, _ = self.execute({

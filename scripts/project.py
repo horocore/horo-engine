@@ -1874,14 +1874,14 @@ class AndroidPackageLaunch:
 
     def rollback(self) -> dict:
         """Use a separate deadline to stop only a provably attributed package process."""
-        if self.retired_crash:
-            return {"status": "already_exited"}
         if self.process is None and self.recovery is None:
             return {"status": "unconfirmed", "reason": "launch_process_unattributed"}
         device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
                                    time.monotonic() + DEPLOY_CLEANUP_SECONDS, self.device.connection)
         try:
             self.require_rollback_target(device)
+            if self.retired_crash:
+                return {"status": "already_exited"}
             if device.process_id(self.application) is None:
                 if self.process is None:
                     raise AndroidDeployError("launch_process_unattributed")
@@ -1889,11 +1889,18 @@ class AndroidPackageLaunch:
                 return {"status": "already_exited"}
             deploy_verified_install(device, self.application, self.user, self.digest)
             uid = deployed_uid(device, self.application, self.user)
-            if self.process is None:
-                self.recover_process(device, uid)
-            elif uid != self.process.uid or deployed_process(device, self.application, uid) != self.process:
+            process = self.process
+            if process is None:
+                process = self.recover_process(device, uid).process
+            elif uid != process.uid or deployed_process(device, self.application, uid) != process:
                 raise AndroidDeployError("application_process_changed")
             self.require_rollback_target(device)
+            current_pid = device.process_id(self.application)
+            if current_pid is None:
+                self.require_rollback_target(device)
+                return {"status": "already_exited"}
+            if current_pid != process.pid or process_start_ticks(device, current_pid) != process.start_ticks:
+                raise AndroidDeployError("application_process_changed")
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:
                 raise AndroidDeployError("application_stop_unconfirmed")
@@ -2107,7 +2114,13 @@ def android_deploy_main(argv=None) -> int:
             report["stage"] = "launch"
             launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256,
                                           openxr_diagnostic=openxr, device_boot_time=device_boot_time)
-            process, window = launch.start()
+            try:
+                process, window = launch.start()
+            except AndroidDeployError:
+                if launch.retired_crash:
+                    launch.confirm_capture_target(device_build)
+                    report["observed"] = {"crashObserved": True}
+                raise
             report["stage"] = "diagnostics"
             observe_seconds = arguments.observe_seconds or 0
             observed, applicable = await_deploy_diagnostics(device, application, process, window, profile, observe_seconds)
@@ -2140,8 +2153,6 @@ def android_deploy_main(argv=None) -> int:
     except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
         report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
     if exit_code != 0 and launch is not None and launch.attempted and "cleanup" not in report:
-        if launch.retired_crash:
-            report["observed"] = {"crashObserved": True}
         if report["error"] == "device_transport_changed":
             report["cleanup"] = {"status": "unconfirmed", "reason": "device_transport_changed"}
         else:

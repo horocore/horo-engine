@@ -212,6 +212,11 @@ checker verifies the exact diagnostic APK bytes and the receipt's source
 revision, Android system build, OpenXR runtime version, declared ADB transport,
 and process retirement. Cold discovery remains setup evidence. The physical
 smoke record proves the on-device observations.
+If the Activity exits before process admission, the deployment tool checks the
+installed APK, selected Android build, foreground user, transport and boot before
+including the attributed crash in the report.
+Before requesting a package stop, it also rechecks the process ID and start time
+after validating the cleanup transport and boot.
 
 The release owner verifies the referenced captures and package receipt before accepting the
 result under [XRA-007.8](https://github.com/horocore/horo-engine/issues/2174).
