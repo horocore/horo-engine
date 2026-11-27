@@ -356,6 +356,11 @@ target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOU
 target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroMcpEditorCommandsInternal HoroEngine::McpController
     HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal HoroEngine::PlatformProjectReadFiles
     HoroEngine::XRApi HoroEngine::SceneSourceModel HoroAudioCaptureBuffer HoroEngine::Security)
+if(TARGET HoroGui)
+    target_compile_definitions(HoroEditorAgentTurnTests PRIVATE HORO_TEST_IMMERSIVE_WORKSPACE=1)
+    target_include_directories(HoroEditorAgentTurnTests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroEngine::Gui HoroEngine::AISceneIntegration HoroEngine::DecisionCookHost)
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(_HORO_TEST_MAC_SPEECH_SOURCE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/MacOnDeviceSpeechProvider.mm")
     set_source_files_properties("${_HORO_TEST_MAC_SPEECH_SOURCE}" PROPERTIES

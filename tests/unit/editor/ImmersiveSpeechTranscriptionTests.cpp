@@ -2,6 +2,12 @@
 #include "AgentTurnMcp.h"
 #include "EditorInspectionMcpTools.h"
 
+#if defined(HORO_TEST_IMMERSIVE_WORKSPACE)
+#include "EditorCommandMcpSession.h"
+#include "McpAuthorizationTestSupport.h"
+#include "editor/screens/workspace/EditorWorkspaceController.h"
+#endif
+
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <condition_variable>
@@ -104,6 +110,7 @@ namespace Horo::Editor {
             SpeechFixtureProvider provider;
             std::unique_ptr<ImmersiveSpeechTranscription> stream;
             ImmersiveAuthoringMode mode{ImmersiveAuthoringMode::Edit};
+            std::optional<ImmersiveContextIdentity> workspaceIdentity;
 
             /** @brief Publishes a real context whose live owner can revoke it while the worker holds a copy. */
             ImmersivePlanningContext Context(const CancellationToken &lifetime = {}) {
@@ -121,7 +128,7 @@ namespace Horo::Editor {
                                                         mode == ImmersiveAuthoringMode::Edit ? 0U : 7U,
                                                         true,
                                                         true};
-                const auto context = owner.Publish(identity, {}, lifetime);
+                const auto context = owner.Publish(workspaceIdentity.value_or(identity), {}, lifetime);
                 REQUIRE(context);
                 return *context;
             }
@@ -326,6 +333,137 @@ namespace Horo::Editor {
             CHECK(inspections == 1);
             CHECK(staged == 0);
         }
+
+#if defined(HORO_TEST_IMMERSIVE_WORKSPACE)
+        TEST_CASE("Immersive replay stages and approves exactly one real Scene change", "[agent][immersive][replay][scene-review]") {
+            constexpr std::string_view Project = "project-one";
+            Runtime::RuntimeSceneService scenes;
+            CancellationSource process;
+            EditorWorkspaceDependencies dependencies;
+            dependencies.world.documentSessionOwner = Assets::AssetId::FromBytes({1});
+            EditorWorkspaceController workspace{Project, scenes, {}, dependencies};
+            REQUIRE(scenes.Startup(process.Token()).HasValue());
+            const Runtime::FrameContext frame{.frameNumber = 1, .cancellation = process.Token()};
+            REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+            workspace.SynchronizeRuntimeScenePreview();
+            REQUIRE(workspace.ViewModel().objects.size() == 1);
+            const auto original = workspace.ViewModel().objects.front();
+            const auto fence = workspace.ViewModel().assetDropFence;
+            const auto endpoint = workspace.BindSceneInspection(std::string{Project}, 3);
+            auto opened = EditorCommandMcpSession::Create({.inspection = endpoint},
+                {"immersive-replay", std::string{Project}, 3, {std::string{EditorSceneProposalGrant}}}, Mcp::Test::Authorization());
+            REQUIRE(opened.HasValue());
+            auto &session = *opened.Value();
+
+            SpeechFixture fixture;
+            fixture.mode = ImmersiveAuthoringMode::Simulate;
+            const auto seed = fixture.Context();
+            auto identity = seed.Identity();
+            identity.documentOpening = fence.replacementEpoch;
+            identity.documentRevision = fence.revision.value;
+            identity.commandSession = session.SessionKey();
+            fixture.workspaceIdentity = identity;
+            const auto speech = FinalEvidence(fixture);
+            const auto &source = speech.Context();
+            auto ray = SpatialObservation(source, 1, 1'010'000, 1'012'000);
+            ray.candidate.shape = Math::Ray{{}, {0, 0, -1}, 0, 5};
+            ray.controllerPress = ImmersiveControllerPress{{5, 1'009'000}, {5, 1'012'000}};
+            ray.pointing = ImmersivePointingHits{.worldGeneration = identity.worldGeneration,
+                                                 .structuralRevision = 1,
+                                                 .hits = {{{original.id, 2, {0, 0, -2}}}},
+                                                 .count = 1};
+            const auto aligned = ImmersiveCommandEnvelope::Assemble(
+                source, speech, ImmersiveSpatialHistoryView{source, ray.cutoff, std::span{&ray, 1}});
+            REQUIRE(aligned.envelope);
+            const auto hits = CollectImmersivePointingHits(aligned.envelope->Spatial(), identity.worldGeneration,
+                                                           ImmersivePointingReviewKind::Objects);
+            REQUIRE(hits);
+            REQUIRE(hits->count == 1);
+            const auto object = hits->hits.front().object.value;
+
+            const std::array tools{std::string{"scene.propose_edits"}};
+            CancellationSource permission;
+            const auto catalog = fixture.owner.CaptureMcpCatalog(source, session, Project, tools, permission.Token());
+            REQUIRE(catalog);
+            Agent::ModelRequest prompt{.model = "replay", .messages = {{.role = Agent::ModelRole::User,
+                .text = std::string{speech.PreviewText(Kind::Final)}}}};
+            auto request = fixture.owner.CaptureMcpPlan(source, std::move(prompt), *catalog);
+            REQUIRE(request);
+            Platform::ProjectReadContext project{std::string{Project}, identity.projectOpening, {},
+                                                  std::chrono::steady_clock::now() + std::chrono::seconds{10}, {}};
+            Agent::AgentContextReaders readers;
+            readers.isCurrent = [](const auto &) { return true; };
+            readers.redact = [](const auto &, std::string_view value) { return Result<std::string>::Success(std::string{value}); };
+            const std::array<Agent::AgentContextSelection, 1> attachment{
+                Agent::AgentContextAttachment{Agent::AgentContextAttachmentKind::Selection, "selection", "r1", "replayed object"}};
+            const auto consent =
+                Agent::AgentContextPreview::Capture(attachment, readers, project, Security::AgentProviderResidence::Local, 1, 1);
+            REQUIRE(consent.HasValue());
+            Security::AgentPolicy policy;
+            REQUIRE(policy.SetProjectTrust(true, 1));
+            REQUIRE(consent.Value().Grant(policy).Allowed());
+            const Agent::AgentTurnContext approved{consent.Value(), policy, project, readers.isCurrent,
+                                                   Security::AgentProviderResidence::Local};
+            auto desired = original.localTransform;
+            desired.translation.x += 3.0F;
+            const nlohmann::json transform{{"object", object},
+                                           {"translation", {desired.translation.x, desired.translation.y, desired.translation.z}},
+                                           {"rotationXYZW", {desired.rotation.x, desired.rotation.y,
+                                                             desired.rotation.z, desired.rotation.w}},
+                                           {"scale", {desired.scale.x, desired.scale.y, desired.scale.z}}};
+            const nlohmann::json arguments{{"scene", {{"epoch", identity.documentOpening}, {"revision", identity.documentRevision}}},
+                                            {"transforms", nlohmann::json::array({transform})},
+                                            {"renames", {{{"object", object}, {"name", "Replayed name"}}}}};
+            ReplayModel model;
+            model.intent = {"replay-rename", tools.front(), arguments.dump()};
+            const auto review = request->Plan(model, 1, {}, {}, {}, &approved);
+            REQUIRE(review.Status() == Agent::AgentTurnStatus::Completed);
+            const auto candidate = review.RetainSceneCandidate(source);
+            REQUIRE(candidate);
+            CHECK_FALSE(workspace.ViewModel().agentSceneReview);
+            CHECK_FALSE(workspace.ViewModel().canUndo);
+            identity.mode = ImmersiveAuthoringMode::Edit;
+            identity.worldGeneration = 0;
+            const auto edit = fixture.owner.TransitionToEdit(source, identity, {});
+            REQUIRE(edit);
+            CancellationSource editPermission;
+            const auto editCatalog = fixture.owner.CaptureMcpCatalog(*edit, session, Project, tools, editPermission.Token());
+            REQUIRE(editCatalog);
+            const auto staged = fixture.owner.StageSceneCandidate(*edit, *editCatalog, *candidate);
+            REQUIRE(staged.HasValue());
+            REQUIRE(workspace.ViewModel().agentSceneReview);
+            CHECK(workspace.ViewModel().agentSceneReview->hasSpatialPreview);
+            CHECK(workspace.ViewModel().objects.front().name == original.name);
+            CHECK(workspace.ViewModel().objects.front().localTransform == original.localTransform);
+            CHECK_FALSE(workspace.ViewModel().canUndo);
+
+            SECTION("local approval commits and undo restores the original object") {
+                CHECK(workspace.ApproveAgentSceneReview(staged.Value()).HasError());
+                CHECK_FALSE(workspace.ViewModel().canUndo);
+                REQUIRE(workspace.ConfirmAgentSceneReviewImpact(staged.Value()).HasValue());
+                REQUIRE(workspace.ApproveAgentSceneReview(staged.Value()).HasValue());
+                CHECK(workspace.ViewModel().objects.front().name == "Replayed name");
+                CHECK(workspace.ViewModel().objects.front().localTransform == desired);
+                CHECK(workspace.ViewModel().isDirty);
+                CHECK(workspace.ViewModel().canUndo);
+                CHECK(workspace.ApproveAgentSceneReview(staged.Value()).HasError());
+                EditorWorkspaceViewCommandData undo;
+                undo.command = EditorWorkspaceViewCommand::UndoScene;
+                workspace.ProcessCommand(undo);
+                CHECK(workspace.ViewModel().objects.front().name == original.name);
+                CHECK(workspace.ViewModel().objects.front().localTransform == original.localTransform);
+                CHECK_FALSE(workspace.ViewModel().canUndo);
+            }
+            SECTION("revoked source consent withdraws the preview without a history entry") {
+                permission.RequestCancellation();
+                CHECK(workspace.ApproveAgentSceneReview(staged.Value()).HasError());
+                CHECK_FALSE(workspace.ViewModel().agentSceneReview);
+                CHECK(workspace.ViewModel().objects.front().name == original.name);
+                CHECK_FALSE(workspace.ViewModel().isDirty);
+                CHECK_FALSE(workspace.ViewModel().canUndo);
+            }
+        }
+#endif
 
         TEST_CASE("Immersive provider deadline requests stop while a provider call is blocked", "[agent][immersive][speech]") {
             SpeechFixture fixture;
