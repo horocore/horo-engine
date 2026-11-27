@@ -1209,6 +1209,9 @@ owner lane after any in-flight borrow completes.
 When native snapshot cleanup reports permission, session, or feature loss,
 plane capture withdraws the previous geometry immediately and retains the
 native handle only for cleanup retry.
+If consent is revoked during context completion or discovery submission,
+the in-flight call reports permission denial and the owner keeps any returned
+context or future until it can retire it.
 Anchor creation and restore recheck their grants before creating a reference
 space. If access was withdrawn while the native anchor call was in flight,
 the owner retires the partial anchor and leaves existing durable records intact.

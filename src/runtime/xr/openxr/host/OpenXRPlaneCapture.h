@@ -4,6 +4,8 @@
 #include "OpenXRNativeSession.h"
 #include "OpenXRPlaneSnapshot.h"
 
+#include <optional>
+
 namespace Horo::XR::OpenXRInternal {
     /** @brief Single authorized spatial context. The host revokes it before retiring World space or native session. */
     class OpenXRPlaneCapture final {
@@ -74,6 +76,10 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> Retire();
         /** @brief Checks whether the session has withdrawn the capture's owner-lane consent. */
         [[nodiscard]] bool ConsentCurrent() const noexcept;
+        /** @brief Revokes publication and retains any native failure when a callback withdraws consent. */
+        [[nodiscard]] std::optional<Error> CheckWithdrawal(const Error *nativeFailure = nullptr);
+        /** @brief Rechecks authority after one nonblocking advance step. */
+        [[nodiscard]] Result<bool> ConfirmAdvance(Result<bool> result);
 
         OpenXRNativeSession &owner_;
         const std::thread::id lane_{std::this_thread::get_id()};
@@ -92,6 +98,7 @@ namespace Horo::XR::OpenXRInternal {
         XRRuntimeTime lastRequest_;
         XRRuntimeTime lastCutoff_;
         std::array<PlaneSlot, XRPlaneSnapshot::MaximumPlanes> slots_{};
+        bool explicitlyRevoked_{};
         mutable bool busy_{};
     };
 }  // namespace Horo::XR::OpenXRInternal

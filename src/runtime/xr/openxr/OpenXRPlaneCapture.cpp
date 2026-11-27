@@ -82,6 +82,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const ScopedOperation guard{busy_};
         observationRevision_ = owner_.observationRevision_;
+        explicitlyRevoked_ = false;
         const auto owner = owner_.Borrow(scope.session);
         if (owner.HasError())
             return Result<void>::Failure(owner.ErrorValue());
@@ -106,10 +107,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (const auto activated = publication_.Activate(scope, limits); activated.HasError())
             return activated;
-        if (!ConsentCurrent()) {
-            publication_.Revoke();
-            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
-        }
+        if (auto withdrawn = CheckWithdrawal())
+            return Result<void>::Failure(std::move(*withdrawn));
 
         dispatch_ = functions;
         scope_ = scope;
@@ -120,8 +119,8 @@ namespace Horo::XR::OpenXRInternal {
         incarnation_ = owner.Value().incarnation;
         lastCutoff_ = now;
         auto started = BeginContext(current.Value(), now);
-        if (started.HasValue() && !ConsentCurrent())
-            started = Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        if (auto withdrawn = CheckWithdrawal(started.HasError() ? &started.ErrorValue() : nullptr))
+            started = Result<void>::Failure(std::move(*withdrawn));
         if (started.HasError()) {
             publication_.Revoke();
             if (future_ == XR_NULL_FUTURE_EXT)
@@ -161,8 +160,6 @@ namespace Horo::XR::OpenXRInternal {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
         }
-        if (!now.IsValid() || now < lastCutoff_)
-            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const auto native = owner_.Borrow(scope.session);
         if (native.HasError() || native.Value().incarnation != incarnation_) {
             publication_.Revoke();
@@ -172,23 +169,24 @@ namespace Horo::XR::OpenXRInternal {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         }
+        if (!now.IsValid() || now < lastCutoff_)
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const auto active = publication_.IsDue(scope, now);
         if (active.HasError())
             return Outcome::Failure(active.ErrorValue());
         lastCutoff_ = now;
-        if (const auto released = ReleaseSnapshot(); released.HasError())
+        const auto released = ReleaseSnapshot();
+        if (auto withdrawn = CheckWithdrawal(released.HasError() ? &released.ErrorValue() : nullptr))
+            return Outcome::Failure(std::move(*withdrawn));
+        if (released.HasError())
             return Outcome::Failure(released.ErrorValue());
-        if (!ConsentCurrent()) {
-            publication_.Revoke();
-            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
-        }
         if (future_ != XR_NULL_FUTURE_EXT)
-            return Poll(native.Value(), now);
+            return ConfirmAdvance(Poll(native.Value(), now));
         if (!context_ || !active.Value())
             return Outcome::Success(false);
         if (now.Nanoseconds() - lastRequest_.Nanoseconds() < limits_.minimumUpdateInterval.ToNanoseconds())
             return Outcome::Success(false);
-        return QueueScan(now);
+        return ConfirmAdvance(QueueScan(now));
     }
 
     /** @brief Polls once and retains ownership of pending work until completion or explicit cancellation. */
@@ -355,6 +353,26 @@ namespace Horo::XR::OpenXRInternal {
         return observationRevision_ == owner_.observationRevision_ && observationRevision_ != std::numeric_limits<std::uint64_t>::max();
     }
 
+    /** @copydoc OpenXRPlaneCapture::CheckWithdrawal */
+    std::optional<Error> OpenXRPlaneCapture::CheckWithdrawal(const Error *nativeFailure) {
+        if (ConsentCurrent() && !explicitlyRevoked_)
+            return std::nullopt;
+        publication_.Revoke();
+        const auto &denied = XRErrors::PermissionDenied;
+        if (!nativeFailure)
+            return MakeError(denied);
+        if (nativeFailure->code.Value() == denied.code.Value())
+            return *nativeFailure;
+        return WithCause(MakeError(denied), *nativeFailure);
+    }
+
+    /** @copydoc OpenXRPlaneCapture::ConfirmAdvance */
+    Result<bool> OpenXRPlaneCapture::ConfirmAdvance(Result<bool> result) {
+        if (auto withdrawn = CheckWithdrawal(result.HasError() ? &result.ErrorValue() : nullptr))
+            return Result<bool>::Failure(std::move(*withdrawn));
+        return result;
+    }
+
     /** @brief Keeps unfinished snapshot destruction retryable without returning unretired geometry. */
     Result<void> OpenXRPlaneCapture::ReleaseSnapshot() {
         if (!snapshot_)
@@ -398,8 +416,10 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRPlaneCapture::Revoke */
     void OpenXRPlaneCapture::Revoke() noexcept {
-        if (std::this_thread::get_id() == lane_)
+        if (std::this_thread::get_id() == lane_) {
+            explicitlyRevoked_ = true;
             publication_.Revoke();
+        }
     }
 
     /** @copydoc OpenXRPlaneCapture::Close */

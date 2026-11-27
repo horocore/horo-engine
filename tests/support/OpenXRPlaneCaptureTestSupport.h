@@ -79,7 +79,10 @@ namespace Horo::Tests::OpenXR {
         bool hasContext{};
         bool hasSnapshot{};
         std::function<void()> onPoll;
+        std::function<void()> onCompleteContext;
+        std::function<void()> onStartScan;
         std::function<void()> onCompleteScan;
+        XrResult startScanResult{XR_SUCCESS};
         XrResult snapshotDestroyResult{XR_SUCCESS};
 
         SpatialCaptureScript() {
@@ -106,6 +109,8 @@ namespace Horo::Tests::OpenXR {
             current->hasContext = true;
             value->futureResult = XR_SUCCESS;
             value->spatialContext = NativeHandle<XrSpatialContextEXT>(33);
+            if (current->onCompleteContext)
+                current->onCompleteContext();
             return XR_SUCCESS;
         }
 
@@ -138,8 +143,11 @@ namespace Horo::Tests::OpenXR {
             CHECK(current->hasContext);
             CHECK(info->componentTypeCount == 1);
             ++current->scans;
-            *future = ScanFuture;
-            return XR_SUCCESS;
+            if (current->onStartScan)
+                current->onStartScan();
+            if (current->startScanResult == XR_SUCCESS)
+                *future = ScanFuture;
+            return current->startScanResult;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL CompleteScan(XrSpatialContextEXT,

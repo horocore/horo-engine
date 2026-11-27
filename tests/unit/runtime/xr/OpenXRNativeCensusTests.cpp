@@ -872,6 +872,39 @@ namespace Horo::Tests::OpenXR {
             RequireFailureIdentity(advance(131), XRErrors::TrackingSnapshotStale);
             CHECK(script.cancels == 1);
         }
+        SECTION("withdrawal is reported when the native context completes or a discovery is submitted") {
+            enum class Step {
+                CompleteContext,
+                StartScan,
+                FailedScan
+            };
+            const auto step = GENERATE(Step::CompleteContext, Step::StartScan, Step::FailedScan);
+            const auto revoke = [&capture] {
+                capture.Revoke();
+            };
+            script.ready = true;
+            if (step == Step::CompleteContext) {
+                script.onCompleteContext = revoke;
+            } else {
+                noPublication(103);
+                script.onStartScan = revoke;
+                if (step == Step::FailedScan)
+                    script.startScanResult = XR_ERROR_RUNTIME_FAILURE;
+            }
+            const auto withdrawn = advance(step == Step::CompleteContext ? 103 : 110);
+            const auto previous = capture.Read(scope, time(110));
+            CHECK(script.hasContext);
+            CHECK(geometry.calls == 0);
+            REQUIRE(capture.Close().HasValue());
+            CHECK(script.cancels == (step == Step::StartScan ? 1U : 0U));
+            RequireFailureIdentity(withdrawn, XRErrors::PermissionDenied);
+            if (step == Step::FailedScan) {
+                REQUIRE(withdrawn.ErrorValue().cause.Get());
+                CHECK(withdrawn.ErrorValue().cause.Get()->code.Value() == XRErrors::OperationUnavailable.code.Value());
+            }
+            RequireFailureIdentity(previous, XRErrors::OperationUnavailable);
+            RequireFailureIdentity(capture.Start(attempt, scope, world, limits, time(111)), XRErrors::IdentityStale);
+        }
         SECTION("context and discoveries use the same exact World grant") {
             noPublication(102);
             script.ready = true;
