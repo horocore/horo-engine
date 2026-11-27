@@ -249,7 +249,8 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<ImmersivePlanningContext> Publish(const ImmersiveContextIdentity &identity,
                                                                       std::span<const SceneSource::SceneObjectId> selection,
                                                                       const CancellationToken &sourceLifetime = {}) noexcept;
-        /** @brief Retires a live Simulate scope and explicitly admits its matching Edit successor.
+        /** @brief Explicitly admits a matching Edit successor before retiring the live Simulate scope.
+         * An inadmissible Edit observation leaves the Simulate scope available for retry.
          * @param source Current Simulate scope. @param identity Edit observation supplied by its owner.
          * @param selection Fresh Edit selection. @param sourceLifetime Optional lifetime of the Edit observation.
          * @return The new Edit generation, or empty if the source or destination is inadmissible.
@@ -320,6 +321,10 @@ namespace Horo::Editor {
                                                                 const ImmersiveSceneCandidate &candidate) const;
 
     private:
+        /** @brief Publishes a validated owner observation, retiring any superseded generation. */
+        [[nodiscard]] std::optional<ImmersivePlanningContext> PublishValidated(const ImmersiveContextIdentity &identity,
+                                                                               std::span<const SceneSource::SceneObjectId> selection,
+                                                                               const CancellationToken &sourceLifetime) noexcept;
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlanRequest(const ImmersivePlanningContext &context,
                                                                               Agent::ModelRequest &&request,
                                                                               std::string_view projectIdentity) const;

@@ -260,6 +260,13 @@ namespace Horo::Editor {
             Revoke();
             return std::nullopt;
         }
+        return PublishValidated(identity, selection, sourceLifetime);
+    }
+
+    /** @copydoc ImmersiveAuthoringContext::PublishValidated */
+    std::optional<ImmersivePlanningContext> ImmersiveAuthoringContext::PublishValidated(
+        const ImmersiveContextIdentity &identity, const std::span<const SceneSource::SceneObjectId> selection,
+        const CancellationToken &sourceLifetime) noexcept {
         if (current_ && identity == current_->Identity() && current_->sourceLifetime_ == sourceLifetime &&
             std::ranges::equal(selection, current_->Selection()))
             return current_;
@@ -293,10 +300,11 @@ namespace Horo::Editor {
         auto expected = source.Identity();
         expected.mode = ImmersiveAuthoringMode::Edit;
         expected.worldGeneration = 0;
-        if (identity != expected)
+        if (identity != expected || sourceLifetime.IsCancellationRequested() || !ValidSelection(selection) ||
+            generation_ == std::numeric_limits<std::uint64_t>::max())
             return std::nullopt;
         const auto sourceGeneration = source.Generation();
-        auto edit = Publish(identity, selection, sourceLifetime);
+        auto edit = PublishValidated(identity, selection, sourceLifetime);
         if (edit)
             editTransferSource_ = sourceGeneration;
         return edit;

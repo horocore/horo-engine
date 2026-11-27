@@ -592,6 +592,17 @@ namespace Horo::Editor {
                 CHECK(owner.StageSceneCandidate(*context, *catalog, *candidate).HasError());
                 auto edit = editIdentity;
                 edit.commandSession = identity.commandSession;
+                if (transfer == Transfer::Explicit) {
+                    const std::array duplicateSelection{SceneSource::SceneObjectId{42}, SceneSource::SceneObjectId{42}};
+                    CancellationSource retiredEdit;
+                    retiredEdit.RequestCancellation();
+                    CHECK_FALSE(owner.TransitionToEdit(*context, edit, duplicateSelection));
+                    CHECK_FALSE(owner.TransitionToEdit(*context, edit, {}, retiredEdit.Token()));
+                    CHECK(context->IsCurrent());
+                    CHECK(review.Status() == Completed);
+                    CHECK(review.RetainSceneCandidate(*context));
+                    CHECK(staged == 0);
+                }
                 if (transfer == Transfer::Revoked) {
                     owner.Revoke();
                     CHECK_FALSE(owner.TransitionToEdit(*context, edit, {}));
