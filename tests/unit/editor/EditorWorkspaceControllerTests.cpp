@@ -571,6 +571,8 @@ namespace {
         CHECK_FALSE(controller.ViewModel().agentSceneReview);
         std::optional<std::uint64_t> replaceOnAuthorityCheck;
         std::optional<std::uint64_t> replacementReview;
+        std::function<void()> afterReviewRetirement;
+        bool requireVisibleReview{};
         unsigned authorizationChecks{};
         const auto sceneRevisionBeforeReview = controller.CurrentViewportSceneRevision();
         const auto preview = controller.PreviewAgentSceneEdits(revision, updates, renames, proposal.Token(), [&] {
@@ -582,7 +584,10 @@ namespace {
                 REQUIRE(shown.HasValue());
                 replacementReview = shown.Value();
             }
-            return true;
+            if (!controller.ViewModel().agentSceneReview)
+                if (auto retired = std::exchange(afterReviewRetirement, {}))
+                    retired();
+            return !requireVisibleReview || controller.ViewModel().agentSceneReview.has_value();
         });
         REQUIRE(preview.HasValue());
         REQUIRE(controller.ViewModel().agentSceneReview);
@@ -696,6 +701,39 @@ namespace {
             CHECK(controller.ViewModel().objects.front().name == object.name);
             CHECK(controller.ViewModel().objects.front().localTransform == object.localTransform);
             CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+            CHECK(events.empty());
+        }
+        SECTION("approval rechecks authority after retiring the viewport review") {
+            REQUIRE(controller.ConfirmAgentSceneReviewImpact(preview.Value()).HasValue());
+            requireVisibleReview = true;
+            const auto deniedApproval = controller.ApproveAgentSceneReview(preview.Value());
+            REQUIRE(deniedApproval.HasError());
+            CHECK(deniedApproval.ErrorValue().code.Value() == SceneTransactionError(SceneTransactionFailure::Unauthorized).code.Value());
+            CHECK_FALSE(controller.ViewModel().agentSceneReview);
+            CHECK(controller.ViewportScene().instances.size() == 1);
+            CHECK(origin() == baseline);
+            CHECK(controller.ViewModel().objects.front().name == object.name);
+            CHECK_FALSE(controller.ViewModel().isDirty);
+            CHECK_FALSE(controller.ViewModel().canUndo);
+            CHECK(events.empty());
+        }
+        SECTION("a replacement published during the final authority check supersedes the approval") {
+            REQUIRE(controller.ConfirmAgentSceneReviewImpact(preview.Value()).HasValue());
+            afterReviewRetirement = [&] {
+                const std::array replacement{AgentSceneObjectRename{object.id.value, "New review"}};
+                const auto staged = controller.PreviewAgentSceneEdits(revision, {}, replacement, proposal.Token());
+                REQUIRE(staged.HasValue());
+                replacementReview = staged.Value();
+            };
+            const auto stale = controller.ApproveAgentSceneReview(preview.Value());
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == SceneTransactionError(SceneTransactionFailure::Stale).code.Value());
+            REQUIRE(replacementReview);
+            REQUIRE(controller.ViewModel().agentSceneReview);
+            CHECK(controller.ViewModel().agentSceneReview->id == *replacementReview);
+            CHECK(controller.ViewModel().objects.front().name == object.name);
+            CHECK(origin() == baseline);
             CHECK_FALSE(controller.ViewModel().canUndo);
             CHECK(events.empty());
         }

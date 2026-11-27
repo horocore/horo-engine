@@ -264,6 +264,12 @@ namespace Horo::Editor {
             return Result<void>::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
         auto proposal = std::move(*m_agentSceneReview);
         CancelObjectTransformPreview();
+        if (proposal.context.cancellation.IsCancellationRequested())
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Cancelled));
+        if (proposal.authorized && !proposal.authorized())
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Unauthorized));
+        if (m_agentSceneReviewSerial != review)
+            return Result<void>::Failure(RejectReview(SceneTransactionFailure::Stale));
         std::vector<SceneObjectId> affected;
         for (const auto &change : proposal.preview.Changes())
             affected.push_back(change.object);

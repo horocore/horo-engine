@@ -343,6 +343,9 @@ Ownership rules:
   revalidates each target first, then uses the same typed decoder as the MCP
   proposal tool. The viewport retains the plan's revocation checks and still
   requires its separate transaction confirmation.
+  Approval rechecks the retained authority after removing the viewport preview,
+  before handing the edit to the document transaction. A replacement review
+  supersedes the previous approval.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,
