@@ -1915,6 +1915,9 @@ a flattened causal list suppresses each wrapping causal record, since wrappers
 can copy private text or fields. An object or array that directly mixes text,
 numbers, or booleans with a private descendant is withheld even without a
 diagnostic label.
+Log admission and bundle export also redact named Save payload, display text,
+and identifier fields in forwarded records from other subsystems. Independent
+numeric counters such as `save.slot_count` remain available.
 Independent structured sibling records remain available.
 Withheld records are removed with their enclosing map keys, including wrappers
 that contain no independent evidence after redaction. This keeps slot names

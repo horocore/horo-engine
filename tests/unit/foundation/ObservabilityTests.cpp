@@ -159,6 +159,7 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
         const Horo::Log::LogContext request("correlation.id", "request-42", "asset.id", "mesh-7");
         const Horo::Log::LogContext credentials("request.X-API-Key", "private-context-value");
         const Horo::Log::LogContext gaze("xr.gaze_origin", "private-gaze-origin");
+        const Horo::Log::LogContext save("save.slot_id", "private-slot-id");
         forwarded = Horo::Log::CaptureLogContext();
     }
     std::thread worker([forwarded] {
@@ -171,6 +172,8 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
             Horo::Telemetry::Field{.key = "auth.token", .value = std::string{"must-not-persist"}},
             Horo::Telemetry::Field{.key = "auth.privateKey", .value = std::string{"private-field-value"}},
             Horo::Telemetry::Field{.key = "xr.camera-frame", .value = std::string{"private-camera-frame"}},
+            Horo::Telemetry::Field{.key = "xr.headsetSerial", .value = std::string{"private-headset"}},
+            Horo::Telemetry::Field{.key = "Save.Display_Name", .value = std::string{"private-display"}},
             Horo::Telemetry::Field{.key = "xr.frame_count", .value = std::uint64_t{3}},
             Horo::Telemetry::Field{.key = "internal.pointer",
                                    .value = std::string{"forbidden"},
@@ -202,9 +205,15 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     CHECK(log.find(R"("auth.privateKey":"[REDACTED]")") != std::string::npos);
     CHECK(log.find(R"("xr.gaze_origin":"[REDACTED]")") != std::string::npos);
     CHECK(log.find(R"("xr.camera-frame":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.headsetSerial":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("Save.Display_Name":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("save.slot_id":"[REDACTED]")") != std::string::npos);
     CHECK(log.find(R"("xr.frame_count":3)") != std::string::npos);
     CHECK(log.find("private-gaze-origin") == std::string::npos);
     CHECK(log.find("private-camera-frame") == std::string::npos);
+    CHECK(log.find("private-headset") == std::string::npos);
+    CHECK(log.find("private-display") == std::string::npos);
+    CHECK(log.find("private-slot-id") == std::string::npos);
     CHECK(log.find("private-context-value") == std::string::npos);
     CHECK(log.find("private-field-value") == std::string::npos);
     REQUIRE(log.find("must-not-persist") == std::string::npos);
@@ -1378,7 +1387,9 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret",)"
                                 << R"("headers":{"X-API-Key":"private-header","keyName":"public-name"},)"
                                 << R"("config":{"apiKey":"private-option","private_key":"private-material"},)"
-                                << R"("cause":{"xr.environment_geometry":[{"vertex":"room-point"}],"speechTranscript":"spoken-private","sampleCount":4}})" << '\n'
+                                << R"("cause":{"xr.environment_geometry":[{"vertex":"room-point"}],"speechTranscript":"spoken-private",)"
+                                << R"("runtime.save.payload":{"bytes":"private-state"},"XR.Raw_Pose_Samples":["private-pose"],)"
+                                << R"("save.slot_count":4}})" << '\n'
                                 << partialRecord;
 
     const auto recovered = Horo::Diagnostics::GenerateDiagnosticBundle({
@@ -1405,9 +1416,13 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     CHECK(extracted.find(R"("private_key":"[REDACTED]")") != std::string::npos);
     CHECK(extracted.find(R"("xr.environment_geometry":"[REDACTED]")") != std::string::npos);
     CHECK(extracted.find(R"("speechTranscript":"[REDACTED]")") != std::string::npos);
-    CHECK(extracted.find(R"("sampleCount":4)") != std::string::npos);
+    CHECK(extracted.find(R"("runtime.save.payload":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("XR.Raw_Pose_Samples":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("save.slot_count":4)") != std::string::npos);
     CHECK(extracted.find("room-point") == std::string::npos);
     CHECK(extracted.find("spoken-private") == std::string::npos);
+    CHECK(extracted.find("private-state") == std::string::npos);
+    CHECK(extracted.find("private-pose") == std::string::npos);
     CHECK(extracted.find("public-name") != std::string::npos);
     REQUIRE(extracted.find("interrupted") == std::string::npos);
 
