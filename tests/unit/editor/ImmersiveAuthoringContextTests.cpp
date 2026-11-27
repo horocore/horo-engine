@@ -583,6 +583,26 @@ namespace Horo::Editor {
                 CHECK(staged == 0);
                 return;
             }
+            SECTION("context inspection shares the turn budget before the provider starts") {
+                unsigned untilDelay = 1;
+                SECTION("while admitting the approved context") {}
+                SECTION("while revalidating it before inference") {
+                    untilDelay = 2;
+                }
+                const std::function<bool(const Agent::AgentContextProvenance &)> inspect = [&](const auto &) {
+                    if (untilDelay != 0 && --untilDelay == 0)
+                        std::this_thread::sleep_for(std::chrono::milliseconds{100});
+                    return true;
+                };
+                const Agent::AgentTurnContext slow{preview.Value(), policy, project, inspect, Security::AgentProviderResidence::Local};
+                const auto expired = pending->Plan(model, 1, {.timeout = std::chrono::milliseconds{50}}, {}, {}, &slow);
+                CHECK(untilDelay == 0);
+                CHECK(expired.Status() == TimedOut);
+                CHECK(model.calls == 0);
+                CHECK(expired.StageScenePreview(*context).HasError());
+                CHECK(staged == 0);
+                return;
+            }
             const auto review = pending->Plan(model, 1, {}, {}, {}, &approved);
             REQUIRE(review.Status() == Completed);
             if (transfer != Transfer::None) {

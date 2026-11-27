@@ -197,6 +197,8 @@ namespace Horo::Agent {
                         return *stopped;
                     if (!context.Check())
                         return ContextDenied;
+                    if (const auto stopped = stop.Status())
+                        return *stopped;
                     auto inspected = plan(intent);
                     if (inspected.status != Completed)
                         return inspected.status;
@@ -407,7 +409,9 @@ namespace Horo::Agent {
                 return {InvalidRequest, {}};
             if (observeText && tools)
                 return {InvalidRequest, {}};
-            if (!context && Clock::now() >= deadline)
+            const auto projectDeadline = context ? std::min(deadline, context->project.deadline) : deadline;
+            const auto turnDeadline = std::min(projectDeadline, Clock::now() + limits.timeout);
+            if (Clock::now() >= turnDeadline)
                 return {TimedOut, {}};
             TurnContextGate contextGate{context, isCurrent_};
             const auto contextOffset = request.messages.size() - 1;
@@ -415,9 +419,17 @@ namespace Horo::Agent {
             if (context) {
                 if (!contextGate.CheckFreshness())
                     return StaleContextResult();
-                const auto allowed = context->preview.InsertBeforeDispatch(context->policy, context->project, context->isCurrent,
+                const auto withinBudget = [&] {
+                    return !cancellation.stop_requested() && Clock::now() < turnDeadline;
+                };
+                const auto currentWithinBudget = [&](const AgentContextProvenance &provenance) {
+                    return withinBudget() && context->isCurrent && context->isCurrent(provenance) && withinBudget();
+                };
+                const auto allowed = context->preview.InsertBeforeDispatch(context->policy, context->project, currentWithinBudget,
                                                                            context->provider, turnId, request);
-                if (Clock::now() >= deadline)
+                if (cancellation.stop_requested())
+                    return {Cancelled, {}};
+                if (Clock::now() >= turnDeadline)
                     return {TimedOut, {}};
                 if (!allowed.Allowed())
                     return {.status = ContextDenied, .contextError = allowed.reason};
@@ -428,7 +440,7 @@ namespace Horo::Agent {
 
             if (providerAuthority && !HasProviderAuthority(*providerAuthority))
                 return StaleContextResult();
-            TurnStop stop{std::min(deadline, Clock::now() + limits.timeout), cancellation, providerAuthority};
+            TurnStop stop{turnDeadline, cancellation, providerAuthority};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
             TurnProgress progress{remaining, stop, contextGate, turnId, observeTool};
@@ -440,6 +452,8 @@ namespace Horo::Agent {
                 request.maximumOutputTokens = std::min(outputPerRound, tokens);
                 if (!AdmitModelRequest(request, known).Succeeded())
                     return {BudgetExceeded, {}};
+                if (const auto stopped = stop.Status())
+                    return {*stopped, {}};
                 Detail::AgentTurnStream stream{progress.remaining};
                 const auto inferenceStart = plan ? Clock::now() : Clock::time_point{};
                 const auto outcome = StreamResponse(provider, request, stop, stream, observeText, contextGate);
@@ -463,6 +477,8 @@ namespace Horo::Agent {
                         return FailedRound(status);
                 }
                 if (plan || message.toolIntents.empty()) {
+                    if (const auto stopped = stop.Status())
+                        return {*stopped, {}};
                     if (context) {
                         const auto firstContext = request.messages.begin() + contextOffset;
                         request.messages.erase(firstContext, firstContext + contextCount);
