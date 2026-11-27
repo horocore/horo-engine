@@ -97,22 +97,27 @@ namespace {
         });
     }
 
+    /** @brief Opens the Asset Browser creation menu in the project asset root. */
+    void OpenAssetCreationMenu(ImGuiTestContext &ui) {
+        if (!ui.ItemExists("//**/Assets")) {
+            ui.ItemClick("//**/horo.global_dock/##ActivityItem");
+            ui.Yield();
+        }
+        ui.ItemClick("//**/Assets");
+        ImGuiTestItemInfo dock = ui.WindowInfo("//##DockBottom", ImGuiTestOpFlags_NoError);
+        if (dock.Window == nullptr)
+            dock = ui.WindowInfo("//##DockBottomLeft", ImGuiTestOpFlags_NoError);
+        if (dock.Window == nullptr)
+            dock = ui.WindowInfo("//##DockBottomRight", ImGuiTestOpFlags_NoError);
+        IM_CHECK(dock.Window != nullptr);
+        ui.MouseMoveToPos({dock.RectClipped.Max.x - 20.0F, dock.RectClipped.GetCenter().y});
+        ui.MouseClick(ImGuiMouseButton_Right);
+    }
+
     /** @brief Creates the requested native or script behavior through the real Asset Browser route. */
     void AddBehaviorCreationStep(Tests::UiScenarioPipe &pipeline, const GameplayRuntimeKind runtime) {
         pipeline.Step("Create behavior through the Asset Browser", [runtime](ImGuiTestContext &ui) {
-            if (!ui.ItemExists("//**/Assets")) {
-                ui.ItemClick("//**/horo.global_dock/##ActivityItem");
-                ui.Yield();
-            }
-            ui.ItemClick("//**/Assets");
-            ImGuiTestItemInfo dock = ui.WindowInfo("//##DockBottom", ImGuiTestOpFlags_NoError);
-            if (dock.Window == nullptr)
-                dock = ui.WindowInfo("//##DockBottomLeft", ImGuiTestOpFlags_NoError);
-            if (dock.Window == nullptr)
-                dock = ui.WindowInfo("//##DockBottomRight", ImGuiTestOpFlags_NoError);
-            IM_CHECK(dock.Window != nullptr);
-            ui.MouseMoveToPos({dock.RectClipped.Max.x - 20.0F, dock.RectClipped.GetCenter().y});
-            ui.MouseClick(ImGuiMouseButton_Right);
+            OpenAssetCreationMenu(ui);
             ui.ItemClick(runtime == GameplayRuntimeKind::Lua ? "//**/###content_browser_create_lua_behavior"
                                                              : "//**/###content_browser_create_native_behavior");
             ui.Yield();
@@ -370,6 +375,54 @@ namespace {
         std::ifstream metadataInput{projectRoot / ".horo/project.json", std::ios::binary};
         const std::string metadata{std::istreambuf_iterator<char>{metadataInput}, std::istreambuf_iterator<char>{}};
         REQUIRE((metadata.find("\"defaultScene\": \"\"") != std::string::npos));
+    }
+
+    TEST_CASE("Fresh project creates linked AI assets through the Asset Browser", "[ui][imgui][editor][e2e][decision]") {
+        Tests::EditorUiTestHarness harness;
+        Tests::FullEditorUiTestHost editor{harness.Surface(), "en-US"};
+        const Tests::FullEditorProjectSetup project{.name = "DecisionAuthoringJourney", .templateId = "empty"};
+        const auto assetRoot = editor.ProjectsRoot() / project.name / "Assets";
+
+        const auto result = harness.RunScenario("full_editor", "decision_authoring_journey", [&editor](ImGuiTestContext *context) {
+            editor.DrawFrame(context);
+        }, [&editor, project](Tests::UiScenarioPipe &pipeline) {
+            Tests::FullEditorSetups::CreateProjectAndOpenWorkspace(pipeline, editor, project);
+            pipeline.Step("Create a Blackboard schema with a named key", [](ImGuiTestContext &ui) {
+                OpenAssetCreationMenu(ui);
+                ui.ItemClick("//**/###content_browser_create_blackboard");
+                ui.Yield();
+                ui.ItemInputValue("//**/##NewBlackboardName", "GuardBoard");
+                ui.ItemInputValue("//**/##NewBlackboardKey", "Target visible");
+                ui.ItemClick("//**/Create schema");
+                ui.Yield();
+            });
+            pipeline.Step("Create a State Machine using the saved schema", [](ImGuiTestContext &ui) {
+                OpenAssetCreationMenu(ui);
+                ui.ItemClick("//**/###content_browser_create_state_machine");
+                ui.Yield();
+                ui.ItemInputValue("//**/##NewStateMachineName", "GuardDecision");
+                ui.ItemClick("//**/##NewStateMachineSchema/Combo#####NewStateMachineSchema");
+                ui.ItemClick("//**/###combo_option_1");
+                ui.ItemClick("//**/Create state machine");
+                ui.Yield();
+            });
+            pipeline.Step("Create an Environment Query with the default point generator", [](ImGuiTestContext &ui) {
+                OpenAssetCreationMenu(ui);
+                ui.ItemClick("//**/###content_browser_create_environment_query");
+                ui.Yield();
+                ui.ItemInputValue("//**/##NewQueryName", "GuardPositions");
+                ui.ItemClick("//**/Create query");
+                ui.Yield();
+            });
+        }, Tests::EditorUiScenarioBudget::Extended(1400), &editor.Input());
+
+        INFO(result.testEngineLog);
+        REQUIRE(result.Succeeded());
+        for (const char *name : {"GuardBoard.horo_bb", "GuardDecision.horo_sm", "GuardPositions.horo_eqs"}) {
+            CAPTURE(name);
+            CHECK(std::filesystem::is_regular_file(assetRoot / name));
+            CHECK(std::filesystem::is_regular_file(assetRoot / (std::string{name} + ".horo")));
+        }
     }
 
     TEST_CASE("Lua behavior completes the editor Play journey", "[ui][imgui][editor][e2e][gameplay][lua]") {

@@ -1,5 +1,6 @@
 #include "FullEditorUiTestHost.h"
 
+#include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
@@ -183,7 +184,8 @@ namespace Horo::Tests {
         State(IEditorUiTestSurface &testSurface, const std::string &locale, std::optional<std::string> recentProjectName)
             : root(MakeIsolatedRoot()), home(root / "home"), projectsRoot(root / "projects"), scopedHome(home),
               jobs(JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256, .ioWorkerCount = 1, .reservedInteractiveJobs = 8}),
-              creation(jobs, engineEvents), localization(Editor::LocaleTag{"en-US"}),
+              creation(jobs, engineEvents, Platform::CreateNativeSecureRandomSource(), std::make_shared<NativeDurableFileSystem>()),
+              localization(Editor::LocaleTag{"en-US"}),
               configuration(Editor::CreateEditorConfigurationService(Editor::DefaultEditorSettings())),
               settings(Editor::DefaultEditorSettings(), configuration, editorEvents, localization), modals(editorEvents, input),
               mutations(files), transactions(files, wallClock, mutations, jobs),
@@ -223,6 +225,10 @@ namespace Horo::Tests {
             screenHost->Services().Register<Editor::EditorViewportSceneState>(viewportScene);
             screenHost->Services().Register<Runtime::RuntimeSceneService>(runtimeScene);
             screenHost->Services().Register<Assets::AssetRegistry>(assetRegistry);
+            if (querySchema.HasError())
+                throw std::runtime_error(querySchema.ErrorValue().message);
+            screenHost->Services().RegisterConst(querySchema.Value());
+            screenHost->Services().RegisterConst(latticeQueryFactory);
             screenHost->Services().RegisterConst<Editor::WorkspaceReadSourceFactory>(workspaceReadSources);
             screenHost->Services().Register<Editor::ProjectMutationCoordinator>(mutations);
             screenHost->Services().Register<DurableFileSystem>(files);
@@ -284,6 +290,8 @@ namespace Horo::Tests {
         Editor::RendererAvailabilitySnapshot rendererAvailability;
         Editor::ProjectOpenService open;
         Assets::AssetRegistry assetRegistry;
+        const Result<AI::QuerySchemaRegistry> querySchema{AI::CaptureBuiltinQuerySchema()};
+        static constexpr AI::LatticeQueryAuthoringFactory latticeQueryFactory = AI::CreateBuiltinLatticeQuery;
         Runtime::RuntimeSceneService runtimeScene;
         CancellationSource runtimeCancellation;
         std::uint64_t runtimeFrameNumber{};
