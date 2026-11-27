@@ -409,6 +409,25 @@ namespace {
                        .options = {NativeProject::PathOption("project", root),
                                    NativeProject::PathOption("package-cache-root", cacheRoot / "added-only")}};
             deniesMissing(rollback.adapter->Execute(command, context));
+            if (scenario != Unchanged) {
+                const auto installed = files.ReadFileBounded(root / ".horo/packages.lock", 1U << 20U, {});
+                REQUIRE(installed.HasValue());
+                command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "empty");
+                const auto incompleteRollback = rollback.adapter->Execute(command, context);
+                REQUIRE(incompleteRollback.HasError());
+                const auto &diagnostics = incompleteRollback.ErrorValue().diagnostics;
+                for (const auto *role : {"Current archive: ", "Candidate archive: "}) {
+                    CHECK(std::ranges::any_of(diagnostics, [&](const auto &diagnostic) {
+                        return diagnostic.code.Value() == "packages.host.update_archive_evidence_unavailable" &&
+                               diagnostic.path == base.package.Value() && diagnostic.message.starts_with(role);
+                    }));
+                }
+                CHECK(std::ranges::any_of(diagnostics, [&](const auto &diagnostic) {
+                    return diagnostic.code.Value() == "packages.host.removal_archive_evidence_unavailable" &&
+                           diagnostic.path == added.Value();
+                }));
+                CHECK(files.ReadFileBounded(root / ".horo/packages.lock", 1U << 20U, {}).Value() == installed.Value());
+            }
             command.options.back() = NativeProject::PathOption("package-cache-root", cacheRoot / "complete");
             const auto reviewedRollback = rollback.adapter->Execute(command, context);
             const auto hasRemovedAsset = [](const Error &error) {

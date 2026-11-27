@@ -440,26 +440,29 @@ namespace Horo::Application::Internal {
         /** @brief Checks the exact cache evidence of one addition, replacement or withdrawal. */
         Result<void> ReviewCachedWithdrawalChange(const Packages::PackageUpdateChange &change, const Packages::PackageCacheStore &cache,
                                                   std::vector<Diagnostic> &diagnostics) {
-            const auto &entry = change.current ? *change.current : *change.candidate;
-            const auto archive = ReadUpdateArchive(cache, entry);
-            const auto reportMissing = [&diagnostics](const char *code, const Packages::LockedPackage &locked, const Error &error) {
-                diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, error.code.Value(),
-                                         SourceLocation{"packages.lock"}, locked.package.Value());
+            const auto read = [&](const Packages::LockedPackage &locked, const char *code, std::string_view role) {
+                auto archive = ReadUpdateArchive(cache, locked);
+                if (archive.HasError())
+                    diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error,
+                                             std::string(role) + archive.ErrorValue().code.Value(),
+                                             SourceLocation{"packages.lock"}, locked.package.Value());
+                return archive;
             };
-            if (archive.HasError()) {
-                reportMissing(change.candidate ? "packages.host.update_archive_evidence_unavailable"
-                                               : "packages.host.removal_archive_evidence_unavailable",
-                              entry, archive.ErrorValue());
-                return Result<void>::Success();
+            constexpr auto updateMissing = "packages.host.update_archive_evidence_unavailable";
+            if (!change.current) {
+                const auto candidate = read(*change.candidate, updateMissing, "Candidate archive: ");
+                return candidate.HasValue() ? ReviewAddedArchive(*change.candidate, candidate.Value(), diagnostics)
+                                            : Result<void>::Success();
             }
-            if (!change.current)
-                return ReviewAddedArchive(entry, archive.Value(), diagnostics);
-            if (!change.candidate)
-                return AppendOfflineRemovalArchiveBlockers(diagnostics, entry, archive.Value());
-            const auto candidate = ReadUpdateArchive(cache, *change.candidate);
-            if (candidate.HasValue())
-                return ReviewAssetFiles(entry, archive.Value(), *change.candidate, candidate.Value(), diagnostics);
-            reportMissing("packages.host.update_archive_evidence_unavailable", *change.candidate, candidate.ErrorValue());
+            if (!change.candidate) {
+                const auto current = read(*change.current, "packages.host.removal_archive_evidence_unavailable", "Departing archive: ");
+                return current.HasValue() ? AppendOfflineRemovalArchiveBlockers(diagnostics, *change.current, current.Value())
+                                          : Result<void>::Success();
+            }
+            const auto current = read(*change.current, updateMissing, "Current archive: ");
+            const auto candidate = read(*change.candidate, updateMissing, "Candidate archive: ");
+            if (current.HasValue() && candidate.HasValue())
+                return ReviewAssetFiles(*change.current, current.Value(), *change.candidate, candidate.Value(), diagnostics);
             return Result<void>::Success();
         }
 
