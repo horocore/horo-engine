@@ -78,6 +78,10 @@ namespace {
         trackingLost.sources[1].pose.positionValid = false;
         trackingLost.sources[1].pose.orientationValid = false;
 
+        auto disconnected = trackingLost;
+        disconnected.sources[1].state = XRTrackedDeviceState::Disconnected;
+        const auto focusLost = Event(XRSessionEvent::FocusLost);
+        const auto refocused = Event(XRSessionEvent::BecameFocused);
         auto failedRelease = ordinary;
         failedRelease.failure = XRFakeFailure::Release;
         const auto terminal = Event(XRSessionEvent::SessionLost);
@@ -89,14 +93,19 @@ namespace {
             XRSessionState session{XRSessionState::Focused};
             std::uint32_t acquiredImages{1};
             std::optional<XRTrackedDeviceState> left{XRTrackedDeviceState::Tracked};
+            std::uint32_t deviceGeneration{1};
         };
 
         const std::array timeline{
             ExpectedStep{ordinary},
             ExpectedStep{delayed, Unavailable, XRSessionState::Focused, 0, std::nullopt},
             ExpectedStep{.controls = trackingLost, .left = XRTrackedDeviceState::TrackingLost},
+            ExpectedStep{.controls = disconnected, .left = XRTrackedDeviceState::Disconnected},
+            ExpectedStep{focusLost, Ok, XRSessionState::Visible, 0, std::nullopt},
+            ExpectedStep{refocused, Ok, XRSessionState::Focused, 0, std::nullopt},
+            ExpectedStep{.controls = ordinary, .deviceGeneration = 2},
             ExpectedStep{failedRelease, Unavailable, XRSessionState::Focused, 1, std::nullopt},
-            ExpectedStep{ordinary},
+            ExpectedStep{.controls = ordinary, .deviceGeneration = 2},
             ExpectedStep{terminal, Ok, XRSessionState::Lost, 0, std::nullopt},
         };
 
@@ -122,6 +131,7 @@ namespace {
             const auto left = std::ranges::find(tracking->Devices(), XRTrackedDeviceRole::LeftController, &XRTrackedDeviceRecord::role);
             REQUIRE(left != tracking->Devices().end());
             CHECK(left->state == *expected.left);
+            CHECK(left->id.slot.generation == expected.deviceGeneration);
         };
 
         REQUIRE(runtime->ArmCapture().HasValue());
@@ -168,6 +178,23 @@ namespace {
         replay->Shutdown();
         CHECK(replay->Tracking() == nullptr);
         CHECK(replay->Tick(Cutoff(timeline.size() + 1)).HasError());
+    }
+
+    TEST_CASE("Simulator capture stop preserves idle and exhaustion states without an export", "[xr][simulator][capture]") {
+        auto runtime = Runtime();
+        REQUIRE(runtime->StopCapture().HasError());
+        CHECK(runtime->Snapshot().capture.state == XRSimulatorCaptureState::Idle);
+
+        REQUIRE(runtime->ArmCapture().HasValue());
+        REQUIRE(runtime->StopCapture().HasError());
+        CHECK(runtime->Snapshot().capture.state == XRSimulatorCaptureState::Cancelled);
+
+        REQUIRE(runtime->ArmCapture({.maximumDurationNanoseconds = 1}).HasValue());
+        REQUIRE(runtime->Step(Cutoff(1)).HasValue());
+        REQUIRE(runtime->StopCapture().HasError());
+        CHECK(runtime->Snapshot().capture.state == XRSimulatorCaptureState::Partial);
+        CHECK(runtime->Snapshot().capture.dropped == 1);
+        CHECK(runtime->RecordedScenario().HasError());
     }
 
     TEST_CASE("Simulator capture cancellation native channels and terminal failure retain truthful outcomes", "[xr][simulator][capture]") {
