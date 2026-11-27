@@ -588,6 +588,19 @@ namespace Horo::Editor {
             std::vector<AgentSceneLightUpdate> lights;
         };
 
+        /** @brief An object may appear in multiple edit kinds, but each property has one proposed writer. */
+        template <class Edit> bool HasDistinctEditTargets(const std::vector<Edit> &edits) {
+            return std::ranges::all_of(edits, [&edits](const auto &edit) {
+                return std::ranges::count(edits, edit.object, &Edit::object) == 1;
+            });
+        }
+
+        /** @brief Applies the scene math contract before treating a proposed rotation as reviewable. */
+        bool HasValidProposalRotation(const AgentViewportTransform &transform) {
+            const auto &rotation = transform.rotation;
+            return Math::Quaternion{rotation[0], rotation[1], rotation[2], rotation[3]}.TryNormalized().HasValue();
+        }
+
         /** @brief Converts schema-validated Scene proposal input and checks the combined edit budget. */
         Result<DecodedSceneProposal> ReadSceneProposal(const Json &arguments) {
             const auto &scene = arguments.at("scene");
@@ -605,6 +618,9 @@ namespace Horo::Editor {
             });
             const auto count = transforms.size() + renames.size() + lights.size();
             if (count == 0 || count > MaximumObjects)
+                return Result<DecodedSceneProposal>::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
+            if (!HasDistinctEditTargets(transforms) || !HasDistinctEditTargets(renames) || !HasDistinctEditTargets(lights) ||
+                !std::ranges::all_of(transforms, HasValidProposalRotation))
                 return Result<DecodedSceneProposal>::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
             return Result<DecodedSceneProposal>::Success({revision, std::move(transforms), std::move(renames), std::move(lights)});
         }

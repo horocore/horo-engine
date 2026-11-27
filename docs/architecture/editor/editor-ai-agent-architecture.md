@@ -325,6 +325,10 @@ Ownership rules:
   Plans with consented context also observe the exact project trust revision
   that admitted it. Replacing trust or retiring the policy stops inference and
   withdraws the draft even when the project remains open.
+  Scene proposal inspection and staging share one input decoder. The decoder
+  rejects competing edits to the same property and invalid rotations before
+  projecting the affected objects. Different properties of one object may
+  appear together and contribute one review target.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

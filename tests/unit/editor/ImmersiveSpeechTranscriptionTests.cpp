@@ -250,11 +250,40 @@ namespace Horo::Editor {
             REQUIRE(stagedRequest);
 
             ReplayModel model;
+            const nlohmann::json transform{{"object", object},
+                                           {"translation", {1, 2, 3}},
+                                           {"rotationXYZW", {0, 0, 0, 1}},
+                                           {"scale", {1, 1, 1}}};
             nlohmann::json arguments{{"scene", {{"epoch", identity.documentOpening}, {"revision", identity.documentRevision}}},
                                      {"renames", {{{"object", object}, {"name", "Reviewed object"}}}}};
             auto expected = Completed;
             std::stop_source cancellation;
             SECTION("valid simulated context reaches read-only review") {}
+            SECTION("different properties on the same object share one review target") {
+                arguments["transforms"] = nlohmann::json::array({transform});
+                arguments["lights"] = nlohmann::json::array({{{"object", object}, {"enabled", false}}});
+            }
+            SECTION("conflicting transforms fail before a review can be shown") {
+                auto conflicting = transform;
+                conflicting["translation"][0] = 5;
+                arguments["transforms"] = nlohmann::json::array({transform, conflicting});
+                expected = InvalidModelResponse;
+            }
+            SECTION("conflicting names fail before a review can be shown") {
+                arguments["renames"].push_back({{"object", object}, {"name", "Other name"}});
+                expected = InvalidModelResponse;
+            }
+            SECTION("conflicting light states fail before a review can be shown") {
+                arguments["lights"] =
+                    nlohmann::json::array({{{"object", object}, {"enabled", false}}, {{"object", object}, {"enabled", true}}});
+                expected = InvalidModelResponse;
+            }
+            SECTION("a zero quaternion cannot produce a scene review") {
+                auto invalid = transform;
+                invalid["rotationXYZW"] = {0, 0, 0, 0};
+                arguments["transforms"] = nlohmann::json::array({invalid});
+                expected = InvalidModelResponse;
+            }
             SECTION("stale proposal revision drops the model tool") {
                 arguments["scene"]["revision"] = identity.documentRevision + 1;
                 expected = ContextDenied;
