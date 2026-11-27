@@ -241,12 +241,14 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
-        if (m_debugCaptureEntity && m_playSession.State() != EditorPlaySessionState::Playing) {
+        const auto state = m_playSession.State();
+        const bool leftPlaying = m_viewModel.playState == EditorPlayState::Playing && state != EditorPlaySessionState::Playing;
+        if (m_debugCaptureEntity && state != EditorPlaySessionState::Playing) {
             m_debugCapture.RetireScene();
             m_debugCaptureEntity.reset();
         }
         RefreshCollisionActivation();
-        switch (m_playSession.State()) {
+        switch (state) {
             case EditorPlaySessionState::Idle:
                 m_viewModel.playState = EditorPlayState::Idle;
                 break;
@@ -269,7 +271,9 @@ namespace Horo::Editor {
                 m_viewModel.playState = EditorPlayState::Failed;
                 break;
         }
-        if (m_viewModel.playState != EditorPlayState::Idle)
+        if (leftPlaying)
+            InvalidateAgentSceneSelection();
+        else if (m_viewModel.playState != EditorPlayState::Idle)
             InvalidateAgentViewport();
         m_viewModel.playError = m_playSession.LastError().has_value() ? m_playSession.LastError()->message : std::string{};
         RefreshPlayDecisionProblem();

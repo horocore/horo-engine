@@ -300,6 +300,8 @@ Ownership rules:
   through its exact live entity generation. Incomplete batches and hidden,
   locked, deleted, or recycled peers suppress the preview. A new selection,
   document revision, or Scene structural revision withdraws the captured review.
+  Leaving active Play also revokes the shared selection capture, so resuming
+  the same Scene cannot restore a previous reference or contact review.
 - MCP validates admitted tools. The editor document/command owner validates and
   commits mutations. AIA owns orchestration and presentation only.
   The plan-only agent turn performs one bounded model round. It holds proposed

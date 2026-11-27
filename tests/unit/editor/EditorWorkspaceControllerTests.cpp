@@ -1230,6 +1230,31 @@ namespace {
         return *refreshed;
     }
 
+    /** @brief Prevents captured references and contacts from becoming current again after a pause. */
+    AgentSceneContactReview VerifyPlayReviewAfterPause(EditorWorkspaceController &workspace, const AgentSceneContactReview &contacts) {
+        const auto references = workspace.ReadSelectedPlayReferences();
+        REQUIRE(references);
+        REQUIRE(workspace.AgentSceneReferencesCurrent(*references));
+        REQUIRE(workspace.AgentSceneContactsCurrent(contacts));
+
+        workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::PausePlay));
+        REQUIRE(workspace.ViewModel().playState == EditorPlayState::Paused);
+        CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*references));
+        CHECK_FALSE(workspace.AgentSceneContactsCurrent(contacts));
+        CHECK(references->lifetime.IsCancellationRequested());
+        CHECK(contacts.lifetime.IsCancellationRequested());
+
+        workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::ResumePlay));
+        REQUIRE(workspace.ViewModel().playState == EditorPlayState::Playing);
+        CHECK_FALSE(workspace.AgentSceneReferencesCurrent(*references));
+        CHECK_FALSE(workspace.AgentSceneContactsCurrent(contacts));
+        const auto refreshed = workspace.ReadAgentSceneContacts();
+        REQUIRE(refreshed);
+        CHECK(refreshed->worldGeneration == contacts.worldGeneration);
+        CHECK(workspace.AgentSceneContactsCurrent(*refreshed));
+        return *refreshed;
+    }
+
     /** @brief Checks the read-only candidate review against a running editor scene. */
     void VerifyPlayReferenceReview(EditorWorkspaceController &workspace, const Runtime::RuntimeSceneView &play,
                                    const SceneObjectId selected) {
@@ -1559,7 +1584,7 @@ namespace {
         VerifyPlayReferenceReview(workspace, *playScene, original);
         VerifyPlayLocationReview(workspace, *playScene, original);
         VerifyMountedPlayReferenceReview(workspace, *playScene, original);
-        const auto contactReview = VerifyPlayContactReview(workspace, *activeHost, original);
+        const auto contactReview = VerifyPlayReviewAfterPause(workspace, VerifyPlayContactReview(workspace, *activeHost, original));
         VerifyPlayPointingAfterStructuralCommit(workspace, activeHost->Scenes(), original);
         CHECK_FALSE(workspace.AgentSceneContactsCurrent(contactReview));
 
