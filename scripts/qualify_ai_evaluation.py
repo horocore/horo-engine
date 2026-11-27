@@ -223,11 +223,13 @@ def validate_retained_manifest(value: object, approval: object, today: date | No
     return record
 
 
-def audit_retention(value: object, approval: object, today: date, approval_path: Path) -> dict:
-    manifest = validate_retained_manifest(value, approval, None)
-    expiry = manifest["expiresOnUtc"]
-    status = "expired" if date.fromisoformat(expiry) <= today else "current"
+def audit_retention(path: Path, approval: object, approval_path: Path) -> dict:
+    data = read_bounded(path, MAX_MANIFEST_BYTES)
+    manifest = validate_retained_manifest(decode(data), approval, None)
     require_manifest_approval(approval_path, manifest, operation="Retention audit")
+    require(read_bounded(path, MAX_MANIFEST_BYTES) == data, "Retention audit manifest changed after validation")
+    expiry = manifest["expiresOnUtc"]
+    status = "expired" if datetime.now(UTC).date() >= date.fromisoformat(expiry) else "current"
     return {"schemaVersion": 1, "status": status, "expiresOnUtc": expiry}
 
 
@@ -499,15 +501,14 @@ def main() -> int:
             parser.error("--qualification-artifacts requires --source-replay when verifying a retained manifest")
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
+        if args.audit_retention:
+            emit_json(audit_retention(args.input, approval, args.approval))
+            return 0
         today = datetime.now(UTC).date()
         if args.compare_replay is not None:
             return compare_approved_replays(args, approval, today)
         if args.purge_expired:
             emit_json(purge_expired_manifest(args.input, args.source_replay, approval, today, args.approval))
-            return 0
-        if args.audit_retention:
-            record = decode(read_bounded(args.input, MAX_MANIFEST_BYTES))
-            emit_json(audit_retention(record, approval, today, args.approval))
             return 0
         if args.verify_retained or args.read_retained:
             record = validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)

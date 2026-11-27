@@ -195,7 +195,8 @@ original approval. It returns a schema-versioned JSON record with `status`
 (`current` or `expired`) and `expiresOnUtc`. A matched record switches to
 `expired` at the start of its expiry date in UTC. Missing, malformed or mismatched
 inputs produce a nonzero exit and no status record. The audit rechecks the
-original approval before reporting the status.
+original approval and manifest contents before determining the status from the
+current UTC date.
 
 ```bash
 python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --audit-retention

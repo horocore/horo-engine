@@ -276,6 +276,48 @@ def test_retention_audit_suppresses_status_after_approval_withdrawal(retained_pa
     assert result.err == "Retention audit approval is no longer current\n"
 
 
+def test_retention_audit_uses_utc_date_after_rechecking_approval(retained_pair, monkeypatch, capsys):
+    manifest, _, grant, _, _ = retained_pair
+    expiry = datetime.fromisoformat(json.loads(grant.read_bytes())["expiresOnUtc"]).replace(tzinfo=UTC)
+    checked = False
+    recheck = evaluation.require_manifest_approval
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            assert tz == UTC
+            return expiry if checked else expiry - timedelta(seconds=1)
+
+    def cross_midnight(*args, **kwargs):
+        nonlocal checked
+        recheck(*args, **kwargs)
+        checked = True
+
+    monkeypatch.setattr(evaluation, "datetime", Clock)
+    monkeypatch.setattr(evaluation, "require_manifest_approval", cross_midnight)
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--approval", str(grant), "--audit-retention"])
+    assert evaluation.main() == 0
+    result = capsys.readouterr()
+    assert not result.err
+    assert json.loads(result.out)["status"] == "expired"
+
+
+def test_retention_audit_does_not_report_a_replaced_manifest(retained_pair, monkeypatch, capsys):
+    manifest, _, grant, _, _ = retained_pair
+    recheck = evaluation.require_manifest_approval
+
+    def replace_manifest(*args, **kwargs):
+        recheck(*args, **kwargs)
+        manifest.write_text(PRIVATE, encoding="utf-8")
+
+    monkeypatch.setattr(evaluation, "require_manifest_approval", replace_manifest)
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--approval", str(grant), "--audit-retention"])
+    assert evaluation.main() == 1
+    result = capsys.readouterr()
+    assert not result.out
+    assert result.err == "Retention audit manifest changed after validation\n"
+
+
 @pytest.mark.parametrize("target", ["approval.json", "evidence.json"])
 def test_evaluation_rejects_inputs_replaced_between_inspection_and_open(tmp_path, export, monkeypatch, target):
     data = json.dumps(frame(3, 2)).encode()
