@@ -13,6 +13,7 @@
 #include <new>
 #include <nlohmann/json.hpp>
 #include <ostream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -271,6 +272,23 @@ namespace Horo::Application::Internal {
             return result;
         }
 
+        /** @brief Rejects ambiguous object members throughout the bounded portable evidence document. */
+        Json ParseReplay(std::span<const std::uint8_t> bytes) {
+            std::vector<std::set<std::string>> objectKeys;
+            return Json::parse(bytes.begin(), bytes.end(), [&](int depth, Json::parse_event_t event, Json &parsed) {
+                using enum Json::parse_event_t;
+                if (depth > 18)
+                    throw InvalidEvidence{};
+                if (event == object_start)
+                    objectKeys.emplace_back();
+                else if (event == object_end)
+                    objectKeys.pop_back();
+                else if (event == key && !objectKeys.back().insert(parsed.get_ref<const std::string &>()).second)
+                    throw InvalidEvidence{};
+                return true;
+            });
+        }
+
         /** @brief Reads a bounded regular file, preserving the legacy one-tick representation. */
         Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path, Json *source = nullptr,
                                                        const Sha256Digest *approved = nullptr) {
@@ -280,11 +298,7 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(bytes.ErrorValue());
             if (approved && ComputeSha256(std::as_bytes(std::span{bytes.Value()})) != *approved)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid, "Replay does not match its approved digest."));
-            auto file = Json::parse(bytes.Value(), [](int depth, Json::parse_event_t, Json &) {
-                if (depth > 18)
-                    throw InvalidEvidence{};
-                return true;
-            });
+            auto file = ParseReplay(bytes.Value());
             if (file.at("format") != "horo-ai-replay-evidence")
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             if (file.at("version") == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes) {

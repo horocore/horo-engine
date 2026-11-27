@@ -427,6 +427,22 @@ namespace Horo::Application::PrefabAtomicTest {
                 changed << window;
                 REQUIRE(changed.good());
             };
+            for (const std::string_view field : {"\"version\":2", "\"tick\":\"3\""}) {
+                auto ambiguous = window.dump();
+                const auto position = ambiguous.find(field);
+                REQUIRE(position != std::string::npos);
+                ambiguous.insert(position, std::string{field} + ",");
+                std::ofstream duplicate{candidate, std::ios::binary | std::ios::trunc};
+                duplicate << ambiguous;
+                duplicate.close();
+                REQUIRE(duplicate.good());
+                CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
+                auto path = candidate.u8string();
+                std::array<char *, 1> arguments{reinterpret_cast<char *>(path.data())};
+                std::ostringstream out, err;
+                CHECK(Internal::RunHeadlessReplayTimeline(arguments, out, err) == 2);
+                CHECK(out.str().empty());
+            }
             std::array distinctScenes{frames.front(), frames.back()};
             ++distinctScenes.back().definition.value;
             const auto mixedPath = (output.Directory() / "mixed-scenes").u8string();
