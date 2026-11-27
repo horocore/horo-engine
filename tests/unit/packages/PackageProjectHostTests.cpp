@@ -1124,6 +1124,24 @@ namespace {
         CHECK(impact.Value().front().path == "Assets/Scene.horoasset");
         CHECK(impact.Value().back().path == "Assets/Example.prefab");
 
+        const auto limited = InspectPackageBehaviorMigrations(*assets, sources.files, sources.context, claims, 1);
+        REQUIRE(limited.HasError());
+        CHECK(limited.ErrorValue().code.Value() == "packages.host.behavior_migration_impact_limit");
+        REQUIRE(limited.ErrorValue().diagnostics.size() == 1);
+        CHECK(limited.ErrorValue().diagnostics.front().path == "Assets/Scene.horoasset");
+
+        const auto otherPackage = Packages::HoroPackageId::Parse("com.horo.other").Value();
+        const auto differentType = Gameplay::BehaviorTypeId::Parse("game.tests.other_behavior").Value();
+        for (const auto &competing : {PackageBehaviorMigration{otherPackage, type, newType},
+                                      PackageBehaviorMigration{locked.package, type, differentType}}) {
+            const std::array conflicting{claims.front(), competing};
+            const auto ambiguous = InspectPackageBehaviorMigrations(*assets, sources.files, sources.context, conflicting, 2);
+            REQUIRE(ambiguous.HasError());
+            CHECK(ambiguous.ErrorValue().code.Value() == "packages.host.behavior_migration_claim_ambiguous");
+            REQUIRE(ambiguous.ErrorValue().diagnostics.size() == 1);
+            CHECK(ambiguous.ErrorValue().diagnostics.front().path == "Assets/Scene.horoasset");
+        }
+
         const auto oldRequest = fixture.Read("packages.json");
         const auto oldLock = fixture.Read("packages.lock");
         const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);

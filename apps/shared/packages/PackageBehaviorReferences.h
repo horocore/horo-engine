@@ -130,8 +130,8 @@ namespace Horo::Application::Internal {
      * @param assets Same-project canonical asset registry source. @param files Root-bound source reader.
      * @param context Original opening, cancellation and deadline.
      * @param claims Bounded artifact-bound claims with typed behavior names. @param diagnosticLimit Output limit.
-     * @return Advisory attachment locations and exact source revisions. Incomplete inventories or unresolved composition
-     * return a typed error with confirmed locations from readable sources.
+     * @return Advisory attachment locations and exact source revisions. Incomplete scans, competing claims for a saved type,
+     * or an exhausted diagnostic budget return a typed error with the available independent locations.
      * @details The matches are possible impacts. Only the live package lifecycle can certify provider ownership.
      */
     [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageBehaviorMigrations(

@@ -718,6 +718,10 @@ reports the failing metadata path and retains matches from admitted records.
 Matches show possible impact. Invalid migration declarations block approval,
 with the declaration and its error reported alongside independently verified
 asset and behavior findings.
+If multiple packages claim the same saved type, or one package supplies
+different destinations for that type, the preview reports ambiguity without
+choosing a rename. A preview whose output budget omits any confirmed impact
+reports that the review is incomplete.
 They require live provider ownership and field compatibility verification before
 the host can approve a migration. The preview does not activate package code or
 edit project sources.

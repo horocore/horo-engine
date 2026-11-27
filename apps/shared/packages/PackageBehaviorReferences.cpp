@@ -919,10 +919,14 @@ namespace Horo::Application::Internal {
         std::span<const PackageBehaviorMigration> claims, std::size_t diagnosticLimit) {
         using Inspection = Result<std::vector<Diagnostic>>;
         SavedReferenceOwners assertedOwners;
-        std::map<std::pair<Packages::HoroPackageId, Gameplay::BehaviorTypeId>, const Gameplay::BehaviorTypeId *> targets;
+        std::map<Gameplay::BehaviorTypeId, const PackageBehaviorMigration *> targets;
+        std::set<Gameplay::BehaviorTypeId> competingClaims;
         for (const auto &claim : claims) {
-            assertedOwners.behaviors[claim.previous].insert(claim.package);
-            targets.emplace(std::pair{claim.package, claim.previous}, &claim.candidate);
+            const auto [existing, inserted] = targets.try_emplace(claim.previous, &claim);
+            if (inserted)
+                assertedOwners.behaviors[claim.previous].insert(claim.package);
+            else if (existing->second->package != claim.package || existing->second->candidate != claim.candidate)
+                competingClaims.insert(claim.previous);
         }
         if (assertedOwners.Empty())
             return Inspection::Success({});
@@ -936,24 +940,42 @@ namespace Horo::Application::Internal {
         if (matches.HasError())
             return Inspection::Failure(matches.ErrorValue());
         auto scan = std::move(matches).Value();
-        const bool unresolvedComposition = !scan.composition.empty();
-        const bool unusableAddresses = !scan.unusableAddresses.empty();
+        const char *incompleteCode = nullptr;
+        if (!scan.composition.empty())
+            incompleteCode = "packages.host.saved_composition_incomplete";
+        if (!scan.unusableAddresses.empty())
+            incompleteCode = "packages.host.behavior_migration_address_unusable";
         std::vector<Diagnostic> diagnostics;
         std::ranges::move(scan.unusableAddresses | std::views::take(diagnosticLimit), std::back_inserter(diagnostics));
         std::ranges::move(scan.composition | std::views::take(diagnosticLimit - diagnostics.size()), std::back_inserter(diagnostics));
-        for (const auto &match : scan.behaviors | std::views::take(diagnosticLimit - diagnostics.size())) {
-            const auto *target = targets.at({match.package, match.type});
+        for (const auto &match : scan.behaviors) {
+            const auto target = targets.find(match.type);
+            if (target == targets.end())
+                continue;
+            if (competingClaims.contains(match.type)) {
+                incompleteCode = "packages.host.behavior_migration_claim_ambiguous";
+                if (diagnostics.size() < diagnosticLimit)
+                    diagnostics.emplace_back(DiagnosticCode{incompleteCode}, DiagnosticSeverity::Error, match.type.Value(),
+                                             SourceLocation{"packages.host"}, match.assetPath);
+                targets.erase(target);
+                continue;
+            }
+            if (diagnostics.size() == diagnosticLimit) {
+                if (!incompleteCode)
+                    incompleteCode = "packages.host.behavior_migration_impact_limit";
+                continue;
+            }
             const auto &revision = scan.behaviorSourceRevisions.at(match.assetPath);
-            auto message = match.package.Value() + " [source sha256:" + revision + "]: " + match.type.Value() + " -> " + target->Value() +
+            auto message = match.package.Value() + " [source sha256:" + revision + "]: " + match.type.Value() + " -> " +
+                           target->second->candidate.Value() +
                            " (object " + std::to_string(match.object) + ", attachment " + std::to_string(match.instance.value) + ')';
             diagnostics.emplace_back(DiagnosticCode{"packages.host.update_possible_behavior_rename"}, DiagnosticSeverity::Note,
                                      std::move(message), SourceLocation{"packages.host"}, match.assetPath);
         }
         auto reviewed = std::move(scan.failures).Finish(std::move(diagnostics));
         if (inventory.status == Assets::AssetRegistryBuildStatus::Complete) {
-            if ((unresolvedComposition || unusableAddresses) && reviewed.HasValue()) {
-                auto incomplete = ReferenceError(unusableAddresses ? "packages.host.behavior_migration_address_unusable"
-                                                                   : "packages.host.saved_composition_incomplete");
+            if (incompleteCode && reviewed.HasValue()) {
+                auto incomplete = ReferenceError(incompleteCode);
                 incomplete.diagnostics = std::move(reviewed).Value();
                 return Inspection::Failure(std::move(incomplete));
             }
