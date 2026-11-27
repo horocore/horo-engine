@@ -44,8 +44,8 @@ class Evidence:
         if view_count is not None:
             require(view_count == PRIMARY_STEREO_VIEW_COUNT, "Desktop preflight must report primary stereo for XR 1.0")
 
-    def android_preflight(self, expected: dict, record: dict) -> None:
-        check_android_preflight_file(self.path(expected["receiptSha256"]), self.path(expected["apkSha256"]), expected, record)
+    def android_preflight(self, expected: dict, record: dict) -> frozenset[str]:
+        return check_android_preflight_file(self.path(expected["receiptSha256"]), self.path(expected["apkSha256"]), expected, record)
 
     def smoke_record(self, digest: str) -> dict:
         with self.path(digest).open("rb") as source:
@@ -139,8 +139,7 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set
     evidence.verify(identity["buildSha256"])
     evidence.verify(identity["packageReceiptSha256"])
     verify_desktop_route(row, evidence, identity)
-    if "androidPreflight" in row:
-        evidence.android_preflight(row["androidPreflight"], record)
+    android_artifacts = evidence.android_preflight(row["androidPreflight"], record) if "androidPreflight" in row else frozenset()
     evidence.display_capture(record)
     evidence.render_timing(record, row["renderTimingLimits"])
     observations = {record["display"]["evidenceSha256"], record["checks"]["renderTiming"]["evidenceSha256"]}
@@ -148,7 +147,7 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set
         observations.add(record["checks"]["optionalMR"]["evidenceSha256"])
     receipts, physical_observations = physical_check_evidence(evidence.root, record, optional)
     check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - receipts - {None}
-    verify_physical_observations(evidence.root, record, physical_observations)
+    verify_physical_observations(evidence.root, record, physical_observations, preflight_artifacts=android_artifacts)
     for digest in sorted(check_digests - physical_observations):
         evidence.verify(digest)
     return record["status"], observations | receipts | physical_observations

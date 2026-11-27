@@ -1016,14 +1016,23 @@ def desktop_receipt(row, *, host=None):
             f"{host} system-default vulkan sha256:{target} {connection} preflight 1 2 3 1 3 0 2 2 3\n").encode()
 
 
-@pytest.mark.parametrize("platform", ["android", "desktop"])
-def test_preflight_receipt_cannot_supply_a_physical_check(release, platform):
+@pytest.mark.parametrize("source", ["android-receipt", "android-apk", "desktop-receipt"])
+def test_preflight_artifact_cannot_supply_a_physical_check(release, source):
     matrix, evidence = release
-    if platform == "android":
+    extra_args = []
+    if source.startswith("android"):
         row = matrix["tuples"][0]
         capture_android_smoke(row, evidence)
         preflight = store(evidence, json.dumps(android_receipt(row, evidence)).encode())
-        row["androidPreflight"]["receiptSha256"] = preflight
+        expected = row["androidPreflight"]
+        expected["receiptSha256"] = preflight
+        preflight_declaration = evidence.parent / "android-preflight.json"
+        preflight_declaration.write_text(json.dumps(expected), encoding="utf-8")
+        extra_args = ["--android-preflight", str(evidence / preflight),
+                      "--android-preflight-declaration", str(preflight_declaration),
+                      "--android-apk", str(evidence / expected["apkSha256"])]
+        if source == "android-apk":
+            preflight = expected["apkSha256"]
     else:
         row = matrix["tuples"][1]
         preflight = row["desktopPreflightSha256"]
@@ -1037,12 +1046,12 @@ def test_preflight_receipt_cannot_supply_a_physical_check(release, platform):
     declaration.write_text(json.dumps(row["declaration"]), encoding="utf-8")
     device = subprocess.run(
         [sys.executable, str(SCRIPTS / "qualify_xr_device.py"), str(evidence / row["recordSha256"]),
-         "--expect", str(declaration), "--physical-check-evidence-dir", str(evidence)],
+         "--expect", str(declaration), "--physical-check-evidence-dir", str(evidence), *extra_args],
         capture_output=True, text=True, check=False,
     )
     for result in (device, run_matrix(release)):
         assert result.returncode == 1
-        assert "Physical observation refers to an XR preflight receipt" in result.stderr
+        assert "Physical observation refers to an XR preflight" in result.stderr
 
 
 @pytest.mark.parametrize(("host", "mode"), [("Windows", "Tethered"), ("Linux", "WirelessStreaming")])

@@ -198,8 +198,8 @@ def check_android_preflight(data: bytes, expected: dict, revision: str, runtime_
         check_android_apk(apk, profile, artifact, abi)
 
 
-def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: dict) -> None:
-    """Match a deployment receipt to the standalone Android build recorded in the physical smoke run."""
+def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: dict) -> frozenset[str]:
+    """Match a deployment receipt to the smoke run and return its setup-only artifact digests."""
     identity = record["tuple"]
     require(is_standalone_android(identity), "Android preflight requires a standalone Android tuple")
     product_artifacts = {identity["buildSha256"], identity["packageReceiptSha256"]}
@@ -214,3 +214,4 @@ def check_android_preflight_file(path: Path, apk: Path, expected: dict, record: 
     require(revision is not None, "Device evidence does not record a source revision")
     with path.open("rb") as source:
         check_android_preflight(source.read(MAX_ANDROID_RECEIPT_BYTES + 1), expected, revision, identity["runtimeVersion"], apk=apk)
+    return frozenset({expected["apkSha256"], expected["receiptSha256"]})

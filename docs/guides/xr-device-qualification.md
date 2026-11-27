@@ -211,8 +211,8 @@ Use the same object shape as `androidPreflight` in the
 [release matrix guide](xr-release-qualification.md#assemble-the-matrix). The
 checker verifies the exact diagnostic APK bytes and the receipt's source
 revision, Android system build, OpenXR runtime version, declared ADB transport,
-and process retirement. Cold discovery remains setup evidence. The physical
-smoke record proves the on-device observations.
+and process retirement. Cold discovery remains setup evidence. Neither the
+diagnostic APK nor its preflight receipt can satisfy a physical observation.
 The deployment receipt must include the observed Android API level and the
 diagnostic package's application ID, declared renderer and packaged ABI list.
 The APK digest and the contents of its reported native images are checked on

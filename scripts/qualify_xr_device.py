@@ -482,9 +482,11 @@ def verify_observation_record(capture: dict, record: dict) -> None:
     require(capture.keys() not in SPECIALIZED_CAPTURE_FIELDS, "Physical observation refers to a specialized XR capture")
 
 
-def verify_physical_observations(root: Path, record: dict, observations: set[str]) -> None:
+def verify_physical_observations(root: Path, record: dict, observations: set[str],
+                                 *, preflight_artifacts: frozenset[str] = frozenset()) -> None:
     """Validate direct observations, including embedded qualification identities."""
     product_artifacts = {record["tuple"]["buildSha256"], record["tuple"]["packageReceiptSha256"]}
+    require(observations.isdisjoint(preflight_artifacts), "Physical observation refers to an XR preflight artifact")
     for artifact in sorted(observations):
         require(artifact not in product_artifacts, "Physical observation refers to a product build or package receipt")
         data = verify_artifact(artifact_path(root, artifact), artifact, bounded_json=True)
@@ -497,10 +499,11 @@ def verify_physical_observations(root: Path, record: dict, observations: set[str
             verify_observation_record(capture, record)
 
 
-def verify_physical_checks(root: Path, record: dict, optional: set[str]) -> None:
+def verify_physical_checks(root: Path, record: dict, optional: set[str],
+                           *, preflight_artifacts: frozenset[str] = frozenset()) -> None:
     """Validate each receipt and its referenced bytes in the selected evidence directory."""
     _, observations = physical_check_evidence(root, record, optional)
-    verify_physical_observations(root, record, observations)
+    verify_physical_observations(root, record, observations, preflight_artifacts=preflight_artifacts)
 
 
 def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
@@ -618,12 +621,12 @@ def parse_options(parser: argparse.ArgumentParser) -> argparse.Namespace:
     return options
 
 
-def validate_android_capture(options: argparse.Namespace, record: dict) -> None:
+def validate_android_capture(options: argparse.Namespace, record: dict) -> frozenset[str]:
     """Verify the diagnostic artifact and receipt against the local physical smoke record."""
     from qualify_xr_android import check_android_preflight_file, validate_android_preflight
 
     expected = validate_android_preflight(load_record(options.android_preflight_declaration))
-    check_android_preflight_file(options.android_preflight, options.android_apk, expected, record)
+    return check_android_preflight_file(options.android_preflight, options.android_apk, expected, record)
 
 
 def main() -> int:
@@ -637,8 +640,10 @@ def main() -> int:
                 with options.mr_capture.open("rb") as source:
                     mr_capture = source.read(MAX_RECORD_BYTES + 1)
             check_physical_gate(record, load_record(options.expect), set(options.require), mr_capture=mr_capture)
+        android_artifacts = validate_android_capture(options, record) if options.android_preflight is not None else frozenset()
         if options.physical_check_evidence_dir is not None:
-            verify_physical_checks(options.physical_check_evidence_dir, record, set(options.require))
+            verify_physical_checks(options.physical_check_evidence_dir, record, set(options.require),
+                                   preflight_artifacts=android_artifacts)
         if options.display_capture is not None:
             with options.display_capture.open("rb") as source:
                 check_display_capture(source.read(MAX_RECORD_BYTES + 1), record)
@@ -649,8 +654,6 @@ def main() -> int:
         if options.desktop_preflight is not None:
             check_desktop_preflight_file(options.desktop_preflight, record["tuple"], options.desktop_preflight_sha256,
                                          options.desktop_component_sha256)
-        if options.android_preflight is not None:
-            validate_android_capture(options, record)
     except (OSError, ValueError, RecursionError) as error:
         parser.exit(1, f"XR qualification record rejected: {error}\n")
     print("Physical smoke evidence matches the declaration" if options.expect else "XR evidence record is valid")
