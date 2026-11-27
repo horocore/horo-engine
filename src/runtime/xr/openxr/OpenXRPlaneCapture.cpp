@@ -288,10 +288,8 @@ namespace Horo::XR::OpenXRInternal {
         if (destroyed.HasError())
             return Outcome::Failure(batch.HasError() ? WithCause(std::move(destroyed).ErrorValue(), batch.ErrorValue())
                                                      : std::move(destroyed).ErrorValue());
-        if (!ConsentCurrent()) {
-            publication_.Revoke();
-            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
-        }
+        if (auto withdrawn = CheckWithdrawal(batch.HasError() ? &batch.ErrorValue() : nullptr))
+            return Outcome::Failure(std::move(*withdrawn));
         if (batch.HasError())
             return Outcome::Failure(batch.ErrorValue());
         const auto published = Publish(batch.Value(), now);

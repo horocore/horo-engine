@@ -976,6 +976,36 @@ namespace Horo::Tests::OpenXR {
                 REQUIRE(capture.Close().HasValue());
                 CHECK_FALSE(script.hasSnapshot);
             }
+            SECTION("withdrawal preserves the native query error without publishing geometry") {
+                const bool semanticQuery = GENERATE(false, true);
+                const bool failedCleanup = GENERATE(false, true);
+                const auto queries = geometry.calls;
+                const auto lastQuery = queries + (semanticQuery ? 2U : 1U);
+                geometry.onQuery = [&] {
+                    if (geometry.calls == lastQuery) {
+                        capture.Revoke();
+                        geometry.result = XR_ERROR_SESSION_LOST;
+                    }
+                };
+                script.failSnapshotDestroy = failedCleanup;
+                const auto denied = advance(122);
+                const auto snapshot = capture.Read(scope, time(122));
+                CHECK(geometry.calls == lastQuery);
+                CHECK(script.hasSnapshot == failedCleanup);
+                script.failSnapshotDestroy = false;
+                REQUIRE(capture.Close().HasValue());
+                CHECK_FALSE(script.hasSnapshot);
+                RequireFailureIdentity(snapshot, XRErrors::OperationUnavailable);
+                RequireFailureIdentity(denied, XRErrors::PermissionDenied);
+                auto *cause = denied.ErrorValue().cause.Get();
+                if (failedCleanup) {
+                    REQUIRE(cause);
+                    CHECK(cause->code.Value() == XRErrors::OperationUnavailable.code.Value());
+                    cause = cause->cause.Get();
+                }
+                REQUIRE(cause);
+                CHECK(cause->code.Value() == XRErrors::IdentityStale.code.Value());
+            }
             SECTION("snapshot cleanup distinguishes access loss from a transient provider failure") {
                 const auto [status, expected] = GENERATE(Catch::Generators::table<XrResult, const ErrorCodeDescriptor *>(
                     {{XR_ERROR_PERMISSION_INSUFFICIENT, &XRErrors::PermissionDenied},

@@ -88,16 +88,18 @@ namespace Horo::XR::OpenXRInternal {
             }
         }
 
-        /** @brief Discards native output if the exact grant changes across a runtime callback. */
+        /** @brief Preserves native failures and admits successful output only under the exact live grant. */
         Result<void> QueryPlaneData(XrSpatialSnapshotEXT snapshot, PFN_xrQuerySpatialComponentDataEXT query,
                                     const XrSpatialComponentDataQueryConditionEXT &condition, XrSpatialComponentDataQueryResultEXT &result,
                                     NativePlaneReadAuthorization authorization) {
             if (!authorization.AllowsRead())
                 return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
             const auto status = query(snapshot, &condition, &result);
+            if (status != XR_SUCCESS)
+                return Result<void>::Failure(QueryError(status));
             if (!authorization.AllowsRead())
                 return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
-            return status == XR_SUCCESS ? Result<void>::Success() : Result<void>::Failure(QueryError(status));
+            return Result<void>::Success();
         }
 
         /** @brief Joins the optional semantic subset by native entity identity, independent of runtime list order. */
