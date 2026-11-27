@@ -58,7 +58,12 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::PrepareHands */
     Result<void> OpenXRApplicationSession::PrepareHands() {
-        if (!WantsHands() || !system_ || system_->handTracking != XRCapabilityState::Available)
+        if (!WantsHands()) {
+            input_.handAvailability = XRCapabilityState::DisabledByPolicy;
+            return Result<void>::Success();
+        }
+        input_.handAvailability = system_ ? system_->handTracking : XRCapabilityState::Unavailable;
+        if (input_.handAvailability != XRCapabilityState::Available)
             return Result<void>::Success();
         // The same cutoff has room for both hands and its existing head/controller sources.
         constexpr auto sourceSlots = 1 + 2 + XRHandTrackingHardLimits::MaximumHands;

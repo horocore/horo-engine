@@ -3373,6 +3373,39 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
+    TEST_CASE("Installed XR inspection distinguishes hand policy from missing system support",
+              "[xr][application][play][hands][fallback]") {
+        using enum XR::XRProjectFeaturePolicy;
+        const bool disabled = GENERATE(false, true);
+        ApplicationFixture fixture{true, 5, Unrequested, disabled ? Disabled : OptionalDisable};
+        fixture.script.census.handsSupported = disabled;
+        auto scene = PublishPlay(fixture);
+        const auto expected = disabled ? XR::XRCapabilityState::DisabledByPolicy : XR::XRCapabilityState::Unsupported;
+        const auto inspect = [&](const Editor::EditorXrInspectionStatus status) {
+            const auto report = fixture.play->ReadInspection();
+            CHECK(report.status == status);
+            const auto hand =
+                std::ranges::find(report.capabilities, XR::XRCapability::HandTracking, &Editor::EditorXrInspectionCapability::kind);
+            REQUIRE(hand != report.capabilities.end());
+            CHECK(hand->observed == expected);
+        };
+        inspect(Editor::EditorXrInspectionStatus::WaitingForSample);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        const auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(observed->result);
+        RequireValue(*observed->result);
+        inspect(Editor::EditorXrInspectionStatus::Current);
+        CHECK(fixture.script.actions.syncs == 1);
+        CHECK(fixture.script.hands.locateLookups == 0);
+        CHECK(fixture.script.hands.locates == 0);
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Installed XR Play separates optional hand outages from the exact held controller action",
               "[xr][application][play][hands][fallback]") {
         using enum XR::XRProjectFeaturePolicy;
