@@ -362,6 +362,21 @@ def approved_replay_digest(path: Path, approval: object, today: date) -> tuple[s
     return source, allowed
 
 
+def require_same_replay_approval(path: Path, replay_digest: str, approved: dict) -> None:
+    """Recheck one approval without exposing private input or storage paths."""
+    try:
+        current = validate_approval(decode(read_bounded(path, MAX_APPROVAL_BYTES)), replay_digest, None)
+    except (OSError, ValueError, RecursionError):
+        raise _EvidenceError("Replay comparison approval is no longer current") from None
+    require(current == approved, "Replay comparison approval is no longer current")
+
+
+def require_current_comparison(approvals: tuple[tuple[Path, str, dict], ...], expiry: str) -> None:
+    for path, replay_digest, approved in approvals:
+        require_same_replay_approval(path, replay_digest, approved)
+    require_current_expiry(expiry)
+
+
 def native_replay_status(engine: Path, inputs: tuple[Path, Path], digests: tuple[str, str]) -> int:
     try:
         result = subprocess.run(
@@ -389,9 +404,10 @@ def compare_approved_replays(args: argparse.Namespace, approval: object, today: 
     if args.qualification_artifacts is not None:
         verify_qualification_artifacts(qualification, args.qualification_artifacts)
     expiry = min(recorded["expiresOnUtc"], replayed["expiresOnUtc"])
-    require_current_expiry(expiry)
+    approvals = ((args.approval, left, recorded), (args.comparison_approval, right, replayed))
+    require_current_comparison(approvals, expiry)
     result = native_replay_status(args.engine, inputs, (left, right))
-    require_current_expiry(expiry)
+    require_current_comparison(approvals, expiry)
     emit_json({"format": REPLAY_COMPARISON_FORMAT, "schemaVersion": 1,
                "status": "matched" if result == 0 else "diverged", "expiresOnUtc": expiry,
                "qualificationSource": QUALIFICATION_SOURCE, "qualification": qualification,

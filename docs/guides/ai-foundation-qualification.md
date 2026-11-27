@@ -174,6 +174,9 @@ emits a result with status `diverged` and exits one. Invalid, incompatible or
 expired inputs exit one without emitting a result. As with the native
 comparator, a match applies to the recorded coverage. The optional artifact
 directory can verify the tuple's provider, model and workload files.
+Both approvals are rechecked before native comparison and before publishing
+its result. Removing either approval or changing its approved content stops
+publication.
 
 Consumers that need the stored manifest as input can use `--read-retained`.
 This emits the redacted manifest only after checking the current UTC expiry,

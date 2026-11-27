@@ -419,7 +419,8 @@ def test_read_retained_requires_the_original_replay_argument(monkeypatch, capsys
 
 
 @pytest.mark.parametrize("scenario", ["matched", "diverged", "same-file", "digest", "tuple", "expired",
-                                     "expired-during-comparison", "native-rejection", "wrong-receipt", "timeout"])
+                                     "expired-during-comparison", "revoked-during-comparison", "replaced-during-comparison",
+                                     "native-rejection", "wrong-receipt", "timeout"])
 def test_approved_replay_comparison_is_digest_bound_and_redacted(tmp_path, monkeypatch, capsys, scenario):
     inputs = [tmp_path / "recorded replay.json", tmp_path / "replayed replay.json"]
     grants = [tmp_path / "recorded approval.json", tmp_path / "replayed approval.json"]
@@ -447,6 +448,12 @@ def test_approved_replay_comparison_is_digest_bound_and_redacted(tmp_path, monke
                            "stderr": evaluation.subprocess.DEVNULL, "timeout": 30, "check": False, "text": True}
         if scenario == "timeout":
             raise evaluation.subprocess.TimeoutExpired(arguments, 30)
+        if scenario == "revoked-during-comparison":
+            grants[0].unlink()
+        if scenario == "replaced-during-comparison":
+            replacement = approval_for(replayed)
+            replacement["qualification"]["workload"]["version"] = "2"
+            grants[1].write_text(json.dumps(replacement), encoding="utf-8")
         code = {"diverged": 1, "native-rejection": 2, "wrong-receipt": 1}.get(scenario, 0)
         out = {"diverged": "approved-replay-v1 diverged\n", "native-rejection": "", "wrong-receipt": PRIVATE}.get(
             scenario, "approved-replay-v1 matched\n")
@@ -470,7 +477,8 @@ def test_approved_replay_comparison_is_digest_bound_and_redacted(tmp_path, monke
                                      "--engine", str(engine)])
     assert evaluation.main() == (0 if scenario == "matched" else 1)
     result = capsys.readouterr()
-    if scenario in ("matched", "diverged", "expired-during-comparison", "native-rejection", "wrong-receipt", "timeout"):
+    if scenario in ("matched", "diverged", "expired-during-comparison", "revoked-during-comparison", "replaced-during-comparison",
+                    "native-rejection", "wrong-receipt", "timeout"):
         assert calls == [[str(engine.resolve()), "--compare-ai-replay", *(str(path) for path in inputs), "--approved-digests",
                           *(f"sha256:{approval['replaySha256']}" for approval in approvals)]]
     else:
@@ -485,6 +493,8 @@ def test_approved_replay_comparison_is_digest_bound_and_redacted(tmp_path, monke
         }
     else:
         assert not result.out and result.err
+    if scenario in ("revoked-during-comparison", "replaced-during-comparison"):
+        assert result.err == "Replay comparison approval is no longer current\n"
     assert PRIVATE not in result.out + result.err
     assert str(tmp_path) not in result.out + result.err
 
