@@ -172,6 +172,22 @@ def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(re
     assert result.returncode == 0, result.stderr
 
 
+def test_release_rejects_private_mixed_reality_data_without_echoing_it(release):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    receipt = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
+    observation = {"input": {"observations": [{"XR.Camera_Frame": "private-device-capture"}]}}
+    receipt["artifactSha256"] = store(evidence, json.dumps(observation).encode())
+    record["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(receipt).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert "Physical observation contains a private XR field" in result.stderr
+    assert "private-device-capture" not in result.stderr + result.stdout
+
+
 @pytest.mark.parametrize("specialized", ["displayEnumeration", "renderTiming"])
 @pytest.mark.parametrize("wrapper", ["unwrapped", "array", "object"])
 def test_specialized_capture_cannot_replace_input_observation_from_the_same_run(release, specialized, wrapper):

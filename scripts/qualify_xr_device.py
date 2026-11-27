@@ -54,6 +54,14 @@ ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
 SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
 PHYSICAL_CHECK_RECEIPT_FIELDS = {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"}
 OBSERVATION_IDENTITY_FIELDS = {"schemaVersion", "tuple", "provenance"}
+OBSERVATION_KEY_SEPARATORS = str.maketrans("", "", "_-.")
+PRIVATE_XR_OBSERVATION_FIELDS = frozenset({
+    "anchortoken", "anchortokens", "cameraframe", "cameraframes", "deviceserial",
+    "environmentgeometry", "gazedirection", "gazehistory", "gazeorigin", "gazesamples",
+    "handjoints", "headsetserial", "microphonepcm", "planeboundary", "posehistory",
+    "rawaudio", "rawcameraframe", "rawcameraframes", "rawpose", "rawposes", "rawposesamples",
+    "roomgeometry", "serialnumber", "speechtranscript",
+})
 SMOKE_RECORD_FIELDS = OBSERVATION_IDENTITY_FIELDS | {"category", "evidenceLevel", "status", "checks", "display"}
 DISPLAY_CAPTURE_FIELDS = OBSERVATION_IDENTITY_FIELDS | {"refreshMilliHertz", "viewExtents"}
 RENDER_TIMING_CAPTURE_FIELDS = OBSERVATION_IDENTITY_FIELDS | {
@@ -452,8 +460,14 @@ def observation_records(data: bytes) -> Iterator[dict]:
             pending.extend(item)
 
 
+def private_xr_observation_key(key: str) -> bool:
+    normalized = key.lower().translate(OBSERVATION_KEY_SEPARATORS).removeprefix("xr")
+    return normalized in PRIVATE_XR_OBSERVATION_FIELDS
+
+
 def verify_observation_record(capture: dict, record: dict) -> None:
-    """Check any embedded XR qualification claim before accepting the observation."""
+    """Check redaction and any embedded qualification claim in the observation."""
+    require(not any(map(private_xr_observation_key, capture)), "Physical observation contains a private XR field")
     require(not ANDROID_RECEIPT_FIELDS <= capture.keys(), "Physical observation refers to an XR preflight receipt")
     if {"tuple", "provenance", "evidenceLevel"}.isdisjoint(capture):
         return

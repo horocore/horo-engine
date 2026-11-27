@@ -130,6 +130,10 @@ limit. An observation with a qualification identity must use schema version 1
 and identify the same product tuple and smoke run. If it declares an evidence
 level, use `PhysicalDeviceQualification`. Those checks also apply to records
 embedded in a JSON object or array.
+Both checkers reject known private XR fields in structured observations,
+including nested device serial numbers, raw poses, gaze samples, camera frames,
+and room geometry. Export aggregate results and redact sensitive content from
+opaque logs and media before including them as evidence.
 The product build, package receipt, smoke summary, and Android or Desktop XR
 preflight receipts cannot serve as physical observations. Use the dedicated
 preflight fields for those receipts.
