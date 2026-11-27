@@ -1,5 +1,7 @@
 #include "../../../apps/HoroEditor/app/ImmersiveAuthoringContext.h"
 #include "AgentTurnTestTools.h"
+#include "EditorCommandMcpSession.h"
+#include "EditorInspectionMcpTools.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <condition_variable>
@@ -444,6 +446,97 @@ namespace Horo::Editor {
             }));
             CHECK(inspected == 1);
             CHECK(review.Status() == ContextDenied);
+        }
+
+        TEST_CASE("Immersive planning uses the live editor session's project and tool grants", "[agent][immersive][turn][plan]") {
+            using enum Agent::AgentTurnStatus;
+            constexpr std::string_view projectIdentity = "project-one";
+            const auto identity = Opening();
+            ImmersiveAuthoringContext owner;
+            const auto context = owner.Publish(identity, {});
+            REQUIRE(context);
+
+            std::size_t staged{};
+            const auto endpoint = std::make_shared<const EditorInspectionCommandEndpoint>(
+                EditorInspectionCommandEndpoint{.project = std::string{projectIdentity},
+                                                .authorizationRevision = 3,
+                                                .owner = std::this_thread::get_id(),
+                                                .readTransforms =
+                                                    [](const ObjectInspectionRequest &) {
+                return Result<TransformInspectionPage>::Success({});
+            },
+                                                .proposeEdits = [&](auto, auto, auto, auto, auto) {
+                ++staged;
+                return Result<std::uint64_t>::Success(1);
+            }});
+            auto opened = EditorCommandMcpSession::Create({.inspection = endpoint},
+                                                          {"immersive-fixture",
+                                                           std::string{projectIdentity},
+                                                           3,
+                                                           {std::string{EditorSceneProposalGrant}}},
+                                                          Mcp::Test::Authorization());
+            REQUIRE(opened.HasValue());
+            auto &session = *opened.Value();
+            const std::array tools{std::string{"scene.propose_edits"}};
+            const std::array ungranted{std::string{"inspect.transforms"}};
+            CancellationSource toolApproval;
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, "other-project", tools, toolApproval.Token()));
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, projectIdentity, ungranted, toolApproval.Token()));
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, projectIdentity, tools, {}));
+            const auto catalog = owner.CaptureMcpCatalog(*context, session, projectIdentity, tools, toolApproval.Token());
+            REQUIRE(catalog);
+            CHECK_FALSE(owner.CaptureMcpPlan(*context, Prompt(), *catalog, "other-project"));
+            auto pending = owner.CaptureMcpPlan(*context, Prompt(), *catalog);
+            REQUIRE(pending);
+            PlanningModel model;
+            CHECK(pending->Plan(model, 1, {}).Status() == ContextDenied);
+            CHECK(model.calls == 0);
+
+            const Platform::ProjectReadContext project{std::string{projectIdentity},
+                                                       identity.projectOpening,
+                                                       {},
+                                                       std::chrono::steady_clock::now() + std::chrono::seconds{10},
+                                                       {}};
+            Agent::AgentContextReaders readers;
+            readers.isCurrent = [](const auto &) {
+                return true;
+            };
+            readers.redact = [](const auto &, std::string_view value) {
+                return Result<std::string>::Success(std::string{value});
+            };
+            const std::array<Agent::AgentContextSelection, 1> attachment{
+                Agent::AgentContextAttachment{Agent::AgentContextAttachmentKind::Selection, "selection", "r1", "object 42"}};
+            const auto preview =
+                Agent::AgentContextPreview::Capture(attachment, readers, project, Security::AgentProviderResidence::Local, 1, 1);
+            REQUIRE(preview.HasValue());
+            Security::AgentPolicy policy;
+            REQUIRE(policy.SetProjectTrust(true, 1));
+            REQUIRE(preview.Value().Grant(policy).Allowed());
+            const Agent::AgentTurnContext approved{preview.Value(), policy, project, readers.isCurrent,
+                                                   Security::AgentProviderResidence::Local};
+            model.tools = {
+                {"scene-edit", tools.front(), R"({"scene":{"epoch":1,"revision":1},"renames":[{"object":42,"name":"Reviewed"}]})"}};
+            const auto review = pending->Plan(model, 1, {}, {}, {}, &approved);
+            REQUIRE(review.Status() == Completed);
+            REQUIRE(model.advertised.size() == 1);
+            CHECK(model.advertised.front().name == tools.front());
+            const auto inspect = [](const Agent::AgentPlanObjectScope &scope) {
+                return scope.opening == 1 && scope.revision == 1 && scope.objects == std::vector<std::uint64_t>{42};
+            };
+            CHECK(review.Read(*context, inspect));
+            CHECK(staged == 0);
+
+            SECTION("closing the command session withdraws the retained plan") {
+                REQUIRE(session.Close().HasValue());
+                CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, projectIdentity, tools, toolApproval.Token()));
+            }
+            SECTION("withdrawing plan consent retires the draft while the command session stays live") {
+                toolApproval.RequestCancellation();
+                CHECK(session.SessionKey().principal != 0);
+            }
+            CHECK(review.Status() == ContextDenied);
+            CHECK_FALSE(review.Read(*context, inspect));
+            CHECK_FALSE(owner.CaptureMcpPlan(*context, Prompt(), *catalog));
         }
 
         TEST_CASE("Immersive plan schemas and review share one revocable MCP catalog", "[agent][immersive][turn][plan]") {

@@ -329,6 +329,11 @@ Ownership rules:
   rejects competing edits to the same property and invalid rotations before
   projecting the affected objects. Different properties of one object may
   appear together and contribute one review target.
+  A host can source planning schemas from the current authenticated editor MCP
+  session. The scope intersects that session's grants with a separate tool
+  selection for the plan and pins the project identity before inference.
+  Disconnect, principal expiry, or withdrawal of the selected tools invalidates
+  retained drafts without giving the planner an MCP execution channel.
 
 Both editor-owned authoring proxies and real scene/gameplay objects may provide
 spatial references. Every evidence record identifies its source, timestamp,

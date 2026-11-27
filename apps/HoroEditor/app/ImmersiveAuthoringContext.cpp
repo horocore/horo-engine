@@ -1,6 +1,7 @@
 #include "ImmersiveAuthoringContext.h"
 
 #include "AgentTurnMcp.h"
+#include "EditorCommandMcpSession.h"
 
 #include <algorithm>
 #include <atomic>
@@ -255,8 +256,9 @@ namespace Horo::Editor {
         return ImmersiveAgentRequest{context, std::move(request), true, std::string{projectIdentity}};
     }
 
-    ImmersiveMcpCatalog::ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog)
-        : context_(std::move(context)), catalog_(std::move(catalog)) {}
+    ImmersiveMcpCatalog::ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog,
+                                             std::string project)
+        : context_(std::move(context)), catalog_(std::move(catalog)), project_(std::move(project)) {}
 
     /** @copydoc ImmersiveAuthoringContext::CaptureMcpCatalog */
     std::optional<ImmersiveMcpCatalog> ImmersiveAuthoringContext::CaptureMcpCatalog(
@@ -271,6 +273,24 @@ namespace Horo::Editor {
         return ImmersiveMcpCatalog{context, std::move(catalog)};
     }
 
+    /** @copydoc ImmersiveAuthoringContext::CaptureMcpCatalog */
+    std::optional<ImmersiveMcpCatalog> ImmersiveAuthoringContext::CaptureMcpCatalog(const ImmersivePlanningContext &context,
+                                                                                    const EditorCommandMcpSession &session,
+                                                                                    const std::string_view project,
+                                                                                    const std::span<const std::string> approvedTools,
+                                                                                    const CancellationToken &approvalLifetime) const {
+        if (project.empty() || Admit(context, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted)
+            return std::nullopt;
+        auto source = session.CapturePlanningSource();
+        if (!source || source->project != project)
+            return std::nullopt;
+        auto catalog = Agent::McpPlanCatalog::CaptureSession(std::move(source->tools), source->grants, approvedTools, approvalLifetime,
+                                                             std::move(source->isCurrent));
+        if (!catalog || !context.IsCurrent())
+            return std::nullopt;
+        return ImmersiveMcpCatalog{context, std::move(catalog), std::move(source->project)};
+    }
+
     /** @copydoc ImmersiveAuthoringContext::CaptureMcpPlan */
     std::optional<ImmersiveAgentRequest> ImmersiveAuthoringContext::CaptureMcpPlan(const ImmersivePlanningContext &context,
                                                                                    Agent::ModelRequest request,
@@ -279,9 +299,11 @@ namespace Horo::Editor {
         if (!catalog.context_.SharesGeneration(context) || !context.IsCurrent() || !catalog.catalog_ ||
             !catalog.catalog_->IsCurrent() || !request.tools.empty())
             return std::nullopt;
+        if (!catalog.project_.empty() && !projectIdentity.empty() && catalog.project_ != projectIdentity)
+            return std::nullopt;
         request.tools = catalog.catalog_->Tools();
         request.requiredFeatures.bits |= static_cast<std::uint32_t>(Agent::ModelFeature::Tools);
-        auto captured = CapturePlan(context, std::move(request), projectIdentity);
+        auto captured = CapturePlan(context, std::move(request), catalog.project_.empty() ? projectIdentity : catalog.project_);
         if (captured)
             captured->catalog_ = catalog.catalog_;
         return captured;

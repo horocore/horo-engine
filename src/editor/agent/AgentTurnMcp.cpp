@@ -88,13 +88,33 @@ namespace Horo::Agent {
                                                                   const std::span<const std::string> capabilities,
                                                                   const std::span<const std::string> approvedTools,
                                                                   CancellationToken approvalLifetime) {
+        if (!registry)
+            return {};
+        auto snapshot = registry->Read();
+        return CapturePublished(std::move(registry), std::move(snapshot), capabilities, approvedTools, std::move(approvalLifetime), {});
+    }
+
+    /** @copydoc McpPlanCatalog::CaptureSession */
+    std::shared_ptr<const McpPlanCatalog> McpPlanCatalog::CaptureSession(std::shared_ptr<const Mcp::McpToolSnapshot> snapshot,
+                                                                         const std::span<const std::string> capabilities,
+                                                                         const std::span<const std::string> approvedTools,
+                                                                         CancellationToken approvalLifetime, AgentTurnFreshness isCurrent) {
+        if (!isCurrent)
+            return {};
+        return CapturePublished({}, std::move(snapshot), capabilities, approvedTools, std::move(approvalLifetime), std::move(isCurrent));
+    }
+
+    /** @copydoc McpPlanCatalog::CapturePublished */
+    std::shared_ptr<const McpPlanCatalog> McpPlanCatalog::CapturePublished(std::shared_ptr<const Mcp::McpToolRegistry> registry,
+                                                                           std::shared_ptr<const Mcp::McpToolSnapshot> snapshot,
+                                                                           const std::span<const std::string> capabilities,
+                                                                           const std::span<const std::string> approvedTools,
+                                                                           CancellationToken approvalLifetime,
+                                                                           AgentTurnFreshness isCurrent) {
         constexpr auto MaximumApprovedTools = AgentTurnLimits{}.maximumToolCalls;
-        if (!registry || approvedTools.empty() || approvedTools.size() > MaximumApprovedTools)
+        if (!snapshot || approvedTools.empty() || approvedTools.size() > MaximumApprovedTools)
             return {};
         if (approvalLifetime == CancellationToken{} || approvalLifetime.IsCancellationRequested())
-            return {};
-        const auto snapshot = registry->Read();
-        if (!snapshot)
             return {};
         const auto visible = snapshot->Discover(capabilities);
         auto catalog = std::shared_ptr<McpPlanCatalog>{new McpPlanCatalog};
@@ -108,6 +128,7 @@ namespace Horo::Agent {
         catalog->registry_ = std::move(registry);
         catalog->snapshot_ = snapshot;
         catalog->approvalLifetime_ = std::move(approvalLifetime);
+        catalog->sessionCurrent_ = std::move(isCurrent);
         catalog->capabilities_.assign(capabilities.begin(), capabilities.end());
         return catalog->IsCurrent() ? catalog : nullptr;
     }
@@ -115,7 +136,9 @@ namespace Horo::Agent {
     /** @copydoc McpPlanCatalog::IsCurrent */
     bool McpPlanCatalog::IsCurrent() const noexcept {
         try {
-            if (approvalLifetime_.IsCancellationRequested() || registry_->Read() != snapshot_)
+            if (approvalLifetime_.IsCancellationRequested() || (registry_ && registry_->Read() != snapshot_))
+                return false;
+            if (sessionCurrent_ && !sessionCurrent_())
                 return false;
             return !approvalLifetime_.IsCancellationRequested();
         } catch (...) {

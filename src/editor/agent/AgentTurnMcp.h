@@ -25,6 +25,17 @@ namespace Horo::Agent {
                                                                            std::span<const std::string> capabilities,
                                                                            std::span<const std::string> approvedTools,
                                                                            CancellationToken approvalLifetime);
+        /** @brief Captures inert schemas from an authenticated host's immutable tool publication.
+         * @param snapshot Exact session publication. @param capabilities Exact grants of that session.
+         * @param approvedTools Tools separately approved for planning. @param approvalLifetime Lifetime of that approval.
+         * @param isCurrent Thread-safe test of the issuing session and principal, including credential expiry.
+         * @return Catalog or empty if any required authority is missing.
+         */
+        [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> CaptureSession(std::shared_ptr<const Mcp::McpToolSnapshot> snapshot,
+                                                                                  std::span<const std::string> capabilities,
+                                                                                  std::span<const std::string> approvedTools,
+                                                                                  CancellationToken approvalLifetime,
+                                                                                  AgentTurnFreshness isCurrent);
         /** @brief Checks whether the exact approval and published registry snapshot remain current. */
         [[nodiscard]] bool IsCurrent() const noexcept;
 
@@ -38,9 +49,17 @@ namespace Horo::Agent {
 
     private:
         McpPlanCatalog() = default;
+        /** @brief Validates one explicitly approved subset against the selected tool publication. */
+        [[nodiscard]] static std::shared_ptr<const McpPlanCatalog> CapturePublished(std::shared_ptr<const Mcp::McpToolRegistry> registry,
+                                                                                    std::shared_ptr<const Mcp::McpToolSnapshot> snapshot,
+                                                                                    std::span<const std::string> capabilities,
+                                                                                    std::span<const std::string> approvedTools,
+                                                                                    CancellationToken approvalLifetime,
+                                                                                    AgentTurnFreshness isCurrent);
         std::shared_ptr<const Mcp::McpToolRegistry> registry_;
         std::shared_ptr<const Mcp::McpToolSnapshot> snapshot_;
         CancellationToken approvalLifetime_;
+        AgentTurnFreshness sessionCurrent_;
         std::vector<std::string> capabilities_;
         std::vector<ModelTool> tools_;
     };

@@ -25,6 +25,8 @@ namespace Horo::Mcp {
 }
 
 namespace Horo::Editor {
+    class EditorCommandMcpSession;
+
     enum class ImmersiveAuthoringMode : std::uint8_t {
         Edit,
         Simulate,
@@ -109,9 +111,11 @@ namespace Horo::Editor {
     class ImmersiveMcpCatalog final {
     private:
         friend class ImmersiveAuthoringContext;
-        ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog);
+        ImmersiveMcpCatalog(ImmersivePlanningContext context, std::shared_ptr<const Agent::McpPlanCatalog> catalog,
+                            std::string project = {});
         ImmersivePlanningContext context_;
         std::shared_ptr<const Agent::McpPlanCatalog> catalog_;
+        std::string project_;
     };
 
     /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
@@ -251,6 +255,16 @@ namespace Horo::Editor {
             const ImmersivePlanningContext &context, std::shared_ptr<const Mcp::McpToolRegistry> registry,
             std::span<const std::string> capabilities, std::span<const std::string> approvedTools,
             const CancellationToken &approvalLifetime) const;
+        /** @brief Admits review tools from the exact live editor MCP session for the current project.
+         * @param context Current Edit or Simulate generation. @param session Existing host-admitted command session.
+         * @param project Exact editor-owned project identity. @param approvedTools Tools separately approved for this plan.
+         * @param approvalLifetime Revocable lifetime of the tool selection.
+         * @return Inert catalog bound to project, session and authoring generation, or empty.
+         */
+        [[nodiscard]] std::optional<ImmersiveMcpCatalog> CaptureMcpCatalog(const ImmersivePlanningContext &context,
+                                                                           const EditorCommandMcpSession &session, std::string_view project,
+                                                                           std::span<const std::string> approvedTools,
+                                                                           const CancellationToken &approvalLifetime) const;
         /** @brief Captures a text request with tool definitions and inspection from the same approved registry snapshot.
          * @param context Current authoring scope. @param request Request without predeclared tools.
          * @param catalog Exact approved MCP catalog. @param projectIdentity Optional consented project identifier.

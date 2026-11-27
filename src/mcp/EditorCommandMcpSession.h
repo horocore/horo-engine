@@ -6,6 +6,7 @@
 #include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Mcp/McpSession.h"
 
+#include <functional>
 #include <string_view>
 
 namespace Horo::Mcp {
@@ -16,6 +17,14 @@ namespace Horo::Mcp {
 }  // namespace Horo::Mcp
 
 namespace Horo::Editor {
+    /** @brief Read-only tool publication and grants issued by one admitted editor MCP session. */
+    struct EditorMcpPlanningSource final {
+        std::shared_ptr<const Mcp::McpToolSnapshot> tools;
+        std::vector<std::string> grants;
+        std::string project;
+        std::function<bool()> isCurrent; /**< Checks the exact session and principal without retaining the host. */
+    };
+
     /** @brief A local host's preapproved client and project binding. */
     struct EditorCommandMcpAdmission {
         std::string client;
@@ -48,6 +57,11 @@ namespace Horo::Editor {
 
         /** @brief Returns the authenticated request channel with no host approval authority. */
         [[nodiscard]] std::shared_ptr<const Mcp::McpInProcessAdapter> Client() const noexcept;
+
+        /** @brief Captures schemas for local review without borrowing an execution or approval port.
+         * @return The immutable source of the exact admitted session, or empty after it retires.
+         */
+        [[nodiscard]] std::optional<EditorMcpPlanningSource> CapturePlanningSource() const;
 
         /** @brief Resolves the effect of a tool permitted for this client. @param tool Exact advertised tool ID. @return Effect or denial.
          */

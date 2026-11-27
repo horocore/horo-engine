@@ -149,6 +149,20 @@ namespace Horo::Editor {
         return client_;
     }
 
+    /** @copydoc EditorCommandMcpSession::CapturePlanningSource */
+    std::optional<EditorMcpPlanningSource> EditorCommandMcpSession::CapturePlanningSource() const {
+        const auto session = sessionContext_.session;
+        auto isCurrent = [client = std::weak_ptr<const Mcp::McpInProcessAdapter>{client_},
+                          principal = std::weak_ptr<const Mcp::McpAuthority>{sessionContext_.authority}, session] {
+            const auto channel = client.lock();
+            const auto authority = principal.lock();
+            return channel && authority && channel->Session() == session && !authority->IsStopRequested();
+        };
+        if (!sessionContext_.projectIdentity || !isCurrent())
+            return std::nullopt;
+        return EditorMcpPlanningSource{tools_, sessionContext_.capabilities, *sessionContext_.projectIdentity, std::move(isCurrent)};
+    }
+
     /** @copydoc EditorCommandMcpSession::ToolEffect */
     Result<Mcp::McpToolEffect> EditorCommandMcpSession::ToolEffect(const std::string_view tool) const {
         return tools_->Effect({std::string{tool}}, sessionContext_.capabilities);
