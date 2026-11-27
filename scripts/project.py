@@ -1872,6 +1872,26 @@ class AndroidPackageLaunch:
         require_deploy_user(self.device, self.user)
         require_deploy_boot(self.device, self.device_boot_time)
 
+    def process_ready_to_stop(self, device: AdmittedAdbDevice, process: DeployedProcess) -> bool:
+        """Confirm the exact live process or prove it exited on the admitted device."""
+        current_pid = device.process_id(self.application)
+        if current_pid == process.pid:
+            try:
+                start_ticks = process_start_ticks(device, current_pid)
+            except AndroidDeployError as error:
+                if error.code not in {"device_command_failed", "application_process_unavailable"}:
+                    raise
+                current_pid = device.process_id(self.application)
+                if current_pid == process.pid:
+                    raise
+            else:
+                if start_ticks == process.start_ticks:
+                    return True
+        if current_pid is not None:
+            raise AndroidDeployError("application_process_changed")
+        self.require_rollback_target(device)
+        return False
+
     def rollback(self) -> dict:
         """Use a separate deadline to stop only a provably attributed package process."""
         if self.process is None and self.recovery is None:
@@ -1895,12 +1915,8 @@ class AndroidPackageLaunch:
             elif uid != process.uid or deployed_process(device, self.application, uid) != process:
                 raise AndroidDeployError("application_process_changed")
             self.require_rollback_target(device)
-            current_pid = device.process_id(self.application)
-            if current_pid is None:
-                self.require_rollback_target(device)
+            if not self.process_ready_to_stop(device, process):
                 return {"status": "already_exited"}
-            if current_pid != process.pid or process_start_ticks(device, current_pid) != process.start_ticks:
-                raise AndroidDeployError("application_process_changed")
             device.run("shell", "am", "force-stop", "--user", self.user, self.application)
             if device.process_id(self.application) is not None:
                 raise AndroidDeployError("application_stop_unconfirmed")

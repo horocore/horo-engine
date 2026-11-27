@@ -216,7 +216,9 @@ If the Activity exits before process admission, the deployment tool checks the
 installed APK, selected Android build, foreground user, transport and boot before
 including the attributed crash in the report.
 Before requesting a package stop, it also rechecks the process ID and start time
-after validating the cleanup transport and boot.
+after validating the cleanup transport and boot. If the process exits between
+those reads, the tool accepts retirement only after confirming that no matching
+process remains and that the transport and boot still match.
 
 The release owner verifies the referenced captures and package receipt before accepting the
 result under [XRA-007.8](https://github.com/horocore/horo-engine/issues/2174).

@@ -767,6 +767,35 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["cleanup"], {"status": "already_exited"})
         self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
+    def test_openxr_rechecks_retirement_when_proc_stat_disappears(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        _, profile = project.load_contract(name, ["arm64-v8a"])
+        application = profile["applicationId"]
+        absent = (1, "")
+        for current, switched, reason in (
+            (absent, False, None),
+            ("123", False, "device_command_failed"),
+            ("456", False, "application_process_changed"),
+            (absent, True, "device_transport_changed"),
+        ):
+            with self.subTest(current=current, switched=switched):
+                overrides = {
+                    LOGCAT: log_line(OPENXR),
+                    STAT_QUERY: [proc_stat()] * 8 + [(1, "No such file or directory")],
+                    ("shell", "pidof", application): [absent] * 2 + ["123"] * 6 + [current],
+                }
+                if switched:
+                    overrides[("get-serialno",)] = [SERIAL] * 6 + ["private-replacement-device"]
+                status, report, commands = self.execute(overrides, OPENXR_OPTIONS, name)
+                if reason is None:
+                    self.assertEqual((status, report["status"]), (0, "diagnostic_complete"))
+                    self.assertEqual(report["cleanup"], {"status": "already_exited"})
+                else:
+                    self.assertEqual((status, report.get("error")), (1, "application_stop_unconfirmed"))
+                    self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": reason})
+                    self.assertNotIn("observed", report)
+                self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
     def test_openxr_discards_discovery_when_transport_changes_before_publication(self):
         status, report, _ = self.execute({
             LOGCAT: log_line(OPENXR),
