@@ -158,6 +158,11 @@ namespace Horo::Editor {
                    (result.structuralRevision == hits.structuralRevision && result.mounted == hits.mounted);
         }
 
+        /** @brief A spatial pose alone cannot authorize a Scene or room-surface lookup. */
+        bool IsPressedRay(const ImmersiveSpatialObservation &observation) noexcept {
+            return observation.controllerPress.has_value() && std::holds_alternative<Math::Ray>(observation.candidate.shape);
+        }
+
         /** @brief Checks the recorded point in the live plane's finite local rectangle without moving the point. */
         bool ContainsCapturedPoint(const XR::XRPlaneObservation &plane, const Math::Vec3 point) noexcept {
             const auto offset = point - plane.centerMeters;
@@ -205,10 +210,13 @@ namespace Horo::Editor {
         ImmersiveSurfaceHits result{.scope = current.Scope(), .worldGeneration = worldGeneration};
         bool queried{};
         for (const auto &observation : aligned) {
-            if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
+            if (!IsPressedRay(observation)) {
+                if (observation.pointing || observation.surfaces)
+                    return std::nullopt;
                 continue;
+            }
             const auto &surfaces = observation.surfaces;
-            if (!observation.controllerPress || !surfaces || observation.candidate.space != result.scope.space ||
+            if (!surfaces || observation.candidate.space != result.scope.space ||
                 surfaces->scope != result.scope ||
                 surfaces->worldGeneration != worldGeneration || !AppendSurfaceHits(result, *surfaces, current.Planes()))
                 return std::nullopt;
@@ -224,10 +232,13 @@ namespace Horo::Editor {
                                                                       const ImmersivePointingReviewKind kind) noexcept {
         ImmersivePointingHits result{.worldGeneration = worldGeneration};
         for (const auto &observation : aligned) {
-            if (!std::holds_alternative<Math::Ray>(observation.candidate.shape))
+            if (!IsPressedRay(observation)) {
+                if (observation.pointing || observation.surfaces)
+                    return std::nullopt;
                 continue;
+            }
             const auto &hits = observation.pointing;
-            if (!observation.controllerPress || !hits || !MatchesPointingScope(result, *hits))
+            if (!hits || !MatchesPointingScope(result, *hits))
                 return std::nullopt;
             if (!AppendPointingHits(result, *hits, kind))
                 return std::nullopt;

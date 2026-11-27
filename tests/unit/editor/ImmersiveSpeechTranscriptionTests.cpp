@@ -567,7 +567,9 @@ namespace Horo::Editor {
             press.candidate.shape = Math::Ray{};
             auto miss = press;
             miss.pointing->count = 0;
-            const std::array mixed{miss, press, press};
+            ImmersiveSpatialObservation poseOnly;
+            poseOnly.candidate.shape = Math::Ray{};
+            const std::array mixed{miss, poseOnly, press, press};
             using enum ImmersivePointingReviewKind;
             for (const auto kind : {Objects, Locations}) {
                 const auto hits = CollectImmersivePointingHits(mixed, World, kind);
@@ -580,6 +582,13 @@ namespace Horo::Editor {
                 REQUIRE(empty);
                 CHECK(empty->count == 0);
                 CHECK(empty->hasMissedPress);
+
+                auto unverified = press;
+                unverified.controllerPress.reset();
+                CHECK_FALSE(CollectImmersivePointingHits(std::array{press, unverified}, World, kind));
+                auto incomplete = press;
+                incomplete.pointing.reset();
+                CHECK_FALSE(CollectImmersivePointingHits(std::array{press, incomplete}, World, kind));
             }
         }
 
@@ -627,12 +636,20 @@ namespace Horo::Editor {
             press.candidate.shape = Math::Ray{};
             press.candidate.space = scope.space;
             press.surfaces->hits[0] = {wall.id, wall.classification, {1, 0, 1}};
-            const std::array repeated{press, press};
+            ImmersiveSpatialObservation poseOnly;
+            poseOnly.candidate = press.candidate;
+            const std::array repeated{press, poseOnly, press};
             const auto candidates = CollectImmersiveSurfaceHits(repeated, World, live.Value());
             REQUIRE(candidates);
             REQUIRE(candidates->count == 1);
             CHECK_FALSE(candidates->hasMissedPress);
             CHECK(candidates->hits[0].classification == wall.classification);
+            auto unverified = press;
+            unverified.controllerPress.reset();
+            CHECK_FALSE(CollectImmersiveSurfaceHits(std::array{press, unverified}, World, live.Value()));
+            auto incomplete = press;
+            incomplete.surfaces.reset();
+            CHECK_FALSE(CollectImmersiveSurfaceHits(std::array{press, incomplete}, World, live.Value()));
             auto miss = press;
             miss.surfaces->count = 0;
             const std::array mixedWithMiss{press, miss};
@@ -651,7 +668,7 @@ namespace Horo::Editor {
             const std::array mixed{press, foreignRay};
             CHECK_FALSE(CollectImmersiveSurfaceHits(mixed, World, live.Value()));
 
-            auto malformed = repeated;
+            std::array malformed{press, press};
             auto &hit = malformed[1].surfaces->hits[0];
             hit.worldPosition.x = std::numeric_limits<float>::infinity();
             CHECK_FALSE(CollectImmersiveSurfaceHits(malformed, World, live.Value()));
