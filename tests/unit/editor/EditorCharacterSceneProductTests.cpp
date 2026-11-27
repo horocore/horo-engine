@@ -523,6 +523,8 @@ return horo.behavior {
         const bool sensor = GENERATE(false, true);
         Fixture fixture;
         auto objects = fixture.source.objects;
+        SceneSource::SceneObjectSnapshot floorCollider{.id = {4}, .parent = SceneSource::SceneObjectId{2}, .name = "Floor collider"};
+        floorCollider.components.colliders = objects[1].components.colliders;
         auto body = objects[1];
         body.id = {3};
         body.name = "Dynamic contact body";
@@ -538,6 +540,8 @@ return horo.behavior {
         collider.source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.5F}};
         collider.sensor = sensor;
         objects.push_back(std::move(body));
+        objects[1].components.colliders.clear();
+        objects.push_back(std::move(floorCollider));
 
         Gameplay::BehaviorRegistry registry;
         REQUIRE(registry.Freeze().HasValue());
@@ -550,7 +554,7 @@ return horo.behavior {
         };
         start();
         const auto bodyRef = play.SceneView()->Find({3});
-        const auto floorRef = play.SceneView()->Find({2});
+        const auto floorRef = play.SceneView()->Find({4});
         REQUIRE(bodyRef);
         REQUIRE(floorRef);
         CHECK_FALSE(play.ReadAgentSceneContacts(*bodyRef));

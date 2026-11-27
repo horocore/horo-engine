@@ -69,6 +69,20 @@ namespace Horo::Application::Internal {
             return found == bindings.end() ? Runtime::SceneObjectId{} : found->object;
         }
 
+        /** @brief Resolves the collider owner without guessing when several authored objects share the reported slot. */
+        Runtime::SceneObjectId ReadContactCollider(const std::span<const Physics::PhysicsSceneShapeBinding> bindings,
+                                                   const Physics::PhysicsEventEndpoint &endpoint) {
+            Runtime::SceneObjectId owner{};
+            for (const auto &binding : bindings) {
+                if (binding.body != endpoint.body || (endpoint.collider != 0 && binding.collider.value != endpoint.collider))
+                    continue;
+                if (owner.value != 0 && owner != binding.object)
+                    return {};
+                owner = binding.object;
+            }
+            return owner;
+        }
+
         /** @brief Projects incident transitions and discards continuous solver updates. */
         std::optional<Editor::EditorPlayContactSnapshot::Kind> ContactTransition(const Physics::PhysicsEventKind kind) noexcept {
             using enum Physics::PhysicsEventKind;
@@ -89,16 +103,19 @@ namespace Horo::Application::Internal {
 
         /** @brief Adds one incident transition without translating it into a gameplay action. */
         bool AppendAgentContact(Editor::EditorPlayContactSnapshot &review, const Runtime::RuntimeSceneView &scene,
-                                const Runtime::SceneObjectId anchor, const std::span<const Physics::PhysicsSceneBodyBinding> bindings,
+                                const Runtime::SceneObjectId anchor, const Physics::Detail::PhysicsSceneHostScope &scope,
                                 const Physics::PhysicsEventRecord &record) {
             const auto kind = ContactTransition(record.kind);
             if (!kind)
                 return true;
-            const auto first = ReadContactObject(bindings, record.pair.first.body);
-            const auto second = ReadContactObject(bindings, record.pair.second.body);
+            const auto first = ReadContactObject(scope.bodyBindings, record.pair.first.body);
+            const auto second = ReadContactObject(scope.bodyBindings, record.pair.second.body);
             if (first != anchor && second != anchor)
                 return true;
-            const auto peer = first == anchor ? second : first;
+            if (first == anchor && second == anchor)
+                return true;
+            const auto &endpoint = first == anchor ? record.pair.second : record.pair.first;
+            const auto peer = ReadContactCollider(scope.shapeBindings, endpoint);
             if (peer == anchor)
                 return true;
             const auto entity = scene.Find(peer);
@@ -144,7 +161,7 @@ namespace Horo::Application::Internal {
                                                  .structuralRevision = scene->StructuralRevision(),
                                                  .completedTick = tick.eventTick};
         for (const auto &record : std::span{records}.first(*copied))
-            if (!AppendAgentContact(review, *scene, anchorId, bindings, record))
+            if (!AppendAgentContact(review, *scene, anchorId, scope.Value(), record))
                 return std::nullopt;
         return review;
     }
