@@ -122,6 +122,20 @@ namespace Horo::Editor {
         std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
     };
 
+    /** @brief One reviewed Scene intent carried out of Simulate without staging or apply authority. */
+    class ImmersiveSceneCandidate final {
+    private:
+        friend class ImmersivePlanReview;
+        friend class ImmersiveAuthoringContext;
+        ImmersiveSceneCandidate(ImmersivePlanningContext source, Agent::ModelToolIntent intent, Agent::AgentPlanObjectScope scope,
+                                Agent::AgentTurnFreshness sourceAuthority, std::weak_ptr<const EditorInspectionCommandEndpoint> scene);
+        ImmersivePlanningContext source_;
+        Agent::ModelToolIntent intent_;
+        Agent::AgentPlanObjectScope scope_;
+        Agent::AgentTurnFreshness sourceAuthority_;
+        std::weak_ptr<const EditorInspectionCommandEndpoint> scene_;
+    };
+
     /** @brief One inert plan retained with its revocable authoring scope until the editor adopts it. */
     class ImmersivePlanReview final {
     public:
@@ -151,6 +165,12 @@ namespace Horo::Editor {
          * @return Preview ID or rejection. The viewport owner requires separate approval before changing the document.
          */
         [[nodiscard]] Result<std::uint64_t> StageScenePreview(const ImmersivePlanningContext &current) const;
+
+        /** @brief Retains the exact Simulate Scene intent before its planning generation is retired.
+         * @param current Current authenticated Simulate context.
+         * @return An inert candidate without transcript or model reply text, or empty on rejection.
+         */
+        [[nodiscard]] std::optional<ImmersiveSceneCandidate> RetainSceneCandidate(const ImmersivePlanningContext &current) const;
 
     private:
         friend class ImmersiveAgentRequest;
@@ -280,6 +300,14 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureMcpPlan(const ImmersivePlanningContext &context,
                                                                           Agent::ModelRequest request, const ImmersiveMcpCatalog &catalog,
                                                                           std::string_view projectIdentity = {}) const;
+
+        /** @brief Stages a retained Simulate candidate on the first matching Edit generation.
+         * @param current Exact Edit scope. @param catalog Fresh tool catalog for that scope.
+         * @param candidate Original candidate, still within its project, trust and deadline fences.
+         * @return Viewport review ID or rejection. Document mutation requires separate approval.
+         */
+        [[nodiscard]] Result<std::uint64_t> StageSceneCandidate(const ImmersivePlanningContext &current, const ImmersiveMcpCatalog &catalog,
+                                                                const ImmersiveSceneCandidate &candidate) const;
 
     private:
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlanRequest(const ImmersivePlanningContext &context,

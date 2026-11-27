@@ -453,6 +453,13 @@ namespace Horo::Editor {
             using enum Agent::AgentTurnStatus;
             constexpr std::string_view projectIdentity = "project-one";
             auto identity = Opening();
+            const auto editIdentity = identity;
+            bool transferFromSimulate = false;
+            SECTION("a retained Simulate proposal needs a new Edit admission") {
+                transferFromSimulate = true;
+                identity.mode = ImmersiveAuthoringMode::Simulate;
+                identity.worldGeneration = 1;
+            }
             ImmersiveAuthoringContext owner;
 
             std::size_t staged{};
@@ -564,6 +571,38 @@ namespace Horo::Editor {
             }
             const auto review = pending->Plan(model, 1, {}, {}, {}, &approved);
             REQUIRE(review.Status() == Completed);
+            if (transferFromSimulate) {
+                const auto candidate = review.RetainSceneCandidate(*context);
+                REQUIRE(candidate);
+                CHECK(review.StageScenePreview(*context).HasError());
+                CHECK(owner.StageSceneCandidate(*context, *catalog, *candidate).HasError());
+                auto edit = editIdentity;
+                edit.commandSession = identity.commandSession;
+                const auto current = owner.Publish(edit, {});
+                REQUIRE(current);
+                CHECK(review.Status() == ContextDenied);
+                CHECK_FALSE(review.RetainSceneCandidate(*context));
+                CHECK(owner.StageSceneCandidate(*current, *catalog, *candidate).HasError());
+                CancellationSource editApproval;
+                const auto editCatalog = owner.CaptureMcpCatalog(*current, session, projectIdentity, tools, editApproval.Token());
+                REQUIRE(editCatalog);
+                targetsAvailable = false;
+                CHECK(owner.StageSceneCandidate(*current, *editCatalog, *candidate).HasError());
+                CHECK(staged == 0);
+                targetsAvailable = true;
+                const auto stagedReview = owner.StageSceneCandidate(*current, *editCatalog, *candidate);
+                REQUIRE(stagedReview.HasValue());
+                CHECK(stagedReview.Value() == 1);
+                CHECK(staged == 1);
+                CHECK(model.calls == 1);
+                REQUIRE(viewportAuthority);
+                CHECK(viewportAuthority());
+                toolApproval.RequestCancellation();
+                CHECK_FALSE(viewportAuthority());
+                CHECK(owner.StageSceneCandidate(*current, *editCatalog, *candidate).HasError());
+                return;
+            }
+            CHECK_FALSE(review.RetainSceneCandidate(*context));
             REQUIRE(model.advertised.size() == 1);
             CHECK(model.advertised.front().name == tools.front());
             const auto inspect = [](const Agent::AgentPlanObjectScope &scope) {

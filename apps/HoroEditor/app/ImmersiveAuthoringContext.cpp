@@ -26,6 +26,21 @@ namespace Horo::Editor {
             return scope.opening == scene.documentOpening && scope.revision == scene.documentRevision;
         }
 
+        /** @brief Recognizes a single bounded Scene proposal produced by registered tool inspection. */
+        bool HasSceneProposal(const Agent::AgentTurnPlan &plan) noexcept {
+            return plan.draft && plan.draft->toolIntents.size() == 1 && plan.tools.size() == 1 && plan.tools.front().scope &&
+                   plan.tools.front().effect == Agent::AgentPlannedEffect::Presentation;
+        }
+
+        /** @brief Checks targets on the same workspace lane that can stage a viewport review. */
+        bool InspectEditScope(const EditorInspectionCommandEndpoint &scene, const Agent::AgentPlanObjectScope &scope) noexcept {
+            try {
+                return scene.inspectEditTargets({scope.opening, scope.revision}, scope.objects).HasValue();
+            } catch (...) {
+                return false;
+            }
+        }
+
         /** @brief Capture-only Play admits no user, conversation or tool dispatch credentials. */
         bool ValidAuthority(const ImmersiveContextIdentity &identity) noexcept {
             const auto &command = identity.commandSession;
@@ -116,7 +131,7 @@ namespace Horo::Editor {
 
     /** @copydoc ImmersivePlanReview::HasCurrentAuthority */
     bool ImmersivePlanReview::HasCurrentAuthority() const noexcept {
-        return authority_ && authority_();
+        return context_.IsCurrent() && authority_ && authority_();
     }
 
     /** @copydoc ImmersivePlanReview::StageScenePreview */
@@ -128,17 +143,34 @@ namespace Horo::Editor {
         if (!scene || scene->owner != std::this_thread::get_id() || !scene->inspectEditTargets)
             return Output::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
         const auto *plan = Read(current, [&scene](const Agent::AgentPlanObjectScope &scope) {
-            return scene->inspectEditTargets({scope.opening, scope.revision}, scope.objects).HasValue();
+            return InspectEditScope(*scene, scope);
         });
-        if (!plan || !plan->draft || plan->draft->toolIntents.size() != 1 || plan->tools.size() != 1 || !plan->tools.front().scope ||
-            plan->tools.front().effect != Agent::AgentPlannedEffect::Presentation)
+        if (!plan || !HasSceneProposal(*plan))
             return Output::Failure(MakeError(Mcp::McpErrors::ToolUnavailable));
         const auto &intent = plan->draft->toolIntents.front();
-        auto authorized = [authority = authority_, stop = stop_] {
-            return !stop.stop_requested() && authority();
+        auto authorized = [context = context_, authority = authority_, stop = stop_] {
+            return !stop.stop_requested() && context.IsCurrent() && authority();
         };
         return StageEditorScenePlan(*scene, intent.name, nlohmann::json::parse(intent.argumentsJson, nullptr, false),
                                     std::move(authorized));
+    }
+
+    ImmersiveSceneCandidate::ImmersiveSceneCandidate(ImmersivePlanningContext source, Agent::ModelToolIntent intent,
+                                                     Agent::AgentPlanObjectScope scope, Agent::AgentTurnFreshness sourceAuthority,
+                                                     std::weak_ptr<const EditorInspectionCommandEndpoint> scene)
+        : source_(std::move(source)), intent_(std::move(intent)), scope_(std::move(scope)), sourceAuthority_(std::move(sourceAuthority)),
+          scene_(std::move(scene)) {}
+
+    /** @copydoc ImmersivePlanReview::RetainSceneCandidate */
+    std::optional<ImmersiveSceneCandidate> ImmersivePlanReview::RetainSceneCandidate(const ImmersivePlanningContext &current) const {
+        if (current.Identity().mode != ImmersiveAuthoringMode::Simulate || !context_.SharesGeneration(current) ||
+            Status() != Agent::AgentTurnStatus::Completed || scene_.expired() || !HasSceneProposal(plan_))
+            return std::nullopt;
+        auto sourceAuthority = [authority = authority_, stop = stop_] {
+            return !stop.stop_requested() && authority();
+        };
+        return ImmersiveSceneCandidate{context_, plan_.draft->toolIntents.front(), *plan_.tools.front().scope, std::move(sourceAuthority),
+                                       scene_};
     }
 
     /** @copydoc ImmersivePlanReview::Status */
@@ -201,14 +233,15 @@ namespace Horo::Editor {
         };
         const auto projectLifetime = approvedContext ? approvedContext->project.cancellation : CancellationToken{};
         const auto projectDeadline = approvedContext ? approvedContext->project.deadline : std::chrono::steady_clock::time_point::max();
-        Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime,
-                                                       trust = *trustLifetime]() noexcept {
-            return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && !trust.IsCancellationRequested() &&
-                   (!catalog || catalog->IsCurrent());
+        auto projectAuthority = [catalog = catalog_, projectLifetime, trust = *trustLifetime]() noexcept {
+            return !projectLifetime.IsCancellationRequested() && !trust.IsCancellationRequested() && (!catalog || catalog->IsCurrent());
+        };
+        const Agent::AgentTurnFreshness providerAuthority = [context = context_, projectAuthority]() noexcept {
+            return context.IsCurrent() && projectAuthority();
         };
         auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext, providerAuthority);
-        auto reviewAuthority = [authority = std::move(providerAuthority), projectDeadline]() noexcept {
-            return std::chrono::steady_clock::now() < projectDeadline && authority();
+        auto reviewAuthority = [projectAuthority = std::move(projectAuthority), projectDeadline]() noexcept {
+            return std::chrono::steady_clock::now() < projectDeadline && projectAuthority();
         };
         return {context_, std::move(plan), stop, std::move(reviewAuthority), scene_};
     }
@@ -347,5 +380,34 @@ namespace Horo::Editor {
             captured->scene_ = catalog.scene_;
         }
         return captured;
+    }
+
+    /** @copydoc ImmersiveAuthoringContext::StageSceneCandidate */
+    Result<std::uint64_t> ImmersiveAuthoringContext::StageSceneCandidate(const ImmersivePlanningContext &current,
+                                                                         const ImmersiveMcpCatalog &catalog,
+                                                                         const ImmersiveSceneCandidate &candidate) const {
+        using Output = Result<std::uint64_t>;
+        auto expected = candidate.source_.Identity();
+        expected.mode = ImmersiveAuthoringMode::Edit;
+        expected.worldGeneration = 0;
+        if (Admit(current, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted || current.Identity() != expected ||
+            candidate.source_.epoch_ != epoch_ || candidate.source_.Generation() != current.Generation() - 1 ||
+            !catalog.context_.SharesGeneration(current) || !catalog.catalog_ || !candidate.sourceAuthority_ ||
+            !candidate.sourceAuthority_())
+            return Output::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));
+        const auto scene = catalog.scene_.lock();
+        if (!scene || candidate.scene_.lock() != scene || scene->owner != std::this_thread::get_id() || !scene->inspectEditTargets)
+            return Output::Failure(MakeError(Mcp::McpErrors::OwnerUnavailable));
+        const auto inspected = catalog.catalog_->Inspect(candidate.intent_);
+        if (!inspected.tool || inspected.status != Agent::AgentTurnStatus::Completed ||
+            inspected.tool->effect != Agent::AgentPlannedEffect::Presentation || !inspected.tool->scope ||
+            !MatchesPlanScene(inspected, current.Identity()) || inspected.tool->scope->objects != candidate.scope_.objects ||
+            !InspectEditScope(*scene, *inspected.tool->scope))
+            return Output::Failure(MakeError(Mcp::McpErrors::ToolUnavailable));
+        auto authorized = [current, approvedTools = catalog.catalog_, sourceAuthority = candidate.sourceAuthority_] {
+            return current.IsCurrent() && approvedTools->IsCurrent() && sourceAuthority();
+        };
+        return StageEditorScenePlan(*scene, candidate.intent_.name, nlohmann::json::parse(candidate.intent_.argumentsJson, nullptr, false),
+                                    std::move(authorized));
     }
 }  // namespace Horo::Editor
