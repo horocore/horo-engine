@@ -133,7 +133,7 @@ namespace Horo::Agent {
         std::vector<AgentPlannedTool> tools; /**< One host result per draft intent, in the same order. */
         std::optional<Security::AgentPolicyReason> contextError;
         std::optional<std::chrono::seconds> retryAfter{}; /**< Bounded retry hint for a throttled provider. */
-        std::optional<AgentPlanTiming> timing{};          /**< Elapsed stage timings for a complete draft. */
+        std::optional<AgentPlanTiming> timing{};          /**< Elapsed stages after inference starts, even if no draft is published. */
     };
 
     /** @brief Editor-owned admission for at most one active authoring turn.
@@ -206,7 +206,7 @@ namespace Horo::Agent {
         struct PlanReview final {
             const AgentPlanToolValidator &inspect;
             std::vector<AgentPlannedTool> tools;
-            AgentPlanTiming timing;
+            std::optional<AgentPlanTiming> timing;
         };
 
         struct TurnPorts final {

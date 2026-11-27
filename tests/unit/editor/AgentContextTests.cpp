@@ -376,7 +376,7 @@ namespace Horo::Agent {
             };
             const auto review = correct->Plan(model, 25, AgentTurnLimits{.timeout = std::chrono::seconds{5}}, inspect, {}, &approved);
             CHECK(observedStop);
-            CHECK(review.Status() == ContextDenied);
+            CHECK(review.Status() == TimedOut);
             CHECK_FALSE(review.Read(*context));
         }
         SECTION("changing trust stops a quiet provider within the same project opening") {

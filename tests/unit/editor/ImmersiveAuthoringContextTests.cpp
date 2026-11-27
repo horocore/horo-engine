@@ -511,11 +511,11 @@ namespace Horo::Editor {
             CHECK(pending->Plan(model, 1, {}).Status() == ContextDenied);
             CHECK(model.calls == 0);
 
-            const Platform::ProjectReadContext project{std::string{projectIdentity},
-                                                       identity.projectOpening,
-                                                       {},
-                                                       std::chrono::steady_clock::now() + std::chrono::seconds{10},
-                                                       {}};
+            Platform::ProjectReadContext project{std::string{projectIdentity},
+                                                 identity.projectOpening,
+                                                 {},
+                                                 std::chrono::steady_clock::now() + std::chrono::seconds{10},
+                                                 {}};
             Agent::AgentContextReaders readers;
             readers.isCurrent = [](const auto &) {
                 return true;
@@ -535,6 +535,15 @@ namespace Horo::Editor {
                                                    Security::AgentProviderResidence::Local};
             model.tools = {
                 {"scene-edit", tools.front(), R"({"scene":{"epoch":1,"revision":1},"renames":[{"object":42,"name":"Reviewed"}]})"}};
+            SECTION("an expired project deadline does not contact the model") {
+                project.deadline = std::chrono::steady_clock::now();
+                const auto expired = pending->Plan(model, 1, {}, {}, {}, &approved);
+                CHECK(expired.Status() == TimedOut);
+                CHECK(model.calls == 0);
+                CHECK(expired.StageScenePreview(*context).HasError());
+                CHECK(staged == 0);
+                return;
+            }
             const auto review = pending->Plan(model, 1, {}, {}, {}, &approved);
             REQUIRE(review.Status() == Completed);
             REQUIRE(model.advertised.size() == 1);

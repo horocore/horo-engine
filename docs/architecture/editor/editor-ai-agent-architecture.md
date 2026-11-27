@@ -386,6 +386,10 @@ Authoring mode is part of admission, not presentation state:
 Mode, document, project or XR-session replacement invalidates outstanding
 approval. A retained proposal remains non-authoritative and must be reviewed
 against fresh context.
+Planning uses the earlier of the admitted project deadline and the turn limit.
+Expiration stops cooperative inference and prevents review publication. Elapsed
+inference and tool inspection times remain available on terminal outcomes for
+stages that ran, including when the draft is discarded.
 The immersive MCP tool catalog is admitted for one exact authoring generation.
 An unchanged registry and tool grant cannot carry that catalog into a new
 project, document revision or mode.

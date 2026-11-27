@@ -126,7 +126,10 @@ namespace Horo::Agent {
         CHECK(model.requests.size() == 1);
         CHECK(tools.scene->calls == 0);
         REQUIRE(result.draft.has_value() == (expected == Completed));
-        CHECK(result.timing.has_value() == (expected == Completed));
+        REQUIRE(result.timing);
+        REQUIRE(result.timing->toolInspection);
+        CHECK(result.timing->inference >= inference);
+        CHECK(*result.timing->toolInspection >= inspection);
         if (result.draft) {
             CHECK(result.draft->toolIntents.size() == 2);
             REQUIRE(result.tools.size() == 2);
@@ -134,10 +137,6 @@ namespace Horo::Agent {
             CHECK(result.tools[1].effect == expectedEffect);
             REQUIRE(result.usage);
             CHECK(result.usage->outputTokens == 2);
-            REQUIRE(result.timing);
-            REQUIRE(result.timing->toolInspection);
-            CHECK(result.timing->inference >= inference);
-            CHECK(*result.timing->toolInspection >= inspection);
         } else
             CHECK(result.tools.empty());
     }

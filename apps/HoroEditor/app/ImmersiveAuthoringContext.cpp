@@ -198,13 +198,16 @@ namespace Horo::Editor {
         };
         const auto projectLifetime = approvedContext ? approvedContext->project.cancellation : CancellationToken{};
         const auto projectDeadline = approvedContext ? approvedContext->project.deadline : std::chrono::steady_clock::time_point::max();
-        Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime, trust = *trustLifetime,
-                                                       projectDeadline]() noexcept {
+        Agent::AgentTurnFreshness providerAuthority = [context = context_, catalog = catalog_, projectLifetime,
+                                                       trust = *trustLifetime]() noexcept {
             return context.IsCurrent() && !projectLifetime.IsCancellationRequested() && !trust.IsCancellationRequested() &&
-                   std::chrono::steady_clock::now() < projectDeadline && (!catalog || catalog->IsCurrent());
+                   (!catalog || catalog->IsCurrent());
         };
         auto plan = runtime.Plan(provider, turnId, std::exchange(request_, {}), limits, inspect, stop, approvedContext, providerAuthority);
-        return {context_, std::move(plan), stop, std::move(providerAuthority), scene_};
+        auto reviewAuthority = [authority = std::move(providerAuthority), projectDeadline]() noexcept {
+            return std::chrono::steady_clock::now() < projectDeadline && authority();
+        };
+        return {context_, std::move(plan), stop, std::move(reviewAuthority), scene_};
     }
 
     ImmersiveAuthoringContext::ImmersiveAuthoringContext() : epoch_(std::make_shared<ImmersiveContextEpoch>()) {}

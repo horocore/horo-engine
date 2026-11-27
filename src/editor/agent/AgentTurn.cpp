@@ -372,13 +372,15 @@ namespace Horo::Agent {
         if (!validateTool)
             return {InvalidRequest};
         PlanReview review{validateTool};
+        const auto deadline = context ? context->project.deadline : Clock::time_point::max();
         auto result = RunTurn(provider, turnId, std::move(request), limits, cancellation,
-                              {nullptr, context, {}, {}, &review, providerAuthority ? &providerAuthority : nullptr});
+                              {nullptr, context, {}, {}, &review, providerAuthority ? &providerAuthority : nullptr}, deadline);
         if (result.status != Completed)
             return {.status = result.status,
                     .providerError = result.providerError,
                     .contextError = result.contextError,
-                    .retryAfter = result.retryAfter};
+                    .retryAfter = result.retryAfter,
+                    .timing = review.timing};
         return {.status = Completed,
                 .draft = std::move(result.messages.back()),
                 .usage = result.finalUsage,
@@ -405,6 +407,8 @@ namespace Horo::Agent {
                 return {InvalidRequest, {}};
             if (observeText && tools)
                 return {InvalidRequest, {}};
+            if (!context && Clock::now() >= deadline)
+                return {TimedOut, {}};
             TurnContextGate contextGate{context, isCurrent_};
             const auto contextOffset = request.messages.size() - 1;
             const auto contextCount = context ? context->preview.Items().size() : 0;
@@ -413,6 +417,8 @@ namespace Horo::Agent {
                     return StaleContextResult();
                 const auto allowed = context->preview.InsertBeforeDispatch(context->policy, context->project, context->isCurrent,
                                                                            context->provider, turnId, request);
+                if (Clock::now() >= deadline)
+                    return {TimedOut, {}};
                 if (!allowed.Allowed())
                     return {.status = ContextDenied, .contextError = allowed.reason};
             }
@@ -438,7 +444,7 @@ namespace Horo::Agent {
                 const auto inferenceStart = plan ? Clock::now() : Clock::time_point{};
                 const auto outcome = StreamResponse(provider, request, stop, stream, observeText, contextGate);
                 if (plan)
-                    plan->timing.inference = Clock::now() - inferenceStart;
+                    plan->timing.emplace().inference = Clock::now() - inferenceStart;
                 if (const auto status = CompleteModelRound(outcome, stream, stop, contextGate); status != Completed)
                     return FailedRound(status, outcome.error);
                 const auto used =
@@ -451,10 +457,10 @@ namespace Horo::Agent {
                 if (plan) {
                     const auto inspectionStart = Clock::now();
                     const auto status = ValidatePlanRound(request, message, plan->inspect, stop, contextGate, plan->tools);
+                    if (!message.toolIntents.empty())
+                        plan->timing->toolInspection = Clock::now() - inspectionStart;
                     if (status != Completed)
                         return FailedRound(status);
-                    if (!message.toolIntents.empty())
-                        plan->timing.toolInspection = Clock::now() - inspectionStart;
                 }
                 if (plan || message.toolIntents.empty()) {
                     if (context) {
