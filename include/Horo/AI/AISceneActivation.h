@@ -402,6 +402,12 @@ namespace Horo::AI {
         std::shared_ptr<const LocalLearnedPolicy> model;
         AiCapabilityDescriptorSet tasks;
         std::vector<BlackboardKeyId> featureKeys;
+
+        /** @brief Validates the entire feature mapping before model execution is admitted.
+         * @param schema Exact Blackboard schema of the selected controller.
+         * @return Success for one compatible signed-integer scalar key per feature, or a typed admission error.
+         */
+        [[nodiscard]] Result<void> ValidateFeatures(const BlackboardSchema &schema) const;
     };
 
     using AiSceneLocalPolicyCatalog = std::map<ControllerTypeId, std::shared_ptr<const AiSceneLocalPolicyBinding>>;

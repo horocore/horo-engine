@@ -347,10 +347,15 @@ namespace Horo::Application::Internal {
                                                               selection.blackboard);
             if (model.HasError())
                 return Result<void>::Failure(std::move(model).ErrorValue());
-            models.emplace(descriptor.controller,
-                           std::make_shared<const AI::AiSceneLocalPolicyBinding>(
-                               AI::AiSceneLocalPolicyBinding{std::make_shared<const AI::LocalLearnedPolicy>(std::move(model).Value()),
-                                                             selection.tasks, selection.featureKeys}));
+            AI::AiSceneLocalPolicyBinding binding{std::make_shared<const AI::LocalLearnedPolicy>(std::move(model).Value()),
+                                                  selection.tasks, selection.featureKeys};
+            if (!binding.featureKeys.empty()) {
+                if (descriptor.decisionKind != AI::DecisionPlanKind::Utility || !descriptor.blackboardSchema)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaInvalid));
+                if (auto validated = binding.ValidateFeatures(*descriptor.blackboardSchema); validated.HasError())
+                    return validated;
+            }
+            models.emplace(descriptor.controller, std::make_shared<const AI::AiSceneLocalPolicyBinding>(std::move(binding)));
             remaining -= storage;
             return Result<void>::Success();
         }

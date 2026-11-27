@@ -733,6 +733,27 @@ namespace {
         const std::array requested{CookedDecisionSceneBinding{controller, graphId}};
         auto bindings = ConfigureSceneLocalPolicies(requested, &policy, target);
         REQUIRE(bindings.HasValue());
+        if (!outOfRange && relevanceMode == Relevance::None) {
+            const auto limits = Prefab::PrefabLimitProfile::Create({}).Value();
+            const auto environment = fixture.Environment();
+            CookedSceneLocalPolicyCatalog models;
+            const auto admit = [&](const auto &selected) {
+                return AdmitCookedSceneControllers({}, decoded.Value(), {*committed.Value(), environment, selected}, limits, {},
+                                                   nullptr, &models);
+            };
+            REQUIRE(admit(bindings.Value()).HasValue());
+            const auto initial = models.at(controller);
+            for (auto keys : {std::vector{score}, std::vector{feature, feature}}) {
+                auto rejected = bindings.Value();
+                auto selection = *rejected.front().localPolicy;
+                selection.featureKeys = std::move(keys);
+                rejected.front().localPolicy = std::make_shared<const CookedSceneLocalPolicySelection>(std::move(selection));
+                const auto result = admit(rejected);
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == AIErrors::DecisionAssetSchemaInvalid.code.Value());
+                CHECK(models.at(controller) == initial);
+            }
+        }
 
         JobSystem jobs{{1, 8}};
         Assets::AssetLoadService loads{jobs, committed.Value()->SceneProvider()};

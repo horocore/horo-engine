@@ -2949,7 +2949,9 @@ declarations on both fresh inputs and cache hits. An explicitly selected Scene
 controller model is admitted from the same verified generation as that
 controller's Decision graph. Admission rechecks the model digest, target, task
 declarations, and the controller's Blackboard schema when the model declares
-one. The retained model counts against the Scene's aggregate Decision memory
+one. A model selected for execution requires a Utility controller and a complete
+mapping of signed-integer scalar keys in the committed Blackboard schema. The
+retained model counts against the Scene's aggregate Decision memory
 budget.
 Inference submits only a proposal. The decision owner's one-shot request slot
 checks the pinned Scene, agent, provider, request and input revisions, model

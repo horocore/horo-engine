@@ -9,6 +9,22 @@
 #include <utility>
 
 namespace Horo::AI {
+    /** @copydoc AiSceneLocalPolicyBinding::ValidateFeatures */
+    Result<void> AiSceneLocalPolicyBinding::ValidateFeatures(const BlackboardSchema &schema) const {
+        if (!model)
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        if (!model->SupportsBlackboard(schema.Identity()) || featureKeys.size() != model->Features().size())
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+        const auto keys = schema.Keys();
+        for (const auto id : featureKeys) {
+            const auto key = std::ranges::lower_bound(keys, id, {}, &BlackboardKeyDescriptor::key);
+            if (key == keys.end() || key->key != id || key->kind != BlackboardValueKind::SignedInteger ||
+                key->cardinality != BlackboardValueCardinality::Scalar)
+                return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+        }
+        return Result<void>::Success();
+    }
+
     namespace {
         /** @brief Keeps nested provider callbacks from replacing the decision being prepared or retired. */
         class DecisionReplacementGuard final {
@@ -116,17 +132,10 @@ namespace Horo::AI {
                 return Bound::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
             if (policy->featureKeys.empty())
                 return Bound::Success({});
-            if (!std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(root.execution) || !agent.schema ||
-                !policy->model->SupportsBlackboard(agent.schema->Identity()) ||
-                policy->featureKeys.size() != policy->model->Features().size())
+            if (!std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(root.execution) || !agent.schema)
                 return Bound::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
-            const auto keys = agent.schema->Keys();
-            for (const auto id : policy->featureKeys) {
-                const auto key = std::ranges::lower_bound(keys, id, {}, &BlackboardKeyDescriptor::key);
-                if (key == keys.end() || key->key != id || key->kind != BlackboardValueKind::SignedInteger ||
-                    key->cardinality != BlackboardValueCardinality::Scalar)
-                    return Bound::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
-            }
+            if (auto validated = policy->ValidateFeatures(*agent.schema); validated.HasError())
+                return Bound::Failure(validated.ErrorValue());
             return Bound::Success(policy);
         }
 
