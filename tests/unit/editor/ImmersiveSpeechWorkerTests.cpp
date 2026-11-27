@@ -1,6 +1,7 @@
 #include "../../../apps/HoroEditor/app/ImmersiveSpeechWorker.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <future>
 #include <new>
 
 namespace Horo::Editor {
@@ -80,6 +81,24 @@ namespace Horo::Editor {
             bool reviseDraft_{};
         };
 
+        /** @brief Signals when a failed provider has been released by the worker. */
+        class UnavailableSpeechProvider final : public ISpeechProvider {
+        public:
+            explicit UnavailableSpeechProvider(std::promise<void> &retired) noexcept : retired_(retired) {}
+
+            ~UnavailableSpeechProvider() override {
+                retired_.set_value();
+            }
+
+            std::unique_ptr<ISpeechProviderStream> Open(std::string_view, const Audio::AudioProcessingFormat &,
+                                                        std::stop_token) noexcept override {
+                return {};
+            }
+
+        private:
+            std::promise<void> &retired_;
+        };
+
         struct SpeechWorkerFixture final {
             const Capture::AudioCaptureBufferDescriptor source{.device = {Audio::AudioRuntimeId::Create(2).Value(), 3, 1},
                                                                .generation = 4,
@@ -93,8 +112,7 @@ namespace Horo::Editor {
             std::stop_source capture;
             ImmersiveSpeechWorker worker;
 
-            void Start(const float confidence = 0.9F, const bool reviseDraft = false, const bool revokeOnFinal = false,
-                       const std::string_view finalText = "Both blocks") {
+            void StartWith(std::shared_ptr<ISpeechProvider> provider) {
                 const XR::XRSessionId session{{XR::XRRuntimeGeneration::Create(1).Value(), {0, 1}}, {0, 1}};
                 const ImmersiveContextIdentity identity{1,
                                                         1,
@@ -111,9 +129,12 @@ namespace Horo::Editor {
                                                         true};
                 const auto context = owner.Publish(identity, {});
                 REQUIRE(context);
-                auto provider = std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft, revokeOnFinal ? &capture : nullptr,
-                                                                       finalText);
                 REQUIRE(worker.Start(owner, *context, source, capture.get_token(), std::move(provider), "en-US", 0.5F) == Accepted);
+            }
+
+            void Start(const float confidence = 0.9F, const bool reviseDraft = false, const bool revokeOnFinal = false,
+                       const std::string_view finalText = "Both blocks") {
+                StartWith(std::make_shared<OrderedSpeechProvider>(confidence, reviseDraft, revokeOnFinal ? &capture : nullptr, finalText));
             }
         };
 
@@ -135,6 +156,23 @@ namespace Horo::Editor {
             REQUIRE(draft.evidence);
             CHECK_FALSE(draft.evidence->IsCurrent());
             CHECK(draft.evidence->PreviewText(SpeechHypothesisKind::Partial).empty());
+        }
+
+        TEST_CASE("Retiring the speech context suppresses an already completed provider failure", "[agent][immersive][speech]") {
+            std::promise<void> retired;
+            const auto workerReleased = retired.get_future();
+            SpeechWorkerFixture fixture;
+            fixture.StartWith(std::make_shared<UnavailableSpeechProvider>(retired));
+            REQUIRE(workerReleased.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+            auto expected = ProviderUnavailable;
+            SECTION("the original context can still report the failure") {}
+            SECTION("a retired context only reports its withdrawal") {
+                fixture.owner.Revoke();
+                expected = StaleContext;
+            }
+            const auto completed = WaitForUpdate(fixture.worker);
+            CHECK(completed.status == expected);
+            CHECK_FALSE(completed.evidence);
         }
 
         TEST_CASE("Speech worker drains live PCM before its sealed tail and preserves lease revocation", "[agent][immersive][speech]") {

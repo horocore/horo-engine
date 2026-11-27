@@ -112,8 +112,8 @@ namespace Horo::Editor {
         /** @brief Rechecks the lease before handing a retired worker's result to the caller. */
         SpeechTranscriptionUpdate Complete(std::optional<SpeechTranscriptionUpdate> reply) {
             RetirePcm();
-            if (cancel.stop_requested())
-                return {Cancelled, {}};
+            if (const auto admitted = CaptureAdmission(); admitted != Accepted)
+                return {admitted, {}};
             if (!reply)
                 return {ProviderUnavailable, {}};
             if (reply->evidence && !reply->evidence->IsCurrent())
@@ -245,6 +245,8 @@ namespace Horo::Editor {
         if (!lock || !state_->partial)
             return {Pending, {}};
         auto update = std::exchange(state_->partial, std::nullopt);
+        if (const auto admitted = state_->CaptureAdmission(); admitted != Accepted)
+            return {admitted, {}};
         if (const auto &evidence = update->evidence; evidence && !evidence->IsCurrent()) {
             const bool draftWithdrawn = evidence->Context().IsCurrent() && !evidence->stop_.stop_requested();
             return {draftWithdrawn ? DraftWithdrawn : StaleContext, {}};
