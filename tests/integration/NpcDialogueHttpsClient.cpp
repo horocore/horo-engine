@@ -110,7 +110,8 @@ namespace {
 
     /** @brief Releases the I/O worker after retirement and before the next presentation poll. */
     int RunQueuedRetirement(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, AiSceneRuntime &runtime, AgentHandle owner,
-                            const NpcDialogueGrant &grant, NpcDialogueTriggerId trigger, std::string_view mode) {
+                            const NpcDialogueGrant &grant, NpcDialogueTriggerId trigger, std::string_view mode,
+                            const CancellationSource &approval) {
         const auto deadline = std::chrono::steady_clock::now() + 5s;
         std::promise<void> release;
         if (HoldIo(jobs, release).HasError())
@@ -122,11 +123,15 @@ namespace {
                 return 14;
         } else if (mode == "queued-scene-shutdown") {
             runtime.BeginShutdown();
+        } else if (mode == "approval-while-queued") {
+            approval.RequestCancellation();
         } else {
             scene.Retire();
         }
         release.set_value();
         jobs.Shutdown(ShutdownPolicy::Drain);
+        if (mode == "approval-while-queued")
+            return scene.Pump(grant, 2) == Accessibility::CaptionAdmission::Accepted && CheckTimeline(scene, grant, false, 0) ? 0 : 21;
         return !scene.Pump(grant, 2) && scene.Start(owner, trigger, grant, 2, 10, deadline, {}).HasError() &&
                        CheckTimeline(scene, grant, true, 0)
                    ? 0
@@ -146,7 +151,8 @@ namespace {
 
     /** @brief Withdraws visible dialogue without affecting another caption on the same HUD. */
     bool CheckVisibleWithdrawal(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner,
-                                CancellationSource &turn, NpcDialogueGrant grant, std::string_view mode) {
+                                CancellationSource &turn, NpcDialogueGrant grant, std::string_view mode,
+                                const CancellationSource &approval) {
         CaptionTimeline timeline;
         if (timeline.Reset(9).HasError())
             return false;
@@ -167,13 +173,15 @@ namespace {
             grant.fields = {};
         if (mode == "malformed-grant-after-drain")
             grant.fields = duplicateFields;
+        if (mode == "approval-after-drain")
+            approval.RequestCancellation();
         static_cast<void>(scene.Drain(timeline, grant));
         return timeline.Cues().size() == 1 && timeline.Cues().front().cue.id == sound;
     }
 
     /** @brief Drives a live NPC turn to HUD publication, then optionally withdraws the cue. */
     int RunTurn(App::NpcDialogueScenePresentation &scene, AiSceneRuntime &runtime, AgentHandle owner, const NpcDialogueGrant &grant,
-                NpcDialogueTriggerId trigger, std::string_view mode) {
+                NpcDialogueTriggerId trigger, std::string_view mode, const CancellationSource &approval) {
         const auto deadline = std::chrono::steady_clock::now() + (mode == "timeout" ? 500ms : 5s);
         CancellationSource turn;
         if (scene.Start(owner, trigger, grant, 1, 10, deadline, turn.Token()).HasError())
@@ -181,8 +189,8 @@ namespace {
         if (!PublishCaption(scene, grant, deadline + 1s))
             return 8;
         if (mode == "disable-after-drain" || mode == "cancel-after-drain" || mode == "grant-after-drain" ||
-            mode == "malformed-grant-after-drain")
-            return CheckVisibleWithdrawal(scene, runtime, owner, turn, grant, mode) ? 0 : 19;
+            mode == "malformed-grant-after-drain" || mode == "approval-after-drain")
+            return CheckVisibleWithdrawal(scene, runtime, owner, turn, grant, mode, approval) ? 0 : 19;
         if (!WithdrawTurn(runtime, owner, turn, mode))
             return 14;
         auto liveGrant = grant;
@@ -210,17 +218,17 @@ namespace {
 
     /** @brief Runs the selected scenario using the same admitted project channel. */
     int RunScenario(App::NpcDialogueScenePresentation &scene, JobSystem &jobs, AiSceneRuntime &runtime, AgentHandle owner,
-                    const NpcDialogueGrant &grant, std::string_view mode) {
+                    const NpcDialogueGrant &grant, std::string_view mode, const CancellationSource &approval) {
         if (mode == "different-agent" || mode == "missing-trigger")
             return RunRejectedTrigger(scene, owner, grant, mode);
         const auto trigger = NpcDialogueTriggerId::Create(AuthoredTrigger).Value();
-        if (mode == "queued-retire" || mode == "disabled-agent" || mode == "queued-scene-shutdown")
-            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode);
-        return RunTurn(scene, runtime, owner, grant, trigger, mode);
+        if (mode == "queued-retire" || mode == "disabled-agent" || mode == "queued-scene-shutdown" || mode == "approval-while-queued")
+            return RunQueuedRetirement(scene, jobs, runtime, owner, grant, trigger, mode, approval);
+        return RunTurn(scene, runtime, owner, grant, trigger, mode, approval);
     }
 
     /** @brief Composes one Scene channel and exercises a complete presentation turn. */
-    int RunScene(const App::NpcDialogueProjectActivation &activation, const std::string_view mode) {
+    int RunScene(const App::NpcDialogueProjectActivation &activation, const std::string_view mode, const CancellationSource &approval) {
         auto created = AiSceneRuntime::Create();
         if (created.HasError())
             return 15;
@@ -242,7 +250,7 @@ namespace {
         if (channel.HasError())
             return 6;
         auto scene = std::move(channel).Value();
-        return RunScenario(scene, jobs, runtime, owner, grant, mode);
+        return RunScenario(scene, jobs, runtime, owner, grant, mode, approval);
     }
 
     /** @brief Builds identical authored project bytes for the approved root and its copy. */
@@ -289,9 +297,13 @@ namespace {
         const auto fingerprint = PrepareProjects(approvedRoot, copiedRoot);
         if (!fingerprint)
             return 12;
-        App::NpcDialogueEndpointApproval approval{approvedRoot, *fingerprint, std::move(config),
+        CancellationSource lifetime;
+        App::NpcDialogueEndpointApproval approval{approvedRoot,
+                                                  *fingerprint,
+                                                  std::move(config),
                                                   {NpcDialogueFactId::Create(1).Value(), NpcDialogueFactId::Create(DisclosedField).Value(),
-                                                   NpcDialogueFactId::Create(9).Value()}};
+                                                   NpcDialogueFactId::Create(9).Value()},
+                                                  lifetime.Token()};
         if (mode == "stale-grant")
             approval.projectSource.bytes[0] ^= 1;
         if (mode == "other-route")
@@ -300,14 +312,17 @@ namespace {
             approval.endpoint.endpoint += "?unapproved=1";
         if (mode == "invalid-approval-fields")
             approval.fields.push_back(approval.fields.back());
+        if (mode == "approval-before-activation")
+            lifetime.RequestCancellation();
         const bool offline = mode == "offline" || mode == "retired" || mode == "offline-replaced-grant";
         const auto &projectRoot = mode == "copied-project" ? copiedRoot : approvedRoot;
         const auto activation = App::NpcDialogueProjectActivation::Create(projectRoot, 1, offline ? nullptr : &approval);
         if (activation.HasError() || !activation.Value())
             return 13;
-        if ((mode == "invalid-endpoint" || mode == "invalid-approval-fields") && activation.Value()->Binding())
+        if ((mode == "invalid-endpoint" || mode == "invalid-approval-fields" || mode == "approval-before-activation") &&
+            activation.Value()->Binding())
             return 20;
-        return RunScene(*activation.Value(), mode);
+        return RunScene(*activation.Value(), mode, lifetime);
     }
 }  // namespace
 

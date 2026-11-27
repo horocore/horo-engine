@@ -38,6 +38,7 @@ class Handler(BaseHTTPRequestHandler):
             "malformed-grant-before-drain": (200, b"allow\n5\n"),
             "malformed-grant-after-drain": (200, b"allow\n5\n"),
             "unused-grant-before-drain": (200, b"allow\n5\n"),
+            "approval-after-drain": (200, b"allow\n5\n"),
         }[mode]
         if mode == "timeout":
             time.sleep(1)
@@ -67,11 +68,12 @@ def run_client(client: Path, endpoint: str, ca_bundle: str, mode: str) -> None:
 def qualify(server: ThreadingHTTPServer, client: Path, certificate: Path) -> None:
     endpoint = f"https://127.0.0.1:{server.server_port}/dialogue"
     offline = ("untrusted", "offline", "offline-replaced-grant", "retired", "queued-retire", "disabled-agent", "queued-scene-shutdown",
-               "different-agent", "missing-trigger", "stale-grant", "other-route", "copied-project", "invalid-endpoint", "invalid-approval-fields")
+               "different-agent", "missing-trigger", "stale-grant", "other-route", "copied-project", "invalid-endpoint", "invalid-approval-fields",
+               "approval-before-activation", "approval-while-queued")
     modes = ("approved", "denied", "unknown", "text", "oversize", "redirect", "timeout",
              "disable-before-drain", "cancel-before-drain", "disable-after-drain", "cancel-after-drain",
              "grant-before-drain", "grant-after-drain", "unused-grant-before-drain",
-             "malformed-grant-before-drain", "malformed-grant-after-drain", *offline)
+             "malformed-grant-before-drain", "malformed-grant-after-drain", "approval-after-drain", *offline)
     for mode in modes:
         server.mode = mode
         server.requests.clear()

@@ -40,16 +40,17 @@ namespace Horo::App {
 
     /** @copydoc NpcDialogueScenePresentation::ProviderDisclosure::ProviderDisclosure */
     NpcDialogueScenePresentation::ProviderDisclosure::ProviderDisclosure(const AI::NpcDialogueGrant &grant,
-                                                                         std::span<const AI::NpcDialogueFact> projection)
-        : route(grant.route), generation(grant.providerGeneration), fields{}, count(projection.size()) {
+                                                                         std::span<const AI::NpcDialogueFact> projection,
+                                                                         CancellationToken approvalLifetime)
+        : route(grant.route), generation(grant.providerGeneration), fields{}, count(projection.size()),
+          approval(std::move(approvalLifetime)) {
         std::ranges::transform(projection, fields.begin(), &AI::NpcDialogueFact::field);
     }
 
     /** @copydoc NpcDialogueScenePresentation::ProviderDisclosure::IsCurrent */
     bool NpcDialogueScenePresentation::ProviderDisclosure::IsCurrent(const AI::NpcDialogueGrant &grant) const noexcept {
-        return route == grant.route && generation == grant.providerGeneration &&
-               grant.HasCanonicalFields() &&
-               std::ranges::includes(grant.fields, std::span{fields}.first(count));
+        return !approval.IsCancellationRequested() && route == grant.route && generation == grant.providerGeneration &&
+               grant.HasCanonicalFields() && std::ranges::includes(grant.fields, std::span{fields}.first(count));
     }
 
     /** @brief Binds the Scene scheduler and caption owner without touching gameplay state. */
@@ -138,7 +139,7 @@ namespace Horo::App {
         cancellation_ = std::move(turnCancellation);
         if (provider_) {
             if (const auto projection = turn.Context(request, grant, tick, cancellation_)) {
-                ProviderDisclosure disclosure{grant, *projection};
+                ProviderDisclosure disclosure{grant, *projection, provider_->approval};
                 auto job = AI::NpcDialogueJob::Start(*jobs_, std::move(turn), request, grant, *provider_, tick, deadline, cancellation_);
                 if (job.HasValue()) {
                     pendingDisclosure_.emplace(std::move(disclosure));

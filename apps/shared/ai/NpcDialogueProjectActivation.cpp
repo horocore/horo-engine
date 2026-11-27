@@ -8,7 +8,8 @@ namespace Horo::App {
         /** @brief Requires explicit approval matching the actual project root, authored bytes, route and lifetime. */
         bool Matches(const std::filesystem::path &projectRoot, const Application::ProjectSourceDocument &project,
                      const AI::NpcDialogueRoute &route, std::uint64_t generation, const NpcDialogueEndpointApproval *approval) {
-            if (!approval || !approval->projectRoot.is_absolute() || project.sourceFingerprint != approval->projectSource ||
+            if (!approval || approval->lifetime == CancellationToken{} || approval->lifetime.IsCancellationRequested() ||
+                !approval->projectRoot.is_absolute() || project.sourceFingerprint != approval->projectSource ||
                 approval->endpoint.route != route || approval->endpoint.generation != generation)
                 return false;
             std::error_code error;
@@ -50,6 +51,7 @@ namespace Horo::App {
         const auto common = std::ranges::set_intersection(policy.fields, approved.fields, activation.fields_.begin());
         activation.count_ = static_cast<std::size_t>(common.out - activation.fields_.begin());
         activation.binding_ = std::move(binding).Value();
+        activation.binding_->approval = approval->lifetime;
         return Activation::Success(std::move(activation));
     }
 

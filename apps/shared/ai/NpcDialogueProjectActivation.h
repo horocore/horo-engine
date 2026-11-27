@@ -14,6 +14,7 @@ namespace Horo::App {
         Sha256Digest projectSource;
         NpcDialogueHttpsConfig endpoint;
         std::vector<AI::NpcDialogueFactId> fields; /**< Increasing approved field IDs owned by the host approval. */
+        CancellationToken lifetime;                /**< Required live disclosure authority for remote activation. */
     };
 
     /** @brief Owned project activation. Empty binding means authored dialogue runs offline. */

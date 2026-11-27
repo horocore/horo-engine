@@ -95,9 +95,11 @@ namespace Horo::App {
             std::uint64_t generation;
             std::array<AI::NpcDialogueFactId, AI::NpcDialogueTurn::MaximumFacts> fields;
             std::size_t count;
+            CancellationToken approval;
 
             /** @brief Captures field identities only from the already admitted, bounded projection. */
-            ProviderDisclosure(const AI::NpcDialogueGrant &grant, std::span<const AI::NpcDialogueFact> projection);
+            ProviderDisclosure(const AI::NpcDialogueGrant &grant, std::span<const AI::NpcDialogueFact> projection,
+                               CancellationToken approval);
             /** @brief Checks route, activation and every field actually disclosed to the provider. */
             [[nodiscard]] bool IsCurrent(const AI::NpcDialogueGrant &grant) const noexcept;
         };

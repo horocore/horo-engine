@@ -2431,7 +2431,11 @@ The timeline issues a new caption session when Play changes Scenes, including
 when a new workspace restarts its local Scene identity sequence.
 
 The application binds a remote provider only when its separate approval matches
-the authorized project root, source fingerprint, route, and provider generation.
+the authorized project root, source fingerprint, route, and provider generation
+and carries a live host-issued cancellation token. The same token reaches the
+I/O job and the caption receipt. Revoking it stops queued disclosures before an
+owner poll, selects the authored fallback for a pending turn, and withdraws
+already presented remote cues without removing unrelated captions.
 A copy at a different root uses authored offline presentation until that root
 receives its own approval.
 Only the intersection of the project and host field lists is disclosed. An

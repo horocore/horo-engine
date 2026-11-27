@@ -205,19 +205,31 @@ namespace Horo::AI {
         });
         REQUIRE(blocker.HasValue());
         const auto provider = std::make_shared<ScriptedDialogueProvider>();
-        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider};
+        CancellationSource approval;
+        const NpcDialogueProviderBinding binding{scenario.route, scenario.request.providerGeneration, std::make_shared<int>(1), provider,
+                                                 approval.Token()};
         auto captured = scenario.Capture();
         REQUIRE(captured.HasValue());
         auto queued = NpcDialogueJob::Start(jobs, std::move(captured).Value(), scenario.request, scenario.grant, binding, 1,
                                             std::chrono::steady_clock::now() + 5s, {});
         REQUIRE(queued.HasValue());
         auto job = std::move(queued).Value();
-        auto revoked = scenario.grant;
-        revoked.fields = {};
-        const auto outcome = job.Poll(scenario.request, revoked, 1);
-        release.set_value();
-        jobs.Shutdown(ShutdownPolicy::Drain);
+        std::optional<NpcDialogueOutcome> outcome;
+        SECTION("the owner polls with fewer disclosed fields") {
+            auto revoked = scenario.grant;
+            revoked.fields = {};
+            outcome = job.Poll(scenario.request, revoked, 1);
+            release.set_value();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+        SECTION("the host withdraws endpoint approval before the next owner poll") {
+            approval.RequestCancellation();
+            release.set_value();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            outcome = job.Poll(scenario.request, scenario.grant, 1);
+        }
         REQUIRE(outcome.has_value());
+        CHECK(outcome->status == NpcDialogueStatus::Fallback);
         CHECK(outcome->cue == scenario.fallback);
         CHECK(provider->worker == std::thread::id{});
     }
