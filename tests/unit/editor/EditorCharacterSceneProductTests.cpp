@@ -11,6 +11,7 @@
 #include "OwnedTestDirectory.h"
 
 #include <catch2/catch_approx.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <functional>
 #endif
@@ -516,6 +517,63 @@ return horo.behavior {
         CHECK(play.SceneView()->RuntimeId().value > first.value);
         play.Stop();
         CHECK(authored.objects.front().localTransform.translation.y == 0.495F);
+    }
+
+    TEST_CASE("Editor Play exposes real Physics contact evidence only for the current Scene", "[editor][play][physics][agent-contact]") {
+        const bool sensor = GENERATE(false, true);
+        Fixture fixture;
+        auto objects = fixture.source.objects;
+        auto body = objects[1];
+        body.id = {3};
+        body.name = "Dynamic contact body";
+        body.localTransform.translation = {4.0F, 0.4F, 0.0F};
+        body.components.rigidBody = Runtime::RigidBodyComponent{.id = {30},
+                                                                .body = {300},
+                                                                .motion = Runtime::AuthoredPhysicsMotionType::Dynamic,
+                                                                .mass = Runtime::AuthoredPhysicsMass{.kilograms = 1.0F}};
+        auto &collider = body.components.colliders.front();
+        collider.id = {31};
+        collider.collider = {301};
+        collider.body = {.object = {3}, .body = {300}};
+        collider.source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.5F}};
+        collider.sensor = sensor;
+        objects.push_back(std::move(body));
+
+        Gameplay::BehaviorRegistry registry;
+        REQUIRE(registry.Freeze().HasValue());
+        Editor::EditorPlaySessionController play;
+        const Editor::SceneDocumentSnapshot authored{{1}, {1}, std::move(objects)};
+        const auto start = [&] {
+            RequirePlayStarted(play.Start(authored, registry, BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)));
+            FinishPlayPreparation(play);
+            REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+        };
+        start();
+        const auto bodyRef = play.SceneView()->Find({3});
+        const auto floorRef = play.SceneView()->Find({2});
+        REQUIRE(bodyRef);
+        REQUIRE(floorRef);
+        CHECK_FALSE(play.ReadAgentSceneContacts(*bodyRef));
+        RequirePlayStarted(play.FixedUpdate({}, {1.0 / 60.0}));
+        const auto review = play.ReadAgentSceneContacts(*bodyRef);
+        REQUIRE(review);
+        CHECK(review->anchor == *bodyRef);
+        CHECK(review->structuralRevision == play.SceneView()->StructuralRevision());
+        CHECK(review->completedTick == 1);
+        REQUIRE(review->count == 1);
+        CHECK(review->contacts[0].peer == floorRef->entity);
+        using enum Editor::EditorPlayContactSnapshot::Kind;
+        CHECK(review->contacts[0].kind == (sensor ? TriggerEnter : ContactBegin));
+        play.Stop();
+        CHECK_FALSE(play.ReadAgentSceneContacts(*bodyRef));
+        start();
+        const auto replacement = play.SceneView()->Find({3});
+        REQUIRE(replacement);
+        CHECK(replacement->runtime != bodyRef->runtime);
+        RequirePlayStarted(play.FixedUpdate({}, {1.0 / 60.0}));
+        REQUIRE(play.ReadAgentSceneContacts(*replacement));
+        CHECK_FALSE(play.ReadAgentSceneContacts(*bodyRef));
+        play.Stop();
     }
 
 #endif
