@@ -628,6 +628,8 @@ from the same scan. The review reports call resolution only after a complete
 scan. When a source is unreadable, the review reports its path and any
 independently confirmed provider references. After a complete scan, the caller
 path, authored node and target ID identify each call that requires review.
+A node containing both a typed call and a legacy subtree reference is reported
+as incompatible while the review continues collecting independent references.
 
 ## Rollback Contract
 

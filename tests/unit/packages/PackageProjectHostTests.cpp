@@ -1558,6 +1558,44 @@ namespace {
         REQUIRE(publish().HasValue());
     }
 
+    TEST_CASE("Package removal retains provider references beside an incompatible legacy call", "[packages][application][host][removal]") {
+        using namespace AI::DecisionGraphTestSupport;
+        using enum AI::DecisionPlanKind;
+        HostFixture fixture{true, NativeArchiveContributions::ModuleOnly};
+        const PackageProjectPolicy policy{.projectRoot = std::filesystem::canonical(fixture.project.Path()),
+                                          .platform = {"linux", "x64", "horo-sdk-2"}};
+        const auto expected = PreparePackageProject(policy, fixture.files, {});
+        REQUIRE(expected.HasValue());
+        const auto assets = fixture.AssetSource();
+        const auto &locked = expected.Value().application.lockedPlan->Packages().front();
+        auto observations = std::array{ObserveFixtureRuntime(locked)};
+        const auto type = AI::DecisionNodeTypeId::Create(201).Value();
+        observations.front().decisionNodes = {type};
+        auto sources = fixture.RemovalSources(*assets);
+        sources.requireGameplayOwner = true;
+        sources.registrations = observations;
+
+        auto call = TreeNode(2, AI::DecisionControlKind::Subplan);
+        call.call = AI::DecisionSubplanCall{Graph(2), BehaviorTree, {1, 1}};
+        call.nestedSubtree = AI::BehaviorTreeSubtreeReference{MakeIdentity<AI::BehaviorTreeGraphId>(2), {1, 0}};
+        WriteRemovalDecisionGraph(policy.projectRoot / "Assets/Caller.horo_bt", "174ee050-f0a1-4351-89c4-04a5895bff81",
+                                  BehaviorTree, Tree(1, {TreeNode(1, AI::DecisionControlKind::Root), call}, {Edge(1, 1, 2)}));
+        WriteRemovalDecisionGraph(policy.projectRoot / "Assets/ProviderTask.horo_bt", "174ee050-f0a1-4351-89c4-04a5895bff82",
+                                  BehaviorTree, TaskTree(2, type.Value()));
+        const auto prior = fixture.Read("packages.lock");
+        const auto blocked = PublishPackageProjectRemoval(policy, expected.Value(), locked.package, fixture.files, sources);
+        REQUIRE(blocked.HasError());
+        const auto &diagnostics = blocked.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 2);
+        CHECK(diagnostics[0].code.Value() == "packages.host.decision_subplan_incompatible");
+        CHECK(diagnostics[0].location.source == "Assets/Caller.horo_bt");
+        CHECK(diagnostics[0].path == "2");
+        CHECK(diagnostics[0].message == "2");
+        CHECK(diagnostics[1].code.Value() == "packages.host.decision_node_in_use");
+        CHECK(diagnostics[1].location.source == "Assets/ProviderTask.horo_bt");
+        CHECK(fixture.Read("packages.lock") == prior);
+    }
+
     /** @brief Confirms that the two independent review blockers identify their exact roles. */
     void CheckIncompleteRuntimeCoverage(const Error &error,
                                         const std::span<const Packages::GameplayPackageModuleHost::RegistrationInventory> roles) {

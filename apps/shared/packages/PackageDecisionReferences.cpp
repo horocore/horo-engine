@@ -98,6 +98,16 @@ namespace Horo::Application::Internal {
             return CollectSenseReview(owners, path, diagnostics);
         }
 
+        /** @brief Adds one bounded call blocker with the authored source, node and target identity. */
+        Result<void> ReportSubplanBlocker(std::vector<Diagnostic> &diagnostics, const char *code, std::string_view path, std::uint64_t node,
+                                          std::uint64_t target) {
+            if (diagnostics.size() >= MaximumReferences)
+                return Result<void>::Failure(ReferenceError("packages.host.decision_subplan_limit", path));
+            diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, std::to_string(target),
+                                     SourceLocation{std::string{path}}, std::to_string(node));
+            return Result<void>::Success();
+        }
+
         /** @brief Bounded call evidence that can be checked after all registered graph sources have been read. */
         class DecisionSubplanReview final {
         public:
@@ -122,10 +132,9 @@ namespace Horo::Application::Internal {
                     const auto *code = Blocker(site.call);
                     if (!code)
                         continue;
-                    if (diagnostics.size() >= MaximumReferences)
-                        return Result<void>::Failure(ReferenceError("packages.host.decision_subplan_limit", site.path));
-                    diagnostics.emplace_back(DiagnosticCode{code}, DiagnosticSeverity::Error, std::to_string(site.call.asset.Value()),
-                                             SourceLocation{std::string{site.path}}, std::to_string(site.node));
+                    if (auto reported = ReportSubplanBlocker(diagnostics, code, site.path, site.node, site.call.asset.Value());
+                        reported.HasError())
+                        return reported;
                 }
                 return Result<void>::Success();
             }
@@ -192,6 +201,9 @@ namespace Horo::Application::Internal {
 
             /** @brief Projects typed and legacy subtree calls into the same reference table. */
             Result<void> CollectTreeCall(const AI::BehaviorTreeNode &node) const {
+                if (node.call && node.nestedSubtree)
+                    return ReportSubplanBlocker(diagnostics, "packages.host.decision_subplan_incompatible", assetPath, node.id.Value(),
+                                                node.call->asset.Value());
                 if (node.call)
                     return subplans.Add(*node.call, assetPath, node.id.Value());
                 if (!node.nestedSubtree)
@@ -199,7 +211,8 @@ namespace Horo::Application::Internal {
                 const auto &legacy = *node.nestedSubtree;
                 const auto target = AI::DecisionGraphAssetId::Create(legacy.graph.Value());
                 if (target.HasError() || legacy.requiredSchemaVersion.minor != 0)
-                    return Result<void>::Failure(ReferenceError("packages.host.decision_subplan_incompatible", assetPath));
+                    return ReportSubplanBlocker(diagnostics, "packages.host.decision_subplan_incompatible", assetPath, node.id.Value(),
+                                                legacy.graph.Value());
                 const auto version = legacy.requiredSchemaVersion.major;
                 return subplans.Add({target.Value(), AI::DecisionPlanKind::BehaviorTree, {version, version}}, assetPath, node.id.Value());
             }
