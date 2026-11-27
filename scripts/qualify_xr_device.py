@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 MAX_RECORD_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 512 * 1024 * 1024
+UTF8_BOM = b"\xef\xbb\xbf"
 MAX_DESKTOP_PREFLIGHT_BYTES = 1024
 MAX_DISPLAY_RATES = 32
 MAX_TIMING_WINDOW_NS = 86_400_000_000_000
@@ -48,6 +49,7 @@ OPTIONAL_CHECKS = {"haptics", "optionalMR"}
 ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
 SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
 PHYSICAL_CHECK_RECEIPT_FIELDS = {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"}
+OBSERVATION_IDENTITY_FIELDS = {"schemaVersion", "tuple", "provenance"}
 MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
 
 
@@ -102,17 +104,23 @@ def artifact_path(root: Path, digest: str) -> Path:
     return path
 
 
-def verify_artifact(path: Path, digest: str) -> bytes | None:
-    """Verify an artifact and retain the exact bytes when it fits the record budget."""
+def verify_artifact(path: Path, digest: str, *, bounded_json: bool = False) -> bytes | None:
+    """Hash an artifact, retaining small records and optionally bounding JSON observations."""
     require(is_digest(digest), "Missing or invalid artifact digest")
     require(path.is_file() and not path.is_symlink(), f"Missing regular artifact {digest}")
     hasher = hashlib.sha256()
     size = 0
+    first_content = b""
     record_bytes = bytearray()
     with path.open("rb") as source:
         while chunk := source.read(1024 * 1024):
+            if bounded_json and not first_content:
+                prefix = chunk if size else chunk.removeprefix(UTF8_BOM)
+                first_content = prefix.lstrip()[:1]
             size += len(chunk)
             require(size <= MAX_ARTIFACT_BYTES, f"Artifact exceeds the size budget: {digest}")
+            if first_content == b"{":
+                require(size <= MAX_RECORD_BYTES, "Physical observation JSON exceeds the size limit")
             hasher.update(chunk)
             if size <= MAX_RECORD_BYTES:
                 record_bytes.extend(chunk)
@@ -411,18 +419,28 @@ def physical_check_evidence(root: Path, record: dict, optional: set[str]) -> tup
 
 def verify_physical_observations(root: Path, record: dict, observations: set[str]) -> None:
     """Validate direct observations, including embedded qualification identities."""
+    product_artifacts = {record["tuple"]["buildSha256"], record["tuple"]["packageReceiptSha256"]}
     for artifact in sorted(observations):
-        data = verify_artifact(artifact_path(root, artifact), artifact)
-        if data is None or not data.lstrip().startswith(b"{"):
+        require(artifact not in product_artifacts, "Physical observation refers to a product build or package receipt")
+        data = verify_artifact(artifact_path(root, artifact), artifact, bounded_json=True)
+        if data is None:
+            continue
+        candidate = data.removeprefix(UTF8_BOM)
+        if not candidate.lstrip().startswith(b"{"):
             continue
         try:
-            capture = decode_record(data)
-        except (ValueError, RecursionError):
-            continue
-        if not isinstance(capture, dict) or not {"schemaVersion", "tuple", "provenance"} <= capture.keys():
+            capture = decode_record(candidate)
+        except (ValueError, RecursionError) as error:
+            raise ValueError("Invalid physical observation JSON") from error
+        if {"tuple", "provenance", "evidenceLevel"}.isdisjoint(capture):
             continue
         require(not PHYSICAL_CHECK_RECEIPT_FIELDS <= capture.keys(),
                 "Physical observation refers to a physical check receipt")
+        require(OBSERVATION_IDENTITY_FIELDS <= capture.keys(), "Physical observation is missing qualification identity")
+        require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1,
+                "Unsupported physical observation schema")
+        require(capture.get("evidenceLevel", record["evidenceLevel"]) == record["evidenceLevel"],
+                "Physical observation must identify physical evidence")
         require(capture["tuple"] == record["tuple"] and capture["provenance"] == record["provenance"],
                 "Physical observation capture is from a different product tuple or smoke run")
 

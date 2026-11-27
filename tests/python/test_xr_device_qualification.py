@@ -95,6 +95,42 @@ def test_device_cli_validates_required_physical_check_receipts(tmp_path, smoke, 
         assert "Physical check receipts and their observations match the smoke run" in result.stdout
 
 
+@pytest.mark.parametrize(("change", "error"), [
+    ({"evidenceLevel": "SimulatorReplay"}, "must identify physical evidence"),
+    ({"schemaVersion": True}, "Unsupported physical observation schema"),
+    ({"schemaVersion": 2}, "Unsupported physical observation schema"),
+])
+def test_identified_physical_observation_requires_matching_level_and_schema(tmp_path, smoke, change, error):
+    capture = {
+        "schemaVersion": 1, "tuple": smoke["tuple"], "provenance": smoke["provenance"],
+        "evidenceLevel": smoke["evidenceLevel"], **change,
+    }
+    data = json.dumps(capture).encode()
+    digest = hashlib.sha256(data).hexdigest()
+    (tmp_path / digest).write_bytes(data)
+    with pytest.raises(ValueError, match=error):
+        xr.verify_physical_observations(tmp_path, smoke, {digest})
+
+
+@pytest.mark.parametrize(("data", "error"), [
+    (b'{"schemaVersion": 1, "schemaVersion": 1}', "Invalid physical observation JSON"),
+    (b'\xef\xbb\xbf{"tuple":', "Invalid physical observation JSON"),
+    (b'{"schemaVersion": 1, "evidenceLevel": "PhysicalDeviceQualification"}', "missing qualification identity"),
+    (b'{"data": "redacted observation"}', None),
+    pytest.param(b' ' * (1024 * 1024) + b'{"tuple": {}}', "Physical observation JSON exceeds the size limit",
+                 id="oversized-json"),
+    pytest.param(b'redacted log\n' * xr.MAX_RECORD_BYTES, None, id="large-opaque-log"),
+])
+def test_observation_preserves_opaque_data_and_validates_structured_evidence(tmp_path, smoke, data, error):
+    digest = hashlib.sha256(data).hexdigest()
+    (tmp_path / digest).write_bytes(data)
+    if error is None:
+        xr.verify_physical_observations(tmp_path, smoke, {digest})
+    else:
+        with pytest.raises(ValueError, match=error):
+            xr.verify_physical_observations(tmp_path, smoke, {digest})
+
+
 def test_android_system_build_digest_is_scoped_to_standalone_android(smoke):
     smoke["provenance"]["androidDeviceBuildSha256"] = DIGEST
     with pytest.raises(ValueError, match="requires a standalone Android tuple"):

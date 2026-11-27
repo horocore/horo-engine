@@ -171,6 +171,31 @@ def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(re
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(("substitute", "reason"), [
+    ("buildSha256", "Physical observation refers to a product build or package receipt"),
+    ("packageReceiptSha256", "Physical observation refers to a product build or package receipt"),
+    ("SimulatorReplay", "Physical observation must identify physical evidence"),
+])
+def test_input_evidence_requires_an_actual_physical_observation(release, substitute, reason):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    receipt = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
+    if substitute in record["tuple"]:
+        observation = record["tuple"][substitute]
+    else:
+        capture = {field: receipt[field] for field in ("schemaVersion", "tuple", "provenance")}
+        capture["evidenceLevel"] = substitute
+        observation = store(evidence, json.dumps(capture).encode())
+    receipt["artifactSha256"] = observation
+    record["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(receipt).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert reason in result.stderr
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_receipt_bytes_cannot_be_rewrapped_as_observation_for_another_run(release, reverse):
     matrix, evidence = release

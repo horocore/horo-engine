@@ -125,8 +125,11 @@ run. Other claimed tuples in the same matrix require their own observations,
 including when they connect to the same headset in a different mode.
 Each generic check receipt references the observation bytes directly. Both
 checkers reject a JSON check receipt used as an observation, including receipts
-outside the declared check set. A bounded JSON observation with a qualification
-tuple and provenance must identify the same product tuple and smoke run.
+outside the declared check set. JSON observations must fit the 64 KiB record
+limit. An observation with a qualification identity must use schema version 1
+and identify the same product tuple and smoke run. If it declares an evidence
+level, use `PhysicalDeviceQualification`.
+The product build and package receipt cannot serve as an observation.
 Display, render-timing, and required mixed-reality captures also belong to the
 original run and cannot be referenced as another tuple's physical observation.
 For older smoke records, create receipts from the original
