@@ -158,6 +158,7 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     {
         const Horo::Log::LogContext request("correlation.id", "request-42", "asset.id", "mesh-7");
         const Horo::Log::LogContext credentials("request.X-API-Key", "private-context-value");
+        const Horo::Log::LogContext gaze("xr.gaze_origin", "private-gaze-origin");
         forwarded = Horo::Log::CaptureLogContext();
     }
     std::thread worker([forwarded] {
@@ -169,6 +170,8 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
             Horo::Telemetry::Field{.key = "detail", .value = std::string{"quote=\" newline=\n"}},
             Horo::Telemetry::Field{.key = "auth.token", .value = std::string{"must-not-persist"}},
             Horo::Telemetry::Field{.key = "auth.privateKey", .value = std::string{"private-field-value"}},
+            Horo::Telemetry::Field{.key = "xr.camera-frame", .value = std::string{"private-camera-frame"}},
+            Horo::Telemetry::Field{.key = "xr.frame_count", .value = std::uint64_t{3}},
             Horo::Telemetry::Field{.key = "internal.pointer",
                                    .value = std::string{"forbidden"},
                                    .privacy = Horo::Telemetry::FieldPrivacy::Forbidden},
@@ -197,6 +200,11 @@ TEST_CASE("Asynchronous logger writes structured severity category timestamp and
     REQUIRE(log.find(R"("auth.token":"[REDACTED]")") != std::string::npos);
     CHECK(log.find(R"("request.X-API-Key":"[REDACTED]")") != std::string::npos);
     CHECK(log.find(R"("auth.privateKey":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.gaze_origin":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.camera-frame":"[REDACTED]")") != std::string::npos);
+    CHECK(log.find(R"("xr.frame_count":3)") != std::string::npos);
+    CHECK(log.find("private-gaze-origin") == std::string::npos);
+    CHECK(log.find("private-camera-frame") == std::string::npos);
     CHECK(log.find("private-context-value") == std::string::npos);
     CHECK(log.find("private-field-value") == std::string::npos);
     REQUIRE(log.find("must-not-persist") == std::string::npos);
@@ -1369,7 +1377,8 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     partialRecord.resize(partialRecord.size() - 2);
     std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret",)"
                                 << R"("headers":{"X-API-Key":"private-header","keyName":"public-name"},)"
-                                << R"("config":{"apiKey":"private-option","private_key":"private-material"}})" << '\n'
+                                << R"("config":{"apiKey":"private-option","private_key":"private-material"},)"
+                                << R"("cause":{"xr.environment_geometry":[{"vertex":"room-point"}],"speechTranscript":"spoken-private","sampleCount":4}})" << '\n'
                                 << partialRecord;
 
     const auto recovered = Horo::Diagnostics::GenerateDiagnosticBundle({
@@ -1394,6 +1403,11 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     CHECK(extracted.find(R"("X-API-Key":"[REDACTED]")") != std::string::npos);
     CHECK(extracted.find(R"("apiKey":"[REDACTED]")") != std::string::npos);
     CHECK(extracted.find(R"("private_key":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("xr.environment_geometry":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("speechTranscript":"[REDACTED]")") != std::string::npos);
+    CHECK(extracted.find(R"("sampleCount":4)") != std::string::npos);
+    CHECK(extracted.find("room-point") == std::string::npos);
+    CHECK(extracted.find("spoken-private") == std::string::npos);
     CHECK(extracted.find("public-name") != std::string::npos);
     REQUIRE(extracted.find("interrupted") == std::string::npos);
 

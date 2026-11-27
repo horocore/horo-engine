@@ -1008,6 +1008,9 @@ failure states.
   insufficient.
 - Raw joints/gaze and continuous pose history are excluded from ordinary logs, crash
   dumps, metrics, replay, analytics, AI context and support bundles.
+- Structured log admission and support-bundle export redact named capture
+  fields, including camera frames, gaze, joint and pose history, speech, and
+  environment geometry. Diagnostic producers publish allowed summaries only.
 - Permission revocation removes derived capability state and invalidates
   outstanding work.
 - Signed OpenXR Setup checks eye-gaze hardware support using the selected
