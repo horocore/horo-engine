@@ -225,7 +225,7 @@ namespace Horo::Agent {
                     if (stop.Token().stop_requested() || !context.CheckFreshness() || !stream.Accept(event))
                         return false;
                     if (observeText && event.kind == ModelEventKind::TextDelta) {
-                        if (!context.Check())
+                        if (!context.Check() || stop.Status())
                             return false;
                         observeText(event.text);
                     }
@@ -285,6 +285,10 @@ namespace Horo::Agent {
             if (!progress.context.Check()) {
                 ReportToolActivity(progress.observeTool, {ordinal, ContextDenied});
                 return ContextDenied;
+            }
+            if (const auto stopped = progress.stop.Status()) {
+                ReportToolActivity(progress.observeTool, {ordinal, *stopped});
+                return *stopped;
             }
             AgentTurnStatus state{ToolFailed};
             try {

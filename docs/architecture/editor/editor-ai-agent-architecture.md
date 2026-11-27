@@ -317,6 +317,8 @@ Ownership rules:
   A proposed mutation requires the exact authoring document opening and revision.
   The review rechecks authority after each live target inspection so an
   invalidated draft cannot inspect additional targets.
+  The shared turn runtime also rechecks the deadline and cancellation after
+  context validation, before handing off a tool call or showing a live text delta.
   The desktop viewport keeps committed geometry in place and appends tinted,
   non-pickable copies at proposed transforms. The copies carry no object or
   motion-history identity. If the renderer's draw budget cannot hold the

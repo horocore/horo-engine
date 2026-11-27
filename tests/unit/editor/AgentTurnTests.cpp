@@ -43,6 +43,21 @@ namespace Horo::Agent {
 
         using TestSupport::Tools;
 
+        /** @brief Records whether the runtime crosses the tool dispatch boundary. */
+        struct DispatchProbe final : IAgentTurnTools {
+            bool ValidArguments(std::string_view) const override {
+                return true;
+            }
+
+            AgentTurnStatus Run(std::uint64_t, std::size_t, const ModelToolIntent &, std::chrono::steady_clock::time_point,
+                                std::stop_token, std::string &) const override {
+                ++calls;
+                return AgentTurnStatus::Completed;
+            }
+
+            mutable unsigned calls{};
+        };
+
         /** @brief Forms one inert response intent for the registered query. */
         ModelEvent Intent(std::string id, std::string arguments = "{}") {
             return {.kind = ModelEventKind::ToolIntent, .tool = {std::move(id), "scene.inspect", std::move(arguments)}};
@@ -215,6 +230,56 @@ namespace Horo::Agent {
         CHECK(result.status == AgentTurnStatus::ContextDenied);
         CHECK(result.messages.empty());
         CHECK(tools.scene->calls == 0);
+    }
+
+    TEST_CASE("Editor Agent stops dispatch when the final context check cancels the turn", "[agent][turn]") {
+        DispatchProbe tools;
+        Model model;
+        model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
+            return Emit(sink, {Intent("inspect"), {.kind = ModelEventKind::Completed}});
+        };
+        std::stop_source stop;
+        bool dispatchPending{};
+        AgentTurnRuntime runtime{[&] {
+            if (dispatchPending)
+                stop.request_stop();
+            return true;
+        }};
+        std::vector<AgentToolActivity> activity;
+        const auto result = runtime.Run(model, &tools, 1, Request(true), {}, stop.get_token(), nullptr, {},
+                                        [&](const AgentToolActivity &event) {
+                                            dispatchPending = !event.outcome;
+                                            activity.push_back(event);
+                                        });
+        CHECK(result.status == AgentTurnStatus::Cancelled);
+        CHECK(result.messages.empty());
+        CHECK(tools.calls == 0);
+        REQUIRE(activity.size() == 2);
+        CHECK(activity.back().ordinal == activity.front().ordinal);
+        CHECK(activity.back().outcome == AgentTurnStatus::Cancelled);
+    }
+
+    TEST_CASE("Editor Agent withholds a text delta if context validation cancels the turn", "[agent][turn]") {
+        Model model;
+        bool emitting{};
+        model.action = [&](std::size_t, const ModelEventSink &sink, std::stop_token) {
+            emitting = true;
+            return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = "Withdrawn"}, {.kind = ModelEventKind::Completed}});
+        };
+        std::stop_source stop;
+        unsigned checks{};
+        AgentTurnRuntime runtime{[&] {
+            if (emitting && ++checks == 2)
+                stop.request_stop();
+            return true;
+        }};
+        unsigned deltas{};
+        const auto result = runtime.Run(model, nullptr, 1, Request(), {}, stop.get_token(), nullptr, [&](std::string_view) {
+            ++deltas;
+        });
+        CHECK(result.status == AgentTurnStatus::Cancelled);
+        CHECK(result.messages.empty());
+        CHECK(deltas == 0);
     }
 
     TEST_CASE("Editor Agent discards malformed sibling intents before making any tool visible", "[agent][turn]") {
