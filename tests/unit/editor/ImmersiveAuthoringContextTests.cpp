@@ -452,10 +452,8 @@ namespace Horo::Editor {
         TEST_CASE("Immersive planning uses the live editor session's project and tool grants", "[agent][immersive][turn][plan]") {
             using enum Agent::AgentTurnStatus;
             constexpr std::string_view projectIdentity = "project-one";
-            const auto identity = Opening();
+            auto identity = Opening();
             ImmersiveAuthoringContext owner;
-            const auto context = owner.Publish(identity, {});
-            REQUIRE(context);
 
             std::size_t staged{};
             std::function<bool()> viewportAuthority;
@@ -499,6 +497,26 @@ namespace Horo::Editor {
             const std::array tools{std::string{"scene.propose_edits"}};
             const std::array ungranted{std::string{"inspect.transforms"}};
             CancellationSource toolApproval;
+            const auto unbound = owner.Publish(identity, {});
+            REQUIRE(unbound);
+            CHECK_FALSE(owner.CaptureMcpCatalog(*unbound, session, projectIdentity, tools, toolApproval.Token()));
+            identity.commandSession = session.SessionKey();
+            const auto context = owner.Publish(identity, {});
+            REQUIRE(context);
+            CHECK_FALSE(unbound->IsCurrent());
+            auto other = EditorCommandMcpSession::Create({.inspection = endpoint},
+                                                         {"other-immersive-fixture",
+                                                          std::string{projectIdentity},
+                                                          3,
+                                                          {std::string{EditorSceneProposalGrant}}},
+                                                         Mcp::Test::Authorization());
+            REQUIRE(other.HasValue());
+            REQUIRE(other.Value()->SessionKey() != session.SessionKey());
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, *other.Value(), projectIdentity, tools, toolApproval.Token()));
+            CHECK_FALSE(owner.CapturePlan(*context, Prompt(), projectIdentity));
+            const std::vector<std::string> granted{std::string{EditorSceneProposalGrant}};
+            Agent::TestSupport::Tools bareRegistry{Mcp::McpToolEffect::PresentationSideEffect, granted};
+            CHECK_FALSE(owner.CaptureMcpCatalog(*context, bareRegistry.registry, granted, tools, toolApproval.Token()));
             CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, "other-project", tools, toolApproval.Token()));
             CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, projectIdentity, ungranted, toolApproval.Token()));
             CHECK_FALSE(owner.CaptureMcpCatalog(*context, session, projectIdentity, tools, {}));

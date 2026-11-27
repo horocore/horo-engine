@@ -392,7 +392,9 @@ inference and tool inspection times remain available on terminal outcomes for
 stages that ran, including when the draft is discarded.
 The immersive MCP tool catalog is admitted for one exact authoring generation.
 An unchanged registry and tool grant cannot carry that catalog into a new
-project, document revision or mode.
+project, document revision or mode. An authenticated Editor workflow also binds
+the context to the exact MCP principal, session and generation. A second session
+for the same project must publish its own context and obtain its own approval.
 
 The `[immersive][replay]` case in `HoroEditorAgentTurnTests` runs the Simulate
 path from synthetic speech and a measured controller press through the

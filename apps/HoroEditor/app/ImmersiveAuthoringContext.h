@@ -3,6 +3,7 @@
 /** @file ImmersiveAuthoringContext.h @brief Editor-owned immersive planning generations. */
 
 #include "AgentTurn.h"
+#include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Scene/SceneSourceModel.h"
 #include "Horo/XR/XRIdentity.h"
@@ -61,7 +62,8 @@ namespace Horo::Editor {
         std::uint64_t worldGeneration{}; /**< Required for a disposable simulation or Play world. */
         bool planningAllowed{};
         bool diagnosticsAllowed{};
-        bool localSpeechOnly{}; /**< Local Play diagnostics. No model, conversation or tool authority. */
+        bool localSpeechOnly{};                /**< Local Play diagnostics. No model, conversation or tool authority. */
+        WorkspaceMcpSessionKey commandSession; /**< Exact authenticated Editor session for command-bound planning. */
         bool operator==(const ImmersiveContextIdentity &) const noexcept = default;
     };
 
@@ -276,11 +278,13 @@ namespace Horo::Editor {
          * @return Owned inert planner or empty for invalid scope, stale catalog or payload.
          */
         [[nodiscard]] std::optional<ImmersiveAgentRequest> CaptureMcpPlan(const ImmersivePlanningContext &context,
-                                                                          Agent::ModelRequest request,
-                                                                          const ImmersiveMcpCatalog &catalog,
+                                                                          Agent::ModelRequest request, const ImmersiveMcpCatalog &catalog,
                                                                           std::string_view projectIdentity = {}) const;
 
     private:
+        [[nodiscard]] std::optional<ImmersiveAgentRequest> CapturePlanRequest(const ImmersivePlanningContext &context,
+                                                                              Agent::ModelRequest &&request,
+                                                                              std::string_view projectIdentity) const;
         std::shared_ptr<ImmersiveContextEpoch> epoch_;
         std::optional<ImmersivePlanningContext> current_;
         std::uint64_t generation_{};
