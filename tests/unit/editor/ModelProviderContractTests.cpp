@@ -221,6 +221,28 @@ TEST_CASE("Local model discovery rejects malformed loopback authorities before t
     }
 }
 
+TEST_CASE("The approved scene turn preserves tool probe throttling and cancellation", "[agent][model][http]") {
+    const ModelProviderConfig config{.endpoint = Endpoint(), .timeout = std::chrono::seconds{2}};
+    auto entropy = std::make_shared<Horo::Mcp::Test::Entropy>();
+    const auto observe = [](const AgentToolActivity) {
+        FAIL_CHECK("A rejected capability probe must not run the scene tool");
+    };
+    const auto throttled = RunApprovedLocalSceneTurn(config, Request("editor-throttled-tool-probe"), 9, 3, entropy, {}, observe);
+    CHECK(throttled.status == AgentTurnStatus::ProviderFailed);
+    CHECK(throttled.providerError == ModelErrorCode::RateLimited);
+    CHECK(throttled.retryAfter == std::chrono::seconds{30});
+    CHECK(throttled.messages.empty());
+
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    const auto cancelled =
+        RunApprovedLocalSceneTurn(config, Request("editor-approved-tool"), 10, 3, entropy, cancellation.get_token(), observe);
+    CHECK(cancelled.status == AgentTurnStatus::Cancelled);
+    CHECK_FALSE(cancelled.providerError);
+    CHECK_FALSE(cancelled.retryAfter);
+    CHECK(cancelled.messages.empty());
+}
+
 TEST_CASE("Local editor inference reports unavailable or missing models and the same provider recovers", "[agent][model][http]") {
     auto provider = Create(false);
     AgentTurnRuntime runtime;

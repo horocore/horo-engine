@@ -645,6 +645,32 @@ namespace {
 #endif
     }
 
+    TEST_CASE("A throttled scene tool probe blocks provider retries without charging quota", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        LocalAgentFixture fixture{"en-US", [](PanelContext &context) {
+            context.sceneObjectCount = [] {
+                return std::size_t{3};
+            };
+        }, {}, {.limits = {.session = 2}}};
+        const auto shows = [&](std::string_view message) {
+            return fixture.DrawnText().find(message) != std::string::npos;
+        };
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-throttled-tool-probe");
+        fixture.Enter("##Prompt", "Count the objects");
+        fixture.Activate("###scene_query_review");
+        fixture.Activate("###ask_with_scene_count");
+        REQUIRE(Await([&] {
+            return shows("The local provider limited requests.");
+        }));
+        CHECK(shows("Editor session AI operations 1/2"));
+        fixture.Activate("###discover");
+        CHECK(shows("The local provider limited requests."));
+        CHECK(shows("Editor session AI operations 1/2"));
+    }
+
     TEST_CASE("Revoking the scene query stops the admitted turn before the model can run the tool", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         const auto *gateName = std::getenv("HORO_MODEL_TEST_CHAT_GATE");

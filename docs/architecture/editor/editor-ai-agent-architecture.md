@@ -1246,7 +1246,9 @@ background retries, silently switch data residency, or mutate scene state.
 HTTP model adapters expose a positive `Retry-After` on a throttled response as
 an optional duration, capped at five minutes so a remote hint cannot suspend an
 editor route indefinitely. The panel uses a monotonic deadline for the configured
-provider and endpoint. Until it expires, explicit discovery and model turn retries
+provider and endpoint. A throttled capability probe for an approved scene tool
+uses that same deadline and stops before opening the tool session. Until the
+deadline expires, explicit discovery and model turn retries
 for that route consume no additional quota. Speech and other routes retain their
 own admission paths. An absent hint leaves existing manual retry behavior intact.
 Cancellation and shutdown revoke retries and release provider work. While a

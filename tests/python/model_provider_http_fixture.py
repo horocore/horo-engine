@@ -47,6 +47,9 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length))
         if self.path == "/api/show":
+            if payload == {"model": "editor-throttled-tool-probe"} and self.headers.get("Authorization") is None:
+                self.send_records(["{}"], status=429, retry_after="30")
+                return
             if self.headers.get("Authorization") is not None or payload not in ({"model": "editor-approved-tool"}, {"model": "normal"}):
                 self.send_records(["{}"], status=400)
                 return

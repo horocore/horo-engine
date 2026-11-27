@@ -96,8 +96,13 @@ namespace Horo::Agent {
                                               const LocalSceneAuditObserver &observeAudit) {
         if (!request.tools.empty() || turnId == 0)
             return {AgentTurnStatus::InvalidRequest};
-        if (const auto supported = ConfirmOllamaModelTools(config, request.model, stop); !supported.Succeeded())
-            return {.status = AgentTurnStatus::ProviderFailed, .providerError = supported.error->code};
+        const auto supported = ConfirmOllamaModelTools(config, request.model, stop);
+        if (stop.stop_requested())
+            return {AgentTurnStatus::Cancelled};
+        if (!supported.Succeeded()) {
+            const auto &failure = *supported.error;
+            return {.status = AgentTurnStatus::ProviderFailed, .providerError = failure.code, .retryAfter = failure.retryAfter};
+        }
         const Json input = {{"type", "object"}, {"additionalProperties", false}};
         const auto session = OpenSceneTool(objectCount, input, std::move(entropy), observeAudit);
         if (session.HasError())
