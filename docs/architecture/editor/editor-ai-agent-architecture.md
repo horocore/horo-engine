@@ -199,8 +199,10 @@ Ownership rules:
   measurement around its XR cutoff. XR timestamps order publications within
   that session. Uncertain phrase boundaries and overlapping observations fail
   explicitly. Missing spatial evidence produces a speech-only result. The
-  envelope retains the speech lease and rechecks XR origin and binding revisions
-  when the editor adopts it.
+  envelope retains the speech lease and rechecks the spatial capture lifetime,
+  XR origin and binding revisions when the editor adopts it. A retired spatial
+  capture invalidates the combined envelope until the editor discards its
+  spatial observations. The local transcript can then remain available.
 - The native XR Input owner brackets its actual runtime time sample when the
   host supplies an admitted Audio capture clock. It publishes that interval
   only with the matching committed pose cutoff. A separate interval brackets

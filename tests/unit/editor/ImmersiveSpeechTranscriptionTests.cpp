@@ -1173,9 +1173,11 @@ namespace Horo::Editor {
                 CHECK(aligned.envelope->Spatial().size() == 1);
                 capture.RetirePointingSource();
                 CHECK(reviewLifetime.IsCancellationRequested());
+                CHECK_FALSE(aligned.envelope->IsCurrent(sample.cutoff));
                 aligned.envelope->DiscardRetiredSpatial();
                 CHECK(aligned.envelope->Spatial().empty());
                 CHECK(aligned.envelope->IsCurrent());
+                CHECK(aligned.envelope->IsCurrent(sample.cutoff));
                 CHECK(aligned.envelope->Speech().Hypothesis().text == Transcript().text);
             }
             CHECK(capture.PointingSourceRetired());

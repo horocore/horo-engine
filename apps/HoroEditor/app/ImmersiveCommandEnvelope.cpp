@@ -257,7 +257,7 @@ namespace Horo::Editor {
     /** @copydoc ImmersiveCommandEnvelope::IsCurrent */
     bool ImmersiveCommandEnvelope::IsCurrent(const XR::XRInteractionCutoff &cutoff) const noexcept {
         return speech_.IsCurrent() && cutoff.session == speech_.Context().Identity().xrSession &&
-               (count_ == 0 || BelongsToHistory(cutoff_, cutoff));
+               (count_ == 0 || (!spatialLifetime_.IsCancellationRequested() && BelongsToHistory(cutoff_, cutoff)));
     }
 
     /** @copydoc ImmersiveCommandEnvelope::DiscardRetiredSpatial */
@@ -314,6 +314,8 @@ namespace Horo::Editor {
                 continue;
             observations_[count_++] = sample;
         }
+        if (history.lifetime.IsCancellationRequested())
+            return InvalidSpatialEvidence;
         cutoff_ = history.cutoff;
         spatialLifetime_ = history.lifetime;
         return count_ ? Aligned : SpeechOnly;
