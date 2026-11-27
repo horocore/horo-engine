@@ -972,11 +972,18 @@ namespace Horo::Editor {
                 CHECK(capture.RecordPointing(sample) == RecordStatus::PointingSourceRetired);
                 capture.Seal();
             }
-            SECTION("the pointer is replaced during final recognition or presentation") {
+            SECTION("the pointer is replaced after the panel receives the final result") {
                 capture.Seal();
                 const auto aligned = capture.AssemblePreview(speech, sample.cutoff);
                 REQUIRE(aligned.status == CommandStatus::Aligned);
+                REQUIRE(aligned.envelope);
+                REQUIRE(aligned.envelope->Spatial().size() == 1);
+                const auto reviewLifetime = aligned.envelope->SpatialLifetime();
+                CHECK_FALSE(reviewLifetime.IsCancellationRequested());
                 capture.RetirePointingSource();
+                CHECK(reviewLifetime.IsCancellationRequested());
+                CHECK(aligned.envelope->Spatial().empty());
+                CHECK(aligned.envelope->Speech().Hypothesis().text == Transcript().text);
             }
             CHECK(capture.PointingSourceRetired());
             const auto preview = capture.AssemblePreview(speech, sample.cutoff);
@@ -988,6 +995,37 @@ namespace Horo::Editor {
             capture.Begin(context);
             CHECK_FALSE(capture.PointingSourceRetired());
             CHECK(capture.RecordPointing(sample) == RecordStatus::Recorded);
+        }
+
+        TEST_CASE("A fresh or destroyed spatial capture withdraws derived evidence", "[agent][immersive][speech]") {
+            SpeechFixture fixture;
+            const auto speech = FinalEvidence(fixture);
+            const auto context = fixture.Context();
+            auto sample = SpatialObservation(context, 1, 1'005'000, 1'015'000);
+            sample.controllerPress = ImmersiveControllerPress{sample.earliest, sample.latest};
+            std::optional<ImmersiveCommandEnvelope> retained;
+            {
+                ImmersiveSpatialCapture capture;
+                capture.Begin(context);
+                REQUIRE(capture.RecordPointing(sample) == ImmersiveSpatialCaptureStatus::Recorded);
+                capture.Seal();
+                retained = capture.Assemble(speech, sample.cutoff).envelope;
+                REQUIRE(retained);
+                const auto prior = retained->SpatialLifetime();
+
+                capture.Begin(context);
+                CHECK(prior.IsCancellationRequested());
+                CHECK(retained->Spatial().empty());
+                REQUIRE(capture.RecordPointing(sample) == ImmersiveSpatialCaptureStatus::Recorded);
+                capture.Seal();
+                retained = capture.Assemble(speech, sample.cutoff).envelope;
+                REQUIRE(retained);
+                CHECK(retained->Spatial().size() == 1);
+                CHECK_FALSE(retained->SpatialLifetime().IsCancellationRequested());
+            }
+            CHECK(retained->SpatialLifetime().IsCancellationRequested());
+            CHECK(retained->Spatial().empty());
+            CHECK(retained->Speech().Hypothesis().text == Transcript().text);
         }
 
         TEST_CASE("Immersive listening never assembles a truncated spatial history", "[agent][immersive][speech]") {

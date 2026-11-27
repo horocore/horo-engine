@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <new>
 #include <utility>
 
 namespace Horo::Editor {
@@ -274,6 +275,8 @@ namespace Horo::Editor {
                                                                    const SpeechHypothesisView &phrase) noexcept {
         if (history.observations.size() > MaximumObservations)
             return CapacityExceeded;
+        if (history.lifetime.IsCancellationRequested())
+            return InvalidSpatialEvidence;
         if (!speech_.Context().SharesGeneration(history.context) || history.cutoff.session != history.context.Identity().xrSession)
             return StaleEvidence;
 
@@ -293,7 +296,20 @@ namespace Horo::Editor {
             observations_[count_++] = sample;
         }
         cutoff_ = history.cutoff;
+        spatialLifetime_ = history.lifetime;
         return count_ ? Aligned : SpeechOnly;
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::~ImmersiveSpatialCapture */
+    ImmersiveSpatialCapture::~ImmersiveSpatialCapture() {
+        RevokeSpatialLifetime();
+    }
+
+    /** @copydoc ImmersiveSpatialCapture::RevokeSpatialLifetime */
+    void ImmersiveSpatialCapture::RevokeSpatialLifetime() noexcept {
+        if (spatialLifetime_)
+            spatialLifetime_->RequestCancellation();
+        spatialLifetime_.reset();
     }
 
     /** @copydoc ImmersiveSpatialCapture::Begin */
@@ -340,13 +356,23 @@ namespace Horo::Editor {
 
     /** @copydoc ImmersiveSpatialCapture::Seal */
     void ImmersiveSpatialCapture::Seal() noexcept {
+        if (sealed_)
+            return;
         sealed_ = true;
+        if (count_ == 0 || failure_)
+            return;
+        try {
+            spatialLifetime_.emplace();
+        } catch (const std::bad_alloc &) {
+            failure_ = ImmersiveSpatialCaptureStatus::CapacityExceeded;
+        }
     }
 
     /** @copydoc ImmersiveSpatialCapture::RetirePointingSource */
     void ImmersiveSpatialCapture::RetirePointingSource() noexcept {
         if (count_ == 0)
             return;
+        RevokeSpatialLifetime();
         std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});
         count_ = 0;
         failure_ = ImmersiveSpatialCaptureStatus::PointingSourceRetired;
@@ -372,8 +398,10 @@ namespace Horo::Editor {
             return {InvalidSpatialEvidence, {}};
         if (count_ == 0)
             return ImmersiveCommandEnvelope::Assemble(*context_, speech);
+        // A sealed, nonempty batch gets its own lifetime before it can be published.
         return ImmersiveCommandEnvelope::Assemble(*context_, speech,
-                                                  ImmersiveSpatialHistoryView{*context_, cutoff, std::span{observations_}.first(count_)});
+                                                  ImmersiveSpatialHistoryView{*context_, cutoff, std::span{observations_}.first(count_),
+                                                                              spatialLifetime_->Token()});
     }
 
     /** @copydoc ImmersiveSpatialCapture::AssemblePreview */
@@ -398,6 +426,7 @@ namespace Horo::Editor {
 
     /** @copydoc ImmersiveSpatialCapture::Reset */
     void ImmersiveSpatialCapture::Reset() noexcept {
+        RevokeSpatialLifetime();
         std::ranges::fill(std::span{observations_}.first(count_), ImmersiveSpatialObservation{});
         count_ = 0;
         context_.reset();

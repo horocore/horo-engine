@@ -45,6 +45,7 @@ namespace Horo::Editor {
         struct ReferenceReview final {
             AgentSceneReferenceReview scene;
             bool hasMissedPress{};
+            CancellationToken spatialLifetime{}; /**< Empty for editor selection; withdrawn when the XR source retires. */
         };
 
         /** @brief Reads the captured selection or aligned pointing candidates on the workspace owner lane. */

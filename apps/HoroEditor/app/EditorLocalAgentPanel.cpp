@@ -723,7 +723,8 @@ namespace Horo::Editor {
                 const auto width = ImGui::GetContentRegionAvail().x;
                 const auto &fonts = context.theme.fonts;
                 const bool pointing = source != AgentSceneReferenceSource::Selection;
-                if (!listeningReferences_ || !agentSceneReferencesCurrent_ || !agentSceneReferencesCurrent_(listeningReferences_->scene)) {
+                if (!listeningReferences_ || !agentSceneReferencesCurrent_ || !agentSceneReferencesCurrent_(listeningReferences_->scene) ||
+                    listeningReferences_->spatialLifetime.IsCancellationRequested()) {
                     listeningReferences_.reset();
                     Ui::WrappedText(width, LocalizedText(locale, pointing ? "xr_pointing_unavailable" : "xr_reference_stale"),
                                     Theme::Muted(), fonts);

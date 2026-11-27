@@ -333,7 +333,10 @@ Destroyed, stale, cross-project, hidden, locked, or unauthorized identities are
 rejected before planning.
 The retained Play reference review remains visible only while its document
 opening, selection, live Scene topology, and mounted or authored source still
-match. The panel checks those revisions without rescanning the candidates.
+match. Pointing and location reviews also retain the exact spatial capture
+lifetime. Losing or replacing its pointer withdraws retained observations and
+their derived reviews while the final transcript and selection remain available.
+The panel checks these lifetimes without rescanning the candidates.
 Reference requests must carry the cancellation token from their
 `AgentSceneSelectionSnapshot`. Both reference and contact reviews retain that
 workspace lifetime. Switching the mounted or authored Play source revokes the

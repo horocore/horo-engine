@@ -38,10 +38,11 @@ namespace Horo::Editor {
                     captured[index] = pointing->hits[index].object.value;
                 request.objects = captured;
             }
+            const auto spatialLifetime = preview.SpatialLifetime();
             auto scene = review(request);
-            if (!scene)
+            if (!scene || spatialLifetime.IsCancellationRequested())
                 return std::nullopt;
-            return EditorImmersiveListening::ReferenceReview{std::move(*scene), pointing->hasMissedPress};
+            return EditorImmersiveListening::ReferenceReview{std::move(*scene), pointing->hasMissedPress, spatialLifetime};
         }
     }  // namespace
 

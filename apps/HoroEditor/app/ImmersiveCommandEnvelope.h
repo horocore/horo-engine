@@ -2,6 +2,7 @@
 
 /** @file ImmersiveCommandEnvelope.h @brief Editor-owned alignment of speech and admitted spatial evidence. */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRPlaneTracking.h"
 #include "ImmersiveSpeechTranscription.h"
@@ -81,6 +82,7 @@ namespace Horo::Editor {
         const ImmersivePlanningContext &context;
         XR::XRInteractionCutoff cutoff;
         std::span<const ImmersiveSpatialObservation> observations;
+        CancellationToken lifetime{}; /**< Retired when the capture loses the source of these observations. */
     };
 
     enum class ImmersivePointingReviewKind : std::uint8_t {
@@ -148,9 +150,14 @@ namespace Horo::Editor {
 
         [[nodiscard]] const ImmersiveSpeechEvidence &Speech() const && = delete;
 
-        /** @brief Borrows aligned observations while their speech lease remains current. */
+        /** @brief Reads the spatial lifetime to fence derived references retained by the editor. */
+        [[nodiscard]] CancellationToken SpatialLifetime() const noexcept {
+            return spatialLifetime_;
+        }
+
+        /** @brief Borrows aligned observations while their speech and spatial lifetimes remain current. */
         [[nodiscard]] std::span<const ImmersiveSpatialObservation> Spatial() const & noexcept {
-            return std::span{observations_}.first(speech_.IsCurrent() ? count_ : 0);
+            return std::span{observations_}.first(speech_.IsCurrent() && !spatialLifetime_.IsCancellationRequested() ? count_ : 0);
         }
 
         [[nodiscard]] std::span<const ImmersiveSpatialObservation> Spatial() const && = delete;
@@ -163,6 +170,7 @@ namespace Horo::Editor {
 
         ImmersiveSpeechEvidence speech_;
         XR::XRInteractionCutoff cutoff_;
+        CancellationToken spatialLifetime_;
         std::array<ImmersiveSpatialObservation, MaximumObservations> observations_{};
         std::size_t count_{};
     };
@@ -188,6 +196,12 @@ namespace Horo::Editor {
      */
     class ImmersiveSpatialCapture final {
     public:
+        ImmersiveSpatialCapture() = default;
+        ImmersiveSpatialCapture(const ImmersiveSpatialCapture &) = delete;
+        ImmersiveSpatialCapture &operator=(const ImmersiveSpatialCapture &) = delete;
+        /** @brief Withdraws any evidence retained after this capture is destroyed. */
+        ~ImmersiveSpatialCapture();
+
         /** @brief Clears the last operation and opens one capture using the exact current planning generation. */
         void Begin(const ImmersivePlanningContext &context) noexcept;
 
@@ -203,7 +217,7 @@ namespace Horo::Editor {
         /** @brief Reports whether this capture lost the source of its recorded points. */
         [[nodiscard]] bool PointingSourceRetired() const noexcept;
 
-        /** @brief Stops recording before the detached speech worker produces its final result. */
+        /** @brief Stops recording and creates a revocable lifetime for the frozen batch. */
         void Seal() noexcept;
 
         /** @brief Assembles final evidence using the latest cutoff from the same XR owner. */
@@ -218,7 +232,11 @@ namespace Horo::Editor {
         void Reset() noexcept;
 
     private:
+        /** @brief Withdraws the lifetime shared by the frozen batch and its retained reviews. */
+        void RevokeSpatialLifetime() noexcept;
+
         std::optional<ImmersivePlanningContext> context_;
+        std::optional<CancellationSource> spatialLifetime_;
         std::array<ImmersiveSpatialObservation, ImmersiveCommandEnvelope::MaximumObservations> observations_{};
         std::size_t count_{};
         bool sealed_{};
