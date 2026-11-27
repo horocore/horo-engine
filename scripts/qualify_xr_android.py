@@ -53,8 +53,9 @@ def validate_android_preflight(value: object) -> dict:
 
 
 def check_android_artifact(artifact: object, expected: dict, profile: dict, revision: str, abi: str) -> None:
-    artifact = receipt_fields(artifact, {"apkSha256", "sourceRevision", "profile", "provenanceSha256", "openxr", "openxrImages"},
-                              {"expectedApkSha256", "applicationId", "declaredRenderer", "abis"}, "Android preflight artifact")
+    artifact = receipt_fields(artifact, {"apkSha256", "sourceRevision", "profile", "provenanceSha256", "openxr", "openxrImages",
+                                         "applicationId", "declaredRenderer", "abis"},
+                              {"expectedApkSha256"}, "Android preflight artifact")
     require(artifact.get("apkSha256") == expected["apkSha256"], "Android preflight uses a different diagnostic APK")
     require(artifact.get("sourceRevision") == revision, "Android preflight is from another source revision")
     require(artifact.get("profile") == expected["profile"], "Android preflight uses a different diagnostic profile")
@@ -67,11 +68,9 @@ def check_android_artifact(artifact: object, expected: dict, profile: dict, revi
             "Invalid Android preflight image digests")
     require(artifact.get("expectedApkSha256", expected["apkSha256"]) == expected["apkSha256"],
             "Android preflight expected a different diagnostic APK")
-    application = profile["applicationId"]
-    require(artifact.get("applicationId", application) == application, "Invalid Android preflight application")
-    renderer = profile["renderer"]
-    require(artifact.get("declaredRenderer", renderer) == renderer, "Invalid Android cold discovery renderer")
-    abis = artifact.get("abis", [abi])
+    require(artifact["applicationId"] == profile["applicationId"], "Invalid Android preflight application")
+    require(artifact["declaredRenderer"] == profile["renderer"], "Invalid Android cold discovery renderer")
+    abis = artifact["abis"]
     supported_abis = profile["abis"]
     require(isinstance(abis, list) and 1 <= len(abis) <= len(supported_abis)
             and all(candidate in supported_abis for candidate in abis) and abi in abis and abis == sorted(set(abis)),
@@ -95,13 +94,14 @@ def check_android_target(receipt: dict, expected: dict, profile: dict, runtime_v
     if "expectedVersion" in runtime:
         require(android_runtime_version(runtime["expectedVersion"]) == runtime_version,
                 "Android preflight expected a different runtime version")
-    device = receipt_fields(receipt.get("device"), {"buildSha256", "abi"}, {"androidApi", "expectedBuildSha256"}, "Android preflight device")
+    device = receipt_fields(receipt.get("device"), {"buildSha256", "abi", "androidApi"}, {"expectedBuildSha256"},
+                            "Android preflight device")
     require(device["buildSha256"] == expected["deviceBuildSha256"],
             "Android preflight uses a different system build")
     require(device.get("expectedBuildSha256", expected["deviceBuildSha256"]) == expected["deviceBuildSha256"],
             "Android preflight expected a different system build")
     minimum_api = profile["minimumApi"]
-    api = device.get("androidApi", minimum_api)
+    api = device["androidApi"]
     require(is_json_integer(api) and 0 < api <= 65535, "Invalid Android preflight API level")
     require(api >= minimum_api, "Android preflight API level is below the diagnostic profile minimum")
     require(device["abi"] in profile["abis"], "Android preflight ABI is not supported by the diagnostic profile")

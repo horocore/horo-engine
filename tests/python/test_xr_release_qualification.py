@@ -682,6 +682,8 @@ def android_receipt(row, evidence, *, profile="qualification-openxr-quest-develo
     return {
         "schema": 1, "status": "diagnostic_complete", "stage": "diagnostics",
         "artifact": {"apkSha256": expected["apkSha256"], "sourceRevision": REVISION, "profile": profile,
+                     "applicationId": qualify_xr_android.android_profile(profile)[1]["applicationId"],
+                     "declaredRenderer": "none", "abis": [abi],
                      "provenanceSha256": hashlib.sha256(b"synthetic provenance").hexdigest(),
                      "openxr": {"schema": 1, "runtime": "openxr", "loaderSource": "bundled", "activityRoute": "cold-discovery"},
                      "openxrImages": {"abi": abi, "diagnosticHostSha256": hashlib.sha256(b"synthetic diagnostic host").hexdigest(),
@@ -690,7 +692,7 @@ def android_receipt(row, evidence, *, profile="qualification-openxr-quest-develo
                           "connection": {"requested": "usb", "observed": "usb"}, "profile": profile,
                           "runtime": {"requested": "openxr", "selection": "system-default", "status": "cold_system_discovered"},
                           "physicalXrQualification": "not_run"},
-        "device": {"abi": abi, "buildSha256": expected["deviceBuildSha256"]},
+        "device": {"abi": abi, "androidApi": 34, "buildSha256": expected["deviceBuildSha256"]},
         "observed": {"crashObserved": False, "openxr": {"abi": abi, "stage": "discovered", "result": 0,
                                                        "runtimeVersion": {"major": 1, "minor": 2, "patch": 3}}},
         "cleanup": {"status": "stopped"},
@@ -829,6 +831,24 @@ def test_android_discovery_rejects_unclassified_nested_evidence_without_echoing_
     assert "Unexpected fields in Android preflight" in result.stderr
     assert "privateCapture" not in result.stderr
     assert "private-room-observation" not in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(("section", "key"), [
+    ("device", "androidApi"),
+    ("artifact", "applicationId"),
+    ("artifact", "declaredRenderer"),
+    ("artifact", "abis"),
+])
+def test_android_matrix_requires_the_emitted_launch_facts(release, section, key):
+    matrix, evidence = release
+    row = matrix["tuples"][0]
+    capture_android_smoke(row, evidence)
+    receipt = android_receipt(row, evidence)
+    del receipt[section][key]
+    row["androidPreflight"]["receiptSha256"] = store(evidence, json.dumps(receipt).encode())
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert f"Unexpected fields in Android preflight {section}" in result.stderr
 
 
 @pytest.mark.parametrize(("section", "key", "value", "message"), [

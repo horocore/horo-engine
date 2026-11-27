@@ -213,6 +213,8 @@ checker verifies the exact diagnostic APK bytes and the receipt's source
 revision, Android system build, OpenXR runtime version, declared ADB transport,
 and process retirement. Cold discovery remains setup evidence. The physical
 smoke record proves the on-device observations.
+The deployment receipt must include the observed Android API level and the
+diagnostic package's application ID, declared renderer and packaged ABI list.
 The APK digest and the contents of its reported native images are checked on
 the same opened file. A changed APK invalidates the receipt check.
 If the Activity exits before or during capture, the deployment tool checks the
