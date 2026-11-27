@@ -761,7 +761,12 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::EvaluateEntry */
     void AiTaskScheduler::EvaluateEntry(Entry &entry) {
         const auto tick = report_.tick;
-        const auto units = std::min(entry.policy.workUnitsPerTick, settings_.workUnitsPerTick - report_.workUnits);
+        auto allowance = entry.policy.workUnitsPerTick;
+        if (settings_.mode == AiSchedulingMode::BestEffort) {
+            if (const auto limit = entry.executor->EvaluationWorkLimit(); limit && *limit > 0)
+                allowance = std::min(allowance, *limit);
+        }
+        const auto units = std::min(allowance, settings_.workUnitsPerTick - report_.workUnits);
         // Reserve the whole slice before callbacks; unused allowance cannot hide unbounded reentry/work.
         report_.workUnits += units;
         ++report_.evaluated;

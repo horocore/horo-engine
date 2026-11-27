@@ -218,6 +218,14 @@ namespace Horo::AI {
         return Available() && !evaluating_;
     }
 
+    /** @copydoc DecisionGraphInstance::NeedsUtilityPreference */
+    bool DecisionGraphInstance::NeedsUtilityPreference() const noexcept {
+        if (!CanDispatchIntents())
+            return false;
+        const auto &root = *occurrences_.front();
+        return root.active && root.utility && !root.utility->selected && !Terminal(root.outcome);
+    }
+
     /** @copydoc DecisionGraphInstance::NextFixedWakeTick */
     std::optional<std::uint64_t> DecisionGraphInstance::NextFixedWakeTick() const noexcept {
         if (!Available() || evaluating_)

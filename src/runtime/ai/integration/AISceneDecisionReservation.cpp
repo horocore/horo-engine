@@ -163,7 +163,8 @@ namespace Horo::AI {
                                            capture->executor == this && !capture->observed
                                        ? capture->trace
                                        : nullptr;
-                const auto step = model_ ? StepModel(input, budget, trace.get()) : StepGraph(input, budget, trace.get());
+                const bool selectWithModel = model_ && decision_->NeedsUtilityPreference();
+                const auto step = selectWithModel ? StepModel(input, budget, trace.get()) : StepGraph(input, budget, trace.get());
                 if (trace && capture && capture->trace == trace) {
                     const auto revision = input.blackboard.CapturedRevision();
                     if (trace->Header().MatchesObservation(capture->plan->Digest(), context.tick, input.current, revision))
@@ -174,6 +175,12 @@ namespace Horo::AI {
                 if (reactive_ && step.Value())
                     nextFixedWake_ = decision_->NextFixedWakeTick();
                 return Result<AiSliceOutcome>::Success(step.Value() ? AiSliceOutcome::Complete : AiSliceOutcome::BudgetExhausted);
+            }
+
+            std::optional<std::size_t> EvaluationWorkLimit() const noexcept override {
+                if (model_ && !decision_->NeedsUtilityPreference())
+                    return graphWork_;
+                return std::nullopt;
             }
 
             std::optional<DecisionProviderFailure> TakeProviderFailure(std::uint64_t tick) noexcept override {

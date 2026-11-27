@@ -199,6 +199,14 @@ namespace Horo::AI {
         virtual void SuspendForRelevance() noexcept {
             Cancel();
         }
+
+        /** @brief Reports a smaller upper bound for the next best-effort evaluation on the owner lane.
+         * @return A positive work limit, or no limit to reserve the registered allowance.
+         * @details This observation must not invoke callbacks, mutate state, or inspect mutable Scene data.
+         */
+        [[nodiscard]] virtual std::optional<std::size_t> EvaluationWorkLimit() const noexcept {
+            return std::nullopt;
+        }
     };
 
     /** @brief Lowerable per-agent frequency, work, command and worker-admission policy. */

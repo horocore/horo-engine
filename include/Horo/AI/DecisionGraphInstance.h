@@ -155,6 +155,9 @@ namespace Horo::AI {
         /** @brief Rechecks live graph authority at the separate Gameplay intent dispatch phase.
          * @return True on the owner lane while the graph and its exact provider generation still admit dispatch. */
         [[nodiscard]] bool CanDispatchIntents() const noexcept;
+        /** @brief Checks whether the root Utility graph can accept a preference for a new action selection.
+         * @return True on the owner lane when the active root has yet to select an action and can still step. */
+        [[nodiscard]] bool NeedsUtilityPreference() const noexcept;
         /** @brief Copies the earliest fixed deadline across active trees, Utility actions and running State Machines.
          * @return No deadline when the graph cannot be observed or has no active deadline. */
         [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;

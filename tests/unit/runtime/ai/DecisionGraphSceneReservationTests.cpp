@@ -2001,6 +2001,15 @@ namespace Horo::AI {
             if (graphFits)
                 CHECK(fixture.probe.calls.back() == "start:" + std::to_string(fallback.Value()));
             REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+
+            if (graphFits) {
+                const auto resumed = scheduler->EvaluateAtDecision(2);
+                REQUIRE(resumed.HasValue());
+                CHECK(resumed.Value().failed == 0);
+                CHECK(resumed.Value().exhausted == 0);
+                CHECK(resumed.Value().workUnits == 2 * graphWork);
+                REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            }
         }
 
         TEST_CASE("Scene fixed ticks feed a verified model from the current integer Blackboard",
