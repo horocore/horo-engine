@@ -227,7 +227,8 @@ namespace Horo::Editor {
                 return Output::Failure(opened.ErrorValue());
             grant = admission;
             speech.emplace(std::move(cancellation), context);
-            deadline = Clock::now() + ImmersiveSpeechTranscription::MaximumInputDuration;
+            nextHealth = Clock::now();
+            deadline = nextHealth + ImmersiveSpeechTranscription::MaximumInputDuration;
             return result;
         }
 
@@ -341,19 +342,24 @@ namespace Horo::Editor {
             recordingStatus = Saved;
         }
 
+        /** @brief Checks a live native capture on the control lane, independently of its PCM consumer. */
+        [[nodiscard]] Result<void> PollNativeHealth(const Clock::time_point now) {
+            if (!grant || now < nextHealth)
+                return Result<void>::Success();
+            nextHealth = now + HealthInterval;
+            return backend->ReconcileCapture(grant->generation, grant);
+        }
+
         /** @brief Reconciles native health periodically and publishes callback activity without reading audio. */
         void Observe(const Clock::time_point now) {
-            if (now >= nextHealth) {
-                nextHealth = now + HealthInterval;
-                if (const auto current = backend->ReconcileCapture(grant->generation, grant); current.HasError()) {
-                    if (take) {
-                        FailRecording(RecordingFailureStatus(current.ErrorValue()));
-                        return;
-                    }
-                    Stop();
-                    status = EditorMicrophoneTestStatus::Failed;
+            if (const auto current = PollNativeHealth(now); current.HasError()) {
+                if (take) {
+                    FailRecording(RecordingFailureStatus(current.ErrorValue()));
                     return;
                 }
+                Stop();
+                status = EditorMicrophoneTestStatus::Failed;
+                return;
             }
             const auto activity = backend->CaptureActivity();
             peakLevel = activity.peakLevel;
@@ -595,7 +601,9 @@ namespace Horo::Editor {
             check_->PollPublication();
             if (check_->speech) {
                 // This tick's foreground flag belongs to Audio Settings. Play owns its own focus fence.
-                static_cast<void>(ReconcileSpeechLease(check_->generation, true));
+                if (ReconcileSpeechLease(check_->generation, true).HasValue() &&
+                    check_->PollNativeHealth(CaptureCheck::Clock::now()).HasError())
+                    CancelSpeechCapture(check_->generation);
             } else if (check_->scanning || check_->pending || check_->grant) {
                 check_->Advance(foreground, CaptureCheck::Clock::now());
             }

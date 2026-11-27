@@ -336,9 +336,11 @@ namespace Horo::Audio::Backend {
                 REQUIRE(interrupted.HasError());
                 CHECK(interrupted.ErrorValue().code.Value() == AudioErrors::SourceInvalid.code.Value());
             }
-            SECTION("normal seal returns the exact detached generation") {
+            SECTION("control health observation leaves the exact generation and its PCM for sealing") {
                 REQUIRE(backend->StartCapture(descriptor, grant.intent, grant).HasValue());
                 WaitForActivity(*backend);
+                REQUIRE(backend->ReconcileCapture(grant.generation, grant).HasValue());
+                CHECK(backend->CaptureActivity().generation == grant.generation);
                 auto sealed = backend->FinishSpeech(grant.generation, grant);
                 REQUIRE(sealed.HasValue());
                 auto tail = std::move(sealed).Value();
@@ -348,6 +350,8 @@ namespace Horo::Audio::Backend {
                 std::vector<AudioSample> pcm(descriptor.maximumFrames * descriptor.format.layout.orderedChannels.size());
                 REQUIRE(tail.TryRead(block, pcm) == AudioCaptureRead::Copied);
                 CHECK(block.sequence == 1);
+                CHECK(block.firstFrame == 0);
+                CHECK(backend->ReconcileCapture(grant.generation, grant).HasError());
             }
             CHECK(backend->CaptureActivity().state == Sdl3CaptureActivityState::Inactive);
             CHECK(backend->FinishSpeech(grant.generation, grant).HasError());
