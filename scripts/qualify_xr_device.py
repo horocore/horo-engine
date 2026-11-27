@@ -27,6 +27,10 @@ TIMING_LIMITS = {
 }
 DESKTOP_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v2"
 DESKTOP_DISPLAY_PREFLIGHT_RECORD = "horo-xr-desktop-qualification-v3"
+DESKTOP_PREFLIGHT_MARKERS = frozenset(name.encode("ascii") for name in (
+    "horo-xr-desktop-qualification-v1", DESKTOP_PREFLIGHT_RECORD, DESKTOP_DISPLAY_PREFLIGHT_RECORD,
+))
+ANDROID_RECEIPT_FIELDS = {"schema", "status", "stage", "artifact", "qualification", "device", "observed", "cleanup"}
 DESKTOP_CONNECTIONS = {"Tethered": "tethered", "WirelessStreaming": "wireless-streaming"}
 DESKTOP_PREFLIGHT_MAXIMA = (65535, 65535, 4294967295, 4294967295, 4294967295, 4294967295, 16, 128, 15)
 DESKTOP_REQUIRED_ROUTES = 0b0011
@@ -425,13 +429,17 @@ def verify_physical_observations(root: Path, record: dict, observations: set[str
         data = verify_artifact(artifact_path(root, artifact), artifact, bounded_json=True)
         if data is None:
             continue
-        candidate = data.removeprefix(UTF8_BOM)
-        if not candidate.lstrip().startswith(b"{"):
+        candidate = data.removeprefix(UTF8_BOM).lstrip()
+        require(candidate.partition(b" ")[0] not in DESKTOP_PREFLIGHT_MARKERS,
+                "Physical observation refers to an XR preflight receipt")
+        if not candidate.startswith(b"{"):
             continue
         try:
             capture = decode_record(candidate)
         except (ValueError, RecursionError) as error:
             raise ValueError("Invalid physical observation JSON") from error
+        require(not ANDROID_RECEIPT_FIELDS <= capture.keys(),
+                "Physical observation refers to an XR preflight receipt")
         if {"tuple", "provenance", "evidenceLevel"}.isdisjoint(capture):
             continue
         require(not PHYSICAL_CHECK_RECEIPT_FIELDS <= capture.keys(),

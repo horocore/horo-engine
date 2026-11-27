@@ -11,13 +11,14 @@ import zipfile
 import zlib
 
 from project import OPENXR_DEVELOPMENT_PROFILES, OPENXR_LOADER_NAME, PROVENANCE_ASSET, android_profile, archive_limits
-from qualify_xr_device import MAX_ARTIFACT_BYTES, decode_record, fields, in_set, is_digest, is_standalone_android, require
+from qualify_xr_device import (
+    ANDROID_RECEIPT_FIELDS, MAX_ARTIFACT_BYTES, decode_record, fields, in_set, is_digest, is_standalone_android, require,
+)
 
 
 MAX_ANDROID_RECEIPT_BYTES = 16 * 1024
 DEPLOY_HOSTS = {"linux-x64", "macos-arm64", "macos-x64", "windows-x64"}
 ANDROID_PREFLIGHT_FIELDS = {"receiptSha256", "apkSha256", "deviceBuildSha256", "profile", "adbConnection"}
-ANDROID_RECEIPT_FIELDS = {"schema", "status", "stage", "artifact", "qualification", "device", "observed", "cleanup"}
 
 
 def receipt_fields(value: object, required: set[str], optional: set[str], name: str) -> dict:

@@ -949,6 +949,35 @@ def desktop_receipt(row, *, host=None):
             f"{host} system-default vulkan sha256:{target} {connection} preflight 1 2 3 1 3 0 2 2 3\n").encode()
 
 
+@pytest.mark.parametrize("platform", ["android", "desktop"])
+def test_preflight_receipt_cannot_supply_a_physical_check(release, platform):
+    matrix, evidence = release
+    if platform == "android":
+        row = matrix["tuples"][0]
+        capture_android_smoke(row, evidence)
+        preflight = store(evidence, json.dumps(android_receipt(row, evidence)).encode())
+        row["androidPreflight"]["receiptSha256"] = preflight
+    else:
+        row = matrix["tuples"][1]
+        preflight = row["desktopPreflightSha256"]
+
+    record = json.loads((evidence / row["recordSha256"]).read_bytes())
+    receipt = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
+    receipt["artifactSha256"] = preflight
+    record["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(receipt).encode())
+    row["recordSha256"] = store(evidence, json.dumps(record).encode())
+    declaration = evidence.parent / "declaration.json"
+    declaration.write_text(json.dumps(row["declaration"]), encoding="utf-8")
+    device = subprocess.run(
+        [sys.executable, str(SCRIPTS / "qualify_xr_device.py"), str(evidence / row["recordSha256"]),
+         "--expect", str(declaration), "--physical-check-evidence-dir", str(evidence)],
+        capture_output=True, text=True, check=False,
+    )
+    for result in (device, run_matrix(release)):
+        assert result.returncode == 1
+        assert "Physical observation refers to an XR preflight receipt" in result.stderr
+
+
 @pytest.mark.parametrize(("host", "mode"), [("Windows", "Tethered"), ("Linux", "WirelessStreaming")])
 def test_desktop_claim_requires_and_consumes_packaged_preflight(release, host, mode):
     matrix, evidence = release
