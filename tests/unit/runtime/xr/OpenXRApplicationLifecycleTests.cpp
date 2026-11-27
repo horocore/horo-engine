@@ -3029,6 +3029,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(evidence.Candidates()[0].device == controller);
         CHECK(evidence.Candidates()[1].device == hand);
         CHECK(evidence.Candidates()[0].space.kind == XR::XRSpaceKind::World);
+        CHECK(evidence.Candidates()[0].space.id == listening->world);
         CHECK(evidence.Candidates()[0].space == evidence.Candidates()[1].space);
         CHECK(std::get<Math::Ray>(evidence.Candidates()[0].shape).maximumDistance == 6.0F);
         const auto point = std::get<Math::Vec3>(evidence.Candidates()[1].shape);

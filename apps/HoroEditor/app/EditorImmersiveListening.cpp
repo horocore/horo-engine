@@ -180,7 +180,7 @@ namespace Horo::Editor {
                                        .documentOpening = selection.documentEpoch,
                                        .documentRevision = selection.documentRevision,
                                        .xrSession = scope->interaction.cutoff.session,
-                                       .referenceSpace = scope->reference,
+                                       .referenceSpace = scope->world,
                                        .capabilities = scope->capabilities,
                                        .mode = ImmersiveAuthoringMode::Play,
                                        .worldGeneration = scope->interaction.scene.value,

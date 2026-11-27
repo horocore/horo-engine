@@ -118,7 +118,8 @@ namespace Horo::Application::Internal {
     /** @brief Stable lineage for one local Play listening operation plus the latest measured cutoff. */
     struct OpenXRPlayListeningScope final {
         OpenXRPlayInteractionScope interaction;
-        XR::XRSpaceId reference;
+        XR::XRSpaceId reference; /**< Native Local reference used for calibration. */
+        XR::XRSpaceId world; /**< Calibrated World space used by interaction candidates. */
         XR::XRCapabilityRevision capabilities;
         std::uint64_t structuralRevision{};
 

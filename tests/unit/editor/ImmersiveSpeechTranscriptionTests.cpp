@@ -829,6 +829,11 @@ namespace Horo::Editor {
             using enum ImmersiveCommandStatus;
             auto expected = Aligned;
             SECTION("one World space can contain multiple devices") {}
+            SECTION("a consistently different World space does not belong to this listening context") {
+                for (auto &observation : samples)
+                    ++observation.candidate.space.id.slot.index;
+                expected = InvalidSpatialEvidence;
+            }
             SECTION("a different World space in the same cutoff rejects the capture") {
                 ++samples[1].candidate.space.id.slot.index;
                 expected = InvalidSpatialEvidence;

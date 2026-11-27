@@ -53,7 +53,7 @@ namespace Horo::Editor {
         std::uint64_t documentOpening{};
         std::uint64_t documentRevision{};
         XR::XRSessionId xrSession;
-        XR::XRSpaceId referenceSpace;
+        XR::XRSpaceId referenceSpace; /**< Exact calibrated World space admitted for spatial evidence. */
         std::uint64_t user{};
         std::uint64_t conversation{};
         std::uint64_t toolContext{};

@@ -416,8 +416,8 @@ namespace Horo::Application::Internal {
         const auto &b = other.interaction;
         return a.scene == b.scene && a.player == b.player && a.assignmentRevision == b.assignmentRevision &&
                a.cutoff.session == b.cutoff.session && a.cutoff.origin == b.cutoff.origin &&
-               a.cutoff.bindingRevision == b.cutoff.bindingRevision && reference == other.reference && capabilities == other.capabilities &&
-               structuralRevision == other.structuralRevision;
+               a.cutoff.bindingRevision == b.cutoff.bindingRevision && reference == other.reference && world == other.world &&
+               capabilities == other.capabilities && structuralRevision == other.structuralRevision;
     }
 
     /** @copydoc OpenXRPlayHost::ReadListeningScope */
@@ -429,8 +429,12 @@ namespace Horo::Application::Internal {
         if (revision == 0)
             return std::nullopt;
         const auto &snapshot = *tracking.Value();
+        const auto world = composition_.session.WorldSpace(snapshot.Session());
+        if (world.HasError() || world.Value().worldOriginRevision != snapshot.WorldOriginRevision())
+            return std::nullopt;
         return OpenXRPlayListeningScope{{DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment},
                                         scene_->references.local.id,
+                                        world.Value().id,
                                         sessions_->Snapshot().capabilityRevision,
                                         revision};
     }

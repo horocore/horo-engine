@@ -73,13 +73,11 @@ namespace Horo::Editor {
 
         /** @brief Validates both source clocks and the exact XR publication scope before alignment. */
         ImmersiveCommandStatus CheckObservation(const ImmersiveSpatialObservation &sample, const ImmersiveSpatialObservation *previous,
-                                                const XR::XRInteractionCutoff &cutoff, const std::uint64_t clockDomain) noexcept {
-            if (!BelongsToHistory(sample.cutoff, cutoff))
+                                                const ImmersiveSpatialHistoryView &history, const std::uint64_t clockDomain) noexcept {
+            if (!BelongsToHistory(sample.cutoff, history.cutoff))
                 return StaleEvidence;
-            if (!ValidObservation(sample, clockDomain) ||
+            if (sample.candidate.space.id != history.context.Identity().referenceSpace || !ValidObservation(sample, clockDomain) ||
                 (sample.controllerPress && (sample.cutoff.bindingRevision == 0 || !ValidPress(*sample.controllerPress, clockDomain))))
-                return InvalidSpatialEvidence;
-            if (previous && sample.candidate.space != previous->candidate.space)
                 return InvalidSpatialEvidence;
             if (previous && !Follows(sample, *previous))
                 return AmbiguousTiming;
@@ -293,7 +291,7 @@ namespace Horo::Editor {
         const ImmersiveSpatialObservation *previous = nullptr;
         for (std::size_t index = 0; index < history.observations.size(); ++index) {
             const auto &sample = history.observations[index];
-            if (const auto status = CheckObservation(sample, previous, history.cutoff, phrase.start.clockDomain); status != Aligned)
+            if (const auto status = CheckObservation(sample, previous, history, phrase.start.clockDomain); status != Aligned)
                 return status;
             if (!FollowsPreviousPress(sample, history.observations.first(index)))
                 return AmbiguousTiming;
