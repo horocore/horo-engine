@@ -152,7 +152,9 @@ def test_physical_observation_cannot_be_rewrapped_for_another_connection(release
 
     result = run_matrix(release)
     assert result.returncode == 1
-    assert "Tethered (xr-platform): Physical observation artifact was reused across smoke runs" in result.stderr
+    expected = ("Physical observation artifact was reused across smoke runs" if source_check == "input"
+                else "Physical observation capture is from a different product tuple or smoke run")
+    assert f"Tethered (xr-platform): {expected}" in result.stderr
 
 
 def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(release):
@@ -184,7 +186,28 @@ def test_receipt_bytes_cannot_be_rewrapped_as_observation_for_another_run(releas
 
     result = run_matrix(release)
     assert result.returncode == 1
-    assert "Physical observation artifact was reused across smoke runs" in result.stderr
+    assert "observation refers to a physical check receipt" in result.stderr
+
+
+@pytest.mark.parametrize("check", ["haptics", "displayEnumeration", "renderTiming"])
+def test_unlisted_foreign_capture_cannot_supply_physical_observations(release, check):
+    matrix, evidence = release
+    source, target = matrix["tuples"]
+    first = json.loads((evidence / source["recordSha256"]).read_bytes())
+    second = json.loads((evidence / target["recordSha256"]).read_bytes())
+    source["requiredOptionalChecks"] = []
+    source_digest = first["checks"][check]["evidenceSha256"]
+    capture = json.loads((evidence / source_digest).read_bytes())
+    capture["provenance"]["runId"] = "unlisted-foreign-run"
+    replacement = json.loads((evidence / second["checks"]["input"]["evidenceSha256"]).read_bytes())
+    replacement["artifactSha256"] = store(evidence, json.dumps(capture).encode())
+    second["checks"]["input"]["evidenceSha256"] = store(evidence, json.dumps(replacement).encode())
+    target["recordSha256"] = store(evidence, json.dumps(second).encode())
+
+    result = run_matrix(release)
+    assert result.returncode == 1
+    assert ("observation refers to a physical check receipt" if check == "haptics"
+            else "Physical observation capture is from a different product tuple or smoke run") in result.stderr
 
 
 @pytest.mark.parametrize("view_count", [1, 4])

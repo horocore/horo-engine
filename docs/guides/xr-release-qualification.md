@@ -123,9 +123,10 @@ of the receipt. The gate checks both files and verifies the receipt belongs to
 that check and run. One observation can support several checks in its original
 run. Other claimed tuples in the same matrix require their own observations,
 including when they connect to the same headset in a different mode.
-Each generic check receipt references the observation bytes directly.
-The release gate also tracks the receipt files so that wrapping a receipt
-from another run cannot count as an independent observation.
+Each generic check receipt references the observation bytes directly. Both
+checkers reject a JSON check receipt used as an observation, including receipts
+outside the declared check set. A bounded JSON observation with a qualification
+tuple and provenance must identify the same product tuple and smoke run.
 Display, render-timing, and required mixed-reality captures also belong to the
 original run and cannot be referenced as another tuple's physical observation.
 For older smoke records, create receipts from the original

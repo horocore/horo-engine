@@ -12,7 +12,7 @@ from qualify_xr_device import (
     artifact_path, check_desktop_preflight, check_display_capture, check_physical_gate, check_render_timing_file, decode_record,
     desktop_receipt_digest, fields, in_set, is_digest, is_source_revision, is_token, load_record, physical_check_evidence, require,
     validate_declaration, validate_record,
-    validate_timing_limits, verify_artifact,
+    validate_timing_limits, verify_artifact, verify_physical_observations,
 )
 
 
@@ -149,7 +149,8 @@ def verify_claim(row: dict, evidence: Evidence, revision: str) -> tuple[str, set
         observations.add(record["checks"]["optionalMR"]["evidenceSha256"])
     receipts, physical_observations = physical_check_evidence(evidence.root, record, optional)
     check_digests = {check["evidenceSha256"] for check in record["checks"].values()} - observations - receipts - {None}
-    for digest in sorted(check_digests | physical_observations):
+    verify_physical_observations(evidence.root, record, physical_observations)
+    for digest in sorted(check_digests - physical_observations):
         evidence.verify(digest)
     return record["status"], observations | receipts | physical_observations
 

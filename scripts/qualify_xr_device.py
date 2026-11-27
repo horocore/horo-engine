@@ -47,6 +47,7 @@ CORE_CHECKS = {"setup", "input", "displayEnumeration", "renderTiming",
 OPTIONAL_CHECKS = {"haptics", "optionalMR"}
 ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
 SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
+PHYSICAL_CHECK_RECEIPT_FIELDS = {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"}
 MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
 
 
@@ -101,18 +102,22 @@ def artifact_path(root: Path, digest: str) -> Path:
     return path
 
 
-def verify_artifact(path: Path, digest: str) -> None:
-    """Match the bytes of one local qualification artifact to its independently declared digest."""
+def verify_artifact(path: Path, digest: str) -> bytes | None:
+    """Verify an artifact and retain the exact bytes when it fits the record budget."""
     require(is_digest(digest), "Missing or invalid artifact digest")
     require(path.is_file() and not path.is_symlink(), f"Missing regular artifact {digest}")
     hasher = hashlib.sha256()
     size = 0
+    record_bytes = bytearray()
     with path.open("rb") as source:
         while chunk := source.read(1024 * 1024):
             size += len(chunk)
             require(size <= MAX_ARTIFACT_BYTES, f"Artifact exceeds the size budget: {digest}")
             hasher.update(chunk)
+            if size <= MAX_RECORD_BYTES:
+                record_bytes.extend(chunk)
     require(size > 0 and hasher.hexdigest() == digest, f"Artifact content does not match {digest}")
+    return bytes(record_bytes) if size <= MAX_RECORD_BYTES else None
 
 
 def fields(value: object, required: set[str], name: str) -> dict:
@@ -375,8 +380,7 @@ def physical_check_capture(path: Path, record: dict, check: str) -> str:
     require(len(data) <= MAX_RECORD_BYTES, f"{check} capture exceeds the size limit")
     digest = record["checks"][check]["evidenceSha256"]
     require(hashlib.sha256(data).hexdigest() == digest, f"{check} capture digest does not match")
-    capture = fields(decode_record(data), {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"},
-                     f"{check} capture")
+    capture = fields(decode_record(data), PHYSICAL_CHECK_RECEIPT_FIELDS, f"{check} capture")
     require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1, f"Unsupported {check} capture schema")
     require(capture["evidenceLevel"] == record["evidenceLevel"], f"{check} capture must identify physical evidence")
     require(capture["check"] == check, f"{check} capture is for a different check")
@@ -405,11 +409,28 @@ def physical_check_evidence(root: Path, record: dict, optional: set[str]) -> tup
     return receipt_digests, observations
 
 
+def verify_physical_observations(root: Path, record: dict, observations: set[str]) -> None:
+    """Validate direct observations, including embedded qualification identities."""
+    for artifact in sorted(observations):
+        data = verify_artifact(artifact_path(root, artifact), artifact)
+        if data is None or not data.lstrip().startswith(b"{"):
+            continue
+        try:
+            capture = decode_record(data)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(capture, dict) or not {"schemaVersion", "tuple", "provenance"} <= capture.keys():
+            continue
+        require(not PHYSICAL_CHECK_RECEIPT_FIELDS <= capture.keys(),
+                "Physical observation refers to a physical check receipt")
+        require(capture["tuple"] == record["tuple"] and capture["provenance"] == record["provenance"],
+                "Physical observation capture is from a different product tuple or smoke run")
+
+
 def verify_physical_checks(root: Path, record: dict, optional: set[str]) -> None:
     """Validate each receipt and its referenced bytes in the selected evidence directory."""
     _, observations = physical_check_evidence(root, record, optional)
-    for artifact in sorted(observations):
-        verify_artifact(artifact_path(root, artifact), artifact)
+    verify_physical_observations(root, record, observations)
 
 
 def desktop_preflight_facts(words: list[str]) -> tuple[int, ...]:
