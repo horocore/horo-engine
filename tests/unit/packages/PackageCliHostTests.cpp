@@ -200,12 +200,13 @@ namespace {
     }
 
     /** @brief Builds an asset addition with historical metadata for a predecessor that is not installed. */
-    Packages::ValidatedPackageArchive HistoricalAssetAddition(const NativeProject &fixture, bool malformed) {
+    Packages::ValidatedPackageArchive HistoricalAssetAddition(const NativeProject &fixture, bool malformed,
+                                                              std::optional<Packages::HoroPackageId> package = std::nullopt) {
         const nlohmann::json transition{{"fromVersion", "0.9.0"},
                                         {"fromArtifactSha256", FormatSha256(Sha256Digest{})},
                                         {"renames", {{{"from", malformed ? "../old.bin" : "assets/old.bin"}, {"to", "assets/data.bin"}}}}};
         const nlohmann::json declaration{{"schemaVersion", 1},
-                                         {"packageId", fixture.graph.package.Value()},
+                                         {"packageId", package.value_or(fixture.graph.package).Value()},
                                          {"toVersion", fixture.graph.version.ToString()},
                                          {"transitions", nlohmann::json::array({transition})}};
         const std::vector<std::pair<std::string, std::string>> entries{{"horo-package.toml", "schemaVersion = 1\n"},
@@ -458,9 +459,12 @@ namespace {
 
     TEST_CASE("An offline update can replace an asset package and roll back the same exchange", "[packages][application][cli][update]") {
         using namespace Packages;
+        const bool malformed = GENERATE(false, true);
         NativeProject fixture;
         const auto replacement = HoroPackageId::Parse("com.horo.replacement-assets").Value();
-        const auto archive = Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("replacement bytes"));
+        const auto archive = malformed
+                                 ? HistoricalAssetAddition(fixture, true, replacement)
+                                 : Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("replacement bytes"));
         WriteAssetCandidate(fixture, fixture.graph.version, archive, "assets", replacement);
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto metadata = root / ".horo";
@@ -488,6 +492,29 @@ namespace {
             REQUIRE(missing.HasError());
             CHECK(missing.ErrorValue().code.Value() == "packages.host.update_archive_evidence_unavailable");
             REQUIRE(cache.Publish(archive).HasValue());
+            if (malformed) {
+                auto metadataOnly = update;
+                metadataOnly.options.pop_back();
+                const auto approval = preview.adapter->Execute(metadataOnly, context);
+                REQUIRE(approval.HasValue());
+                fixture.WriteImporterReference("late.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+                auto applyRequest = update;
+                applyRequest.command = apply.adapter->GetDescriptor().path;
+                applyRequest.options.push_back(
+                    {"approve", {{std::get<std::string>(approval.Value().fields.back().value), CliValueSource::Invocation, {}}}});
+                const auto checkBlockers = [&](const Result<CliCommandResult> &result) {
+                    REQUIRE(result.HasError());
+                    CHECK(result.ErrorValue().code.Value() == "packages.migration.invalid_path");
+                    CHECK(std::ranges::any_of(result.ErrorValue().diagnostics, [](const auto &entry) {
+                        return entry.code.Value() == "packages.host.importer_in_use" && entry.path == "Assets/late.horoasset";
+                    }));
+                };
+                checkBlockers(preview.adapter->Execute(update, context));
+                checkBlockers(apply.adapter->Execute(applyRequest, context));
+                CHECK(read("packages.json") == oldRequest);
+                CHECK(read("packages.lock") == oldLock);
+                return;
+            }
             const auto reviewed = preview.adapter->Execute(update, context);
             REQUIRE(reviewed.HasValue());
             CHECK(read("packages.json") == oldRequest);

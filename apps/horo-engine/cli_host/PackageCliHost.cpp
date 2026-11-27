@@ -502,15 +502,28 @@ namespace Horo::Application::Internal {
             }
             if (impact.removed.empty())
                 return Result<void>::Success();
-            if (auto review = ReviewCachedRemoval(update, request, context, diagnostics); review.HasError())
-                return review;
+            auto review = ReviewCachedRemoval(update, request, context, diagnostics);
+            if (context.IsStopRequested())
+                return Result<void>::Failure(UpdateStopped(context));
             auto references = ReadRemovalImporters(update.policy, impact, context);
+            if (references.HasValue())
+                AppendPackageImporterDiagnostics(diagnostics, references.Value());
+            if (review.HasError()) {
+                auto failure = std::move(review).ErrorValue();
+                if (references.HasError()) {
+                    auto referenceFailure = std::move(references).ErrorValue();
+                    diagnostics.emplace_back(DiagnosticCode{referenceFailure.code.Value()}, DiagnosticSeverity::Error,
+                                             std::move(referenceFailure.message), SourceLocation{referenceFailure.domain.Value()}, "");
+                    std::ranges::move(referenceFailure.diagnostics, std::back_inserter(diagnostics));
+                }
+                std::ranges::move(diagnostics, std::back_inserter(failure.diagnostics));
+                return Result<void>::Failure(std::move(failure));
+            }
             if (references.HasError()) {
                 auto failure = std::move(references).ErrorValue();
                 std::ranges::move(diagnostics, std::back_inserter(failure.diagnostics));
                 return Result<void>::Failure(std::move(failure));
             }
-            AppendPackageImporterDiagnostics(diagnostics, references.Value());
             if (diagnostics.empty())
                 return Result<void>::Success();
             return Result<void>::Failure(Error{ErrorCode{diagnostics.front().code.Value()}, ErrorDomainId{"packages.host"},
