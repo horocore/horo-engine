@@ -196,6 +196,7 @@ namespace Horo::Application::Internal {
 
     /** @brief Binds names from the archive to Gameplay type identities and bounds the project-wide scan. */
     static Result<void> AppendBehaviorClaims(const Packages::LockedPackage &previous,
+                                             const Packages::LockedPackage &candidate,
                                              std::span<const Packages::PackageBehaviorRename> names,
                                              std::vector<PackageBehaviorMigration> &claims) {
         constexpr std::size_t maximumClaims = 128;
@@ -210,7 +211,8 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(Error{ErrorCode{"packages.migration.invalid_behavior_rename"},
                                                    ErrorDomainId{"packages.migration"}, ErrorSeverity::Error, previous.package.Value()});
             }
-            claims.emplace_back(previous.package, std::move(from).Value(), std::move(to).Value());
+            claims.emplace_back(previous.package, std::move(from).Value(), std::move(to).Value(), previous.artifactDigest,
+                                candidate.artifactDigest);
         }
         return Result<void>::Success();
     }
@@ -241,7 +243,7 @@ namespace Horo::Application::Internal {
             return;
         const auto behavior = Packages::InspectPackageBehaviorRenames(*change.current, previous.Value(), *change.candidate, candidate.Value());
         auto reviewed = behavior.HasError() ? Result<void>::Failure(behavior.ErrorValue())
-                                            : AppendBehaviorClaims(*change.current, behavior.Value(), claims);
+                                            : AppendBehaviorClaims(*change.current, *change.candidate, behavior.Value(), claims);
         if (reviewed.HasError())
             ReportMigrationFailure(diagnostics, *change.candidate, Packages::PackageBehaviorRenameDeclarationPath,
                                    std::move(reviewed).ErrorValue(), firstFailure);

@@ -713,7 +713,9 @@ The optional inert `migrations/behavior-renames.json` declaration uses the same
 destination and exact source selectors, with stable Gameplay type IDs in
 `from` and `to`. Cache-backed preview matches applicable source IDs against
 saved Scene and Prefab attachments, including disabled attachments, and reports
-the relative path, object and attachment identity. A degraded asset inventory
+the relative path, object and attachment identity. The shared review retains
+the exact asset ID, source digest and both package artifact digests with each
+attachment. CLI output is derived from that typed review. A degraded asset inventory
 reports the failing metadata path and retains matches from admitted records.
 Matches show possible impact. Invalid migration declarations block approval,
 with the declaration and its error reported alongside independently verified

@@ -1117,12 +1117,26 @@ namespace {
         writeAsset("Example.prefab", prefabAsset, "core.prefab", prefabBytes.Value());
 
         const auto newType = Gameplay::BehaviorTypeId::Parse("game.tests.new_behavior").Value();
-        const std::array claims{PackageBehaviorMigration{locked.package, type, newType}};
+        constexpr std::string_view candidatePackage{"fixture candidate archive"};
+        const auto candidateArtifact = ComputeSha256(std::as_bytes(std::span{candidatePackage}));
+        const std::array claims{PackageBehaviorMigration{locked.package, type, newType, locked.artifactDigest, candidateArtifact}};
         const auto impact = InspectPackageBehaviorMigrations(*assets, sources.files, sources.context, claims, 2);
         REQUIRE(impact.HasValue());
         REQUIRE(impact.Value().size() == 2);
-        CHECK(impact.Value().front().path == "Assets/Scene.horoasset");
-        CHECK(impact.Value().back().path == "Assets/Example.prefab");
+        const auto &sceneTarget = impact.Value().front();
+        CHECK(sceneTarget.asset == sceneAsset);
+        CHECK(sceneTarget.assetPath == "Assets/Scene.horoasset");
+        CHECK(sceneTarget.sourceRevision == FormatSha256(ComputeSha256(std::as_bytes(std::span{scene}))));
+        CHECK(sceneTarget.object == 7);
+        CHECK(sceneTarget.attachment == behavior.instanceId);
+        CHECK(sceneTarget.migration == claims.front());
+        const auto &prefabTarget = impact.Value().back();
+        CHECK(prefabTarget.asset == prefabAsset);
+        CHECK(prefabTarget.assetPath == "Assets/Example.prefab");
+        CHECK(prefabTarget.sourceRevision == FormatSha256(ComputeSha256(std::as_bytes(std::span{prefabBytes.Value()}))));
+        CHECK(prefabTarget.object == 0);
+        CHECK(prefabTarget.attachment == behavior.instanceId);
+        CHECK(prefabTarget.migration == claims.front());
 
         const auto limited = InspectPackageBehaviorMigrations(*assets, sources.files, sources.context, claims, 1);
         REQUIRE(limited.HasError());
@@ -1132,8 +1146,9 @@ namespace {
 
         const auto otherPackage = Packages::HoroPackageId::Parse("com.horo.other").Value();
         const auto differentType = Gameplay::BehaviorTypeId::Parse("game.tests.other_behavior").Value();
-        for (const auto &competing : {PackageBehaviorMigration{otherPackage, type, newType},
-                                      PackageBehaviorMigration{locked.package, type, differentType}}) {
+        for (const auto &competing : {PackageBehaviorMigration{otherPackage, type, newType, locked.artifactDigest, candidateArtifact},
+                                      PackageBehaviorMigration{locked.package, type, differentType, locked.artifactDigest, candidateArtifact},
+                                      PackageBehaviorMigration{locked.package, type, newType, locked.artifactDigest, locked.artifactDigest}}) {
             const std::array conflicting{claims.front(), competing};
             const auto ambiguous = InspectPackageBehaviorMigrations(*assets, sources.files, sources.context, conflicting, 2);
             REQUIRE(ambiguous.HasError());

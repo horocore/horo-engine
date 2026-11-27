@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Assets/AssetId.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 
@@ -124,9 +126,29 @@ namespace Horo::Application::Internal {
         Packages::HoroPackageId package;
         Gameplay::BehaviorTypeId previous;
         Gameplay::BehaviorTypeId candidate;
+        Sha256Digest previousArtifact;
+        Sha256Digest candidateArtifact;
+
+        bool operator==(const PackageBehaviorMigration &) const = default;
     };
 
-    /** @brief Reports saved Scene and Prefab attachments whose type matches a declared rename.
+    /** @brief Exact saved attachment and source revision observed during an inert migration review. */
+    struct PackageBehaviorMigrationTarget final {
+        PackageBehaviorMigration migration;
+        Assets::AssetId asset;
+        std::string assetPath;
+        std::string sourceRevision;
+        std::uint64_t object;
+        Gameplay::BehaviorInstanceId attachment;
+    };
+
+    /** @brief Formats one reviewed target for user-facing diagnostic output.
+     * @param target Observed attachment in the reviewed source.
+     * @return An advisory migration diagnostic with the exact file revision and attachment address.
+     */
+    [[nodiscard]] Diagnostic DescribePackageBehaviorMigration(const PackageBehaviorMigrationTarget &target);
+
+    /** @brief Captures saved Scene and Prefab attachments whose type matches a declared rename.
      * @param assets Same-project canonical asset registry source. @param files Root-bound source reader.
      * @param context Original opening, cancellation and deadline.
      * @param claims Bounded artifact-bound claims with typed behavior names. @param diagnosticLimit Output limit.
@@ -134,7 +156,7 @@ namespace Horo::Application::Internal {
      * or an exhausted diagnostic budget return a typed error with the available independent locations.
      * @details The matches are possible impacts. Only the live package lifecycle can certify provider ownership.
      */
-    [[nodiscard]] Result<std::vector<Diagnostic>> InspectPackageBehaviorMigrations(
+    [[nodiscard]] Result<std::vector<PackageBehaviorMigrationTarget>> InspectPackageBehaviorMigrations(
         const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
         std::span<const PackageBehaviorMigration> claims, std::size_t diagnosticLimit);
 

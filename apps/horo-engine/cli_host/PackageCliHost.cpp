@@ -422,8 +422,7 @@ namespace Horo::Application::Internal {
                 failure.diagnostics.clear();
                 return Result<void>::Failure(WithCause(UpdateNeedsMigration(std::move(diagnostics)), std::move(failure)));
             }
-            auto notes = std::move(matches).Value();
-            std::ranges::move(notes, std::back_inserter(diagnostics));
+            std::ranges::transform(matches.Value(), std::back_inserter(diagnostics), DescribePackageBehaviorMigration);
             return Result<void>::Success();
         }
 

@@ -72,10 +72,16 @@ namespace Horo::Application::Internal {
 
         using CompositionGraph = std::map<const Assets::AssetRecord *, CompositionNode>;
 
+        /** @brief Source identity from the same read as its attachments. */
+        struct SavedBehaviorSource final {
+            Assets::AssetId asset;
+            std::string revision;
+        };
+
         /** @brief Bounded matches from the same captured Scene and Prefab bytes. */
         struct SavedReferenceScan final {
             References behaviors;
-            std::map<std::string, std::string, std::less<>> behaviorSourceRevisions;
+            std::map<std::string, SavedBehaviorSource, std::less<>> behaviorSources;
             std::vector<Diagnostic> senses;
             std::vector<Diagnostic> components;
             std::vector<Diagnostic> composition;
@@ -488,7 +494,7 @@ namespace Horo::Application::Internal {
             auto inspected = record.type.Value() == SceneAssetType ? InspectScene(scan, review, record, *source.Value().text)
                                                                    : InspectPrefab(scan, review, record, *source.Value().text, limits);
             if (inspected.HasValue() && scan.behaviors.size() != before)
-                scan.behaviorSourceRevisions.emplace(path, source.Value().revision);
+                scan.behaviorSources.emplace(path, SavedBehaviorSource{record.id, source.Value().revision});
             return inspected;
         }
 
@@ -913,11 +919,21 @@ namespace Horo::Application::Internal {
         return std::move(scan.failures).Finish(std::move(diagnostics));
     }
 
+    /** @copydoc DescribePackageBehaviorMigration */
+    Diagnostic DescribePackageBehaviorMigration(const PackageBehaviorMigrationTarget &target) {
+        const auto &migration = target.migration;
+        auto message = migration.package.Value() + " [source sha256:" + target.sourceRevision + "]: " +
+                       migration.previous.Value() + " -> " + migration.candidate.Value() +
+                       " (object " + std::to_string(target.object) + ", attachment " + std::to_string(target.attachment.value) + ')';
+        return Diagnostic{DiagnosticCode{"packages.host.update_possible_behavior_rename"}, DiagnosticSeverity::Note,
+                          std::move(message), SourceLocation{"packages.host"}, target.assetPath};
+    }
+
     /** @copydoc InspectPackageBehaviorMigrations */
-    Result<std::vector<Diagnostic>> InspectPackageBehaviorMigrations(
+    Result<std::vector<PackageBehaviorMigrationTarget>> InspectPackageBehaviorMigrations(
         const Assets::IAssetRegistrySource &assets, const Platform::IProjectReadFiles &files, Platform::ProjectReadContext context,
         std::span<const PackageBehaviorMigration> claims, std::size_t diagnosticLimit) {
-        using Inspection = Result<std::vector<Diagnostic>>;
+        using Inspection = Result<std::vector<PackageBehaviorMigrationTarget>>;
         SavedReferenceOwners assertedOwners;
         std::map<Gameplay::BehaviorTypeId, const PackageBehaviorMigration *> targets;
         std::set<Gameplay::BehaviorTypeId> competingClaims;
@@ -925,7 +941,7 @@ namespace Horo::Application::Internal {
             const auto [existing, inserted] = targets.try_emplace(claim.previous, &claim);
             if (inserted)
                 assertedOwners.behaviors[claim.previous].insert(claim.package);
-            else if (existing->second->package != claim.package || existing->second->candidate != claim.candidate)
+            else if (*existing->second != claim)
                 competingClaims.insert(claim.previous);
         }
         if (assertedOwners.Empty())
@@ -946,6 +962,7 @@ namespace Horo::Application::Internal {
         if (!scan.unusableAddresses.empty())
             incompleteCode = "packages.host.behavior_migration_address_unusable";
         std::vector<Diagnostic> diagnostics;
+        std::vector<PackageBehaviorMigrationTarget> evidence;
         std::ranges::move(scan.unusableAddresses | std::views::take(diagnosticLimit), std::back_inserter(diagnostics));
         std::ranges::move(scan.composition | std::views::take(diagnosticLimit - diagnostics.size()), std::back_inserter(diagnostics));
         for (const auto &match : scan.behaviors) {
@@ -954,32 +971,31 @@ namespace Horo::Application::Internal {
                 continue;
             if (competingClaims.contains(match.type)) {
                 incompleteCode = "packages.host.behavior_migration_claim_ambiguous";
-                if (diagnostics.size() < diagnosticLimit)
+                if (diagnostics.size() + evidence.size() < diagnosticLimit)
                     diagnostics.emplace_back(DiagnosticCode{incompleteCode}, DiagnosticSeverity::Error, match.type.Value(),
                                              SourceLocation{"packages.host"}, match.assetPath);
                 targets.erase(target);
                 continue;
             }
-            if (diagnostics.size() == diagnosticLimit) {
+            if (diagnostics.size() + evidence.size() == diagnosticLimit) {
                 if (!incompleteCode)
                     incompleteCode = "packages.host.behavior_migration_impact_limit";
                 continue;
             }
-            const auto &revision = scan.behaviorSourceRevisions.at(match.assetPath);
-            auto message = match.package.Value() + " [source sha256:" + revision + "]: " + match.type.Value() + " -> " +
-                           target->second->candidate.Value() +
-                           " (object " + std::to_string(match.object) + ", attachment " + std::to_string(match.instance.value) + ')';
-            diagnostics.emplace_back(DiagnosticCode{"packages.host.update_possible_behavior_rename"}, DiagnosticSeverity::Note,
-                                     std::move(message), SourceLocation{"packages.host"}, match.assetPath);
+            const auto &source = scan.behaviorSources.at(match.assetPath);
+            evidence.push_back({*target->second, source.asset, match.assetPath, source.revision, match.object, match.instance});
         }
+        const bool completeInventory = inventory.status == Assets::AssetRegistryBuildStatus::Complete;
+        if (completeInventory && !incompleteCode && !scan.failures.Incomplete())
+            return Inspection::Success(std::move(evidence));
+        std::ranges::transform(evidence, std::back_inserter(diagnostics), DescribePackageBehaviorMigration);
         auto reviewed = std::move(scan.failures).Finish(std::move(diagnostics));
-        if (inventory.status == Assets::AssetRegistryBuildStatus::Complete) {
-            if (incompleteCode && reviewed.HasValue()) {
-                auto incomplete = ReferenceError(incompleteCode);
-                incomplete.diagnostics = std::move(reviewed).Value();
-                return Inspection::Failure(std::move(incomplete));
-            }
-            return reviewed;
+        if (completeInventory) {
+            if (reviewed.HasError())
+                return Inspection::Failure(std::move(reviewed).ErrorValue());
+            auto incomplete = ReferenceError(incompleteCode);
+            incomplete.diagnostics = std::move(reviewed).Value();
+            return Inspection::Failure(std::move(incomplete));
         }
         auto partial = MakeIncompletePackageInventoryError(inventory);
         auto &findings = reviewed.HasError() ? reviewed.ErrorValue().diagnostics : reviewed.Value();
