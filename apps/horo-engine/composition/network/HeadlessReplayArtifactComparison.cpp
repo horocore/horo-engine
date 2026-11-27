@@ -8,6 +8,7 @@
 #include "Horo/Physics/PhysicsWorld.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <new>
 #include <nlohmann/json.hpp>
@@ -38,6 +39,7 @@ namespace Horo::Application::Internal {
     namespace {
         using Json = nlohmann::json;
         using Comparison = Result<std::optional<AI::AiReplayDivergence>>;
+        using ApprovedReplayDigests = std::array<Sha256Digest, 2>;
         using enum AI::AiReplayBoundary;
         using InvalidEvidence = InvalidHeadlessReplayEvidence;
 
@@ -270,11 +272,14 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads a bounded regular file, preserving the legacy one-tick representation. */
-        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path, Json *source = nullptr) {
+        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path, Json *source = nullptr,
+                                                       const Sha256Digest *approved = nullptr) {
             using Outcome = Result<std::vector<PortableReplay>>;
             const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(path, MaximumHeadlessReplayWindowBytes);
             if (bytes.HasError())
                 return Outcome::Failure(bytes.ErrorValue());
+            if (approved && ComputeSha256(std::as_bytes(std::span{bytes.Value()})) != *approved)
+                return Outcome::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid, "Replay does not match its approved digest."));
             auto file = Json::parse(bytes.Value(), [](int depth, Json::parse_event_t, Json &) {
                 if (depth > 18)
                     throw InvalidEvidence{};
@@ -365,13 +370,14 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Compares both admitted inputs and optionally attaches a safe link into the timeline. */
-        Comparison CompareFiles(const std::filesystem::path &recorded, const std::filesystem::path &replayed, Json *location = nullptr) {
+        Comparison CompareFiles(const std::filesystem::path &recorded, const std::filesystem::path &replayed, Json *location = nullptr,
+                                const ApprovedReplayDigests *approved = nullptr) {
             try {
                 Json recordedSource, replayedSource;
-                const auto baseline = ReadReplay(recorded, location ? &recordedSource : nullptr);
+                const auto baseline = ReadReplay(recorded, location ? &recordedSource : nullptr, approved ? &(*approved)[0] : nullptr);
                 if (baseline.HasError())
                     return Comparison::Failure(baseline.ErrorValue());
-                const auto candidate = ReadReplay(replayed, location ? &replayedSource : nullptr);
+                const auto candidate = ReadReplay(replayed, location ? &replayedSource : nullptr, approved ? &(*approved)[1] : nullptr);
                 if (candidate.HasError())
                     return Comparison::Failure(candidate.ErrorValue());
                 const auto result = ComparePortable(baseline.Value(), candidate.Value());
@@ -392,6 +398,26 @@ namespace Horo::Application::Internal {
                 return Comparison::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
             }
         }
+
+        /** @brief Compares approved bytes without producing timeline locations or exposing native diagnostics. */
+        int CompareApprovedFiles(const std::filesystem::path &recorded, const std::filesystem::path &replayed,
+                                 const std::span<char *> hashes, std::ostream &out, std::ostream &err) {
+            const auto left = ParseSha256(hashes[0]);
+            const auto right = ParseSha256(hashes[1]);
+            if (left.HasError() || right.HasError() || left.Value() == Sha256Digest{} || right.Value() == Sha256Digest{}) {
+                err << "Approved replay digests are invalid.\n";
+                return 2;
+            }
+            const ApprovedReplayDigests digests{left.Value(), right.Value()};
+            const auto result = CompareFiles(recorded, replayed, nullptr, &digests);
+            if (result.HasError()) {
+                err << "Approved replay comparison could not be completed.\n";
+                return 2;
+            }
+            const bool diverged = result.Value().has_value();
+            out << (diverged ? "approved-replay-v1 diverged\n" : "approved-replay-v1 matched\n");
+            return diverged ? 1 : 0;
+        }
     }  // namespace
 
     /** @copydoc CompareHeadlessReplayArtifacts */
@@ -401,13 +427,19 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RunHeadlessReplayComparison */
     int RunHeadlessReplayComparison(const std::span<char *> arguments, std::ostream &out, std::ostream &err) {
-        if (arguments.size() != 2) {
-            err << "Usage: horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>\n";
+        const bool approved = arguments.size() == 5 && std::string_view{arguments[2]} == "--approved-digests";
+        if (arguments.size() != 2 && !approved) {
+            err << "Usage: horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>"
+                   " [--approved-digests <recorded sha256> <replayed sha256>]\n";
             return 2;
         }
         try {
+            const auto recorded = InputPath(arguments[0]);
+            const auto replayed = InputPath(arguments[1]);
+            if (approved)
+                return CompareApprovedFiles(recorded, replayed, arguments.subspan(3), out, err);
             Json location;
-            const auto result = CompareFiles(InputPath(arguments[0]), InputPath(arguments[1]), &location);
+            const auto result = CompareFiles(recorded, replayed, &location);
             if (result.HasError()) {
                 err << result.ErrorValue().code.Value() << ": " << result.ErrorValue().message << '\n';
                 return 2;

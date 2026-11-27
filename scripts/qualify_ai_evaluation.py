@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -22,6 +23,7 @@ MAX_APPROVAL_BYTES = 4096
 MAX_MANIFEST_BYTES = 32 * 1024
 MAX_QUALIFICATION_ARTIFACT_BYTES = 512 * 1024 * 1024
 MANIFEST_FORMAT = "horo-ai-evaluation-manifest"
+REPLAY_COMPARISON_FORMAT = "horo-ai-evaluation-replay-comparison"
 APPROVAL_PURPOSE = "offline-evaluation"
 QUALIFICATION_SOURCE = "operator-declared"
 OUTCOMES = ("idle", "running", "succeeded", "failed", "cancelled")
@@ -353,6 +355,50 @@ def require_current_expiry(expiry: str) -> None:
     require(datetime.now(UTC).date() < date.fromisoformat(expiry), "Export approval has expired")
 
 
+def approved_replay_digest(path: Path, approval: object, today: date) -> tuple[str, dict]:
+    data, source = read_replay(path)
+    allowed = validate_approval(approval, source, today)
+    summarize_source(data)
+    return source, allowed
+
+
+def native_replay_status(engine: Path, inputs: tuple[Path, Path], digests: tuple[str, str]) -> int:
+    try:
+        result = subprocess.run(
+            [str(engine.resolve(strict=True)), "--compare-ai-replay", *(str(path.absolute()) for path in inputs),
+             "--approved-digests", *(f"sha256:{value}" for value in digests)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=False, text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise _EvidenceError("Approved replay comparison could not be completed") from None
+    expected = {0: "approved-replay-v1 matched\n", 1: "approved-replay-v1 diverged\n"}
+    require(result.returncode in expected and result.stdout == expected[result.returncode],
+            "Approved replay comparison could not be completed")
+    return result.returncode
+
+
+def compare_approved_replays(args: argparse.Namespace, approval: object, today: date) -> int:
+    """Publish a redacted comparison of two approved recordings under the same qualification tuple."""
+    inputs = (args.input, args.compare_replay)
+    require(not inputs[0].samefile(inputs[1]), "Replay comparison requires two distinct files")
+    comparison_approval = decode(read_bounded(args.comparison_approval, MAX_APPROVAL_BYTES))
+    left, recorded = approved_replay_digest(inputs[0], approval, today)
+    right, replayed = approved_replay_digest(inputs[1], comparison_approval, today)
+    qualification = recorded["qualification"]
+    require(qualification == replayed["qualification"], "Replay approvals use different qualification tuples")
+    if args.qualification_artifacts is not None:
+        verify_qualification_artifacts(qualification, args.qualification_artifacts)
+    expiry = min(recorded["expiresOnUtc"], replayed["expiresOnUtc"])
+    require_current_expiry(expiry)
+    result = native_replay_status(args.engine, inputs, (left, right))
+    require_current_expiry(expiry)
+    emit_json({"format": REPLAY_COMPARISON_FORMAT, "schemaVersion": 1,
+               "status": "matched" if result == 0 else "diverged", "expiresOnUtc": expiry,
+               "qualificationSource": QUALIFICATION_SOURCE, "qualification": qualification,
+               "recordedReplaySha256": left, "replayedReplaySha256": right})
+    return result
+
+
 def publish_manifest(path: Path, manifest: dict) -> None:
     """Publish a complete new manifest while its approval is current."""
     data = json_line(manifest).encode("utf-8")
@@ -380,17 +426,27 @@ def main() -> int:
     retained.add_argument("--read-retained", action="store_true", help="Emit a current stored manifest after reproducing its approved evidence")
     retained.add_argument("--audit-retention", action="store_true", help="Report the UTC retention status of a stored manifest and its approval")
     retained.add_argument("--purge-expired", action="store_true", help="Remove an expired manifest and source from owner-exclusive storage")
+    retained.add_argument("--compare-replay", type=Path, help="Compare another approved recording under the same qualification tuple")
+    parser.add_argument("--comparison-approval", type=Path, help="Current approval for the second recording")
+    parser.add_argument("--engine", type=Path, help="Trusted horo-engine executable for an approved replay comparison")
     parser.add_argument("--source-replay", type=Path, help="Reproduce the evidence from the original approved replay")
     parser.add_argument("--qualification-artifacts", type=Path, help="Check approved provider, model and workload files named by SHA-256")
     parser.add_argument("--output", type=Path, help="Publish the export to a new manifest file")
     args = parser.parse_args()
+    comparison_options = (args.comparison_approval, args.engine)
+    if args.compare_replay is not None:
+        if None in comparison_options:
+            parser.error("--compare-replay requires --comparison-approval and --engine")
+    elif any(option is not None for option in comparison_options):
+        parser.error("--comparison-approval and --engine require --compare-replay")
     if args.read_retained and args.source_replay is None:
         parser.error("--read-retained requires --source-replay")
     if args.purge_expired and args.source_replay is None:
         parser.error("--purge-expired requires --source-replay")
     if args.source_replay is not None and not (args.verify_retained or args.read_retained or args.purge_expired):
         parser.error("--source-replay requires --verify-retained, --read-retained or --purge-expired")
-    if args.output is not None and (args.verify_retained or args.read_retained or args.audit_retention or args.purge_expired):
+    if args.output is not None and (args.verify_retained or args.read_retained or args.audit_retention or args.purge_expired
+                                    or args.compare_replay is not None):
         parser.error("--output is only available when exporting a replay")
     if args.qualification_artifacts is not None:
         if args.audit_retention or args.purge_expired:
@@ -400,6 +456,8 @@ def main() -> int:
     try:
         approval = decode(read_bounded(args.approval, MAX_APPROVAL_BYTES))
         today = datetime.now(UTC).date()
+        if args.compare_replay is not None:
+            return compare_approved_replays(args, approval, today)
         if args.purge_expired:
             emit_json(purge_expired_manifest(args.input, args.source_replay, approval, today))
             return 0

@@ -89,6 +89,29 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(Internal::RunHeadlessReplayComparison(arguments, out, err) == 1);
             CHECK(out.str().find("Divergence at tick 1 in physics") != std::string::npos);
             CHECK(err.str().empty());
+            const auto approvedDigest = [](const std::filesystem::path &path) {
+                const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(path, Internal::MaximumHeadlessReplayEvidenceBytes);
+                REQUIRE(bytes.HasValue());
+                return FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.Value()})));
+            };
+            auto firstDigest = approvedDigest(file);
+            auto secondDigest = approvedDigest(candidate);
+            std::string approvedFlag{"--approved-digests"};
+            std::array<char *, 5> approved{arguments[0], arguments[1], approvedFlag.data(), firstDigest.data(), secondDigest.data()};
+            std::ostringstream privateOut, privateError;
+            CHECK(Internal::RunHeadlessReplayComparison(approved, privateOut, privateError) == 1);
+            CHECK(privateOut.str() == "approved-replay-v1 diverged\n");
+            CHECK(privateError.str().empty());
+            approved[1] = approved[0];
+            privateOut.str("");
+            CHECK(Internal::RunHeadlessReplayComparison(approved, privateOut, privateError) == 2);
+            CHECK(privateOut.str().empty());
+            CHECK(privateError.str() == "Approved replay comparison could not be completed.\n");
+            approved[4] = approved[3];
+            privateError.str("");
+            CHECK(Internal::RunHeadlessReplayComparison(approved, privateOut, privateError) == 0);
+            CHECK(privateOut.str() == "approved-replay-v1 matched\n");
+            CHECK(privateError.str().empty());
 
             auto incompatibleBuild = configuration;
             incompatibleBuild.build = configuration.solver;

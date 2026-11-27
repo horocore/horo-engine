@@ -418,6 +418,77 @@ def test_read_retained_requires_the_original_replay_argument(monkeypatch, capsys
     assert not result.out and "--read-retained requires --source-replay" in result.err
 
 
+@pytest.mark.parametrize("scenario", ["matched", "diverged", "same-file", "digest", "tuple", "expired",
+                                     "expired-during-comparison", "native-rejection", "wrong-receipt", "timeout"])
+def test_approved_replay_comparison_is_digest_bound_and_redacted(tmp_path, monkeypatch, capsys, scenario):
+    inputs = [tmp_path / "recorded replay.json", tmp_path / "replayed replay.json"]
+    grants = [tmp_path / "recorded approval.json", tmp_path / "replayed approval.json"]
+    engine = tmp_path / "test engine.exe"
+    engine.touch()
+    recorded = json.dumps(frame(3, 2)).encode()
+    replayed = json.dumps(frame(3, 3)).encode() if scenario == "diverged" else recorded
+    approvals = [approval_for(recorded), approval_for(replayed)]
+    if scenario == "digest":
+        approvals[1]["replaySha256"] = "a" * 64
+    if scenario == "tuple":
+        approvals[1]["qualification"]["workload"]["version"] = "2"
+    if scenario == "expired":
+        approvals[1]["expiresOnUtc"] = datetime.now(UTC).date().isoformat()
+    for path, data in zip(inputs, (recorded, replayed)):
+        path.write_bytes(data)
+    for path, approval in zip(grants, approvals):
+        path.write_text(json.dumps(approval), encoding="utf-8")
+
+    calls = []
+
+    def run(arguments, **options):
+        calls.append(arguments)
+        assert options == {"stdin": evaluation.subprocess.DEVNULL, "stdout": evaluation.subprocess.PIPE,
+                           "stderr": evaluation.subprocess.DEVNULL, "timeout": 30, "check": False, "text": True}
+        if scenario == "timeout":
+            raise evaluation.subprocess.TimeoutExpired(arguments, 30)
+        code = {"diverged": 1, "native-rejection": 2, "wrong-receipt": 1}.get(scenario, 0)
+        out = {"diverged": "approved-replay-v1 diverged\n", "native-rejection": "", "wrong-receipt": PRIVATE}.get(
+            scenario, "approved-replay-v1 matched\n")
+        return evaluation.subprocess.CompletedProcess(arguments, code, stdout=out)
+
+    if scenario == "expired-during-comparison":
+        expiry = datetime.fromisoformat(approvals[1]["expiresOnUtc"]).replace(tzinfo=UTC)
+        times = iter((expiry - timedelta(seconds=1), expiry - timedelta(seconds=1), expiry))
+
+        class Clock:
+            @staticmethod
+            def now(tz):
+                assert tz == UTC
+                return next(times)
+
+        monkeypatch.setattr(evaluation, "datetime", Clock)
+    monkeypatch.setattr(evaluation.subprocess, "run", run)
+    comparison_input = inputs[0] if scenario == "same-file" else inputs[1]
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(inputs[0]), "--approval", str(grants[0]),
+                                     "--compare-replay", str(comparison_input), "--comparison-approval", str(grants[1]),
+                                     "--engine", str(engine)])
+    assert evaluation.main() == (0 if scenario == "matched" else 1)
+    result = capsys.readouterr()
+    if scenario in ("matched", "diverged", "expired-during-comparison", "native-rejection", "wrong-receipt", "timeout"):
+        assert calls == [[str(engine.resolve()), "--compare-ai-replay", *(str(path) for path in inputs), "--approved-digests",
+                          *(f"sha256:{approval['replaySha256']}" for approval in approvals)]]
+    else:
+        assert not calls
+    if scenario in ("matched", "diverged"):
+        assert not result.err
+        assert json.loads(result.out) == {
+            "format": "horo-ai-evaluation-replay-comparison", "schemaVersion": 1, "status": scenario,
+            "expiresOnUtc": min(approval["expiresOnUtc"] for approval in approvals),
+            "qualificationSource": "operator-declared", "qualification": approvals[0]["qualification"],
+            "recordedReplaySha256": approvals[0]["replaySha256"], "replayedReplaySha256": approvals[1]["replaySha256"],
+        }
+    else:
+        assert not result.out and result.err
+    assert PRIVATE not in result.out + result.err
+    assert str(tmp_path) not in result.out + result.err
+
+
 def test_retained_metadata_verification_rechecks_expiry_at_completion(tmp_path, export, monkeypatch, capsys):
     data = json.dumps(frame(3, 2)).encode()
     approval = approval_for(data)

@@ -67,7 +67,12 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<std::optional<AI::AiReplayDivergence>> CompareHeadlessReplayArtifacts(const std::filesystem::path &recorded,
                                                                                                const std::filesystem::path &replayed);
 
-    /** @brief Terminal view of the first differing tick and boundary, or typed evidence failure. */
+    /** @brief Compares portable replay files through the command-line route.
+     * @param arguments Two paths, optionally followed by `--approved-digests` and the two prefixed SHA-256 identities.
+     * @param out Ordinary comparison details, or a fixed status record when approved digests are supplied.
+     * @param err Diagnostic sink. Approved mode suppresses evidence details.
+     * @return Zero for a match, one for divergence, or two for invalid or incompatible input.
+     */
     int RunHeadlessReplayComparison(std::span<char *> arguments, std::ostream &out, std::ostream &err);
 
     /** @brief Exports a bounded privacy-filtered timeline from admitted portable replay evidence. */

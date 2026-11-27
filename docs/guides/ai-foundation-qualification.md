@@ -159,6 +159,22 @@ verification emits neither raw replay values nor regenerated evidence.
 The artifact check is also available with `--verify-retained` and
 `--read-retained` when the original replay is supplied.
 
+To compare two recordings under the same provider, model, platform and
+workload tuple, use both current approvals and a trusted build of `horo-engine`.
+
+```bash
+python scripts/qualify_ai_evaluation.py recorded.json --approval recorded-approval.json \
+  --compare-replay replayed.json --comparison-approval replayed-approval.json --engine /path/to/horo-engine
+```
+
+The native comparator checks each approved digest against the bytes it
+actually compares. The tool writes a redacted result with both digests, the
+qualification tuple and the earlier expiry. A match exits zero. Divergence
+emits a result with status `diverged` and exits one. Invalid, incompatible or
+expired inputs exit one without emitting a result. As with the native
+comparator, a match applies to the recorded coverage. The optional artifact
+directory can verify the tuple's provider, model and workload files.
+
 Consumers that need the stored manifest as input can use `--read-retained`.
 This emits the redacted manifest only after checking the current UTC expiry,
 matching the original approval, and reproducing its evidence from the approved
