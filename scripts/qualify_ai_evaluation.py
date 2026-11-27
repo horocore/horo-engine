@@ -362,18 +362,26 @@ def approved_replay_digest(path: Path, approval: object, today: date) -> tuple[s
     return source, allowed
 
 
-def require_same_replay_approval(path: Path, replay_digest: str, approved: dict) -> None:
+def require_same_replay_approval(path: Path, replay_digest: str, approved: dict, *, operation: str = "Evaluation") -> None:
     """Recheck one approval without exposing private input or storage paths."""
+    reason = f"{operation} approval is no longer current"
     try:
         current = validate_approval(decode(read_bounded(path, MAX_APPROVAL_BYTES)), replay_digest, None)
     except (OSError, ValueError, RecursionError):
-        raise _EvidenceError("Replay comparison approval is no longer current") from None
-    require(current == approved, "Replay comparison approval is no longer current")
+        raise _EvidenceError(reason) from None
+    require(current == approved, reason)
+
+
+def require_current_manifest_approval(path: Path, manifest: dict) -> None:
+    """Recheck the exact manifest grant at the final publication or verification boundary."""
+    allowed = {key: manifest[key] for key in ("expiresOnUtc", "qualification")}
+    require_same_replay_approval(path, manifest["sourceReplaySha256"], allowed)
+    require_current_expiry(manifest["expiresOnUtc"])
 
 
 def require_current_comparison(approvals: tuple[tuple[Path, str, dict], ...], expiry: str) -> None:
     for path, replay_digest, approved in approvals:
-        require_same_replay_approval(path, replay_digest, approved)
+        require_same_replay_approval(path, replay_digest, approved, operation="Replay comparison")
     require_current_expiry(expiry)
 
 
@@ -415,7 +423,7 @@ def compare_approved_replays(args: argparse.Namespace, approval: object, today: 
     return result
 
 
-def publish_manifest(path: Path, manifest: dict) -> None:
+def publish_manifest(path: Path, manifest: dict, approval: Path) -> None:
     """Publish a complete new manifest while its approval is current."""
     data = json_line(manifest).encode("utf-8")
     try:
@@ -425,7 +433,7 @@ def publish_manifest(path: Path, manifest: dict) -> None:
                 output.write(data)
                 output.flush()
                 os.fsync(output.fileno())
-            require_current_expiry(manifest["expiresOnUtc"])
+            require_current_manifest_approval(approval, manifest)
             os.link(staged, path)
     except FileExistsError:
         raise _EvidenceError("Evaluation output already exists") from None
@@ -487,7 +495,7 @@ def main() -> int:
                 verify_source_evidence(record, args.source_replay)
                 if args.qualification_artifacts is not None:
                     verify_qualification_artifacts(record["qualification"], args.qualification_artifacts)
-            require_current_expiry(record["expiresOnUtc"])
+            require_current_manifest_approval(args.approval, record)
             if args.read_retained:
                 emit_json(record)
             return 0
@@ -499,10 +507,10 @@ def main() -> int:
         manifest = {"format": MANIFEST_FORMAT, "schemaVersion": 1, "purpose": APPROVAL_PURPOSE,
                     "qualificationSource": QUALIFICATION_SOURCE, "sourceReplaySha256": replay_digest, **allowed, "evidence": evidence}
         if args.output is None:
-            require_current_expiry(manifest["expiresOnUtc"])
+            require_current_manifest_approval(args.approval, manifest)
             emit_json(manifest)
         else:
-            publish_manifest(args.output, manifest)
+            publish_manifest(args.output, manifest, args.approval)
     except _EvidenceError as error:
         print(error, file=sys.stderr)
         return 1

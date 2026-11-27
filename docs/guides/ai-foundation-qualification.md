@@ -133,6 +133,8 @@ The destination must be new and its parent directory must exist on a filesystem
 that supports hard links. The exporter stages the redacted manifest beside the
 destination, rechecks the approval before publishing, and preserves any existing
 file at that path. Omit `--output` to stream the redacted manifest to stdout.
+Both modes suppress publication if the replay approval is withdrawn, changed,
+or expired by the final approval check.
 
 Pass `--qualification-artifacts <directory>` to also check the provider, model
 and workload files against the approved SHA-256 values. Store each file under

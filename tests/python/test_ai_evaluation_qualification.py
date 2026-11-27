@@ -66,6 +66,39 @@ def test_publishes_the_same_redacted_manifest_to_a_new_file(tmp_path, export):
     assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
 
 
+@pytest.mark.parametrize("output_file", [False, True])
+def test_export_discards_output_when_approval_is_withdrawn(tmp_path, export, monkeypatch, output_file):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    grant = tmp_path / "approval.json"
+    destination = tmp_path / "withdrawn.json"
+
+    if output_file:
+        fsync = evaluation.os.fsync
+
+        def withdraw_after_staging(fd):
+            fsync(fd)
+            grant.unlink()
+
+        monkeypatch.setattr(evaluation.os, "fsync", withdraw_after_staging)
+    else:
+        summarize = evaluation.summarize_source
+
+        def withdraw_after_summarizing(source):
+            result = summarize(source)
+            grant.unlink()
+            return result
+
+        monkeypatch.setattr(evaluation, "summarize_source", withdraw_after_summarizing)
+
+    options = ("--output", str(destination)) if output_file else ()
+    status, result = export(data, approval, *options)
+    assert status == 1 and not result.out
+    assert result.err == "Evaluation approval is no longer current\n"
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".horo-ai-evaluation-*"))
+
+
 @pytest.fixture
 def retained_pair(tmp_path, export, monkeypatch, capsys):
     data = json.dumps(frame(3, 2)).encode()
@@ -90,6 +123,27 @@ def retained_pair(tmp_path, export, monkeypatch, capsys):
         return status, capsys.readouterr()
 
     return manifest, replay, grant, expire, purge
+
+
+@pytest.mark.parametrize("mode", ["--read-retained", "--verify-retained"])
+def test_retained_use_rechecks_approval_after_reading_source(retained_pair, monkeypatch, capsys, mode):
+    manifest, replay, grant, _, _ = retained_pair
+    verify = evaluation.verify_source_evidence
+
+    def replace_approval(record, path):
+        verify(record, path)
+        replacement = json.loads(grant.read_bytes())
+        replacement["qualification"]["workload"]["version"] = "2"
+        grant.write_text(json.dumps(replacement), encoding="utf-8")
+
+    monkeypatch.setattr(evaluation, "verify_source_evidence", replace_approval)
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--approval", str(grant),
+                                      mode, "--source-replay", str(replay)])
+    assert evaluation.main() == 1
+    result = capsys.readouterr()
+    assert not result.out
+    assert result.err == "Evaluation approval is no longer current\n"
+    assert manifest.exists() and replay.exists()
 
 
 def test_purge_removes_expired_pair_and_preserves_audit_approval(retained_pair):
