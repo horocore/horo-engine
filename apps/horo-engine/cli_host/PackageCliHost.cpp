@@ -794,6 +794,14 @@ namespace Horo::Application::Internal {
                 .capabilities = {{"horo.package.manage"}}};
     }
 
+    /** @brief Shares the directly requested package selector between preview and apply. */
+    static Cli::CliOptionDescriptor PackageIdOption() {
+        return {.name = "package-id",
+                .summary = "Portable ID of a directly requested package.",
+                .valueKind = Cli::CliOptionValueKind::String,
+                .required = true};
+    }
+
     /** @copydoc DescribePackageRemovalPreviewCommand */
     Cli::CliCommandDescriptor DescribePackageRemovalPreviewCommand() {
         auto descriptor = DescribePackageRollbackPreviewCommand();
@@ -801,10 +809,7 @@ namespace Horo::Application::Internal {
         descriptor.summary = "Review the exact package withdrawal and its approval fingerprint.";
         std::ranges::find(descriptor.options, "package-cache-root", &Cli::CliOptionDescriptor::name)->summary =
             "Optional absolute cache root for verifying the exact departing archives.";
-        descriptor.options.insert(descriptor.options.begin(), {.name = "package-id",
-                                                               .summary = "Portable ID of a directly requested package.",
-                                                               .valueKind = Cli::CliOptionValueKind::String,
-                                                               .required = true});
+        descriptor.options.push_back(PackageIdOption());
         descriptor.output.id = "horo.package.preview-remove";
         return descriptor;
     }
@@ -814,7 +819,7 @@ namespace Horo::Application::Internal {
         auto descriptor = DescribePackageRollbackUpdateCommand();
         descriptor.path = {{"package", "remove"}};
         descriptor.summary = "Withdraw an approved asset package from a local project.";
-        descriptor.options.push_back(DescribePackageRemovalPreviewCommand().options.front());
+        descriptor.options.push_back(PackageIdOption());
         descriptor.output.id = "horo.package.remove";
         return descriptor;
     }

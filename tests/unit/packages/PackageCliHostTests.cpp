@@ -580,7 +580,8 @@ namespace {
         const auto rollbackPreviewPath = rollbackPreview.adapter->GetDescriptor().path;
         const auto rollbackApplyPath = rollbackApply.adapter->GetDescriptor().path;
         const std::array descriptors{descriptor, applyDescriptor, rollbackPreview.adapter->GetDescriptor(),
-                                     rollbackApply.adapter->GetDescriptor()};
+                                     rollbackApply.adapter->GetDescriptor(), DescribePackageRemovalPreviewCommand(),
+                                     DescribePackageApplyRemovalCommand()};
         CHECK(descriptor.sideEffects == CliSideEffectPolicy::ReadsState);
         CHECK(applyDescriptor.sideEffects == CliSideEffectPolicy::WritesFiles);
         const CliDispatchPolicy policy{.activeHost = CliHostKind::HoroEngine,
@@ -595,6 +596,8 @@ namespace {
         adapters.push_back(std::move(applyRegistration));
         adapters.push_back(std::move(rollbackPreview));
         adapters.push_back(std::move(rollbackApply));
+        adapters.push_back(MakePackageRemovalPreviewCommandAdapter());
+        adapters.push_back(MakePackageApplyRemovalCommandAdapter());
         auto dispatcher = CliDispatcher::Create(std::move(registry).Value(), std::move(adapters), policy);
         REQUIRE(dispatcher.HasValue());
         auto admitted = std::move(dispatcher).Value();
