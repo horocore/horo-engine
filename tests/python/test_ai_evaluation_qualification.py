@@ -228,6 +228,73 @@ def test_purge_preserves_replay_when_the_manifest_changes_after_validation(retai
     assert manifest.read_bytes() == b"separate retention operation"
 
 
+@pytest.mark.parametrize("withdrawal", ["during-verification", "after-source-removal"])
+def test_purge_stops_before_the_next_removal_when_approval_is_withdrawn(retained_pair, monkeypatch, withdrawal):
+    manifest, replay, grant, expire, purge = retained_pair
+    expire()
+    if withdrawal == "during-verification":
+        verify = evaluation.verify_replay_bytes
+
+        def withdraw(*args):
+            verify(*args)
+            grant.unlink()
+
+        monkeypatch.setattr(evaluation, "verify_replay_bytes", withdraw)
+    else:
+        unlink = Path.unlink
+
+        def withdraw(path):
+            unlink(path)
+            if path == replay:
+                unlink(grant)
+
+        monkeypatch.setattr(Path, "unlink", withdraw)
+
+    original = manifest.read_bytes()
+    status, result = purge()
+    assert status == 1 and not result.out
+    assert result.err == "Retention purge approval is no longer current\n"
+    assert manifest.read_bytes() == original
+    assert replay.exists() == (withdrawal == "during-verification")
+
+
+def test_retention_audit_suppresses_status_after_approval_withdrawal(retained_pair, monkeypatch, capsys):
+    manifest, _, grant, expire, _ = retained_pair
+    expire()
+    validate = evaluation.validate_retained_manifest
+
+    def withdraw(*args):
+        result = validate(*args)
+        grant.unlink()
+        return result
+
+    monkeypatch.setattr(evaluation, "validate_retained_manifest", withdraw)
+    monkeypatch.setattr(sys, "argv", ["qualify_ai_evaluation.py", str(manifest), "--approval", str(grant), "--audit-retention"])
+    assert evaluation.main() == 1
+    result = capsys.readouterr()
+    assert not result.out
+    assert result.err == "Retention audit approval is no longer current\n"
+
+
+@pytest.mark.parametrize("target", ["approval.json", "evidence.json"])
+def test_evaluation_rejects_inputs_replaced_between_inspection_and_open(tmp_path, export, monkeypatch, target):
+    data = json.dumps(frame(3, 2)).encode()
+    approval = approval_for(data)
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(data if target == "evidence.json" else json.dumps(approval).encode())
+    open_file = os.open
+
+    def replace_before_open(name, flags):
+        if Path(name) == tmp_path / target:
+            replacement.replace(name)
+        return open_file(name, flags)
+
+    monkeypatch.setattr(evaluation.os, "open", replace_before_open)
+    status, result = export(data, approval)
+    assert status == 1 and not result.out
+    assert result.err == "Input changed before reading\n"
+
+
 @pytest.mark.parametrize("scenario", ["match", "no-model", "wrong-model", "missing-workload", "over-budget"])
 @pytest.mark.parametrize("retained", [False, True])
 def test_evaluation_can_check_the_approved_artifact_bytes(tmp_path, export, monkeypatch, capsys, scenario, retained):

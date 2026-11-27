@@ -51,10 +51,15 @@ def unique_members(pairs: list[tuple[str, object]]) -> dict:
 
 
 def read_bounded(path: Path, limit: int) -> bytes:
-    require(path.is_file(), "Input must be a regular file")
-    with path.open("rb") as stream:
+    before = path.stat()
+    require(stat.S_ISREG(before.st_mode), "Input must be a regular file")
+    require(0 < before.st_size <= limit, "Input exceeds the size limit or is empty")
+    expected = file_identity(before)
+    with open(path, "rb", opener=open_nonblocking) as stream:
+        require(same_regular_file(os.fstat(stream.fileno()), expected), "Input changed before reading")
         data = stream.read(limit + 1)
-    require(0 < len(data) <= limit, "Input exceeds the size limit or is empty")
+        require(same_regular_file(os.fstat(stream.fileno()), expected), "Input changed while reading")
+    require(len(data) == before.st_size and same_regular_file(path.stat(), expected), "Input changed while reading")
     return data
 
 
@@ -218,10 +223,11 @@ def validate_retained_manifest(value: object, approval: object, today: date | No
     return record
 
 
-def audit_retention(value: object, approval: object, today: date) -> dict:
+def audit_retention(value: object, approval: object, today: date, approval_path: Path) -> dict:
     manifest = validate_retained_manifest(value, approval, None)
     expiry = manifest["expiresOnUtc"]
     status = "expired" if date.fromisoformat(expiry) <= today else "current"
+    require_manifest_approval(approval_path, manifest, operation="Retention audit")
     return {"schemaVersion": 1, "status": status, "expiresOnUtc": expiry}
 
 
@@ -253,6 +259,14 @@ def file_identity(info: os.stat_result) -> tuple[int, ...]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
 
 
+def same_regular_file(info: os.stat_result, expected: tuple[int, ...]) -> bool:
+    return stat.S_ISREG(info.st_mode) and file_identity(info) == expected
+
+
+def open_nonblocking(name: str, flags: int) -> int:
+    return os.open(name, flags | getattr(os, "O_NONBLOCK", 0))
+
+
 def retention_identity(info: os.stat_result) -> tuple[int, ...]:
     require(is_plain_file(info) and info.st_nlink == 1, "Retention requires independent regular files")
     return file_identity(info)
@@ -260,7 +274,7 @@ def retention_identity(info: os.stat_result) -> tuple[int, ...]:
 
 def read_retention_file(path: Path, limit: int) -> tuple[bytes, tuple[int, ...]]:
     identity = retention_identity(path.lstat())
-    with path.open("rb") as stream:
+    with open(path, "rb", opener=open_nonblocking) as stream:
         require(retention_identity(os.fstat(stream.fileno())) == identity, "Retention file changed before reading")
         data = stream.read(limit + 1)
         require(retention_identity(os.fstat(stream.fileno())) == identity, "Retention file changed while reading")
@@ -280,7 +294,7 @@ def remove_retention_file(path: Path, expected: tuple[int, ...]) -> None:
         raise _EvidenceError("A verified evaluation file could not be removed; retry the purge") from None
 
 
-def purge_expired_manifest(path: Path, replay: Path, approval: object, today: date) -> dict:
+def purge_expired_manifest(path: Path, replay: Path, approval: object, today: date, approval_path: Path) -> dict:
     """Remove an expired pair from the storage owner's exclusive directory."""
     directory = path.parent.resolve(strict=True)
     require(replay.parent.resolve(strict=True) == directory, "Retention inputs must share one storage directory")
@@ -290,7 +304,7 @@ def purge_expired_manifest(path: Path, replay: Path, approval: object, today: da
     record = validate_retained_manifest(decode(raw), approval, None)
     expiry = record["expiresOnUtc"]
     require(date.fromisoformat(expiry) <= today, "Evaluation retention is still current")
-    source_removed = False
+    replay_identity = None
     try:
         replay.lstat()
     except FileNotFoundError:
@@ -299,11 +313,13 @@ def purge_expired_manifest(path: Path, replay: Path, approval: object, today: da
     else:
         data, replay_identity = read_retention_file(replay, MAX_FRAME_BYTES * MAX_FRAMES)
         verify_replay_bytes(record, data, hashlib.sha256(data).hexdigest())
-        require_retention_identity(path, manifest_identity)
+    require_manifest_approval(approval_path, record, operation="Retention purge")
+    require_retention_identity(path, manifest_identity)
+    if replay_identity is not None:
         remove_retention_file(replay, replay_identity)
-        source_removed = True
+        require_manifest_approval(approval_path, record, operation="Retention purge")
     remove_retention_file(path, manifest_identity)
-    return {"schemaVersion": 1, "status": "purged", "expiresOnUtc": expiry, "sourceRemoved": source_removed}
+    return {"schemaVersion": 1, "status": "purged", "expiresOnUtc": expiry, "sourceRemoved": replay_identity is not None}
 
 
 def artifact_identity(info: os.stat_result, label: str) -> tuple[int, ...]:
@@ -372,10 +388,14 @@ def require_same_replay_approval(path: Path, replay_digest: str, approved: dict,
     require(current == approved, reason)
 
 
-def require_current_manifest_approval(path: Path, manifest: dict) -> None:
-    """Recheck the exact manifest grant at the final publication or verification boundary."""
+def require_manifest_approval(path: Path, manifest: dict, *, operation: str = "Evaluation") -> None:
+    """Recheck that the original grant still covers the manifest, including during retention."""
     allowed = {key: manifest[key] for key in ("expiresOnUtc", "qualification")}
-    require_same_replay_approval(path, manifest["sourceReplaySha256"], allowed)
+    require_same_replay_approval(path, manifest["sourceReplaySha256"], allowed, operation=operation)
+
+
+def require_current_manifest_approval(path: Path, manifest: dict) -> None:
+    require_manifest_approval(path, manifest)
     require_current_expiry(manifest["expiresOnUtc"])
 
 
@@ -483,11 +503,11 @@ def main() -> int:
         if args.compare_replay is not None:
             return compare_approved_replays(args, approval, today)
         if args.purge_expired:
-            emit_json(purge_expired_manifest(args.input, args.source_replay, approval, today))
+            emit_json(purge_expired_manifest(args.input, args.source_replay, approval, today, args.approval))
             return 0
         if args.audit_retention:
             record = decode(read_bounded(args.input, MAX_MANIFEST_BYTES))
-            emit_json(audit_retention(record, approval, today))
+            emit_json(audit_retention(record, approval, today, args.approval))
             return 0
         if args.verify_retained or args.read_retained:
             record = validate_retained_manifest(decode(read_bounded(args.input, MAX_MANIFEST_BYTES)), approval, today)

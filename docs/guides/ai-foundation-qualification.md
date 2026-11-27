@@ -194,7 +194,8 @@ For retention automation, use `--audit-retention` with the same manifest and
 original approval. It returns a schema-versioned JSON record with `status`
 (`current` or `expired`) and `expiresOnUtc`. A matched record switches to
 `expired` at the start of its expiry date in UTC. Missing, malformed or mismatched
-inputs produce a nonzero exit and no status record.
+inputs produce a nonzero exit and no status record. The audit rechecks the
+original approval before reporting the status.
 
 ```bash
 python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval approval.json --audit-retention
@@ -209,8 +210,9 @@ python scripts/qualify_ai_evaluation.py evaluation-manifest.json --approval appr
 ```
 
 The purge checks the UTC expiry, matches the approval, and reproduces the
-manifest from the source before removal. The source goes first so that an
-interruption leaves the verified manifest available for retry. If the source
+manifest from the source before removal. It rechecks the approval before each
+removal and stops if the approval was withdrawn or changed. The source goes
+first so that an interruption leaves the verified manifest available for retry. If the source
 is already absent, retry verifies the expired manifest against the approval
 and removes it. The approval remains available for audit. The purge affects
 the specified directory entries and does not erase copies or backups.
