@@ -46,6 +46,7 @@ def declared(smoke):
     ("wrong-check", "input capture is for a different check"),
     ("changed-observation", "Artifact content does not match"),
     ("nested-receipt", "input observation refers to a physical check receipt"),
+    ("smoke-summary", "Physical observation refers to a smoke summary"),
     ("foreign-observation", "Physical observation capture is from a different product tuple or smoke run"),
     ("identified-observation", None),
     ("missing-haptics", "Missing regular artifact"),
@@ -55,6 +56,8 @@ def test_device_cli_validates_required_physical_check_receipts(tmp_path, smoke, 
     evidence.mkdir()
     for check, _ in xr.required_physical_check_receipts(smoke, {"haptics"}):
         contents = f"redacted {check} observation".encode()
+        if check == "input" and change == "smoke-summary":
+            contents = json.dumps(smoke).encode()
         if check == "input" and change in {"foreign-observation", "identified-observation"}:
             provenance = dict(smoke["provenance"])
             if change == "foreign-observation":

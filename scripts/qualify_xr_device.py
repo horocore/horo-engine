@@ -50,6 +50,7 @@ ALL_CHECKS = CORE_CHECKS | OPTIONAL_CHECKS
 SPECIALIZED_PHYSICAL_CHECKS = {"displayEnumeration", "renderTiming", "optionalMR"}
 PHYSICAL_CHECK_RECEIPT_FIELDS = {"schemaVersion", "evidenceLevel", "tuple", "provenance", "check", "artifactSha256"}
 OBSERVATION_IDENTITY_FIELDS = {"schemaVersion", "tuple", "provenance"}
+SMOKE_RECORD_FIELDS = OBSERVATION_IDENTITY_FIELDS | {"category", "evidenceLevel", "status", "checks", "display"}
 MR_COMMON_CHECKS = {"operation", "consentDenial", "revocation", "fallback", "shutdown"}
 
 
@@ -307,8 +308,7 @@ def validate_provenance(value: object, identity: dict, *, observed: bool) -> Non
 
 
 def validate_record(value: object) -> dict:
-    record = fields(value, {"schemaVersion", "category", "evidenceLevel", "status", "tuple",
-                            "provenance", "checks", "display"}, "record")
+    record = fields(value, SMOKE_RECORD_FIELDS, "record")
     require(type(record["schemaVersion"]) is int and record["schemaVersion"] == 1, "Unsupported XR evidence schema")
     require(in_set(record["category"], CATEGORIES), "Invalid planning category")
     require(in_set(record["evidenceLevel"], LEVELS), "Invalid evidence level")
@@ -436,6 +436,7 @@ def verify_physical_observations(root: Path, record: dict, observations: set[str
             continue
         require(not PHYSICAL_CHECK_RECEIPT_FIELDS <= capture.keys(),
                 "Physical observation refers to a physical check receipt")
+        require(not SMOKE_RECORD_FIELDS <= capture.keys(), "Physical observation refers to a smoke summary")
         require(OBSERVATION_IDENTITY_FIELDS <= capture.keys(), "Physical observation is missing qualification identity")
         require(type(capture["schemaVersion"]) is int and capture["schemaVersion"] == 1,
                 "Unsupported physical observation schema")

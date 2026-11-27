@@ -175,6 +175,7 @@ def test_one_physical_observation_can_support_multiple_checks_in_the_same_run(re
     ("buildSha256", "Physical observation refers to a product build or package receipt"),
     ("packageReceiptSha256", "Physical observation refers to a product build or package receipt"),
     ("SimulatorReplay", "Physical observation must identify physical evidence"),
+    ("smoke-summary", "Physical observation refers to a smoke summary"),
 ])
 def test_input_evidence_requires_an_actual_physical_observation(release, substitute, reason):
     matrix, evidence = release
@@ -183,6 +184,8 @@ def test_input_evidence_requires_an_actual_physical_observation(release, substit
     receipt = json.loads((evidence / record["checks"]["input"]["evidenceSha256"]).read_bytes())
     if substitute in record["tuple"]:
         observation = record["tuple"][substitute]
+    elif substitute == "smoke-summary":
+        observation = row["recordSha256"]
     else:
         capture = {field: receipt[field] for field in ("schemaVersion", "tuple", "provenance")}
         capture["evidenceLevel"] = substitute
