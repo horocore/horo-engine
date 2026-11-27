@@ -490,12 +490,18 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             Packages::PackageRemovalGraphPreview impact;
             std::vector<Diagnostic> diagnostics;
+            bool needsMigration = false;
             for (const auto &change : update.preview.changes) {
-                if (change.candidate &&
-                    (!IsAssetOnly(*change.candidate) || (change.current && !CanRestoreRetainedAsset(*change.current, *change.candidate))))
-                    return Result<void>::Failure(UpdateNeedsMigration());
-                if (change.candidate)
+                if (change.candidate) {
+                    if (!IsAssetOnly(*change.candidate) ||
+                        (change.current && !CanRestoreRetainedAsset(*change.current, *change.candidate))) {
+                        needsMigration = true;
+                        diagnostics.emplace_back(DiagnosticCode{"packages.host.update_requires_migration_review"},
+                                                 DiagnosticSeverity::Error, change.candidate->package.Value(),
+                                                 SourceLocation{"packages.lock"}, "");
+                    }
                     continue;
+                }
                 impact.removed.push_back({change.current->package, change.current->version});
                 if (auto blocker = OfflineRemovalContributionBlocker(*change.current))
                     diagnostics.push_back(std::move(*blocker));
@@ -503,6 +509,8 @@ namespace Horo::Application::Internal {
             if (impact.removed.empty())
                 return Result<void>::Success();
             auto review = ReviewCachedRemoval(update, request, context, diagnostics);
+            if (needsMigration && review.HasValue())
+                review = Result<void>::Failure(UpdateNeedsMigration());
             if (context.IsStopRequested())
                 return Result<void>::Failure(UpdateStopped(context));
             auto references = ReadRemovalImporters(update.policy, impact, context);

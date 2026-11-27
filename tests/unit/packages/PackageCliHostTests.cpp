@@ -459,13 +459,19 @@ namespace {
 
     TEST_CASE("An offline update can replace an asset package and roll back the same exchange", "[packages][application][cli][update]") {
         using namespace Packages;
-        const bool malformed = GENERATE(false, true);
+        enum class Replacement {
+            Asset,
+            InvalidMigration,
+            Native
+        };
+        const auto replacementKind = GENERATE(Replacement::Asset, Replacement::InvalidMigration, Replacement::Native);
         NativeProject fixture;
         const auto replacement = HoroPackageId::Parse("com.horo.replacement-assets").Value();
-        const auto archive = malformed
+        const auto archive = replacementKind == Replacement::InvalidMigration
                                  ? HistoricalAssetAddition(fixture, true, replacement)
                                  : Tests::PackageApplicationService::Verify(Tests::Packages::ValidPackageArchiveBytes("replacement bytes"));
-        WriteAssetCandidate(fixture, fixture.graph.version, archive, "assets", replacement);
+        WriteAssetCandidate(fixture, fixture.graph.version, archive, replacementKind == Replacement::Native ? "native" : "assets",
+                            replacement);
         const auto root = std::filesystem::canonical(fixture.project.Path());
         const auto metadata = root / ".horo";
         const auto cacheRoot = std::filesystem::canonical(fixture.storage.Path()) / "cache";
@@ -490,9 +496,29 @@ namespace {
                                                  NativeProject::PathOption("package-cache-root", cacheRoot)}};
             const auto missing = preview.adapter->Execute(update, context);
             REQUIRE(missing.HasError());
-            CHECK(missing.ErrorValue().code.Value() == "packages.host.update_archive_evidence_unavailable");
+            CHECK(std::ranges::any_of(missing.ErrorValue().diagnostics, [&](const auto &diagnostic) {
+                return diagnostic.code.Value() == "packages.host.update_archive_evidence_unavailable" &&
+                       diagnostic.path == replacement.Value();
+            }));
             REQUIRE(cache.Publish(archive).HasValue());
-            if (malformed) {
+            if (replacementKind == Replacement::Native) {
+                fixture.WriteImporterReference("late.horoasset", "174ee050-f0a1-4351-89c4-04a5895bff81");
+                const auto blocked = preview.adapter->Execute(update, context);
+                REQUIRE(blocked.HasError());
+                CHECK(blocked.ErrorValue().code.Value() == "packages.host.update_requires_migration_review");
+                const auto &diagnostics = blocked.ErrorValue().diagnostics;
+                CHECK(std::ranges::any_of(diagnostics, [&](const auto &diagnostic) {
+                    return diagnostic.code.Value() == "packages.host.update_requires_migration_review" &&
+                           diagnostic.message == replacement.Value();
+                }));
+                CHECK(std::ranges::any_of(diagnostics, [](const auto &diagnostic) {
+                    return diagnostic.code.Value() == "packages.host.importer_in_use" && diagnostic.path == "Assets/late.horoasset";
+                }));
+                CHECK(read("packages.json") == oldRequest);
+                CHECK(read("packages.lock") == oldLock);
+                return;
+            }
+            if (replacementKind == Replacement::InvalidMigration) {
                 auto metadataOnly = update;
                 metadataOnly.options.pop_back();
                 const auto approval = preview.adapter->Execute(metadataOnly, context);
