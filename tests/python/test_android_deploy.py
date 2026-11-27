@@ -832,6 +832,16 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertNotIn("private-foreign-device", json.dumps(report))
 
+    def test_openxr_cleanup_rechecks_the_uid_after_the_final_transport_fence(self):
+        status, report, commands = self.execute({
+            LOGCAT: log_line(OPENXR),
+            UID_QUERY: ["UID\n1010200"] * 4 + ["UID\n10200"],
+        }, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report.get("error")), (1, "application_stop_unconfirmed"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "application_process_identity_mismatch"})
+        self.assertNotIn("observed", report)
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
     def test_stop_requires_retirement_evidence_from_the_same_transport_and_boot(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
         _, profile = project.load_contract(name, ["arm64-v8a"])

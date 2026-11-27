@@ -1644,18 +1644,23 @@ def process_start_ticks(device: AdmittedAdbDevice, pid: int) -> int:
     return deploy_number(fields[19], 2**64 - 1, "application_process_unavailable")
 
 
-def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> DeployedProcess:
-    """Capture the exact live process incarnation for one already verified package user."""
-    pid = device.process_id(application)
-    if not pid:
-        raise AndroidDeployError("application_process_unavailable")
-    started = process_start_ticks(device, pid)
+def require_process_uid(device: AdmittedAdbDevice, pid: int, uid: int) -> None:
+    """Require the live owner's UID without retaining the command output."""
     identity = device.run("shell", "toybox", "ps", "-p", str(pid), "-o", "UID")
     matched = re.fullmatch(r"UID\n\s*([0-9]{1,10})", identity)
     if not matched:
         raise AndroidDeployError("application_process_unavailable")
     if uid != int(matched.group(1)):
         raise AndroidDeployError("application_process_identity_mismatch")
+
+
+def deployed_process(device: AdmittedAdbDevice, application: str, uid: int) -> DeployedProcess:
+    """Capture the exact live process incarnation for one already verified package user."""
+    pid = device.process_id(application)
+    if not pid:
+        raise AndroidDeployError("application_process_unavailable")
+    started = process_start_ticks(device, pid)
+    require_process_uid(device, pid, uid)
     if process_start_ticks(device, pid) != started:
         raise AndroidDeployError("application_process_changed")
     return DeployedProcess(pid, uid, started)
@@ -1879,6 +1884,7 @@ class AndroidPackageLaunch:
         current_pid = device.process_id(self.application)
         if current_pid == process.pid:
             try:
+                require_process_uid(device, current_pid, process.uid)
                 start_ticks = process_start_ticks(device, current_pid)
             except AndroidDeployError as error:
                 if error.code not in {"device_command_failed", "application_process_unavailable"}:
