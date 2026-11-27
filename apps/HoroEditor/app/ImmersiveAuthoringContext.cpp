@@ -280,6 +280,26 @@ namespace Horo::Editor {
     void ImmersiveAuthoringContext::Revoke() noexcept {
         epoch_->current.store(0, std::memory_order_release);
         current_.reset();
+        editTransferSource_ = 0;
+    }
+
+    /** @copydoc ImmersiveAuthoringContext::TransitionToEdit */
+    std::optional<ImmersivePlanningContext> ImmersiveAuthoringContext::TransitionToEdit(
+        const ImmersivePlanningContext &source, const ImmersiveContextIdentity &identity,
+        const std::span<const SceneSource::SceneObjectId> selection, const CancellationToken &sourceLifetime) noexcept {
+        if (Admit(source, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted ||
+            source.Identity().mode != ImmersiveAuthoringMode::Simulate || !source.Identity().commandSession.principal)
+            return std::nullopt;
+        auto expected = source.Identity();
+        expected.mode = ImmersiveAuthoringMode::Edit;
+        expected.worldGeneration = 0;
+        if (identity != expected)
+            return std::nullopt;
+        const auto sourceGeneration = source.Generation();
+        auto edit = Publish(identity, selection, sourceLifetime);
+        if (edit)
+            editTransferSource_ = sourceGeneration;
+        return edit;
     }
 
     ImmersiveAdmission ImmersiveAuthoringContext::Admit(const ImmersivePlanningContext &context,
@@ -387,11 +407,8 @@ namespace Horo::Editor {
                                                                          const ImmersiveMcpCatalog &catalog,
                                                                          const ImmersiveSceneCandidate &candidate) const {
         using Output = Result<std::uint64_t>;
-        auto expected = candidate.source_.Identity();
-        expected.mode = ImmersiveAuthoringMode::Edit;
-        expected.worldGeneration = 0;
-        if (Admit(current, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted || current.Identity() != expected ||
-            candidate.source_.epoch_ != epoch_ || candidate.source_.Generation() != current.Generation() - 1 ||
+        if (Admit(current, ImmersiveRequestKind::Plan) != ImmersiveAdmission::Admitted ||
+            candidate.source_.epoch_ != epoch_ || candidate.source_.Generation() != editTransferSource_ ||
             !catalog.context_.SharesGeneration(current) || !catalog.catalog_ || !candidate.sourceAuthority_ ||
             !candidate.sourceAuthority_())
             return Output::Failure(MakeError(Mcp::McpErrors::AuthorizationDenied));

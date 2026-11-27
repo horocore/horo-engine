@@ -249,6 +249,16 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<ImmersivePlanningContext> Publish(const ImmersiveContextIdentity &identity,
                                                                       std::span<const SceneSource::SceneObjectId> selection,
                                                                       const CancellationToken &sourceLifetime = {}) noexcept;
+        /** @brief Retires a live Simulate scope and explicitly admits its matching Edit successor.
+         * @param source Current Simulate scope. @param identity Edit observation supplied by its owner.
+         * @param selection Fresh Edit selection. @param sourceLifetime Optional lifetime of the Edit observation.
+         * @return The new Edit generation, or empty if the source or destination is inadmissible.
+         */
+        [[nodiscard]] std::optional<ImmersivePlanningContext> TransitionToEdit(const ImmersivePlanningContext &source,
+                                                                               const ImmersiveContextIdentity &identity,
+                                                                               std::span<const SceneSource::SceneObjectId> selection,
+                                                                               const CancellationToken &sourceLifetime = {}) noexcept;
+
         /** @brief Revokes all previously issued contexts before project, document or XR teardown. */
         void Revoke() noexcept;
         /** @brief Rechecks one captured request before any tool authority is consulted.
@@ -315,6 +325,7 @@ namespace Horo::Editor {
                                                                               std::string_view projectIdentity) const;
         std::shared_ptr<ImmersiveContextEpoch> epoch_;
         std::optional<ImmersivePlanningContext> current_;
+        std::uint64_t editTransferSource_{}; /**< Simulate generation admitted by the current explicit transition. */
         std::uint64_t generation_{};
     };
 }  // namespace Horo::Editor

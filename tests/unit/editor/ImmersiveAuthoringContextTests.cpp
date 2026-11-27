@@ -454,9 +454,23 @@ namespace Horo::Editor {
             constexpr std::string_view projectIdentity = "project-one";
             auto identity = Opening();
             const auto editIdentity = identity;
-            bool transferFromSimulate = false;
+            enum class Transfer {
+                None,
+                Explicit,
+                Revoked,
+                Implicit
+            };
+            auto transfer = Transfer::None;
             SECTION("a retained Simulate proposal needs a new Edit admission") {
-                transferFromSimulate = true;
+                transfer = Transfer::Explicit;
+            }
+            SECTION("revocation cannot be followed by a Simulate handoff") {
+                transfer = Transfer::Revoked;
+            }
+            SECTION("a plain Edit publication cannot inherit a Simulate proposal") {
+                transfer = Transfer::Implicit;
+            }
+            if (transfer != Transfer::None) {
                 identity.mode = ImmersiveAuthoringMode::Simulate;
                 identity.worldGeneration = 1;
             }
@@ -571,14 +585,18 @@ namespace Horo::Editor {
             }
             const auto review = pending->Plan(model, 1, {}, {}, {}, &approved);
             REQUIRE(review.Status() == Completed);
-            if (transferFromSimulate) {
+            if (transfer != Transfer::None) {
                 const auto candidate = review.RetainSceneCandidate(*context);
                 REQUIRE(candidate);
                 CHECK(review.StageScenePreview(*context).HasError());
                 CHECK(owner.StageSceneCandidate(*context, *catalog, *candidate).HasError());
                 auto edit = editIdentity;
                 edit.commandSession = identity.commandSession;
-                const auto current = owner.Publish(edit, {});
+                if (transfer == Transfer::Revoked) {
+                    owner.Revoke();
+                    CHECK_FALSE(owner.TransitionToEdit(*context, edit, {}));
+                }
+                const auto current = transfer == Transfer::Explicit ? owner.TransitionToEdit(*context, edit, {}) : owner.Publish(edit, {});
                 REQUIRE(current);
                 CHECK(review.Status() == ContextDenied);
                 CHECK_FALSE(review.RetainSceneCandidate(*context));
@@ -586,6 +604,11 @@ namespace Horo::Editor {
                 CancellationSource editApproval;
                 const auto editCatalog = owner.CaptureMcpCatalog(*current, session, projectIdentity, tools, editApproval.Token());
                 REQUIRE(editCatalog);
+                if (transfer != Transfer::Explicit) {
+                    CHECK(owner.StageSceneCandidate(*current, *editCatalog, *candidate).HasError());
+                    CHECK(staged == 0);
+                    return;
+                }
                 targetsAvailable = false;
                 CHECK(owner.StageSceneCandidate(*current, *editCatalog, *candidate).HasError());
                 CHECK(staged == 0);

@@ -388,7 +388,9 @@ approval. A retained proposal remains non-authoritative and must be reviewed
 against fresh context. A Simulate Scene proposal can retain its tool intent for
 the immediate transition to Edit on the same project, document revision, XR
 session and workspace owner. Edit requires a fresh catalog and revalidates the
-target objects before staging the normal viewport review.
+target objects before staging the normal viewport review. Only the editor owner's
+explicit transition from the live Simulate scope can admit that candidate.
+Ordinary Edit publication and context revocation discard handoff eligibility.
 Planning uses the earlier of the admitted project deadline and the turn limit.
 Expiration stops cooperative inference and prevents review publication. Elapsed
 inference and tool inspection times remain available on terminal outcomes for
